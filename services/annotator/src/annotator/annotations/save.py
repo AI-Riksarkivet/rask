@@ -23,12 +23,12 @@ from annotator.annotations.schema import (
     SaveResult,
     identity_values,
 )
-from annotator.api.security import RawBearerToken
+from annotator.api.security import CurrentSubject, RawBearerToken
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
 from service_kit.lancekit.writer import open_writer
-from service_kit.media.deps import AuthorDep, DatasetParam, StateDep
+from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 
 
@@ -55,7 +55,11 @@ def new_rows(inserts: Sequence[NewAnnotation], ident: Mapping[str, object], sche
 @router.post("/annotations/{doc_id}/{speech_id}/{chunk_id}")
 def save_annotations(
     state: StateDep,
-    author: AuthorDep,
+    # The VERIFIED subject, never a header (open_python-audit: any caller could sign another
+    # person's name onto annotation provenance via `X-User`). `current_subject` is `anon` with
+    # OIDC off (byte-identical dev behaviour), the token's `sub` with it on, 401 with no token,
+    # 503 when enabled-but-unwired — the same no-header-fallback rule the projects plane got.
+    author: CurrentSubject,
     doc_id: str,
     speech_id: int,
     chunk_id: int,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, Query, Request
+from fastapi import Depends, Query, Request
 
 from service_kit.media.state import AppState
 
@@ -26,12 +26,10 @@ StateDep = Annotated[AppState, Depends(get_state)]
 DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB when omitted).")]
 
 
-def get_author(x_user: Annotated[str | None, Header(alias="X-User")] = None) -> str:
-    """The write author — the per-user identity seam. Today a trusted ``X-User`` header
-    (dev / gateway-injected); at merge, lance-ns's auth swaps this for the VERIFIED token
-    subject (OpenFGA keys on it) — the downstream stamping of `reviewer` stays the same.
-    Defaults to ``anon`` so writes always carry an author."""
-    return (x_user or "").strip() or "anon"
-
-
-AuthorDep = Annotated[str, Depends(get_author)]
+# `get_author` / `AuthorDep` (the trusted `X-User` header) lived here and are DELETED. The
+# docstring's own promise — "at merge, lance-ns's auth swaps this for the VERIFIED token subject" —
+# is the change that removed them: the annotator's write routes now take `CurrentSubject`
+# (annotator/api/security.py), which is `anon` with OIDC off and the verified `sub` with it on,
+# with deliberately no header fallback. The gateway additionally strips `x-user` at the public edge
+# (`_CLIENT_SPOOFABLE`), so the header means nothing anywhere. Pinned by
+# `tests/unit/test_annotator_governed_auth.py::test_the_header_seam_itself_is_GONE`.

@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
-from service_kit.media.deps import AuthorDep, DatasetParam, StateDep
+from service_kit.media.deps import DatasetParam, StateDep
 
 
 def get_control_emitter(request: Request) -> ControlEmitter:
@@ -26,4 +26,4 @@ def get_control_emitter(request: Request) -> ControlEmitter:
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]
 
 
-__all__ = ["AuthorDep", "ControlEmitterDep", "DatasetParam", "StateDep", "get_control_emitter"]
+__all__ = ["ControlEmitterDep", "DatasetParam", "StateDep", "get_control_emitter"]

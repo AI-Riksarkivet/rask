@@ -23,14 +23,14 @@ from annotator.annotations.schema import (
     TagWrite,
     identity_values,
 )
-from annotator.api.security import RawBearerToken
+from annotator.api.security import CurrentSubject, RawBearerToken
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.keys import validate_doc_key
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
 from service_kit.lancekit.writer import open_writer
-from service_kit.media.deps import AuthorDep, DatasetParam, StateDep
+from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 
 
@@ -92,7 +92,11 @@ def tag_rows(adds: Sequence[TagWrite], declared: Declared, *, author: str, schem
 @router.post("/annotations/tags")
 def apply_tags(
     state: StateDep,
-    author: AuthorDep,
+    # The VERIFIED subject, never a header (open_python-audit: any caller could sign another
+    # person's name onto annotation provenance via `X-User`). `current_subject` is `anon` with
+    # OIDC off (byte-identical dev behaviour), the token's `sub` with it on, 401 with no token,
+    # 503 when enabled-but-unwired — the same no-header-fallback rule the projects plane got.
+    author: CurrentSubject,
     body: TagBatch,
     caller_token: RawBearerToken = None,
     dataset: DatasetParam = None,

@@ -8,11 +8,12 @@ machine (or after clearing site data) found an empty canvas. These routes give t
 :mod:`service_kit.schemas.dock_layout` carries the dock envelope.
 
 **Why the catalog owns this.** Only two app-ids are in the state store's ``scopes``
-(``chart/values.yaml`` → ``stateStore.scopes``): ``annotator`` and ``catalog``. Of those two, only the
-catalog has a verified subject to key on — ``services/annotator/main.py`` builds no ``OIDCVerifier`` and
-``services/annotator/api/dependencies.py`` re-exports only ``AuthorDep``, whose ``get_author``
-(``service_kit/media/deps.py``) reads a **trusted ``X-User`` header** and defaults to ``"anon"``. Per-subject storage
-keyed on a client-settable header is the exact leak these routes exist to prevent. The catalog instead has
+(``chart/values.yaml`` → ``stateStore.scopes``): ``annotator`` and ``catalog``. When these routes were
+built, only the catalog had a verified subject to key on — the annotator then took its author from a
+trusted ``X-User`` header. That seam is GONE (2026-08-28: the annotator builds an ``OIDCVerifier`` and
+its write routes take ``CurrentSubject``; ``get_author``/``AuthorDep`` are deleted), so the original
+forcing reason no longer holds — but the ownership stays, because per-subject storage still belongs
+beside the verified-token machinery and the BFF that forwards it. The catalog has
 ``api/security.py``'s ``CurrentToken``, the router-wide ``Depends(authorize)`` that 401s an anonymous
 caller, and — the reachability half — a BFF proxy the media zone already uses
 (``routes/capi/v1/me/+server.ts`` → ``makeCatalogProxy``), which forwards the signed-in user's bearer and

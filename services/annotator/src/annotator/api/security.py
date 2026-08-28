@@ -10,7 +10,7 @@ enabled but no client was built. A configured-but-broken auth layer must never d
 access — that is the failure mode the whole governed plane exists to prevent.
 
 **Why the annotator needs this at all**: it writes per-subject state (projects, tasks, claims,
-drafts). `service_kit.media.deps.get_author` reads a *trusted* `X-User` header defaulting to
+drafts). `service_kit.media.deps.get_author` READ (deleted 2026-08-28) a *trusted* `X-User` header defaulting to
 `"anon"`, which is fine for a read-plane media service and a cross-user leak for anything keyed on
 identity.
 """

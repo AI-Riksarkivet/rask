@@ -77,6 +77,12 @@ _CLIENT_SPOOFABLE = frozenset(
         # stamps on the way in, a client that sets it names itself an allowlisted service — the
         # same laundering as the caller-app-id, one header along.
         b"x-lance-service-identity",
+        # NOTHING reads this any more — the annotator's write routes take the verified subject, and
+        # the seam that read it (`service_kit.media.deps.get_author`) is deleted. Stripped anyway,
+        # as defense in depth: it BOUGHT write authorship for as long as it existed, and a header
+        # that once meant "I am this person" must not be forwardable while any old build is still
+        # running behind this gateway.
+        b"x-user",
         # The forwarded chain is a PROXY's assertion about a client, and anything arriving on this
         # listener was written by the client. Stripped here and re-stamped below from the values the
         # server resolved — stripping alone would be worse than passing through, because a backend

@@ -159,3 +159,58 @@ def test_oidc_without_issuer_and_audience_is_refused_at_construction(monkeypatch
     monkeypatch.delenv("LANCE_OIDC_AUDIENCE", raising=False)
     with pytest.raises(ValueError, match="LANCE_OIDC_ISSUER and LANCE_OIDC_AUDIENCE are required"):
         AnnotatorSettings()
+
+
+# ── the WRITE routes' author stamp ──────────────────────────────────────────────────────────────
+#
+# open_python-audit — "Write authorship comes from an unverified, client-supplied `X-User` header".
+#
+# This file already pinned the projects plane ("X-User used to BE the identity; it must now be
+# inert") — but the two Lance WRITE routes kept the old seam: `save_annotations` and `apply_tags`
+# stamped `service_kit.media.deps.get_author`'s value as the reviewer, so any caller could sign
+# another person's name onto annotation provenance by setting a header. The independent re-audit
+# (2026-08-28) confirmed it live at HEAD and noted the sharp part: the gateway's spoofable-header
+# strip covers `dapr-*` and `x-forwarded-*` but not `x-user`, so the header sailed through the edge.
+
+
+def _author_dependency(route_fn: object) -> object:
+    """The callable FastAPI will actually run to fill the `author` parameter."""
+    import typing
+
+    hints = typing.get_type_hints(route_fn, include_extras=True)
+    metadata = typing.get_args(hints["author"])[1:]
+    for item in metadata:
+        dependency = getattr(item, "dependency", None)
+        if dependency is not None:
+            return dependency
+    raise AssertionError("`author` carries no dependency at all")
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["save_annotations", "apply_tags"],
+)
+def test_the_write_routes_take_their_author_from_the_VERIFIED_subject(route: str) -> None:
+    """Asserted on the dependency IDENTITY: FastAPI runs exactly this callable, so the author can
+    only be what `current_subject` answers — the verified `sub`, `anon` with OIDC off, 401 with OIDC
+    on and no token, 503 when enabled-but-unwired. No header is consulted anywhere on that path."""
+    from annotator.annotations import save, tags
+    from annotator.api import security
+
+    route_fn = getattr(save, route, None) or getattr(tags, route)
+    assert _author_dependency(route_fn) is security.current_subject, (
+        f"`{route}` still resolves its author through the client-supplied X-User seam — "
+        "a caller can sign any name onto annotation provenance by setting a header"
+    )
+
+
+def test_the_header_seam_itself_is_GONE() -> None:
+    """Deleting the consumer is half; the seam must not survive to grow a new one.
+
+    `get_author`'s own docstring promised "at merge, lance-ns's auth swaps this for the VERIFIED
+    token subject" — the swap is this change, so the function it was written on goes with it.
+    """
+    from service_kit.media import deps
+
+    assert not hasattr(deps, "get_author"), "the X-User seam still exists in service_kit.media.deps"
+    assert not hasattr(deps, "AuthorDep"), "the AuthorDep alias still exists — a new route could adopt it back"

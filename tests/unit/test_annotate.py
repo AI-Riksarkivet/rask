@@ -179,12 +179,9 @@ def test_schema_single_source_of_truth(tmp_path: Path) -> None:
     assert seeded.equals(expected), f"schema drift:\nseeded={seeded}\nexpected={expected}"
 
 
-def test_get_author_seam_defaults_to_anon_and_trims() -> None:
-    from service_kit.media.deps import get_author
-
-    assert get_author(None) == "anon"  # no header → always an author
-    assert get_author("   ") == "anon"  # blank → anon
-    assert get_author("gabriel") == "gabriel"  # the X-User subject
+# `test_get_author_seam_defaults_to_anon_and_trims` lived here and went with the seam it tested:
+# the X-User header no longer chooses the author anywhere. The anon-default property it pinned now
+# belongs to `current_subject` and is pinned in `test_annotator_governed_auth.py`.
 
 
 def test_new_rows_stamps_the_author_as_reviewer() -> None:
