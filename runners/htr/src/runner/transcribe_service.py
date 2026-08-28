@@ -217,9 +217,12 @@ class TranscribeViaServe:
     handle. With a free function the handle would be looked up per call.
     """
 
-    def __init__(self, app_name: str = APP_NAME) -> None:
+    def __init__(self, app_name: str = APP_NAME, handle: object | None = None) -> None:
+        # `handle=None` is the production path — Ray Data constructs this with no
+        # handle and the app is looked up through Serve. A test passes a fake, the
+        # same seam `HTRFlowViaServeBytes` already offers.
         self.app_name = app_name
-        self._handle = serve.get_app_handle(app_name)
+        self._handle = handle if handle is not None else serve.get_app_handle(app_name)
 
     @staticmethod
     def _shard(items: list, num_shards: int) -> list[list]:
@@ -269,14 +272,22 @@ class TranscribeViaServe:
         # streaming executor only ever has 1 TranscribeViaServe task in flight.
         # Without this, the executor's queue rule serialises the map_batches
         # step exactly like it serialised the old TranscribeActor pool.
-        flat_crops = [e["crop"] for e in entries]
-        shards = self._shard(flat_crops, num_shards=3)
-        responses = [self._handle.transcribe.remote(shard) for shard in shards if shard]
+        #
+        # SHARD THE ENTRIES, not the crops, and flatten the entries back through the
+        # SAME shards — the results come home in shard-concatenated order, not in the
+        # sorted order `entries` is in. Zipping against `entries` attached each line's
+        # text to a different line (`w60` got the width-120 crop's transcription) for
+        # any batch of four or more crops, silently: `strict=True` guards length, not
+        # order. `HTRFlowViaServe` rebuilds `flat_paths` from its shards for exactly
+        # this reason, and now the two read alike.
+        entry_shards = self._shard(entries, num_shards=3)
+        responses = [self._handle.transcribe.remote([e["crop"] for e in shard]) for shard in entry_shards if shard]
         shard_results = [r.result() for r in responses]
+        flat_entries = [e for shard in entry_shards for e in shard]
         flat_results = [item for shard in shard_results for item in shard]
 
         line_results: dict[tuple[int, int], tuple[Line, str, float]] = {
-            e["key"]: (e["line"], text, conf) for e, (text, conf) in zip(entries, flat_results, strict=True)
+            e["key"]: (e["line"], text, conf) for e, (text, conf) in zip(flat_entries, flat_results, strict=True)
         }
 
         per_row: list[list[TranscribedLine]] = []
