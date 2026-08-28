@@ -51,6 +51,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
+
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -205,6 +207,24 @@ class StagingOverlapError(RuntimeError):
     """
 
 
+class StagingCoverAbandoned(RuntimeError):
+    """The finalizer STOPPED SEARCHING for a selection. It did not find the fragments in conflict.
+
+    Deliberately not a `StagingOverlapError`, and deliberately not a subclass of one, because the two
+    demand opposite responses from an operator: an overlap needs fragments reconciled by hand, an
+    abandoned search needs the run re-finalized. They used to be indistinguishable — `_exact_cover`
+    returned a bare `None` for both "no cover exists" and "I ran out of budget", and this module
+    rendered both as an overlap. That mattered far more than it sounds: before the solver stopped
+    rebuilding its candidate index over the run's whole unit universe at every step, running out of
+    budget was the ORDINARY outcome for a large CLEAN run, so the message an operator got told them
+    their fragments conflicted when nothing was wrong with them at all.
+
+    Reaching this now means the staged family really is ambiguous on a scale `drain_chunk`'s
+    singleton-redelivery rule exists to prevent. As with an overlap, every byte is still on the store
+    and still named by its manifest — nothing has been committed and nothing has been lost.
+    """
+
+
 def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
     """The fragments this run should commit — each of its units covered exactly ONCE.
 
@@ -243,7 +263,12 @@ def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
     legitimate, and raising here would turn a successful no-op run into a failure.
     """
     records: list[tuple[frozenset[str], list[str]]] = []
-    for raw in sorted(_read_all(staging_root(dataset_uri, run_id))):
+    # NOT `sorted(_read_all(...))`. Determinism comes from the `records.sort` below, and that key is
+    # total here: a manifest is named by a hash of its unit set, so no two records can share one.
+    # Sorting the raw manifest BODIES first bought nothing and held every manifest's JSON in memory
+    # at once — hundreds of MB on a run this module's docstrings advertise, for an ordering thrown
+    # away three lines later.
+    for raw in _read_all(staging_root(dataset_uri, run_id)):
         try:
             record = json.loads(raw)
         except json.JSONDecodeError:
@@ -262,9 +287,21 @@ def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
     records.sort(key=lambda item: (-len(item[0]), sorted(item[0])))
 
     staged_units = frozenset().union(*(units for units, _ in records)) if records else frozenset()
-    chosen = _exact_cover([units for units, _ in records], staged_units)
+    verdict = _exact_cover([units for units, _ in records], staged_units)
 
-    if chosen is None:
+    if verdict.exhausted:
+        # Reported SEPARATELY from an overlap, and worded so the difference is unmissable. Telling an
+        # operator "your fragments overlap" when the finalizer merely stopped looking sends them to
+        # reconcile fragments that are fine, and hides the one action that would work — re-running
+        # the finalize.
+        raise StagingCoverAbandoned(
+            f"run {run_id}: the finalizer ABANDONED its search for a fragment selection over "
+            f"{len(records)} staged manifests covering {len(staged_units)} units. This is not a "
+            f"verdict that they overlap — the search was cut short, and a selection may well exist. "
+            f"Every byte is still on the store and named by its manifest."
+        )
+
+    if verdict.chosen is None:
         # NAME the units the search could not place. A refusal an operator cannot act on is only
         # half a refusal — "some overlap somewhere" makes them re-derive by hand what the finalizer
         # already knows. The greedy pass is the diagnostic here, not the decision: it takes what it
@@ -283,7 +320,7 @@ def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
 
     out: list[str] = []
     seen: set[str] = set()
-    for index in chosen:
+    for index in verdict.chosen:
         for fragment in records[index][1]:
             if fragment not in seen:
                 seen.add(fragment)
@@ -291,15 +328,32 @@ def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
     return out
 
 
-#: Bound on the search below. A run's staging holds one manifest per BATCH, so the realistic input is
-#: a handful; the cap exists so a pathological one degrades to a loud refusal rather than to a finalize
-#: that never returns. Exceeding it is indistinguishable from "no cover" to the caller, which is the
-#: safe direction: it refuses instead of committing a guess.
-_SEARCH_NODE_LIMIT = 50_000
+class CoverResult(BaseModel):
+    """A cover search's verdict, keeping "no selection exists" apart from "I stopped looking".
+
+    The two used to arrive as the same bare `None`, and `discover_staged` rendered both as an
+    overlap. They are opposite diagnoses, so they get separate fields and separate exceptions —
+    see `StagingCoverAbandoned`.
+    """
+
+    chosen: list[int] | None = None
+    exhausted: bool = False
 
 
-def _exact_cover(sets: Sequence[frozenset[str]], universe: frozenset[str]) -> list[int] | None:
-    """Indices of a subset covering `universe` with NO unit counted twice, or None if none exists.
+#: Budget for the backtracking search over the AMBIGUOUS residue, counted in primitive steps rather
+#: than in search nodes. A node bound was the wrong unit: it capped how many nodes were visited while
+#: the cost OF a node grew with the run's unit count, so the cap did not bound anything an operator
+#: cares about and a clean 25,600-unit run still spent 95s inside the search. Steps bound wall time
+#: directly, and stay deterministic — two workers finalizing the same prefix must reach the same
+#: verdict, so a real clock could not be used here.
+#:
+#: Reaching it now requires fragments that overlap in a way unit propagation cannot decide, and it is
+#: reported as ABANDONED, never as an overlap.
+_SEARCH_WORK_LIMIT = 20_000_000
+
+
+def _exact_cover(sets: Sequence[frozenset[str]], universe: frozenset[str]) -> CoverResult:
+    """Indices of a subset covering `universe` with NO unit counted twice.
 
     A real search rather than a greedy pass, because greedy is not merely suboptimal here — it
     REFUSES work it could do. Taking the largest fragment first and skipping whatever overlaps it
@@ -307,41 +361,177 @@ def _exact_cover(sets: Sequence[frozenset[str]], universe: frozenset[str]) -> li
     oracle. Deferring the raise to the end of the sweep cut that but did not close it: the choice
     itself, not the moment of judging it, is what blocks the cover.
 
-    Standard exact-cover backtracking: pick the least-covered unit, try each fragment containing it,
-    recurse. Choosing the most-constrained unit first is what keeps this small — it fails a doomed
-    branch immediately instead of exploring it.
+    Three stages, cheapest first, because the input this actually gets is almost never a search
+    problem. An OWNER INDEX (unit -> the fragments holding it) is built once, instead of being
+    rebuilt over the whole remaining universe at every step. UNIT PROPAGATION then forces every
+    fragment that is the sole holder of some unit — which resolves an uncrashed run outright, since
+    there each unit has exactly one holder — and eliminates whatever those forced picks collide with.
+    Only what survives reaches the SEARCH, and that search walks an explicit stack.
 
-    Deterministic by construction (sorted candidate order), because two workers finalizing the same
-    staging prefix must select the same fragments, and S3 listing order is not a choice.
+    None of that is an optimisation. This runs inside `finalize_run`, after every unit has been acked
+    off a WORK_QUEUE stream, so it is the last point at which a run can still fail recoverably — and
+    the version before this one made per-step work proportional to the RUN's unit count and stack
+    depth equal to its fragment count. Measured: a clean 25,600-unit run took 95s, and ~950 clean
+    fragments overflowed the interpreter stack. Both are ordinary runs at the scale this module's own
+    docstrings advertise, and both surfaced to the operator as "your fragments overlap".
+
+    Deterministic by construction, because two workers finalizing the same staging prefix must select
+    the same fragments and S3 listing order is not a choice. Propagation cannot make the verdict
+    order-dependent — a fragment that is some unit's sole holder belongs to EVERY exact cover, so
+    forcing it can neither create a cover nor destroy one — and the indices come back sorted.
     """
     if not universe:
-        return []
+        return CoverResult(chosen=[])
 
-    budget = [_SEARCH_NODE_LIMIT]
+    owners: dict[str, list[int]] = {}
+    for index, unit_set in enumerate(sets):
+        for unit in unit_set:
+            owners.setdefault(unit, []).append(index)
 
-    def search(remaining: frozenset[str], used: frozenset[int], picked: list[int]) -> list[int] | None:
-        if not remaining:
-            return list(picked)
-        budget[0] -= 1
-        if budget[0] <= 0:
+    if any(unit not in owners for unit in universe):
+        return CoverResult()
+
+    settled = _propagate(sets, owners)
+    if settled is None:
+        return CoverResult()
+
+    undecided = universe - settled.covered
+    if not undecided:
+        return CoverResult(chosen=sorted(settled.forced))
+
+    found = _search_core(sets, settled.core, frozenset(undecided))
+    if found.chosen is None:
+        return found
+    return CoverResult(chosen=sorted(settled.forced + found.chosen))
+
+
+class _Propagation(BaseModel):
+    """What forcing the sole-held fragments settled, and what it left for the search."""
+
+    forced: list[int]
+    covered: set[str]
+    core: list[int]
+
+
+def _propagate(sets: Sequence[frozenset[str]], owners: dict[str, list[int]]) -> _Propagation | None:
+    """Force every fragment that is some unit's ONLY holder, transitively. None if that proves no cover.
+
+    Sound because a unit held by exactly one live fragment leaves no choice: every exact cover of the
+    universe must contain that fragment, so taking it can neither create a cover nor destroy one.
+    That is also why the result cannot depend on the order units come off the worklist, which the
+    determinism contract in `discover_staged` requires.
+
+    This is the whole reason the finalizer is now linear on the input it actually gets. An uncrashed
+    run's batches share no units, so every unit has exactly one holder, every fragment is forced, and
+    nothing reaches the search at all.
+    """
+    # A manifest with fragments but an EMPTY unit set is never live, so it is never forced and never
+    # committed. That matches what the previous search did — it was a candidate for no unit, so
+    # backtracking never reached it — and here it has to be explicit: propagation would otherwise be
+    # free to force a fragment covering nothing, committing rows no unit in the run claims.
+    live = {index for index, unit_set in enumerate(sets) if unit_set}
+    holders_left = {unit: len(indices) for unit, indices in owners.items()}
+    covered: set[str] = set()
+    forced: list[int] = []
+    pending = [unit for unit, count in holders_left.items() if count == 1]
+
+    def drop(index: int) -> None:
+        """Rule a fragment out. Units it held may become sole-held, so they go back on the worklist."""
+        live.discard(index)
+        for unit in sets[index]:
+            if unit in covered:
+                continue
+            holders_left[unit] -= 1
+            if holders_left[unit] <= 1:
+                pending.append(unit)
+
+    while pending:
+        unit = pending.pop()
+        if unit in covered or holders_left[unit] > 1:
+            continue
+        if holders_left[unit] == 0:
+            # Nothing live holds it and nothing forced covers it, so no selection can. A genuine
+            # overlap, decided in linear time rather than by exhausting a search.
             return None
+        index = next(i for i in owners[unit] if i in live)
+        forced.append(index)
+        live.discard(index)
+        covered |= sets[index]
+        # Anything else still holding one of those units would now commit it a second time.
+        for held in sets[index]:
+            for other in owners[held]:
+                if other in live:
+                    drop(other)
 
-        # The most constrained unit: the one the fewest unused fragments can supply. A unit no
-        # fragment can supply ends the branch here rather than after exploring everything else.
-        candidates = {unit: [i for i, s in enumerate(sets) if i not in used and unit in s and s <= remaining] for unit in remaining}
-        unit = min(candidates, key=lambda u: (len(candidates[u]), u))
-        if not candidates[unit]:
-            return None
+    return _Propagation(forced=forced, covered=covered, core=sorted(live))
 
-        for index in candidates[unit]:
-            picked.append(index)
-            found = search(remaining - sets[index], used | {index}, picked)
-            if found is not None:
-                return found
-            picked.pop()
-        return None
 
-    return search(universe, frozenset(), [])
+def _search_core(sets: Sequence[frozenset[str]], core: Sequence[int], remaining: frozenset[str]) -> CoverResult:
+    """Backtracking over the fragments propagation could not decide, on an EXPLICIT stack.
+
+    Explicit rather than recursive even though the core is normally empty and never large: the old
+    solver recursed once per fragment it PICKED, and in the ordinary disjoint case exactly one is
+    picked per level, so stack depth equalled the run's manifest count. Around 950 manifests — a
+    ~970k-unit run at the default `fragment_rows=1024` — overflowed CPython's stack from inside the
+    finalize activity. A frame cost that scales with the run is the one thing this cannot afford,
+    whatever the search's own complexity is.
+
+    Scans are restricted to the core, never the run's universe, so the per-step cost tracks how
+    AMBIGUOUS the staging is rather than how big the run is.
+    """
+    core_holders: dict[str, list[int]] = {}
+    for index in core:
+        for unit in sets[index]:
+            core_holders.setdefault(unit, []).append(index)
+    core_occurrences = sum(len(sets[index]) for index in core)
+
+    def candidates(rest: frozenset[str]) -> list[int]:
+        """Fragments that could cover the most-constrained unit left, in ascending index order.
+
+        Most-constrained first is what keeps the search small: a unit nothing can supply ends the
+        branch here instead of after every other branch has been explored.
+        """
+        usable = {index for index in core if sets[index] <= rest}
+        best: list[int] | None = None
+        for unit in sorted(rest):
+            holders = [index for index in core_holders.get(unit, ()) if index in usable]
+            if not holders:
+                return []
+            if best is None or len(holders) < len(best):
+                best = holders
+        return best or []
+
+    budget = _SEARCH_WORK_LIMIT
+    frames: list[tuple[frozenset[str], Iterator[int]]] = []
+    picked: list[int] = []
+
+    def descend(rest: frozenset[str]) -> bool:
+        """Open a frame for `rest`, charging what its candidate scan costs. False when spent."""
+        nonlocal budget
+        budget -= core_occurrences + len(rest)
+        if budget <= 0:
+            return False
+        frames.append((rest, iter(candidates(rest))))
+        return True
+
+    if not descend(remaining):
+        return CoverResult(exhausted=True)
+
+    while frames:
+        rest, untried = frames[-1]
+        if not rest:
+            return CoverResult(chosen=list(picked))
+        index = next(untried, None)
+        if index is None:
+            frames.pop()
+            if picked:
+                picked.pop()
+            continue
+        picked.append(index)
+        if not descend(rest - sets[index]):
+            return CoverResult(exhausted=True)
+
+    return CoverResult()
 
 
 def purge_staged(dataset_uri: str, run_id: str) -> int:
@@ -428,7 +618,7 @@ def _read_all(root: str) -> Iterator[str]:
         bucket, prefix = _split(root)
         client = _client()
         for key in _list_object_keys(bucket, prefix):
-            yield client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()  # type: ignore[attr-defined]
+            yield client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
         return
 
     directory = Path(root)
