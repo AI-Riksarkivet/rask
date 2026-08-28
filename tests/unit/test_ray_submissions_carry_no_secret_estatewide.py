@@ -78,16 +78,24 @@ def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     seen: dict[str, Any] = {}
 
-    async def _capture(_client: Any, submission_id: str, body: dict[str, Any]) -> None:
-        seen["stage"] = body
+    async def _capture(_client: Any, submission_id: str, body: dict[str, Any], **_policy: Any) -> str:
+        # `**_policy` swallows the kernel's `on_terminal_failure` keyword: the pin captures BODIES,
+        # and pinning the policy signature here would make every kernel-contract change a pin edit.
+        # KEYED BY THE ID'S OWN PREFIX, not by which double intercepted it: since move 14 collapsed
+        # train onto the kernel, BOTH seams flow through submit_or_reattach, and a capture keyed by
+        # interception point silently filed train's body under "stage" — this pin's own
+        # never-captured guard is what caught that.
+        seen["train" if submission_id.startswith("ray-train-") else "stage"] = body
+        return "submitted"
 
     class _Response:
         status_code = 200
 
     class _Client:
+        # Present only so `ray_client()` returns something; with the kernel monkeypatched above,
+        # nothing posts through it — both seams' bodies arrive via `_capture`.
         async def post(self, _path: str, json: dict[str, Any]) -> _Response:  # noqa: A002 — httpx's kwarg name
-            seen["train"] = json
-            return _Response()
+            raise AssertionError("a submission bypassed the kernel — some seam still carries an inline POST")
 
     async def _client() -> _Client:
         return _Client()

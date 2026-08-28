@@ -38,7 +38,6 @@ log = logging.getLogger(__name__)
 # (:237). Its sibling _TERMINAL_OK and the poll-error tolerance went with the completion
 # poll — nothing observes a job to SUCCEEDED any more, so only the FAILED/STOPPED test
 # survives, and only at submit time.
-_TERMINAL_BAD = frozenset({"FAILED", "STOPPED"})
 
 
 #: The ONE Ray dashboard client for this worker process.
@@ -366,22 +365,15 @@ async def submit_train_job(
         "metadata": {key: value for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token)) if value},
     }
     client = await ray_client()
-    try:
-        response = await client.post("/api/jobs/", json=body)
-        if response.status_code < 400:
-            log.info("ray_train_job_submitted", extra={"submission_id": submission_id, "model": model})
-            return "submitted"
-        existing = await client.get(f"/api/jobs/{submission_id}")
-        if existing.status_code == 200:
-            if existing.json().get("status") in _TERMINAL_BAD:
-                log.warning("ray_train_job_previously_failed", extra={"submission_id": submission_id})
-                return "already_failed"
-            log.info("ray_train_job_reattach", extra={"submission_id": submission_id})
-            return "attached"
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise rk.RayJobError(f"failed to submit ray train job {submission_id}: {exc}") from exc
-    return "submitted"
+    # THROUGH THE KERNEL, with D2 as the explicit policy: `on_terminal_failure="report"` is the one
+    # deliberate divergence from the stage contract (the kernel's docstring names both). This
+    # replaced an inline copy of the same POST-then-reattach dance — the "second implementation"
+    # ray_kit.submit's header warns about, written before the kernel existed and never collapsed.
+    outcome = await rk.submit_or_reattach(client, submission_id, body, on_terminal_failure="report")
+    if outcome == "submitted":
+        log.info("ray_train_job_submitted", extra={"submission_id": submission_id, "model": model})
+    # The published contract keeps its historical strings: callers branch on "attached".
+    return "attached" if outcome == "reattached" else outcome
 
 
 #: Re-exported. The generic submitter moved to `ray_kit.submit` (R2) so `compute` — the execution

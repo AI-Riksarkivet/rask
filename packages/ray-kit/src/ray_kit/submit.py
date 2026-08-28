@@ -2,9 +2,11 @@
 
 ``ray_kit`` was read-only: schemas plus a dashboard wrapper. Everything that could START a job lived in
 ``medallion/services/ray_submit.py``, so the medallion owned job submission for the whole estate — which
-is backwards. ``compute`` is the execution plane (it holds the Ray Job SDK, submits, polls and proxies
-Serve), and R2 puts ETL there; it cannot do that while the only submitter is inside the service that
-merely happens to have needed one first.
+is backwards: the mechanics of submission belong to no one workload. (An earlier version of this header
+claimed ``compute`` "submits" and that R2 would move ETL there — corrected 2026-08-28: compute holds the
+Ray Job SDK client for INTROSPECTION only and deliberately submits nothing, verified by call-site sweep.
+The kernel's consumers are the workload wrappers, medallion's stage and train paths both included since
+open_ray-kernel.md move 14 collapsed train's inline copy onto ``submit_or_reattach``.)
 
 **What moved and what did not.** Of the eight functions in that module, five read no settings at all —
 they are the submitter. The other three (``submit_stage_job``, ``submit_ingest_job``,
@@ -30,6 +32,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Mapping
+from typing import Literal
 
 import httpx
 from opentelemetry import propagate
@@ -161,30 +164,51 @@ def is_terminal(status: str | None) -> bool:
     return status == TERMINAL_OK or status in TERMINAL_BAD
 
 
-async def submit_or_reattach(client: httpx.AsyncClient, sub_id: str, body: Mapping[str, object]) -> None:
-    """``POST /api/jobs/``, tolerating an id that already exists.
+async def submit_or_reattach(
+    client: httpx.AsyncClient,
+    sub_id: str,
+    body: Mapping[str, object],
+    *,
+    on_terminal_failure: Literal["resubmit", "report"] = "resubmit",
+) -> str:
+    """``POST /api/jobs/``, tolerating an id that already exists. Returns what actually happened:
+    ``"submitted"`` | ``"reattached"`` | ``"resubmitted"`` | ``"already_failed"``.
 
-    A 4xx for a duplicate id re-attaches to that job — UNLESS the prior one terminally FAILED or STOPPED,
-    in which case it is deleted and resubmitted fresh, so the redelivery actually retries the work on a
-    healthy worker. Without that branch every redelivery re-observes the same failure until maxDeliver
-    silently drops the trigger, and the deterministic id that bought idempotency becomes the thing that
-    guarantees the work never completes.
+    A 4xx for a duplicate id re-attaches to that job. What happens when the prior one terminally
+    FAILED or STOPPED is the ONE deliberate policy divergence between this kernel's callers, so it is
+    a parameter rather than a fork:
+
+    - ``"resubmit"`` (the default — the STAGE contract): delete it and resubmit fresh, so the
+      redelivery actually retries the work on a healthy worker. Without that branch every redelivery
+      re-observes the same failure until maxDeliver silently drops the trigger, and the deterministic
+      id that bought idempotency becomes the thing that guarantees the work never completes.
+    - ``"report"`` (the TRAIN contract, docs/RAY-TRAIN.md D2): answer ``"already_failed"`` and touch
+      nothing — training compute is expensive, so a failed run is terminal until a human resubmits
+      with a fresh token, and the caller needs the outcome so it can DROP attributably.
+
+    This parameter exists because the alternative was measured: train carried its own inline copy of
+    this dance to get the D2 branch, and a mirrored submission seam is where one-sided fixes land
+    (the credential echo; the work-axis id fix).
     """
     try:
         response = await client.post("/api/jobs/", json=dict(body))
         if response.status_code < 400:
-            return
+            return "submitted"
         existing = await client.get(f"/api/jobs/{sub_id}")
         if existing.status_code == 200:
             if existing.json().get("status") in TERMINAL_BAD:
+                if on_terminal_failure == "report":
+                    log.warning("ray_job_previously_failed", extra={"submission_id": sub_id})
+                    return "already_failed"
                 # DELETE is valid only on a terminal job; FAILED/STOPPED are.
                 await client.delete(f"/api/jobs/{sub_id}")
                 fresh = await client.post("/api/jobs/", json=dict(body))
                 fresh.raise_for_status()
                 log.info("ray_job_resubmitted_after_failure", extra={"submission_id": sub_id})
-                return
+                return "resubmitted"
             log.info("ray_job_reattach", extra={"submission_id": sub_id})
-            return
+            return "reattached"
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise RayJobError(f"failed to submit ray job {sub_id}: {exc}") from exc
+    return "submitted"
