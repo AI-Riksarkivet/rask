@@ -115,9 +115,9 @@ async def produce(
             if rows is not None:
                 seed_kwargs["rows"] = rows
             result = await run_in_threadpool(partial(seed_bronze, bronze_uri, settings.storage_options(), **seed_kwargs))
-            span.set_attribute("lance.version", result.version)
-            span.set_attribute("lance.row_count", result.row_count)
-            span.set_attribute("lance.size_bytes", result.size_bytes)
+            span.set_attribute("lance.write.version", result.version)
+            span.set_attribute("lance.write.row_count", result.row_count)
+            span.set_attribute("lance.write.size_bytes", result.size_bytes)
         bronze_event = build_run_event(
             operation=settings.producer_operation,
             author=settings.producer_author,

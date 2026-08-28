@@ -409,7 +409,7 @@ def test_the_terminal_span_names_the_RUN_and_marks_a_failed_one(monkeypatch: pyt
     (span,) = exporter.get_finished_spans()
     attrs = dict(span.attributes or {})
     assert attrs.get("lance.ingest.run_id") == "run-77", f"the span does not name the run: {attrs}"
-    assert attrs.get("lance.dataset") == "pages", f"the span does not name the dataset: {attrs}"
+    assert attrs.get("lance.ingest.dataset") == "pages", f"the span does not name the dataset: {attrs}"
     assert span.status.status_code is StatusCode.ERROR, (
         "a FAILED run leaves its terminal span UNSET — the boundary RETURNS the failure, so daprd sees an "
         "activity that completed and trace-based error search shows a clean estate."

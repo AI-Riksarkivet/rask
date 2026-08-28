@@ -1340,7 +1340,7 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: TerminalInput) -> None:
     # closed half.
     span = trace.get_current_span()
     span.set_attribute("lance.ingest.run_id", spec.run_id)
-    span.set_attribute("lance.dataset", spec.dataset)
+    span.set_attribute("lance.ingest.dataset", spec.dataset)
     if outcome.status != "COMPLETE":
         # The error boundary RETURNS RunOutcome(status="FAILED") rather than raising — deliberately, so
         # the queue release and the FAIL lineage record still happen — which means daprd sees an activity

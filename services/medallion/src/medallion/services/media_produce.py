@@ -113,8 +113,8 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         # Idempotency: reuse a caller-supplied key (its 503-retry contract) so a retry MERGEs on the same
         # deterministic run_ids instead of double-firing the media chain (bug hunt 2026-07-13).
         result = await run_in_threadpool(_seed_and_ingest, settings)
-        span.set_attribute("lance.version", result.version)
-        span.set_attribute("lance.row_count", result.row_count)
+        span.set_attribute("lance.write.version", result.version)
+        span.set_attribute("lance.write.row_count", result.row_count)
         event = build_run_event(
             operation="ingest_media",
             author=settings.producer_author,

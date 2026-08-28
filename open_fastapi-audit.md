@@ -1719,7 +1719,39 @@ produce.py:91 `with tracer.start_as_current_span("medallion.produce") as span:` 
 
 </details>
 
-<details><summary><b>Custom span attributes split one concept across two namespaces: the OpenLineage run id is `lance.ingest.run_id` in one service and `lance.lineage.run_id` in another</b> <i>(observability.md, ADJUSTED)</i></summary>
+<details><summary><b>~~Custom span attributes split one concept across two namespaces: the OpenLineage run id is `lance.ingest.run_id` in one service and `lance.lineage.run_id` in another~~</b> <i>(observability.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-28.** The finding refutes its own headline and its **Fix contradicts its own
+> analysis**; both were checked in code and the analysis is the half that is right, so the Fix's first
+> sentence is **deliberately not implemented**.
+>
+> `lance.ingest.run_id` is `spec.run_id`, the ingest harvest's run. `lance.lineage.run_id` was
+> `lineage_doc.run_id`, and `promotion_lineage` calls `build_run_event(...)` then
+> `LineageDoc.from_run_event(...)` — a run MINTED IN THE MOVER. Two different ids. "Change
+> ingest/workflow.py to match" would file them under ONE key, turning a join that returns nothing
+> into one that silently returns the wrong spans — strictly worse. The second half of the original
+> claim is dropped as the finding asks: OTel attributes are scoped by their span, and
+> `medallion.produce` / `medallion.transform` / `compaction.compact` already distinguish them.
+>
+> **What survives is namespace hygiene, and it is now two derived rules** in
+> `tests/unit/test_span_attribute_namespaces.py` (63 rows, 15 RED first):
+> **(a) every `lance.*` key names a domain** — the seven bare ones are gone. The three write-result
+> attributes describe the SAME Lance commit in three services, so they became one shared
+> `lance.write.{version,row_count,size_bytes}` rather than three service-prefixed copies; the rest took
+> their owning service's segment (`lance.ingest.dataset`, `lance.maintenance.{dataset_uri,
+> policy_skipped,refused}`). **(b) a service's domain segment belongs to that service** — which is what
+> catches the real residue: the mover filed its OWN promotion run under `lance.lineage.*`, the segment
+> naming another service, on a span whose every sibling is `lance.medallion.*`. Now
+> `lance.medallion.{run_id,chain_depth}`, which cannot be mistaken for a shared lineage identity.
+>
+> The domain vocabulary is derived from `services/` rather than listed. `SHARED_DOMAINS` holds one
+> entry (`write`) and a test refuses it if it stops being shared or drifts from the three fields of a
+> Lance commit; `CROSS_DOMAIN` holds the two genuine cross-domain attributes
+> (`lance.catalog.{registered,ungoverned}` on a medallion span — a catalog fact the mover legitimately
+> records) with the reason inline.
+> **Checked before renaming:** no Perses dashboard, alert rule, doc or frontend consumes any of these
+> keys, so nothing downstream breaks. The two apparent `lance.version` hits in `docs/` are prose about
+> the pylance version. Two test consumers were updated with the renames.
 
 **Rule.** observability.md: § Manual spans ("See the `otel` skill references/signals.md for the full naming rules") — attribute keys must be stable across the services that emit the same concept
 

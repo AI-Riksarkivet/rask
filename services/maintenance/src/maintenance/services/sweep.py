@@ -284,7 +284,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     for uri in uris:
         record_dataset_swept()
         with tracer.start_as_current_span("compaction.compact") as span:
-            span.set_attribute("lance.dataset_uri", uri)
+            span.set_attribute("lance.maintenance.dataset_uri", uri)
             effective_older_than: timedelta | None = older_than
             retain_versions: int | None = None
             # #61 per-TIER default, before any policy is read. One row count cannot serve a ~1.8 MB
@@ -307,7 +307,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                 policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
                 skipped = _policy_skip_reason(policy, settings, options, now, uri) if policy else None
                 if skipped:
-                    span.set_attribute("lance.policy_skipped", skipped)
+                    span.set_attribute("lance.maintenance.policy_skipped", skipped)
                     results.append(DatasetResult(uri=uri, skipped=skipped))
                     continue
                 if policy is not None:
@@ -375,7 +375,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             results.append(result)
             # #64 — a refusal is not an error, so it would otherwise be invisible in the trace too.
             if result.refused is not None:
-                span.set_attribute("lance.refused", result.refused)
+                span.set_attribute("lance.maintenance.refused", result.refused)
             # compact_one never raises (it captures the per-dataset error), so reflect a failure on the
             # span explicitly — else a failed dataset looks identical to a clean one in the trace.
             if result.error is not None:

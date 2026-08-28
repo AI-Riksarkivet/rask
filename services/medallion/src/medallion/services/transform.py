@@ -521,8 +521,13 @@ async def handle_stage(
                 )
                 with tracer.start_as_current_span("medallion.transform") as span:
                     span.set_attribute("lance.medallion.transition", transition)
-                    span.set_attribute("lance.lineage.run_id", lineage_doc.run_id)
-                    span.set_attribute("lance.lineage.chain_depth", len(lineage_doc.derived_from))
+                    # `lance.medallion.*`, NOT `lance.lineage.*`. This run id is minted HERE —
+                    # `promotion_lineage` builds its own run event — so filing it under the segment
+                    # that names the lineage SERVICE read as a shared identity it is not. An operator
+                    # joining it to `lance.ingest.run_id` would get a silently wrong answer rather
+                    # than an empty one, which is the worse of the two failures.
+                    span.set_attribute("lance.medallion.run_id", lineage_doc.run_id)
+                    span.set_attribute("lance.medallion.chain_depth", len(lineage_doc.derived_from))
                     use_ray = settings.ray_enabled
                     if use_ray and not trigger.ray_job_done:
                         # S1 — DISPATCH, and return. This branch used to submit and then measure on the
@@ -640,9 +645,9 @@ async def handle_stage(
                             )
                             span.set_attribute("lance.catalog.ungoverned", to_dataset)
 
-                    span.set_attribute("lance.version", result.version)
-                    span.set_attribute("lance.row_count", result.row_count)
-                    span.set_attribute("lance.size_bytes", result.size_bytes)
+                    span.set_attribute("lance.write.version", result.version)
+                    span.set_attribute("lance.write.row_count", result.row_count)
+                    span.set_attribute("lance.write.size_bytes", result.size_bytes)
                 # THE MOVER MEASURES; IT DOES NOT RULE. Under one door the catalog decides whether a
                 # version may be promoted, so these assertions no longer gate anything — see
                 # `failed_assertions` below, which is deliberately not derived from them.

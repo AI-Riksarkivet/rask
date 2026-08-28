@@ -153,7 +153,7 @@ async def test_a_successful_head_is_not_marked_ERROR(monkeypatch: pytest.MonkeyP
 
     span = _span(exporter, "medallion.produce")
     assert span is not None and span.status.status_code is not StatusCode.ERROR
-    assert span.attributes.get("lance.row_count") == 8, "the seed attributes were lost in the move"
+    assert span.attributes.get("lance.write.row_count") == 8, "the seed attributes were lost in the move"
 
 
 # ── the media head, the same two defects ────────────────────────────────────────────────────────
