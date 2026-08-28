@@ -42,9 +42,33 @@ from ratch.errors import RatchError
 
 logger = logging.getLogger(__name__)
 
-#: Environment prefixes forwarded into the job (store creds + service URLs) —
-#: the same idea as lance-ns forwarding S3_* into its stage jobs.
+#: Environment prefixes forwarded into the job — service URLs and store COORDINATES, never credentials.
 _FORWARDED_ENV_PREFIXES = ("MEDIA_", "AWS_")
+
+#: Substrings that mark a name as a CREDENTIAL, which must never ride a job submission. The Ray Jobs
+#: API echoes `runtime_env` back on `GET /api/jobs/<id>` — an unauthenticated dashboard, proxied at
+#: `/api/ray/*` and published at the edge — so anything here is readable by any caller. This is the
+#: same P0 the medallion closed on 2026-08-28 (open_python-audit MED-003); it had not crossed into
+#: ratch, where the `AWS_` prefix forwarded `AWS_SECRET_ACCESS_KEY` and `MEDIA_` forwarded the media
+#: plane's own S3 secret.
+#:
+#: A DENYLIST OVER THE PREFIXES, not an allowlist of names, because the prefixes exist to carry
+#: whatever service URLs a runner needs without a code change here — an allowlist would make every
+#: new `MEDIA_*_URL` a platform edit. Matching on shape catches the names nobody has invented yet;
+#: `AWS_ACCESS_KEY_ID` deliberately does NOT match, because an access-key id identifies rather than
+#: authenticates and Lance needs it alongside the endpoint.
+#:
+#: Removing these breaks nothing in-cluster: the Ray pods carry no `AWS_*` at all (verified against
+#: the chart and the live head), so this forward ships no credential there. Where a credential IS in
+#: the submitter's environment — a developer's machine, a CI runner — shipping it through an echoing
+#: API is the defect. A job that needs S3 credentials takes them from the POD, as the medallion's do.
+_SECRET_NAME_MARKERS = ("SECRET", "TOKEN", "PASSWORD", "CREDENTIAL")
+
+
+def _is_credential(name: str) -> bool:
+    return any(marker in name.upper() for marker in _SECRET_NAME_MARKERS)
+
+
 #: uuid5 namespace for submission ids (deterministic per (runner, token)).
 _SUBMISSION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/lance-audio/runners")
 _TERMINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "STOPPED"})
@@ -157,7 +181,12 @@ def _job_runtime_env(job: RunnerJob) -> dict[str, Any]:
     """working_dir (the repo, so ``runners.*`` imports resolve) + the runner's own
     pip env + forwarded store/service env vars. pip runtime_env is the DEV bridge —
     production bakes each runner into an image (docs/TODO.md)."""
-    forwarded = {k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES)}
+    forwarded = {k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and not _is_credential(k)}
+    dropped = sorted(k for k in os.environ if k.startswith(_FORWARDED_ENV_PREFIXES) and _is_credential(k))
+    if dropped:
+        # Named, not silent: an operator whose job cannot reach S3 needs to know the credential was
+        # deliberately withheld from the submission rather than lost. The value never appears.
+        logger.info("not forwarding credential-shaped env into the job submission (the Jobs API echoes it): %s", ", ".join(dropped))
     return {
         "working_dir": str(runners_root().parent),
         **runner_env(job.runner),
