@@ -35,7 +35,7 @@ from ratch.core.engine import _ValueCheckpoint, attach_values_by_rowid
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     import ray.data
 
@@ -136,7 +136,7 @@ class _BlobActor:
         blob_column: str,
         out_name: str,
         output_type: pa.DataType,
-        done_ids: frozenset[int],
+        done_ids: Resume,
     ) -> None:
         self._fn = factory()
         self._ds = lance.dataset(dataset_uri)
@@ -193,7 +193,7 @@ class _ScanByRowidActor:
         factory: Callable[[], Callable[[pa.Table], pa.Array]],
         out_name: str,
         output_type: pa.DataType,
-        done_ids: frozenset[int],
+        done_ids: Resume,
     ) -> None:
         self._fn = factory()
         self._out = out_name
@@ -217,6 +217,97 @@ class _RowsActor:
 
     def __call__(self, batch: pa.Table) -> pa.Table:
         return self._fn(batch)
+
+
+#: Above this many members a resume set travels by REFERENCE rather than by value. Ray's own
+#: `pass-large-arg-by-value` pattern puts the line at roughly 100 KB; a few thousand row ids or key
+#: tuples is the same order, and below it a `ray.put` costs more round-trips than it saves.
+RESUME_BY_REFERENCE_ABOVE = 10_000
+
+
+def _object_store_put(value: object) -> Any:  # noqa: ANN401 — an opaque ObjectRef
+    """Indirection so the object-store hop can be exercised without a live cluster."""
+    import ray
+
+    return ray.put(value)
+
+
+def _object_store_get(ref: Any) -> Any:  # noqa: ANN401 — an opaque ObjectRef
+    import ray
+
+    return ray.get(ref)
+
+
+class Resume:
+    """The work already done, sized to travel.
+
+    Two of Ray's documented patterns name the same hazard from opposite directions, and this seam
+    was hitting both: `closure-capture-large-objects` (a set captured by a `map_batches` function is
+    cloudpickled into EVERY task) and `pass-large-arg-by-value` (a set handed through
+    `fn_constructor_kwargs` is copied once per actor in the pool). The set grows with the OUTPUT
+    table rather than with the pending work, so on a mature table a resume shipped tens of MB of key
+    tuples per task — and it shipped them exactly when the job was already recovering from a
+    failure. The comment that stood here asserted the set was "small (key tuples only)"; nothing
+    bounded it.
+
+    Above `RESUME_BY_REFERENCE_ABOVE` the members go into the object store ONCE and every consumer
+    dereferences them; below it they ride inline, because a fresh run has no resume set at all and a
+    hundred keys are cheaper to copy than to put.
+
+    THE PUT HAPPENS AT SERIALIZATION, not at construction, and its handle is cached — so a driver
+    that builds one of these and never ships it never touches Ray, and a stage that ships it a
+    thousand times still stores one copy. The RESOLVED members are deliberately dropped from the
+    pickle: a worker that dereferenced the set and then re-serialized itself would put the whole set
+    back on the wire one hop later, which is the same defect with an extra step.
+    """
+
+    __slots__ = ("_members", "_ref", "_resolved")
+
+    def __init__(self, values: Iterable[Any]) -> None:
+        self._members: frozenset[Any] | None = frozenset(values)
+        self._ref: Any = None
+        self._resolved: frozenset[Any] | None = self._members
+
+    def _get(self) -> frozenset[Any]:
+        if self._resolved is None:
+            self._resolved = _object_store_get(self._ref)
+        return self._resolved  # ty: the branch above guarantees it is set
+
+    def __contains__(self, value: object) -> bool:
+        return value in self._get()
+
+    def __len__(self) -> int:
+        return len(self._get())
+
+    def __bool__(self) -> bool:
+        return bool(self._members) if self._members is not None else len(self) > 0
+
+    def __getstate__(self) -> tuple[frozenset[Any] | None, Any]:
+        if self._members is not None and len(self._members) <= RESUME_BY_REFERENCE_ABOVE:
+            return (self._members, None)
+        if self._ref is None:
+            self._ref = _object_store_put(self._members if self._members is not None else self._get())
+        return (None, self._ref)
+
+    def __setstate__(self, state: tuple[frozenset[Any] | None, Any]) -> None:
+        self._members, self._ref = state
+        self._resolved = self._members
+
+
+def drop_done_rows(done: Resume, key_columns: list[str]) -> Callable[[pa.Table], pa.Table]:
+    """The append stage's resume filter, built OUTSIDE the stage so what it closes over is visible.
+
+    It captures a `Resume` (a pointer once the set is large) and the key column names, and nothing
+    else — which is the whole point of lifting it out of `run_append_rows_stage`, where it closed
+    over the raw set.
+    """
+
+    def _drop_done(batch: pa.Table) -> pa.Table:
+        keys = zip(*(batch[k].to_pylist() for k in key_columns), strict=True)
+        mask = pa.array([k not in done for k in keys], pa.bool_())
+        return batch.filter(mask)
+
+    return _drop_done
 
 
 def _map_batches(source: ray.data.Dataset, actor_cls: type, stage: Stage, **ctor: Any) -> ray.data.Dataset:
@@ -379,7 +470,7 @@ def _build_scan_column_by_rowid(
         factory=factory,
         out_name=name,
         output_type=output_type,
-        done_ids=frozenset(value_by_row_id),
+        done_ids=Resume(value_by_row_id),
     )
     for batch in (cast("pa.Table", b) for b in results.iter_batches(batch_format="pyarrow")):
         pairs = list(zip(batch.column("_rowid").to_pylist(), batch.column(name).to_pylist(), strict=True))
@@ -455,7 +546,7 @@ def run_blob_column_stage(
         blob_column=stage.blob_column,
         out_name=name,
         output_type=output_type,
-        done_ids=frozenset(value_by_row_id),
+        done_ids=Resume(value_by_row_id),
     )
     for batch in (cast("pa.Table", b) for b in results.iter_batches(batch_format="pyarrow")):
         pairs = list(zip(batch.column("_rowid").to_pylist(), batch.column(name).to_pylist(), strict=True))
@@ -502,10 +593,10 @@ def run_append_rows_stage(
         filters.append(gate)
 
     key_columns = list(stage.key_columns)
-    done: set[tuple[Any, ...]] = set()
+    done = Resume(())
     if Path(out_uri).exists():
         existing = lance.dataset(out_uri).to_table(columns=key_columns)
-        done = set(zip(*(existing[k].to_pylist() for k in key_columns), strict=True)) if existing.num_rows else set()
+        done = Resume(zip(*(existing[k].to_pylist() for k in key_columns), strict=True)) if existing.num_rows else Resume(())
     else:
         create_output()
 
@@ -515,14 +606,7 @@ def run_append_rows_stage(
         filter=" AND ".join(filters) if filters else None,
     )
     if done:
-        done_broadcast = done  # captured by the lambda; small (key tuples only)
-
-        def _drop_done(batch: pa.Table) -> pa.Table:
-            keys = zip(*(batch[k].to_pylist() for k in key_columns), strict=True)
-            mask = pa.array([k not in done_broadcast for k in keys], pa.bool_())
-            return batch.filter(mask)
-
-        source = source.map_batches(_drop_done, batch_format="pyarrow")
+        source = source.map_batches(drop_done_rows(done, key_columns), batch_format="pyarrow")
 
     results = _map_batches(source, _RowsActor, stage, factory=factory)
 
