@@ -31,6 +31,7 @@ import logging
 from typing import Any
 
 from service_kit import dapr_publish
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)
@@ -42,10 +43,10 @@ _RETRY = {"status": "RETRY"}
 #: creates — is a governance notice, not a readiness one, and must drive nothing.
 PUBLISHED_ACTION = "table_published"
 
-#: The catalog's identifier delimiter. Hardcoded here rather than read from medallion settings
-#: because medallion has none — the value belongs to the CATALOG's identifier grammar, and inventing
-#: a medallion-side knob for it would be a second source of truth for someone else's format.
-DELIMITER = "$"
+#: The catalog's identifier delimiter — the estate-wide `CATALOG_DELIMITER`, not a medallion knob.
+#: The value belongs to the CATALOG's identifier grammar; a medallion-side knob for it would be a
+#: second source of truth for someone else's format.
+DELIMITER = CATALOG_DELIMITER
 
 
 def _table_name(object_id: str, delimiter: str) -> str | None:

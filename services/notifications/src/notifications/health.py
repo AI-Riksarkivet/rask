@@ -5,20 +5,11 @@ default `healthPath` (`/api/health`) points at, and a probe that fails when a DE
 unreachable turns a blip into a restart loop. The operational pair (`/livez` + `/readyz`, root-mounted
 so a supervisor need not know this service's api prefix) is where per-component reporting lives.
 
-The response model is the estate-wide `service_kit.schemas.health.Liveness` — one probe body for every
-service, one place to change it.
+The shared ``service_kit.health`` router serves the estate-wide ``Liveness`` badge — one probe body,
+one handler, one place to change it.
 """
 
-from fastapi import APIRouter
-
-from service_kit.schemas.health import Liveness
+from service_kit.health import make_health_router
 
 
-router = APIRouter(tags=["health"])
-
-
-@router.get("/health")
-async def health() -> Liveness:
-    # async, not sync def: a liveness probe must run ON the event loop, never queued behind the
-    # blocking threadpool — else it fails exactly when the pod is busiest.
-    return Liveness()
+router = make_health_router()

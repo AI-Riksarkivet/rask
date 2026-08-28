@@ -12,9 +12,10 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
-import pyarrow as pa
 import pyarrow.fs as pafs
 from pydantic import BaseModel
+
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 class SourceObject(BaseModel):
@@ -220,7 +221,4 @@ class LanceFragmentSource:
     def iter_objects(self) -> Iterator[SourceObject]:
         for fragment in self._dataset().get_fragments():
             table = fragment.to_table()
-            sink = pa.BufferOutputStream()
-            with pa.ipc.new_stream(sink, table.schema) as writer:
-                writer.write_table(table)
-            yield SourceObject(uri=self._key(fragment.fragment_id), data=sink.getvalue().to_pybytes())
+            yield SourceObject(uri=self._key(fragment.fragment_id), data=encode_arrow_stream(table))

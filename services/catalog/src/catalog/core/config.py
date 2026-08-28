@@ -14,6 +14,8 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 _STORAGE_PREFIX = "storage."
 
@@ -32,7 +34,7 @@ class Settings(BaseSettings):
     # Catalog
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
     root: str = Field(default="s3://lance-catalog", alias="LANCE_REST_ROOT")
-    delimiter: str = Field(default="$", alias="LANCE_NS_DELIMITER")
+    delimiter: str = Field(default=CATALOG_DELIMITER, alias="LANCE_NS_DELIMITER")
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
     #: and the schemas shipped openly. A security default every deployment must remember to disable is

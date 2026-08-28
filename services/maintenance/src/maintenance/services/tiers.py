@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 #: ~512 x 1.8 MB. Bronze rows are page images; a row count meant for narrow data produces fragments
 #: measured in tens of GB here, which is the OOM `scanBatchSize` already had to be bounded for.
@@ -121,8 +123,8 @@ def tier_of(dataset_uri: str) -> str | None:
         return None
 
     leaf = parts[-1]
-    if "$" in leaf:  # layout 3 — flat: the namespace is the leaf's own prefix, not a parent directory
-        namespace = leaf.split("$", 1)[0]
+    if CATALOG_DELIMITER in leaf:  # layout 3 — flat: the namespace is the leaf's own prefix, not a parent directory
+        namespace = leaf.split(CATALOG_DELIMITER, 1)[0]
         # Strip the dir backend's uuid8 prefix, once: `aa3bed10_silver` -> `silver`.
         return _tier_from_namespace(namespace.split("_", 1)[1] if "_" in namespace else namespace)
 

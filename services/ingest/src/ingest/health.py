@@ -13,19 +13,11 @@ actual rollout could say the probe path and the app disagreed.
 
 Liveness ONLY — deliberately not a readiness that probes NATS or the catalog. A liveness probe that
 fails when a dependency is down turns one broken dependency into a restart loop across every pod that
-touches it, which is how a partial outage becomes a total one.
+touches it, which is how a partial outage becomes a total one. The shared ``service_kit.health`` router
+serves the estate-wide ``Liveness`` badge: one probe body, one handler, one place to change it.
 """
 
-from fastapi import APIRouter
-
-from service_kit.schemas.health import Liveness
+from service_kit.health import make_health_router
 
 
-router = APIRouter(tags=["health"])
-
-
-@router.get("/health")
-async def health() -> Liveness:
-    # async, not sync def: a liveness probe must run ON the event loop rather than queue behind the
-    # blocking threadpool — otherwise it fails exactly when the pod is busiest and healthy.
-    return Liveness()
+router = make_health_router()

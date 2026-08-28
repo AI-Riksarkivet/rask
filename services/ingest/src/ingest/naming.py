@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import os
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 def delimiter() -> str:
     """The catalog's table-id separator. From env so it cannot drift from the catalog's own."""
-    return os.getenv("RASK_CATALOG_DELIMITER", "$")
+    return os.getenv("RASK_CATALOG_DELIMITER", CATALOG_DELIMITER)
 
 
 def bronze_namespace() -> str:

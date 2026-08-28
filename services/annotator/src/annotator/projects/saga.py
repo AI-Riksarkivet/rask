@@ -42,6 +42,7 @@ from typing import Any, Protocol
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Task, TaskState
 from annotator.projects.publish import PROJECT_FACET, PublishPlan, PublishRefusal, build_plan, project_facet, source_pin, table_properties
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 logger = logging.getLogger(__name__)
@@ -107,14 +108,10 @@ class PublishOutcome:
     already_published: bool = False
 
 
-#: The catalog's identifier delimiter (`LANCE_NS_DELIMITER`, catalog/core/config.py) — estate ids
-#: are `bronze$events`, `silver$features`. A `.` here is NOT a separator to the catalog: the id
-#: would parse as one root-level segment, landing the table at the catalog ROOT while FGA
-#: authorized creation in `namespace:<target>` — the authorization object and the created object
-#: would diverge.
-CATALOG_DELIMITER = "$"
-
-
+# The catalog's identifier delimiter is `CATALOG_DELIMITER` (imported): estate ids are `bronze$events`,
+# `silver$features`. A `.` here is NOT a separator to the catalog — the id would parse as one root-level
+# segment, landing the table at the catalog ROOT while FGA authorized creation in `namespace:<target>`,
+# so the authorization object and the created object would diverge.
 def table_id_for(project: AnnotationProject, publish_id: str, namespace: str) -> str:
     """The published table's id — DETERMINISTIC in the publish token, which is what makes `create`
     idempotent on retry.

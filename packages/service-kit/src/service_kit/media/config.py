@@ -17,6 +17,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 class AssistBackend(BaseModel):
     """One registered assist producer: its endpoint plus its DECLARED contract.
@@ -122,7 +124,7 @@ class Settings(BaseSettings):
     read_backend: str = Field(default="direct", alias="MEDIA_READ_BACKEND")
     write_backend: str = Field(default="direct", alias="MEDIA_WRITE_BACKEND")
     catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
-    catalog_delimiter: str = Field(default="$", alias="MEDIA_CATALOG_DELIMITER")
+    catalog_delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDIA_CATALOG_DELIMITER")
     # The publish saga's own OIDC identity (the catalog accepts only IdP bearers, and the saga
     # outlives any user request). A token is minted FRESH per publish via the password grant with a
     # dedicated service account — nothing long-lived is stored anywhere, so nothing can go stale

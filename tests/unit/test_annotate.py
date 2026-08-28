@@ -16,8 +16,8 @@ import pytest
 from annotator.annotations.save import build_delta, new_rows
 from annotator.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
 from annotator.annotations.tags import check_keys_arity, tag_id, tag_rows
-from annotator.annotations.wire import ipc_stream
 
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.descriptor import Declared
 
 
@@ -40,7 +40,7 @@ def test_ipc_stream_roundtrips() -> None:
             "shape_type": ["rectangle"],
         }
     )
-    back = _read_ipc(ipc_stream(tbl))
+    back = _read_ipc(encode_arrow_stream(tbl))
     assert back.num_rows == 1
     assert back.column("id")[0].as_py() == "x"
 
@@ -48,7 +48,7 @@ def test_ipc_stream_roundtrips() -> None:
 def test_empty_schema_is_a_parseable_empty_stream() -> None:
     # A dataset with no annotations table degrades to this — the client must still
     # parse it and render 0, so it carries the columns ArrowDataPlugin reads.
-    back = _read_ipc(ipc_stream(EMPTY_SCHEMA.empty_table()))
+    back = _read_ipc(encode_arrow_stream(EMPTY_SCHEMA.empty_table()))
     assert back.num_rows == 0
     names = set(back.schema.names)
     # geometry the PixiJS ArrowDataPlugin reads

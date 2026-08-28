@@ -30,7 +30,9 @@ from typing import Any
 from annotator.core.config import get_annotator_settings
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan
 from annotator.projects.saga import PublishOutcome, run_publish
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.warehouse_registry import namespace_for
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
 logger = logging.getLogger(__name__)
@@ -54,16 +56,13 @@ def _bare_facets(run_facet: dict[str, Any]) -> dict[str, Any]:
 
 
 def _arrow_stream_bytes(plan: PublishPlan) -> bytes:
-    """The plan's rows as an Arrow-IPC **stream** — the encoding the catalog's write endpoints parse
-    (an IPC *file* body fails their reader). Explicit schema, so an all-sentinel publish still
-    produces correctly-typed columns."""
+    """The plan's rows as an Arrow-IPC stream body for the catalog's create. Explicit schema, so an
+    all-sentinel publish still produces correctly-typed columns."""
     import pyarrow as pa  # noqa: PLC0415 - heavy import, publish path only
 
-    table = pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA)
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return bytes(sink.getvalue())
+    from service_kit.lancekit.arrow_ipc import encode_arrow_stream  # noqa: PLC0415 - keeps pyarrow off module import
+
+    return encode_arrow_stream(pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA))
 
 
 def publish_token(settings: Any) -> str | None:
@@ -130,7 +129,7 @@ class _HttpCreateApi:
         table_id: str,
         body: bytes,
         *,
-        delimiter: str = "$",
+        delimiter: str = CATALOG_DELIMITER,
         mode: str | None = None,
         properties: str | None = None,
         source: str | None = None,
@@ -155,7 +154,7 @@ class _HttpCreateApi:
             f"{self._base}/v1/table/{quote(table_id, safe='')}/create",
             params=params,
             content=body,
-            headers={"content-type": "application/vnd.apache.arrow.stream", **(_headers or {})},
+            headers={"content-type": ARROW_STREAM_MEDIA_TYPE, **(_headers or {})},
             timeout=_request_timeout,
         )
         if response.status_code >= 400:
@@ -180,7 +179,7 @@ class CatalogPublisher:
         self,
         base_url: str,
         *,
-        delimiter: str = "$",
+        delimiter: str = CATALOG_DELIMITER,
         token: str | None = None,
         originator: str | None = None,
         timeout: float = 60.0,

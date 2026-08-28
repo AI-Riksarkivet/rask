@@ -189,7 +189,8 @@ class LanceFragmentFetcher:
     @staticmethod
     def _read(key: str) -> bytes:
         import lance
-        import pyarrow as pa
+
+        from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
         uri, marker, raw = key.partition("#fragment=")
         if not marker:
@@ -209,10 +210,7 @@ class LanceFragmentFetcher:
             # will not appear on a retry. Compaction can RETIRE one, which is exactly this case.
             raise FileNotFoundError(f"fragment {fragment_id} is not in {uri!r} (retired by compaction, or never existed)")
 
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, table.schema) as writer:
-            writer.write_table(table)
-        return sink.getvalue().to_pybytes()
+        return encode_arrow_stream(table)
 
 
 def _lance_append_fetcher() -> LanceFragmentFetcher:

@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import lance
 
 from service_kit.exceptions import ConflictError
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.reader import translate_catalog_errors
 
 
@@ -151,19 +153,6 @@ class LocalCatalogWriteTransport:
             self._ds.delete(predicate)
 
 
-def _arrow_stream_bytes(delta: pa.Table) -> bytes:
-    """Serialize the merge delta as an Arrow-IPC **stream** — the encoding the
-    catalog's write endpoints parse (an IPC *file* body fails their Rust reader
-    with "failed to fill whole buffer"). The read side returns IPC files — the
-    asymmetry is the catalog's contract, not ours."""
-    import pyarrow as pa_
-
-    sink = pa_.BufferOutputStream()
-    with pa_.ipc.new_stream(sink, delta.schema) as writer:
-        writer.write_table(delta)
-    return bytes(sink.getvalue())
-
-
 class RestCatalogWriteTransport:
     """Live REST catalog transport — ``POST /v1/table/{id}/merge_insert`` + ``/delete``
     via the lance-ns client's ``DataApi.merge_insert_into_table`` / ``delete_from_table``.
@@ -176,7 +165,7 @@ class RestCatalogWriteTransport:
         base_url: str,
         table_id: list[str],
         *,
-        delimiter: str = "$",
+        delimiter: str = CATALOG_DELIMITER,
         token: str | None = None,
         retries: int = 3,
         timeout: float = 30.0,
@@ -199,7 +188,7 @@ class RestCatalogWriteTransport:
             self._api.merge_insert_into_table(
                 self._id_str,
                 on,
-                _arrow_stream_bytes(delta),
+                encode_arrow_stream(delta),
                 delimiter=self._delimiter,
                 when_matched_update_all=True,
                 when_not_matched_insert_all=True,
@@ -211,7 +200,7 @@ class RestCatalogWriteTransport:
             self._api.merge_insert_into_table(
                 self._id_str,
                 on,
-                _arrow_stream_bytes(delta),
+                encode_arrow_stream(delta),
                 delimiter=self._delimiter,
                 when_matched_update_all=False,
                 when_not_matched_insert_all=True,

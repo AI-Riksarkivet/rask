@@ -33,6 +33,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,7 @@ def reset_events() -> None:
 
 def _delimiter() -> str:
     """The catalog's table-id separator. Read from env so it cannot drift from the catalog client's."""
-    return os.getenv("RASK_CATALOG_DELIMITER", "$")
+    return os.getenv("RASK_CATALOG_DELIMITER", CATALOG_DELIMITER)
 
 
 def _output_datasets(project: str, dataset: str, version: int | None, rows: int) -> list[Any]:

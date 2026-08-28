@@ -1,157 +1,55 @@
 """OIDC authentication + the FGA checker seam for the annotator.
 
-Mirrors `services/catalog/api/security.py` deliberately — same bearer parsing, same fail-closed
-posture, same audit calls — so the two governed services cannot drift into two different answers to
-"who is this request".
+The three governed dependencies — verify the bearer, name the subject, check one relation — come from
+the shared ``service_kit.governed.deps.make_auth_deps`` factory, which was extracted FROM this module.
+Building them here against ``AnnotatorSettings`` (rather than re-copying the bodies) means the
+annotator cannot drift from the other governed services into a different answer to "who is this
+request", and a widening of the contract lands in one place.
 
-**Fail-closed twice.** If OIDC is enabled but no verifier reached `app.state` (discovery failed at
-startup, or a deployment skew), we raise 503 rather than let requests through; likewise if FGA is
-enabled but no client was built. A configured-but-broken auth layer must never degrade to open
-access — that is the failure mode the whole governed plane exists to prevent.
-
-**Why the annotator needs this at all**: it writes per-subject state (projects, tasks, claims,
-drafts). `service_kit.media.deps.get_author` READ (deleted 2026-08-28) a *trusted* `X-User` header defaulting to
-`"anon"`, which is fine for a read-plane media service and a cross-user leak for anything keyed on
-identity.
+**Why the annotator needs auth at all**: it writes per-subject state (projects, tasks, claims,
+drafts). The shared factory fails closed twice — OIDC enabled but no verifier on ``app.state`` → 503,
+FGA enabled but no client → 503 — because a configured-but-broken auth layer must never degrade to
+open access.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Protocol
+from typing import Annotated
 
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
 
 from annotator.core.config import AnnotatorSettings, get_annotator_settings
-from service_kit.exceptions import ServiceUnavailableError, UnauthorizedError
-from service_kit.governed import fga
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.oidc import IDToken, OIDCVerifier
+from service_kit.governed.deps import ANONYMOUS_SUBJECT, FgaChecker, RawBearerToken, make_auth_deps
+from service_kit.governed.oidc import IDToken
 
 
-# auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
-_bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
-_CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
+__all__ = [
+    "ANONYMOUS_SUBJECT",
+    "CheckerDep",
+    "CurrentSubject",
+    "CurrentToken",
+    "FgaChecker",
+    "FgaClientDep",
+    "RawBearerToken",
+    "SettingsDep",
+    "authenticate",
+    "current_subject",
+    "get_checker",
+    "get_fga_client",
+]
 
 SettingsDep = Annotated[AnnotatorSettings, Depends(get_annotator_settings)]
 
-#: The subject used when OIDC is disabled. Named rather than inlined so a grep for who can act
-#: without a token returns exactly one place.
-ANONYMOUS_SUBJECT = "anon"
+_deps = make_auth_deps(SettingsDep)
 
-
-def authenticate(request: Request, settings: SettingsDep, credentials: _CredentialsDep) -> IDToken | None:
-    """Authenticate the request, returning the parsed token (or ``None`` when OIDC is off)."""
-    if not settings.oidc_enabled:
-        return None
-    verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
-    if verifier is None:
-        audit("authn", FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    if credentials is None or not credentials.credentials:
-        audit("authn", FAILURE, reason="missing_token")
-        raise UnauthorizedError("Missing bearer token")
-    try:
-        token = verifier.verify(credentials.credentials)
-    except Exception:
-        audit("authn", FAILURE, reason="invalid_token")
-        raise
-    audit("authn", SUCCESS, subject=token.sub)
-    return token
-
+# Re-exported as module-level names so the routes' `Depends(...)` and the tests' `dependency_overrides`
+# key on the same objects the factory built.
+authenticate = _deps.authenticate
+current_subject = _deps.current_subject
+get_checker = _deps.get_checker
+get_fga_client = _deps.get_fga_client
 
 CurrentToken = Annotated[IDToken | None, Depends(authenticate)]
-
-
-def raw_bearer(credentials: _CredentialsDep) -> str | None:
-    """The raw bearer JWT (scheme-stripped), or ``None`` when absent — for FORWARDING, not verifying.
-
-    The annotator reads Lance through the REST catalog, and the catalog authenticates every `/v1`
-    call itself. Reading with a SERVICE token would make this a confused deputy: the catalog's
-    `authorize` checks one relation on one `table:` object and injects no row predicate, so a
-    service credential answers 200 for a caller who has no grant at all — the two users diverge,
-    not the rows. Forwarding the caller's own bearer keeps the catalog's answer about the CALLER.
-
-    Mirrors `services/catalog/api/security.py::raw_bearer` and reuses the same `HTTPBearer` seam, so
-    forwarding can never parse differently from :func:`authenticate`.
-    """
-    return credentials.credentials if credentials is not None else None
-
-
-#: The caller's raw bearer JWT (``None`` when absent) — forwarded to the catalog on reads/writes.
-RawBearerToken = Annotated[str | None, Depends(raw_bearer)]
-
-
-def current_subject(token: CurrentToken) -> str:
-    """The verified principal, as the FGA subject id (no ``user:`` prefix — `fga.check` qualifies it).
-
-    With OIDC off this is `anon`, which matches the pre-auth behaviour of `get_author` so a dev stack
-    keeps working. With OIDC on it is the token's `sub` and nothing else: there is deliberately no
-    header fallback, because a fallback is what turns "verified subject" back into "whatever the
-    caller claimed".
-    """
-    return token.sub if token is not None else ANONYMOUS_SUBJECT
-
-
 CurrentSubject = Annotated[str, Depends(current_subject)]
-
-
-class FgaChecker(Protocol):
-    """The one capability the annotation-project routes need from OpenFGA.
-
-    Narrower than the real client on purpose: an endpoint should not be able to write tuples or
-    enumerate objects, and a test double should not have to pretend it can.
-    """
-
-    async def __call__(self, *, user: str, relation: str, obj: str) -> bool: ...
-
-
-def get_checker(request: Request, settings: SettingsDep) -> FgaChecker:
-    """Resolve the FGA checker.
-
-    Three outcomes, and the middle one is the point:
-
-    - FGA **off** → a permissive checker, so a dev/offline stack behaves as it did before authz.
-    - FGA **on** with a client → the real `fga.check`, which retries and fails closed on outage.
-    - FGA **on** without a client → **503**. Never fall back to permissive here: that would turn a
-      broken authz layer into an open one, silently.
-    """
-    if not settings.fga_enabled:
-
-        async def _open(*, user: str, relation: str, obj: str) -> bool:  # noqa: ARG001
-            return True
-
-        return _open
-
-    client = getattr(request.app.state, "fga", None)
-    if client is None:
-        audit("authz", FAILURE, reason="client_unavailable")
-        raise ServiceUnavailableError("Authorization is enabled but unavailable")
-
-    async def _check(*, user: str, relation: str, obj: str) -> bool:
-        return await fga.check(client, user=user, relation=relation, obj=obj)
-
-    return _check
-
-
 CheckerDep = Annotated[FgaChecker, Depends(get_checker)]
-
-
-def get_fga_client(request: Request, settings: SettingsDep) -> object | None:
-    """The raw OpenFGA client, for WRITES (ownership seeding) rather than checks.
-
-    `None` when FGA is disabled — seeding is then a no-op, matching `get_checker`'s permissive
-    branch, so an offline stack behaves as before. When FGA is ENABLED but no client was built we
-    raise, exactly as the checker does: a create that silently skipped its ownership seed would
-    return 201 for a project nobody can ever act on, which is worse than failing.
-    """
-    if not settings.fga_enabled:
-        return None
-    client = getattr(request.app.state, "fga", None)
-    if client is None:
-        audit("authz", FAILURE, reason="fga_unavailable")
-        raise ServiceUnavailableError("Authorization is enabled but unavailable")
-    return client
-
-
 FgaClientDep = Annotated[object | None, Depends(get_fga_client)]

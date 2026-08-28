@@ -37,6 +37,8 @@ import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -48,7 +50,7 @@ logger = logging.getLogger(__name__)
 #: The catalog composes a table identifier from its parts with this separator (`bronze$pages`).
 #: Matches the estate's `catalog_delimiter`; a mismatch addresses a different table rather than
 #: failing, which is why it is read from env rather than assumed.
-DELIMITER = os.getenv("RASK_CATALOG_DELIMITER", "$")
+DELIMITER = os.getenv("RASK_CATALOG_DELIMITER", CATALOG_DELIMITER)
 
 #: Generous, because a create can provision storage. Still bounded: an unbounded call here would
 #: hang a workflow activity rather than letting Dapr retry it.
@@ -399,26 +401,23 @@ class CatalogServiceClient:
         bronze table impossible to create at all.
         """
         import httpx
-        import pyarrow as pa
 
         from service_kit.lakehouse import blobs
+        from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
         # Stamp the approved external base onto the schema before the create, exactly as the local
         # path does — the catalog's door carries a schema and nothing else, so this is where the base
         # has to ride.
         schema = blobs.stamp_external_base(self._schema, external_base) if external_base else self._schema
 
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, schema) as writer:
-            writer.write_table(schema.empty_table())
-        body = sink.getvalue().to_pybytes()
+        body = encode_arrow_stream(schema.empty_table())
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/create"
         try:
             response = httpx.post(
                 url,
                 content=body,
-                headers=self._headers({"Content-Type": "application/vnd.apache.arrow.stream"}),
+                headers=self._headers({"Content-Type": ARROW_STREAM_MEDIA_TYPE}),
                 timeout=TIMEOUT_SECONDS,
             )
         except Exception as exc:

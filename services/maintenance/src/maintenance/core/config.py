@@ -7,6 +7,7 @@ from functools import lru_cache
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -85,7 +86,7 @@ class MaintenanceSettings(BaseSettings):
     # The catalog id delimiter — to derive a dataset's parent namespace from its table id (matches the
     # catalog's LANCE_DELIMITER default). The catalog lays tables out as <uuid>_<table_id>; table_id is the
     # canonical lineage Dataset name == OpenFGA object id, and its parent is all-but-the-last segment.
-    delimiter: str = Field(default="$", alias="MAINTENANCE_DELIMITER")
+    delimiter: str = Field(default=CATALOG_DELIMITER, alias="MAINTENANCE_DELIMITER")
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")

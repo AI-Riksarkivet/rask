@@ -24,6 +24,7 @@ from opentelemetry import metrics
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from service_kit.lakehouse.ns_errors import problem_body
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
 _PROBLEM_JSON = b"application/problem+json"
@@ -34,7 +35,7 @@ _WRITE_SUFFIXES = ("/create", "/insert", "/merge_insert")
 # metadata endpoints (`/v1/namespace/{id}/create`, `/v1/table/{id}/tags/create`, `.../version/create`,
 # `/v1/materialized_view/{id}/create`) which send JSON and buffer nothing — shedding those under write
 # pressure would be nonsense. The bulk table writes are exactly the ones that POST an Arrow stream.
-_ARROW_IPC = b"application/vnd.apache.arrow.stream"
+_ARROW_IPC = ARROW_STREAM_MEDIA_TYPE.encode()
 
 
 def _is_bulk_arrow_write(scope: Scope) -> bool:

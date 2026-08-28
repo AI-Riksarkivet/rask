@@ -49,6 +49,7 @@ from service_kit.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)
@@ -357,7 +358,7 @@ class RestCatalogTransport:
         self,
         base_url: str,
         *,
-        delimiter: str = "$",
+        delimiter: str = CATALOG_DELIMITER,
         token: str | None = None,
         retries: int = 3,
         timeout: float = 30.0,

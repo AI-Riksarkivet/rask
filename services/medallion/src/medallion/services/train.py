@@ -27,6 +27,7 @@ from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit
 from service_kit import dapr_publish
 from service_kit.governed import fga
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ def _safe_dataset(value: Any) -> bool:
     the ingest's ``SET d.namespace`` would then write onto the SHARED graph node (review 2026-07-11)."""
     if not isinstance(value, str):
         return False
-    parts = value.split("$")
+    parts = value.split(CATALOG_DELIMITER)
     return len(parts) == 2 and all(_SAFE_SEGMENT.fullmatch(part) for part in parts)
 
 
@@ -90,7 +91,7 @@ def stage_uri_for(settings: MedallionSettings, dataset: str) -> str:
     stage URI is that base + the dataset's namespace segment. Demo-tier convention — a catalog-registered
     feature table would resolve through describe instead (future #115 work).
     """
-    stage = dataset.split("$", 1)[0]
+    stage = dataset.split(CATALOG_DELIMITER, 1)[0]
     return f"{_stage_base(settings)}/{stage}"
 
 

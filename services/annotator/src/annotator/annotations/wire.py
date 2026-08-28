@@ -6,15 +6,17 @@ the Lance annotations table as an Arrow IPC stream — the same wire format the 
 annotations yet is not an error).
 """
 
-from typing import Annotated
+from __future__ import annotations
 
-import pyarrow as pa
+from typing import TYPE_CHECKING, Annotated
+
 from fastapi import APIRouter, Query, Response
 
 from annotator.annotations.schema import ANNOTATIONS_TABLE, EMPTY_SCHEMA
 from annotator.annotations.versions import VERSION_SOURCE_HEADER, checkout
 from annotator.api.security import RawBearerToken
 from service_kit.exceptions import NotFoundError
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import open_catalog_reader, open_reader
 from service_kit.lancekit.registry import table_dataset
@@ -22,17 +24,11 @@ from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 
 
+if TYPE_CHECKING:
+    import pyarrow as pa
+
+
 router = APIRouter(tags=["annotate"])
-
-ARROW_STREAM = "application/vnd.apache.arrow.stream"
-
-
-def ipc_stream(table: pa.Table) -> bytes:
-    """Serialize an Arrow table to an IPC stream (the wire the engine parses)."""
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 @router.get("/annotations/{doc_id}/{speech_id}/{chunk_id}")
@@ -109,8 +105,8 @@ def annotations(
 
 def _empty_stream_response() -> Response:
     return Response(
-        content=ipc_stream(EMPTY_SCHEMA.empty_table()),
-        media_type=ARROW_STREAM,
+        content=encode_arrow_stream(EMPTY_SCHEMA.empty_table()),
+        media_type=ARROW_STREAM_MEDIA_TYPE,
         headers={"Cache-Control": "no-store", "X-Annotations-Version": "0"},
     )
 
@@ -121,8 +117,8 @@ def _annotations_response(table: pa.Table, version: int, *, source: str) -> Resp
     (``catalog`` vs the local ``direct``/``local`` lineage) so compare-versions
     tooling can never silently mix the two pre-merge."""
     return Response(
-        content=ipc_stream(table),
-        media_type=ARROW_STREAM,
+        content=encode_arrow_stream(table),
+        media_type=ARROW_STREAM_MEDIA_TYPE,
         headers={
             "Cache-Control": "no-store",
             "X-Annotations-Version": str(version),

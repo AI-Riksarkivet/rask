@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+
 
 #: Schema-metadata keys; the lineage service / a consumer reads these straight off the Lance table. Only
 #: opaque coordinates — no identity/PII (the creator is resolved via the gated /creator endpoint).
@@ -50,7 +52,4 @@ def inject_into_arrow_stream(stream: bytes, metadata: dict[str, str]) -> bytes:
         **{key.encode(): value.encode() for key, value in metadata.items()},
     }
     table = table.replace_schema_metadata(merged)
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)

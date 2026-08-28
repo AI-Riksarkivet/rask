@@ -28,6 +28,7 @@ from fastapi import APIRouter, Query, Response
 
 from service_kit.exceptions import NotFoundError, ValidationError
 from service_kit.lancekit.alignments import parse_alignments_json
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from service_kit.lancekit.descriptor import AtlasSpace, Declared
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.predicate import and_, eq, isin, or_
@@ -47,8 +48,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
-#: Media type for the /points Arrow IPC stream response.
-_ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 #: Max memoized /points payloads (the LOOKUP bound). The MEMORY bound is
 #: `settings.points_cache_bytes` — see `evict_to_bounds`.
 _POINTS_CACHE_MAX = 12
@@ -147,7 +146,7 @@ def atlas_points(state: StateDep, space: SpaceParam = None, dataset: DatasetPara
 
     return Response(
         content=body,
-        media_type=_ARROW_STREAM_MEDIA_TYPE,
+        media_type=ARROW_STREAM_MEDIA_TYPE,
         headers={"Cache-Control": "public, max-age=300"},
     )
 

@@ -34,6 +34,9 @@ import httpx
 import pyarrow as pa
 from pydantic import BaseModel, Field
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +104,7 @@ def register_stage_output(
     catalog_root: str,
     table_id: str,
     to_uri: str,
-    delimiter: str = "$",
+    delimiter: str = CATALOG_DELIMITER,
     token: str | None = None,
     app_token: str | None = None,
     service_identity: str | None = None,
@@ -297,7 +300,7 @@ def ensure_stage_output(
     catalog_url: str,
     table_id: str,
     schema: pa.Schema,
-    delimiter: str = "$",
+    delimiter: str = CATALOG_DELIMITER,
     token: str | None = None,
     app_token: str | None = None,
     service_identity: str | None = None,
@@ -337,14 +340,11 @@ def ensure_stage_output(
         if described.status_code == 200:
             return _vended(described, table_id)
 
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, schema) as writer:
-            writer.write_table(schema.empty_table())
         try:
             created = client.post(
                 f"/v1/table/{table_id}/create",
-                content=sink.getvalue().to_pybytes(),
-                headers={**headers, "Content-Type": "application/vnd.apache.arrow.stream", "x-lance-table-id": delimiter.join(segments)},
+                content=encode_arrow_stream(schema.empty_table()),
+                headers={**headers, "Content-Type": ARROW_STREAM_MEDIA_TYPE, "x-lance-table-id": delimiter.join(segments)},
             )
         except httpx.HTTPError as exc:
             raise RegisterError(f"catalog unreachable creating {table_id!r}: {exc}") from exc

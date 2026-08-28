@@ -21,6 +21,7 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.control_events import CONTROL_TOPIC
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 # Re-exported, NOT redefined. The bronze naming convention is shared with the ingest plane, so its one
@@ -312,7 +313,7 @@ class MedallionSettings(BaseSettings):
     app_api_token: str = Field(default="", alias="APP_API_TOKEN")
     # The catalog id delimiter (`gold$catalog`) — matches LANCE_DELIMITER's default, same rationale as
     # MAINTENANCE_DELIMITER: a mismatch addresses a DIFFERENT table rather than failing.
-    delimiter: str = Field(default="$", alias="MEDALLION_DELIMITER")
+    delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDALLION_DELIMITER")
     ray_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_RAY_REQUEST_TIMEOUT_SECONDS")
     ray_poll_interval_seconds: float = Field(default=2.0, gt=0, alias="MEDALLION_RAY_POLL_INTERVAL_SECONDS")
     # The mover BLOCKS its Dapr handler until the job finishes. Redelivery is safe (the submission id is

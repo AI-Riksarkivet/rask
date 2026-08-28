@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from annotator.projects.agreement import group_scores, summarize
 from annotator.projects.models import AnnotationProject, Draft, Link, Shape, Task, TaskState
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 #: The only state that contributes SHAPES. Every other terminal state contributes a sentinel row.
@@ -471,7 +472,7 @@ def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str
     }
 
 
-def source_pin(plan: PublishPlan, *, delimiter: str = "$") -> tuple[str, int] | None:
+def source_pin(plan: PublishPlan, *, delimiter: str = CATALOG_DELIMITER) -> tuple[str, int] | None:
     """The reproducibility pin (§7.2): the ONE (dataset, version) every published item came from.
 
     Pins only when EVERY published item names the same one dataset with the same one CAPTURED

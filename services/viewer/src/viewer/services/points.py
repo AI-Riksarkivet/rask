@@ -22,6 +22,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from service_kit.exceptions import ValidationError
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.descriptor import AtlasSpace, Declared
 
 
@@ -180,7 +181,4 @@ def build_points(declared: Declared, space: AtlasSpace, ds: lance.LanceDataset) 
     )
     out = pa.table(arrays, schema=out_schema)
 
-    sink = pa.BufferOutputStream()
-    with pa.ipc.RecordBatchStreamWriter(sink, out.schema) as writer:
-        writer.write_table(out)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(out)

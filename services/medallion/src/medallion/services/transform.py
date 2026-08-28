@@ -47,6 +47,7 @@ from medallion.services.transform_spec import UndeclaredTransformError, resolve_
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.quality import Assertion, assert_quality
 from service_kit.lakehouse.warehouse_registry import (
     UnresolvableProjectError,
@@ -181,7 +182,7 @@ def _namespace_of(table_id: str) -> str:
     with an undeclared namespace is exactly the silent mismatch the record exists to remove, and a
     guess here would be indistinguishable from a correct resolution at every later step.
     """
-    namespace, sep, _ = table_id.partition("$")
+    namespace, sep, _ = table_id.partition(CATALOG_DELIMITER)
     if not sep or not namespace:
         raise ValueError(f"table id {table_id!r} names no namespace — expected '<namespace>$<table>'")
     return namespace

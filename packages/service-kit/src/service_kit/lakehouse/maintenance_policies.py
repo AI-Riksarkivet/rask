@@ -41,6 +41,7 @@ from typing import Any
 
 import pyarrow.fs as pafs
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -159,7 +160,7 @@ def resolve_policy(
     uri: str,
     *,
     logical_id: str | None = None,
-    delimiter: str = "$",
+    delimiter: str = CATALOG_DELIMITER,
 ) -> dict[str, Any] | None:
     """The policy governing dataset ``uri`` (``s3://<bucket>/<path>``): an exact table match wins,
     else the longest-matching namespace record, else a project record (#84) whose ``buckets`` contain
