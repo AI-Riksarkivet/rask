@@ -19,10 +19,19 @@ end-to-end that same day. Only a real signed-in browser submit reaches line 151 
 can therefore be completely unable to verify a user token while every service-to-service test passes.
 
 WHAT THIS GATE IS. Not a test of ingest — a test that the doors AGREE. It reads the source of every
-`OIDCVerifier(...)` construction in the estate and requires each to pass `discovery_overrides`. Written
-against the source rather than behaviour because the defect is an omission: there is no call to assert
-on, only one that should have been made and was not. A behavioural test would need a live IdP with a
-split horizon to reproduce, which is exactly why this went unnoticed.
+`OIDCVerifier(...)` construction and requires each to pass `discovery_overrides`. Written against the
+source rather than behaviour because the defect is an omission: there is no call to assert on, only one
+that should have been made and was not. A behavioural test would need a live IdP with a split horizon
+to reproduce, which is exactly why this went unnoticed.
+
+IT NOW SCANS THE KERNEL, NOT `services/`, and that is the fix landing rather than the gate weakening.
+When this was written there were eight hand-rolled constructions across the estate and "do they agree"
+was a real question with eight answers. DUP-01 collapsed all of them onto
+`service_kit.governed.auth_lifespan.attach_auth`, so today there is ONE construction and agreement is
+structural: a door cannot omit an argument it does not pass. Pointing the walk at `services/` after
+that would have found zero constructions and passed vacuously — which is why the guard below asserts
+the walk found something, and why the scan root moved to where the code went. If a service ever builds
+its own verifier again, `tests/unit/test_governed_bootstrap_is_one_implementation.py` refuses it there.
 """
 
 from __future__ import annotations
@@ -68,14 +77,19 @@ def _constructions(text: str) -> list[str]:
     return out
 
 
-def _sources() -> list[Path]:
-    """Every non-test module under `services/` that CONSTRUCTS a verifier.
+#: Where the estate's governed-auth bootstrap lives. Every door reaches its verifier through here.
+GOVERNED = ROOT / "packages/service-kit/src/service_kit/governed"
 
-    Deliberately discovered, not listed. A new governed service is the case this gate exists for, and a
-    hardcoded list would silently exempt it — the same shape of omission as the bug.
+
+def _sources() -> list[Path]:
+    """Every non-test module in the governed kernel that CONSTRUCTS a verifier.
+
+    Deliberately discovered, not listed. A second construction appearing beside the first is the case
+    this gate exists for, and a hardcoded list would silently exempt it — the same shape of omission as
+    the bug.
     """
     found = []
-    for path in (ROOT / "services").rglob("*.py"):
+    for path in GOVERNED.rglob("*.py"):
         if "test" in path.parts or path.name.startswith("test_"):
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -93,12 +107,12 @@ def test_the_estate_has_governed_doors_to_check() -> None:
     # name and requiring the parser to reach all of them means the two can only agree if the walk works.
     mentions = sum(
         len(CONSTRUCTION_START.findall(p.read_text(encoding="utf-8", errors="ignore")))
-        for p in (ROOT / "services").rglob("*.py")
+        for p in GOVERNED.rglob("*.py")
         if "test" not in p.parts and not p.name.startswith("test_")
     )
     parsed = sum(len(_constructions(p.read_text(encoding="utf-8"))) for p in doors)
 
-    assert doors, "no governed doors found at all — the scan is broken, not the code"
+    assert doors, "no verifier construction found in the governed kernel — the scan is broken, or the bootstrap moved and this gate is now asserting nothing"
     assert parsed == mentions, (
         f"the estate names OIDCVerifier( {mentions} times but the paren walk parsed {parsed} — a "
         "construction is being skipped, so the assertions below run on a subset of the doors"
@@ -113,7 +127,7 @@ def test_every_governed_door_passes_discovery_overrides(path: Path) -> None:
     for call in _constructions(path.read_text(encoding="utf-8")):
         assert "discovery_overrides" in call, (
             f"{path.relative_to(ROOT)} builds an OIDCVerifier without discovery_overrides — behind a reverse-proxied IdP "
-            f"it will fetch discovery from the browser-facing issuer and every user-bearer request will 500"
+            f"it will fetch discovery from the browser-facing issuer and every user-bearer request in the estate will 500"
         )
 
 

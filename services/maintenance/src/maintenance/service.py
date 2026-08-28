@@ -36,7 +36,7 @@ from maintenance.core.lineage_emit import make_emitter
 from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter
 from service_kit.exceptions import register_handlers
-from service_kit.governed import fga
+from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
@@ -59,58 +59,25 @@ async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa
 
     * the **drift reconciler** only READS tuples (`fga.read_tuples`);
     * the **expired-trash purge** REVOKES an object's tuples (`fga.revoke_object_tuples`, origin
-      ``lifecycle_delete``) as the FIRST step of destroying it, because a grant that outlives the bytes
-      silently re-grants the old subjects if the id is ever reused. A revoke it cannot perform refuses
-      the record, so the client is a precondition for deleting, never a means of granting.
+      ``lifecycle_delete``) as the FIRST step of destroying it — a grant that outlives the bytes would
+      silently re-grant the old subjects if the id is ever reused. (`lifecycle_delete` is the real
+      origin, on the governed allowlist at `service_kit.governed.fga`; `purge.py` passes it. An
+      earlier prose pass invented `trash-purge`, which is on no allowlist and matches nothing.)
 
-    It holds **no grant-writing path at all** — no `write_tuples`, no `seed_ownership` — which is why it
-    needs no capability beyond what pins the store.
+    Neither may AUTHOR the estate's model, so this passes ``provision=False``: the shared bootstrap
+    then takes `fga.resolve`, which is read-only, can never create a store or write a model, and
+    returns ``None`` when the estate is not bootstrapped. That principle once covered the LOOKUP too,
+    and the cost is recorded in `fga.resolve`'s own docstring — on the chart's DEFAULT posture
+    (`auth.fgaStoreId: ""`, a per-cluster ULID that cannot be a committed default) refusing to look up
+    meant reporting every authz category unavailable against an estate that was right there. Reading
+    which store exists is not authoring one.
 
-    This service must NOT PROVISION a store when the ids are absent: provisioning from a maintenance
-    job would create an empty store and then cheerfully report every real tenant as a ghost, which is
-    worse than reporting the category unavailable. That rule stands and `fga.provision` is referenced
-    nowhere here.
-
-    IT MAY, HOWEVER, LOOK ONE UP — and refusing to was a distinct bug wearing the same justification.
-    Unpinned used to return ``None`` outright, so on the chart's DEFAULT posture (`auth.fgaStoreId: ""`,
-    because a store id is a per-cluster ULID that cannot be a committed default) this service never had
-    a client at all. Measured live 2026-08-16: `ghost_projects`, `ghost_warehouses` and
-    `unreferenced_projects` reported UNAVAILABLE on every tick, and since `report_is_clean` blocks on any
-    unavailable category, the #79 expired-trash purge could never certify in any default deployment.
-
-    `service_kit.governed.fga.resolve` exists for exactly this, and its docstring records the identical
-    mistake made by ingest — which applied the no-authoring principle to BOTH halves and therefore 503'd
-    out of the box on every dev and e2e cluster: *"reading is not authoring"*. Resolve is read-only, can
-    never create a store or write a model, and returns ``None`` when the estate is not bootstrapped —
-    so this still fails closed, it just no longer fails closed against an estate that is right there.
-
-    Never raises. A misconfigured or unreachable authz endpoint degrades the authz categories; it must
-    not stop the sweep, which is this service's primary job and needs no FGA at all.
+    NEVER RAISES, which is why ``fatal`` stays at its default. A misconfigured or unreachable authz
+    endpoint degrades the authz categories; it must not stop the sweep, which is this service's
+    primary job and needs no FGA at all. It also returns the client rather than assigning it: the
+    sweep runs from a cron route and holds it as ``app.state.fga_client``.
     """
-    if not settings.fga_enabled:
-        return None
-
-    store_id, model_id = settings.fga_store_id, settings.fga_model_id
-    if not (store_id and model_id):
-        try:
-            resolved = await fga.resolve(settings.fga_api_url)
-        except Exception:
-            log.warning("reconcile_fga_resolve_failed", exc_info=True)
-            return None
-        if resolved is None:
-            log.warning(
-                "reconcile_fga_unpinned",
-                extra={"reason": "MAINTENANCE_FGA_STORE_ID/MODEL_ID unset and no store to resolve — authz categories will report unavailable"},
-            )
-            return None
-        store_id, model_id = resolved
-        log.info("reconcile_fga_resolved_by_name", extra={"store_id": store_id, "hint": "pin MAINTENANCE_FGA_STORE_ID/MODEL_ID for production"})
-
-    try:
-        return fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-    except Exception:
-        log.warning("reconcile_fga_client_failed", exc_info=True)
-        return None
+    return await build_fga_client(settings, service="maintenance", provision=False)
 
 
 def _make_s3_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — boto3 client has no stub

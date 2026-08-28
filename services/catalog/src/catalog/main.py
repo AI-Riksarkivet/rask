@@ -33,10 +33,9 @@ from service_kit import setup_logging
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
 from service_kit.exceptions import register_handlers
-from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.oidc import OIDCVerifier
 from service_kit.governed.secrets import fetch_required_secrets
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
@@ -106,23 +105,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # root_uri (bindings are immutable, so cache-forever is safe) and root_uri → its namespace connection.
     app.state.warehouse_binding_cache = {}
     app.state.warehouse_namespaces = {}
-    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
-        app.state.oidc = OIDCVerifier(
-            settings.oidc_issuer,
-            settings.oidc_audience,
-            settings.oidc_cache_ttl,
-            leeway=settings.oidc_leeway,
-            allow_insecure=settings.oidc_allow_insecure,
-            # Split-horizon (reverse-proxy IdP): fetch discovery/JWKS in-cluster while tokens
-            # keep the public issuer string. Unset = derive the fetch URL from the issuer.
-            discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
-        )
-    if settings.fga_enabled:
-        store_id, model_id = settings.fga_store_id, settings.fga_model_id
-        if not (store_id and model_id):
-            store_id, model_id = await fga.provision(settings.fga_api_url)
-            log.info("openfga_provisioned", extra={"store_id": store_id, "model_id": model_id})
-        app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+    # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
+    # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
+    # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
+    # visible as a CrashLoopBackOff, not as a fleet of ready pods answering 503 to everyone.
+    await attach_auth(app, settings, service="catalog", fatal=True)
     # Credential vending (data plane): turn an authorized (table location, tier) into the scoped
     # storage_options a client uses to reach object storage DIRECTLY. mode_b (default) vends nothing —
     # clients use the server-mediated Arrow-IPC endpoints; sts (AssumeRole + per-table session policy) /

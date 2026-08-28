@@ -21,6 +21,7 @@ from ingest.provenance import LineageProvenanceReader
 from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
 from service_kit.governed.actor_state_store import probe_actor_state_store
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -63,12 +64,13 @@ def create_app() -> FastAPI:
 
     if mount_incremental_cron(app, os.environ.get("RASK_INGEST_CRON_BINDING_NAME")):
         logger.info("ingest incremental cron mounted at /%s", os.environ["RASK_INGEST_CRON_BINDING_NAME"])
-    # The authz/authn clients the ingest door needs. Wired here rather than lazily inside the
-    # dependency because `authorize_ingest` FAILS CLOSED on a missing client — a lazily-absent client
-    # would 503 every request instead of authorizing it, and the estate's review found exactly that
-    # bypass shape once already (a gate silently off with FGA_ENABLED=true because the client was
-    # never built).
-    _wire_auth(app)
+    # FAIL-CLOSED DEFAULTS, so the attributes exist before the lifespan runs: `authorize_ingest`
+    # reads them directly and 503s on a missing client, which is the correct answer in the window
+    # before startup completes. The BUILD itself is in the lifespan (`attach_auth`) because resolving
+    # an unpinned store is I/O and this function is sync — and because constructing an OIDCVerifier
+    # fetches discovery, which must never happen merely because something built the app object.
+    app.state.fga = None
+    app.state.oidc = None
     # A DENIAL MUST BE A 403, NOT A 500. `make_service_app` carries the fleet's own handlers, which do
     # not know the `lance_namespace` typed errors the auth door raises — so without this an
     # unauthorized ingest answered "Internal Server Error", which tells the caller nothing, tells
@@ -77,105 +79,6 @@ def create_app() -> FastAPI:
     # raise typed errors and ONE translator maps all 22 codes.
     install_problem_handlers(app, logger)
     return app
-
-
-def _wire_auth(app: FastAPI) -> None:
-    """Build the FGA client and OIDC verifier onto `app.state`, or leave them None when disabled.
-
-    Same construction shape as the catalog, lineage and medallion consumers — pinned store/model else
-    provision, explicit timeout — so all of them behave alike. A per-service variation here is how one
-    pod ends up minting a model version on every restart.
-    """
-    from ingest.auth import get_auth_settings
-
-    settings = get_auth_settings()
-
-    app.state.fga = None
-    if settings.fga_enabled:
-        from service_kit.governed import fga
-
-        store_id, model_id = settings.fga_store_id, settings.fga_model_id
-        if store_id and model_id:
-            app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-        # UNPINNED is not a failure here — it is resolved in the lifespan, where there is an event
-        # loop (`_resolve_fga_client`). Building nothing and leaving `app.state.fga` None keeps the
-        # fail-closed property intact for the window before startup completes.
-
-    app.state.oidc = None
-    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
-        from service_kit.governed.oidc import OIDCVerifier
-
-        app.state.oidc = OIDCVerifier(
-            settings.oidc_issuer,
-            settings.oidc_audience,
-            settings.oidc_cache_ttl,
-            leeway=settings.oidc_leeway,
-            allow_insecure=settings.oidc_allow_insecure,
-            # SPLIT-HORIZON DISCOVERY, and the ONLY door in the estate that was missing it. The issuer
-            # is the browser-facing URL that lands in a token's `iss` claim (`http://localhost:8080/dex`
-            # in k3s); the discovery document has to be fetched from the in-cluster service
-            # (`http://rask-dex:5556/dex`). Without the override the verifier fetches discovery from the
-            # issuer, which resolves to the POD ITSELF, and every user-bearer ingest died with
-            #
-            #     httpx.ConnectError: [Errno 111] Connection refused
-            #
-            # surfaced to the browser as `{"message":"Internal Error"}` — a 500 with nothing about auth
-            # in it. The service-token path never touched the verifier, so every in-cluster test passed
-            # and only a real signed-in submit from `/compute/etl` reached the line.
-            #
-            # The chart has been setting `LANCE_OIDC_DISCOVERY_URL` all along and `GovernedAuthSettings`
-            # has been parsing it; this door simply never passed it on, while catalog, lineage, viewer,
-            # annotator and medallion all did (identical expression, five sites).
-            discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
-        )
-
-
-async def _resolve_fga_client(app: FastAPI) -> None:
-    """When the store/model are UNPINNED, resolve the one the estate already uses. Read-only.
-
-    THIS PLANE STILL REFUSES TO PROVISION. A data writer that mints a store or writes an authorization
-    model becomes the source of truth for everyone else's permissions, and that is not ingest's job.
-    But it applied that principle to the LOOKUP as well, and reading which store exists is not
-    authoring one — so ingest ended up the only service in the estate that cannot boot on the chart's
-    own default posture.
-
-    `auth.fgaStoreId: ""` is that posture, and it is correct: a store id is a per-cluster ULID, so it
-    cannot be a committed chart default. Catalog, lineage and medallion resolve by name and come up;
-    ingest 503'd every user-bearer request on every dev and e2e cluster. It reaches a person as
-    `{"message":"Internal Error"}` from an ETL submit, and the only trace is a startup warning.
-
-    The stopgap was `kubectl set env LANCE_FGA_STORE_ID=…` on the live deployment, which drifts from
-    the chart and dies at the next `make k3s-up` — a fix that has to be reapplied by hand is a defect
-    wearing a workaround.
-
-    HERE rather than in `_wire_auth` because resolving is I/O and `_wire_auth` is sync. Leaving
-    `app.state.fga` None until startup completes keeps the fail-closed window closed: `authorize_ingest`
-    503s on a missing client, which is the correct answer before the estate is known to be reachable.
-
-    Still fails closed after: `fga.resolve` returns None when no store or model exists, meaning the
-    estate has not been bootstrapped, and the client stays unwired.
-    """
-    from ingest.auth import get_auth_settings
-
-    settings = get_auth_settings()
-    if not settings.fga_enabled or app.state.fga is not None:
-        return
-    from service_kit.governed import fga
-
-    try:
-        resolved = await fga.resolve(settings.fga_api_url)
-    except Exception:
-        # Never fatal at startup. OpenFGA being slow to accept connections is an ordering blip, not a
-        # reason to CrashLoopBackOff; the door 503s until it is reachable, which is where an operator
-        # can actually see it.
-        logger.warning("ingest: could not reach OpenFGA to resolve a store — the ingest door will 503", exc_info=True)
-        return
-    if resolved is None:
-        logger.warning("ingest: LANCE_FGA_ENABLED but no provisioned OpenFGA store to resolve — the ingest door will 503")
-        return
-    store_id, model_id = resolved
-    app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-    logger.info("ingest: resolved the OpenFGA store by name (unpinned) — pin LANCE_FGA_STORE_ID/MODEL_ID for production")
 
 
 def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanFactory shape
@@ -194,7 +97,19 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        await _resolve_fga_client(app)
+        # `provision=False` IS THE WHOLE POSTURE OF THIS DOOR. A data writer that mints a store or
+        # writes an authorization model becomes the source of truth for everyone else's permissions,
+        # and that is not ingest's job. Reading which store the estate already uses is not authoring
+        # one — the distinction ingest originally missed, which made it the only service that could
+        # not boot on the chart's own default (`auth.fgaStoreId: ""`, a per-cluster ULID that cannot
+        # be a committed default). It still fails closed: no store to resolve means no client, and
+        # the door 503s.
+        #
+        # Non-fatal, deliberately: OpenFGA being slow to accept connections is an ordering blip, not
+        # a reason to CrashLoopBackOff.
+        from ingest.auth import get_auth_settings
+
+        await attach_auth(app, get_auth_settings(), service="ingest", provision=False)
         runtime = None
         try:
             import dapr.ext.workflow as wf

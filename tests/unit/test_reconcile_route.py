@@ -158,7 +158,13 @@ def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPat
     async def _no_store(*_a: Any, **_kw: Any) -> Any:
         return None
 
-    monkeypatch.setattr(service.fga, "resolve", _no_store)
+    # Patched on `service_kit.governed.fga`, not on `maintenance.service`: this service builds its
+    # client through the estate's ONE bootstrap (`auth_lifespan.build_fga_client`) rather than a
+    # private copy, so the transport seam is the shared module's. The claim under test is unchanged —
+    # `provision` must never be CALLED.
+    from service_kit.governed import fga
+
+    monkeypatch.setattr(fga, "resolve", _no_store)
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=False))) is None
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None, "no store to resolve → still None, never a new one"
 
@@ -192,8 +198,10 @@ def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch
         return ("store-01ABC", "model-01XYZ")
 
     made: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(service.fga, "resolve", _resolve)
-    monkeypatch.setattr(service.fga, "make_client", lambda url, store, model, **_kw: made.append((url, store, model)) or "CLIENT")
+    from service_kit.governed import fga
+
+    monkeypatch.setattr(fga, "resolve", _resolve)
+    monkeypatch.setattr(fga, "make_client", lambda url, store, model, **_kw: made.append((url, store, model)) or "CLIENT")
 
     client = asyncio.run(service._make_fga_client(_settings(fga_enabled=True)))
 
@@ -213,7 +221,9 @@ def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatc
     async def _boom(*_a: Any, **_kw: Any) -> Any:
         raise ConnectionRefusedError("openfga not up yet")
 
-    monkeypatch.setattr(service.fga, "resolve", _boom)
+    from service_kit.governed import fga
+
+    monkeypatch.setattr(fga, "resolve", _boom)
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None
 
 

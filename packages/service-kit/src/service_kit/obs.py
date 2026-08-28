@@ -4,7 +4,8 @@
 but nothing raises the root/app level from Python's default WARNING — so ``log.info()`` / ``log.debug()`` are
 rejected by ``isEnabledFor()`` and the LogRecord is never created, never reaching the OTLP exporter. The
 result (found by the 2026-07-13 observability audit): the entire INFO **audit** (``access_denied``,
-``openfga_provisioned``, ``fga_tuples_revoked``) + **request-lifecycle** (``medallion_produced``,
+``openfga_provisioned`` / ``openfga_resolved_by_name`` / ``openfga_unpinned`` / ``openfga_client_failed``
+from the shared bootstrap, ``fga_tuples_revoked``) + **request-lifecycle** (``medallion_produced``,
 ``train_requested``, ``ray_stage_job_submitted``, ``compaction_sweep`` …) tier the otel skill mandates at
 severity 9 is silently lost; only WARNING/ERROR survive.
 

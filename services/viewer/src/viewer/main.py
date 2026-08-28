@@ -18,9 +18,8 @@ from starlette.concurrency import run_in_threadpool
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
-from service_kit.governed import fga
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.config import get_settings
 from service_kit.media.middleware import register_middleware
@@ -55,32 +54,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # — the corpus list is only gated once someone turns FGA on. Built here, never at import: an
     # OIDCVerifier fetches discovery, so module scope would make importing this file do I/O.
     #
-    # A failure to BUILD is logged and left non-fatal on purpose: the dependency then finds no
-    # verifier/client on app.state and answers 503, which is the honest reading. Falling back to a
-    # permissive checker instead would turn a broken authorization layer into an open one.
-    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
-        try:
-            app.state.oidc = OIDCVerifier(
-                settings.oidc_issuer,
-                settings.oidc_audience,
-                settings.oidc_cache_ttl,
-                leeway=settings.oidc_leeway,
-                allow_insecure=settings.oidc_allow_insecure,
-                discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
-            )
-            logger.info("viewer: OIDC verifier ready (issuer=%s)", settings.oidc_issuer)
-        except Exception:
-            logger.exception("viewer: OIDC verifier failed to build — guarded routes will 503")
-    if settings.fga_enabled:
-        try:
-            store_id, model_id = settings.fga_store_id, settings.fga_model_id
-            if not (store_id and model_id):
-                store_id, model_id = await fga.provision(settings.fga_api_url)
-                logger.info("viewer: openfga provisioned store=%s model=%s", store_id, model_id)
-            app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-            logger.info("viewer: FGA client ready (%s)", settings.fga_api_url)
-        except Exception:
-            logger.exception("viewer: FGA client failed to build — authorized routes will 503")
+    # A failure to BUILD is logged and left non-fatal — the estate default — so the dependency then
+    # finds no verifier/client on app.state and answers 503, which is the honest reading. Falling back
+    # to a permissive checker instead would turn a broken authorization layer into an open one.
+    await attach_auth(app, settings, service="viewer")
 
     app.state.startup_complete = True
     app.state.shutting_down = False

@@ -30,6 +30,7 @@ from flows.config import build_flows_settings
 from flows.dependencies import FlowRunReader, FlowScheduler, ScheduleUnconfirmed
 from service_kit.config import Settings
 from service_kit.governed.actor_state_store import probe_actor_state_store
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.fga import dispose as fga_dispose
 
 
@@ -57,38 +58,12 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.settings = settings
         app.state.flows_settings = build_flows_settings()
         flows_settings = app.state.flows_settings
-        # AUTHN/AUTHZ, the viewer's shape: both default OFF and the service behaves exactly as it
+        # AUTHN/AUTHZ, the fleet's shape: both default OFF and the service behaves exactly as it
         # always did when they are. Built here, never at import (an OIDCVerifier fetches discovery).
-        # A failure to BUILD is logged and non-fatal on purpose: the dependency then finds no
-        # verifier/client on app.state and answers 503 — falling back to a permissive checker would
+        # A failure to BUILD is logged and non-fatal — the estate default — so the dependency finds no
+        # verifier/client on app.state and answers 503; falling back to a permissive checker would
         # turn a broken authorization layer into an open one.
-        if flows_settings.oidc_enabled and flows_settings.oidc_issuer and flows_settings.oidc_audience:
-            try:
-                from service_kit.governed.oidc import OIDCVerifier
-
-                app.state.oidc = OIDCVerifier(
-                    flows_settings.oidc_issuer,
-                    flows_settings.oidc_audience,
-                    flows_settings.oidc_cache_ttl,
-                    leeway=flows_settings.oidc_leeway,
-                    allow_insecure=flows_settings.oidc_allow_insecure,
-                    discovery_overrides=({flows_settings.oidc_issuer: flows_settings.oidc_discovery_url} if flows_settings.oidc_discovery_url else None),
-                )
-                log.info("flows: OIDC verifier ready (issuer=%s)", flows_settings.oidc_issuer)
-            except Exception:
-                log.exception("flows: OIDC verifier failed to build — the run door will 503")
-        if flows_settings.fga_enabled:
-            try:
-                from service_kit.governed import fga
-
-                store_id, model_id = flows_settings.fga_store_id, flows_settings.fga_model_id
-                if not (store_id and model_id):
-                    store_id, model_id = await fga.provision(flows_settings.fga_api_url)
-                    log.info("flows: openfga provisioned store=%s model=%s", store_id, model_id)
-                app.state.fga = fga.make_client(flows_settings.fga_api_url, store_id, model_id, timeout_seconds=flows_settings.fga_timeout_seconds)
-                log.info("flows: FGA client ready (%s)", flows_settings.fga_api_url)
-            except Exception:
-                log.exception("flows: FGA client failed to build — the run door will 503")
+        await attach_auth(app, flows_settings, service="flows")
         # One app-scoped client so connections are pooled across runs. The per-node budget is passed
         # per call (executor._call_serve); this is the connect/default bound.
         app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=app.state.flows_settings.serve_timeout))

@@ -28,6 +28,7 @@ from service_kit.config import Settings
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -77,40 +78,11 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
 
         # Authn/authz, the fleet's shape: both default OFF and the service behaves as it would without
         # them. Built here, never at import (an OIDCVerifier fetches discovery). A failure to BUILD is
-        # logged and non-fatal on purpose: the dependency then finds no verifier/client on app.state and
-        # answers 503, where falling back to a permissive checker would turn a broken authorization
-        # layer into an open one — on a plane whose whole point is that a badge counts YOUR work.
-        auth = notifications_settings
-        if auth.oidc_enabled and auth.oidc_issuer and auth.oidc_audience:
-            try:
-                # Imported here, not at module scope: constructing a verifier fetches discovery/JWKS.
-                from service_kit.governed.oidc import OIDCVerifier
-
-                app.state.oidc = OIDCVerifier(
-                    auth.oidc_issuer,
-                    auth.oidc_audience,
-                    auth.oidc_cache_ttl,
-                    leeway=auth.oidc_leeway,
-                    allow_insecure=auth.oidc_allow_insecure,
-                    # Split-horizon (reverse-proxied IdP): fetch discovery in-cluster while tokens keep
-                    # the public issuer string. Same wiring as the catalog and annotator, deliberately.
-                    discovery_overrides=({auth.oidc_issuer: auth.oidc_discovery_url} if auth.oidc_discovery_url else None),
-                )
-                log.info("notifications: OIDC verifier ready (issuer=%s)", auth.oidc_issuer)
-            except Exception:
-                log.exception("notifications: OIDC verifier failed to build — the inbox will 503")
-        if auth.fga_enabled:
-            try:
-                from service_kit.governed import fga
-
-                store_id, model_id = auth.fga_store_id, auth.fga_model_id
-                if not (store_id and model_id):
-                    store_id, model_id = await fga.provision(auth.fga_api_url)
-                    log.info("notifications: openfga provisioned store=%s model=%s", store_id, model_id)
-                app.state.fga = fga.make_client(auth.fga_api_url, store_id, model_id, timeout_seconds=auth.fga_timeout_seconds)
-                log.info("notifications: FGA client ready (%s)", auth.fga_api_url)
-            except Exception:
-                log.exception("notifications: FGA client failed to build — the inbox will 503")
+        # logged and non-fatal — the estate default — so the dependency finds no verifier/client on
+        # app.state and answers 503, where falling back to a permissive checker would turn a broken
+        # authorization layer into an open one, on a plane whose whole point is that a badge counts
+        # YOUR work.
+        await attach_auth(app, notifications_settings, service="notifications")
 
         # The reconciler's egress, built ONCE. One `AsyncClient` serves both halves — lineage's feed
         # over the network and the sidecar's state API on localhost — because a pool is a property of

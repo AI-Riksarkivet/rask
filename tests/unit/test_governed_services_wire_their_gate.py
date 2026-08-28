@@ -19,11 +19,12 @@ The record:
   sitting unread one directory over.
 
 So the invariant is checked here, once, over every service rather than remembered per service: if a
-service's settings mix in `GovernedAuthSettings`, some module in that service must put a client on
-`app.state.fga`. Either mechanism satisfies it — `attach_auth` (the shared helper) or the inline
-`fga.make_client` assignment the ten older services still use — because this gate is about the wire
-being CONNECTED, not about which helper connects it. Collapsing the ten copies onto the helper is
-`DUP-01`, a different finding with a different risk.
+service's settings mix in `GovernedAuthSettings`, some module in that service must build its client
+through the estate's shared bootstrap — `attach_auth` or `build_fga_client`. It once also accepted an
+inline `state.fga` assignment, because ten services still hand-rolled the block and this gate was only
+asking whether the wire was CONNECTED. `DUP-01` collapsed those ten onto the helper, so the looser
+alternative now admits only a re-introduced copy; `tests/unit/test_governed_bootstrap_is_one_
+implementation.py` is where that is refused, and this gate no longer contradicts it.
 
 WHAT THIS GATE DOES NOT CATCH, stated so nobody reads more into a green run: it is a source-level
 check that a service wires FGA *somewhere*, not that a particular route is reachable. Only running
@@ -40,8 +41,10 @@ import pathlib
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SERVICES = REPO / "services"
 
-#: Any of these, anywhere in the service's source, means the wire is connected.
-_WIRES = ("attach_auth", "state.fga")
+#: Any of these, anywhere in the service's source, means the wire is connected. Both are the shared
+#: bootstrap: `attach_auth` assigns onto `app.state`, `build_fga_client` returns the client for the one
+#: consumer (`maintenance`) that lives outside a lifespan.
+_WIRES = ("attach_auth", "build_fga_client")
 
 
 def _service_sources(service: pathlib.Path) -> list[pathlib.Path]:

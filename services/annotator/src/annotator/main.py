@@ -26,12 +26,11 @@ from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter, set_process_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
-from service_kit.governed import fga
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.config import get_settings
 from service_kit.media.middleware import register_middleware
@@ -66,31 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # but absent, `annotator.api.security` raises 503 rather than degrading to open access. A failure
     # is logged and the attribute left UNSET on purpose — a half-built auth layer must not look
     # configured, and 503 is the honest answer until it is fixed.
-    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
-        try:
-            app.state.oidc = OIDCVerifier(
-                settings.oidc_issuer,
-                settings.oidc_audience,
-                settings.oidc_cache_ttl,
-                leeway=settings.oidc_leeway,
-                allow_insecure=settings.oidc_allow_insecure,
-                # Split-horizon (reverse-proxied IdP): fetch discovery/JWKS in-cluster while tokens
-                # keep the public issuer string. Same wiring as the catalog, deliberately.
-                discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
-            )
-            logger.info("annotator: OIDC verifier ready (issuer=%s)", settings.oidc_issuer)
-        except Exception:
-            logger.exception("annotator: OIDC verifier failed to build — guarded routes will 503")
-    if settings.fga_enabled:
-        try:
-            store_id, model_id = settings.fga_store_id, settings.fga_model_id
-            if not (store_id and model_id):
-                store_id, model_id = await fga.provision(settings.fga_api_url)
-                logger.info("annotator: openfga provisioned store=%s model=%s", store_id, model_id)
-            app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-            logger.info("annotator: FGA client ready (%s)", settings.fga_api_url)
-        except Exception:
-            logger.exception("annotator: FGA client failed to build — authorized routes will 503")
+    await attach_auth(app, settings, service="annotator")
 
     # Control-plane change events. Built here so the emit path is a pure in-process call on the request
     # path: the Dapr client targets the local sidecar, so construction needs no broker reachability.

@@ -38,11 +38,10 @@ from medallion.core.config import apply_dapr_secrets, get_settings
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
-from service_kit.governed import fga
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.audit import configure_audit
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import RequestIDMiddleware
@@ -73,32 +72,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # dapr.resiliency.enabled chart resiliency; the /dlq-event route ERROR-logs + acks — park-and-alert,
     # not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12).
     app.state.dapr = DaprClient()
-    # The trainer consumer (#115a) gates as its own identity — the client MUST exist here or the gate
-    # is silently off with MEDALLION_FGA_ENABLED=true (review 2026-07-10 caught exactly that bypass).
+    # BOTH DEFAULT TO None BEFORE THE BUILD, because this app's dependencies read the attributes
+    # directly rather than through `getattr`: the trainer consumer (#115a) gates as its own identity
+    # and the client MUST exist here or the gate is silently off with MEDALLION_FGA_ENABLED=true
+    # (review 2026-07-10 caught exactly that bypass), and #64's OIDC verifier is the /produce human
+    # door — an admin can trigger the cascade without the service token.
+    #
+    # `fatal=True` KEEPS THIS APP'S POSTURE: it wrapped neither construction in a `try`, so a failed
+    # build has always crashed the pod. That is the loud failure, and the cascade head is not a place
+    # to serve 503s quietly — a producer that cannot authorize is a cascade that does not run.
     app.state.fga = None
-    if get_settings().fga_enabled:
-        settings = get_settings()
-        # Pinned-else-provision + explicit timeout — the same client-construction shape as
-        # catalog/lineage, so all four FGA consumers behave alike (audit 2026-07-15: the medallion
-        # alone re-provisioned on every boot, minting a model version per pod restart).
-        store_id, model_id = settings.fga_store_id, settings.fga_model_id
-        if not (store_id and model_id):
-            store_id, model_id = await fga.provision(settings.fga_api_url)
-        app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-    # #64 OIDC verifier for the /produce human door (admin can trigger the cascade without the service
-    # token). Same construction shape as catalog/lineage; None when OIDC is off (dev / service-only).
     app.state.oidc = None
-    _oidc = get_settings()
-    if _oidc.oidc_enabled and _oidc.oidc_issuer and _oidc.oidc_audience:
-        app.state.oidc = OIDCVerifier(
-            _oidc.oidc_issuer,
-            _oidc.oidc_audience,
-            _oidc.oidc_cache_ttl,
-            leeway=_oidc.oidc_leeway,
-            allow_insecure=_oidc.oidc_allow_insecure,
-            # Split-horizon (see the catalog twin): in-cluster fetch, public issuer string.
-            discovery_overrides=({_oidc.oidc_issuer: _oidc.oidc_discovery_url} if _oidc.oidc_discovery_url else None),
-        )
+    await attach_auth(app, get_settings(), service="medallion-producer", fatal=True)
     # THE WORKFLOW WORKER for `promotion_review` — and the reason this app hosts it at all.
     # `raise_workflow_event` resolves the instance through the CALLING app's app-id, so the approve
     # route and the instance must share a process. The gate that holds a promotion runs in a mover,

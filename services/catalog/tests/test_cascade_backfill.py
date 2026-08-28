@@ -109,13 +109,20 @@ def test_main_exits_zero_on_a_clean_run(monkeypatch) -> None:
 
 
 def _stub_client(monkeypatch) -> None:
-    """Replace the OpenFGA client construction — these tests are about the WALK, not the transport."""
+    """Replace the OpenFGA client construction — these tests are about the WALK, not the transport.
+
+    Patched on `service_kit.governed.fga` rather than on this module: the backfill builds its client
+    through the estate's ONE bootstrap (`auth_lifespan.build_fga_client`) instead of its own copy of
+    pinned-else-provision, so the transport seam is the shared module's, not a name re-exported here.
+    """
 
     class _Client:
         async def close(self) -> None: ...
 
-    monkeypatch.setattr(cascade_backfill.fga, "make_client", lambda *a, **k: _Client())
-    monkeypatch.setattr(cascade_backfill.fga, "provision", _provision)
+    from service_kit.governed import fga
+
+    monkeypatch.setattr(fga, "make_client", lambda *a, **k: _Client())
+    monkeypatch.setattr(fga, "provision", _provision)
 
 
 async def _provision(_url: str) -> tuple[str, str]:

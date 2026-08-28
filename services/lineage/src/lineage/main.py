@@ -25,10 +25,9 @@ from lineage.services.repository import LineageRepository
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
-from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
+from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import RequestIDMiddleware
@@ -86,26 +85,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # UNIQUE index per AGE vertex label so a concurrent MERGE (reconcile racing ingest) can't create a
     # duplicate vertex (item 6). Best-effort: a per-label failure is logged, not fatal, so ingest still boots.
     await repository.ensure_graph_constraints()
-    # Auth is opt-in; when enabled, reuse the catalog's verifier + the shared OpenFGA store.
-    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
-        app.state.oidc = OIDCVerifier(
-            settings.oidc_issuer,
-            settings.oidc_audience,
-            settings.oidc_cache_ttl,
-            leeway=settings.oidc_leeway,
-            allow_insecure=settings.oidc_allow_insecure,
-            # Split-horizon (see the catalog twin): in-cluster fetch, public issuer string.
-            discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
-        )
-    if settings.fga_enabled:
-        # Converge on the catalog's store: provision is idempotent by store NAME ("lance-catalog"), so
-        # both services resolve the same store + model without the id being pinned ahead of boot. (The
-        # catalog writes the grants on create; lineage reads them — one shared Zanzibar store.)
-        store_id, model_id = settings.fga_store_id, settings.fga_model_id
-        if not (store_id and model_id):
-            store_id, model_id = await fga.provision(settings.fga_api_url)
-            log.info("openfga_provisioned", extra={"store_id": store_id, "model_id": model_id})
-        app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+    # Auth is opt-in; when enabled, converge on the CATALOG's store — provision is idempotent by store
+    # NAME ("lance-catalog"), so both services resolve the same store + model without the id being
+    # pinned ahead of boot. (The catalog writes the grants on create; lineage reads them — one shared
+    # Zanzibar store.)
+    #
+    # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
+    # failed build has always crashed the pod. Lineage answers "who did what to which dataset"; a
+    # replica that came up unable to authorize would serve 503s that read as a slow graph, not as a
+    # broken authorization plane.
+    await attach_auth(app, settings, service="lineage", fatal=True)
     # Durable ingest (#25) is the Dapr subscription wired below (declarative — the sidecar drives it);
     # there is no consumer task to manage here. The HTTP /api/v1/lineage path stays for external producers.
     #

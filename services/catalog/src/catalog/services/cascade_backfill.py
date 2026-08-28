@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 from catalog.api import fga_deps
 from catalog.core.config import get_settings
 from catalog.services import warehouses
-from service_kit.governed import fga
+from service_kit.governed.auth_lifespan import build_fga_client
 
 
 if TYPE_CHECKING:
@@ -69,10 +69,14 @@ async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
         log.info("cascade_backfill_skipped", extra={"reason": "no_cascade_writers"})
         return (0, 0, [])
 
-    store_id, model_id = settings.fga_store_id, settings.fga_model_id
-    if not (store_id and model_id):
-        store_id, model_id = await fga.provision(settings.fga_api_url)
-    client = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+    # THE SAME BOOTSTRAP THE LIFESPAN USES, not a private copy of it — this is a hook Job that must
+    # land on the store `main.py` already resolved, and a second implementation is how a resolver and
+    # a provisioner end up on different stores. `fatal=True` because the alternative here is
+    # `_reconcile(None, …)`: a hook that cannot build a client has nothing to repair with, and its
+    # caller (`main.py::_backfill_cascade_grants`) already catches and reports.
+    client = await build_fga_client(settings, service="cascade-backfill", fatal=True)
+    if client is None:  # unreachable while fga_enabled is checked above; narrows the Optional for `ty`
+        raise RuntimeError("cascade backfill: FGA is enabled but no client could be built")
     try:
         return await _reconcile(client, settings)
     finally:
