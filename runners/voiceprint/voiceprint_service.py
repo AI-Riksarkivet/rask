@@ -26,6 +26,7 @@ network in the middle.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import TYPE_CHECKING, Any
@@ -103,7 +104,13 @@ class VoiceprintDeployment:
                 status_code=400,
             )
         waveform = np.frombuffer(body, dtype="<f4")
-        return JSONResponse({"embedding": self.embed(waveform)})
+        # OFF THE LOOP: `embed` is a speaker-encoder forward pass over up to 30 s of audio, on CPU
+        # unless RASK_SERVE_GPU_FRAC is set. Inline it held the replica's event loop for the whole
+        # pass, which made `max_ongoing_requests=4` a number rather than a behaviour and put the
+        # health probe behind the encoder. torch releases the GIL inside its ops, so the threads
+        # genuinely overlap.
+        embedding = await asyncio.to_thread(self.embed, waveform)
+        return JSONResponse({"embedding": embedding})
 
 
 voiceprint_app = VoiceprintDeployment.bind()

@@ -50,10 +50,19 @@ DEFAULT_MODEL = TEXT_MODEL.repo
 SERVE_REPLICAS = int(os.environ.get("RASK_SERVE_REPLICAS", "2"))
 SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "0.49"))
 
+#: What a replica actually costs in HOST RAM, declared so Ray's admission enforces it rather than a
+#: comment. `pipeline.py` records the cost of leaving it undeclared: "6 * ~4GB TrOCR-in-RAM saturated
+#: host memory and the kernel OOM killer reaped dashboard_agent, fate-killing the raylet". The fix
+#: then was to lower a hand-tuned actor count — which holds only until someone raises
+#: RASK_SERVE_REPLICAS, co-deploys htrflow, or lands another workload on the node, because the
+#: scheduler was told each 4GB replica costs one CPU and zero bytes. `RASK_SERVE_MEMORY_GB` tunes it
+#: for hosts that differ, the same way replicas and GPU share already are the RUNNER's to set.
+SERVE_MEMORY_BYTES = int(float(os.environ.get("RASK_SERVE_MEMORY_GB", "4")) * 1024**3)
+
 
 @serve.deployment(
     num_replicas=SERVE_REPLICAS,
-    ray_actor_options={"num_gpus": SERVE_GPU_FRAC, "num_cpus": 1},
+    ray_actor_options={"num_gpus": SERVE_GPU_FRAC, "num_cpus": 1, "memory": SERVE_MEMORY_BYTES},
     max_ongoing_requests=2,
 )
 class TranscribeService:
@@ -121,7 +130,23 @@ class TranscribeService:
         )
 
     async def transcribe(self, line_images: list[Image.Image]) -> list[tuple[str, float]]:
-        """Run TrOCR on a flat list of line crops; return list of (text, confidence)."""
+        """Run TrOCR on a flat list of line crops; return list of (text, confidence).
+
+        OFF THE EVENT LOOP. The body below is multi-second blocking GPU work with no
+        await in it, so running it inline made this coroutine async in name only: the
+        replica's loop was held for the whole batch, `max_ongoing_requests=2` bought
+        nothing (the second request could not start its preprocessing until the first
+        returned), and Serve's health probe queued behind the GPU. The sibling
+        `HTRFlowDeployment` already does exactly this, and `deploy_htr.py` records what
+        the inline form cost: "event loop unresponsive -> Serve killed every replica ->
+        restart storm".
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self._transcribe_sync, line_images)
+
+    def _transcribe_sync(self, line_images: list[Image.Image]) -> list[tuple[str, float]]:
+        """The blocking half — the GPU work, run in a worker thread."""
         from concurrent.futures import ThreadPoolExecutor
 
         import torch

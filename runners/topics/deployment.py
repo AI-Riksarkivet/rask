@@ -11,6 +11,7 @@ never in ratch's — so it is excluded from ratch's type-check/lint.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import worker
@@ -27,9 +28,26 @@ class TopicsDeployment:
     replica start-up is cheap.
     """
 
+    def __init__(self) -> None:
+        # ONE build at a time, said out loud. It used to be true by accident — the
+        # blocked event loop could not start a second request — and the build writes
+        # the whole chunks table, so two of them against one DB would fight. Now that
+        # the loop is free, the serialisation has to be deliberate.
+        self._building = asyncio.Lock()
+
     async def __call__(self, request: Any) -> dict[str, int]:
+        """Build the topic layers off the event loop.
+
+        `worker.run` is the entire Toponymy build — embedding plus LLM topic-naming
+        over a Lance DB's chunks table, minutes to hours. Run inline it froze the
+        replica's loop, so Serve's health probe queued behind it and the controller
+        declared the replica unhealthy and restarted it MID-BUILD, losing the work.
+        That is the failure `runners/htr/scripts/deploy_htr.py` already records:
+        "event loop unresponsive -> Serve killed every replica -> restart storm".
+        """
         body = await request.json()
-        rows = worker.run(db_path=body["db"], llm_url=body.get("llm_url"))
+        async with self._building:
+            rows = await asyncio.to_thread(worker.run, db_path=body["db"], llm_url=body.get("llm_url"))
         return {"rows": rows}
 
 

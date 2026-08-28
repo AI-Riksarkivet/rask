@@ -56,15 +56,18 @@ def _require(schema_names: list[str], db: Path) -> None:
 def run(db_path: str, llm_url: str | None = None) -> int:
     """Programmatic entry — the Ray Serve deployment (deployment.py) calls this;
     it parses through the same CLI contract as ``main()`` so the served path and
-    the CLI run identical compute. Returns the number of chunks written."""
-    argv = ["worker", "--db", db_path]
+    the CLI run identical compute. Returns the number of chunks written.
+
+    The argv is handed to the parser, NOT swapped into ``sys.argv``. The swap was
+    a process-wide mutation, and it was only ever safe because the deployment
+    blocked its own event loop and therefore served one request at a time. Now
+    that the build is offloaded to a thread, two concurrent calls would have
+    raced on the interpreter's argv and parsed each other's arguments.
+    """
+    argv = ["--db", db_path]
     if llm_url:
         argv += ["--llm-url", llm_url]
-    saved, sys.argv = sys.argv, argv
-    try:
-        return _build(_parse_args())
-    finally:
-        sys.argv = saved
+    return _build(_parse_args(argv))
 
 
 def main() -> int:
@@ -73,7 +76,7 @@ def main() -> int:
     return 0
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Build Swedish topic layers on chunks via Toponymy.")
     ap.add_argument("--db", required=True, help="Lance DB dir (contains chunks.lance).")
     ap.add_argument("--llm-url", default=os.getenv("MEDIA_TOPICS_LLM_URL", "http://127.0.0.1:8003/v1"))
@@ -88,7 +91,7 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--min-clusters", type=int, default=6)
     ap.add_argument("--base-min-cluster-size", type=int, default=100)
     ap.add_argument("--max-layers", type=int, default=None)
-    return ap.parse_args()
+    return ap.parse_args(argv)
 
 
 def _build(args: argparse.Namespace) -> int:
