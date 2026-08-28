@@ -5,8 +5,10 @@ fields: ranks the frame table (by an image/caption vector, or BM25 over the
 caption text), dedups to one best frame per row key, then fetches the matching
 row-table payload rows and re-orders them to the frame ranking. Backs visual /
 scene / scene_fts search and the frame legs of ``all``. A join failure raises a
-domain :class:`ValidationError` (real error logged, never interpolated); the
-graceful-degradation ``except`` blocks degrade to ``[]`` when no index exists yet.
+domain :class:`ValidationError` (real error logged, never interpolated), and a ranker that cannot run
+raises :class:`ServiceUnavailableError` rather than degrading to ``[]`` — see
+:func:`_ranked_or_fallback`. Genuine ABSENCE (no frames extracted, no caption column) is answered
+``[]`` by each function's own guard, before any ranking is attempted.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from search.services.constants import (
     VECTOR_REFINE_FACTOR,
 )
 from search.services.postprocess import RowKey, row_key
-from service_kit.exceptions import ValidationError
+from service_kit.exceptions import ServiceUnavailableError, ValidationError
 from service_kit.lancekit.predicate import eq
 
 
@@ -41,17 +43,33 @@ logger = logging.getLogger(__name__)
 def _ranked_or_fallback(rank: Callable[..., list[dict[str, Any]]], *, scoped: bool) -> list[dict[str, Any]]:
     """Run ``rank(scoped=True)``; if the scope prefilter references a column the
     frame table lacks (a metadata filter, which stays on the row-table join),
-    retry unscoped. ``[]`` if even the unscoped rank fails (no vector/FTS index
-    yet)."""
+    retry unscoped. A failing UNSCOPED rank is an OUTAGE and is raised.
+
+    IT USED TO RETURN ``[]`` THERE, defended as "no vector/FTS index yet" — and that justification is
+    empirically false. Measured against lancedb at HEAD: an FTS query with no FTS index does NOT
+    raise (flat scan), and a vector search with no ANN index does NOT raise (flat search, rows
+    returned). Absence never reaches this function at all — the callers' guard
+    (``vec is None or frame_tbl is None or column not in frame_tbl.schema.names``) has already
+    answered ``[]`` for it.
+
+    So the only thing that ``except`` ever caught was a genuine failure — a store outage, a timeout,
+    a malformed query — and every one of them was rendered to the caller as "no hits". An empty 200
+    says "this corpus has nothing to show you", which is a different claim from "search is down", and
+    the search plane is half of what this estate is for.
+
+    The scoped→unscoped retry stays, because THAT case is real and verified: a prefilter naming a
+    non-frame column raises ``Invalid user input: Schema error: No field named ...``, and retrying
+    unscoped is the documented recovery.
+    """
     if scoped:
         try:
             return rank(scoped=True)
         except Exception:
-            pass
+            logger.info("scoped rank failed; retrying unscoped (the prefilter names a non-frame column)", exc_info=True)
     try:
         return rank(scoped=False)
-    except Exception:
-        return []
+    except Exception as exc:
+        raise ServiceUnavailableError(f"the frame ranker is unavailable, so no ranking could be produced: {exc}") from exc
 
 
 def frame_search(
@@ -117,7 +135,10 @@ def frame_fts_search(
     The keyword counterpart to scene-vector search: same frame→row join as
     :func:`frame_search`, only the ranking is BM25 instead of cosine.
     ``scope_where`` prefilters to an upstream scope (see :func:`frame_search`).
-    Returns ``[]`` when captions / their FTS index aren't built yet.
+    Returns ``[]`` when the corpus declares no caption column — the guard below, not an ``except``.
+    A MISSING FTS INDEX IS NOT THAT CASE: measured against lancedb, an FTS query with no index does
+    not raise, it flat-scans. This docstring used to claim the index case was handled by degrading to
+    ``[]``, which is how a real ranker failure came to look like "no hits".
     """
     if not query or frame_tbl is None or column not in frame_tbl.schema.names:
         return []
