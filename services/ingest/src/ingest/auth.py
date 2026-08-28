@@ -35,10 +35,12 @@ from __future__ import annotations
 
 import os
 import secrets
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed import fga
@@ -73,13 +75,19 @@ class IngestAuthSettings(GovernedAuthSettings, BaseSettings):
 
     #: The project the SERVICE token may ingest into. The shared token carries no tenant identity, so
     #: it is pinned here; crossing tenants requires a user bearer and its per-project FGA check.
-    service_project: str = "demo"
+    #:
+    #: `RASK_INGEST_SERVICE_PROJECT` is the deployment knob and takes precedence; the model reads it
+    #: directly rather than through a post-construct `os.environ` patch, so caching `get_auth_settings`
+    #: cannot strand a stale value.
+    service_project: str = Field(default="demo", validation_alias=AliasChoices("RASK_INGEST_SERVICE_PROJECT", "LANCE_SERVICE_PROJECT"))
 
 
+@lru_cache
 def get_auth_settings() -> IngestAuthSettings:
-    settings = IngestAuthSettings()
-    settings.service_project = os.environ.get("RASK_INGEST_SERVICE_PROJECT", settings.service_project)
-    return settings
+    """The auth settings, built ONCE. `AuthSettingsDep` resolves this per request on every governed
+    route, and an uncached `BaseSettings` re-reads `.env` from disk each time. `cache_clear` is the
+    hook tests use when they mutate the environment between constructions."""
+    return IngestAuthSettings()
 
 
 AuthSettingsDep = Annotated[IngestAuthSettings, Depends(get_auth_settings)]
@@ -104,13 +112,19 @@ async def _require_admin(client: OpenFgaClient, *, user: str, obj: str) -> None:
 
 async def authorize_ingest(
     request: Request,
-    settings: AuthSettingsDep,
+    settings: IngestAuthSettings,
     project: str | None = None,
-    dapr_api_token: Annotated[str | None, Header()] = None,
-    authorization: Annotated[str | None, Header()] = None,
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+    dapr_api_token: str | None = None,
+    authorization: str | None = None,
+    dapr_caller_app_id: str | None = None,
 ) -> str | None:
     """Allow EITHER the Dapr app-api-token (service, configured project only) OR a project admin.
+
+    Plain parameters, NOT FastAPI bindings: every call site invokes this positionally with values the
+    ROUTE already extracted (each governed route declares its own `Header()`-bound params and passes
+    them in). Header()/Depends() here would be inert, and wiring this in as an actual dependency would
+    bind `project` as a query param defaulting to None — silently scoping the admin check to the
+    configured project instead of the body's, a cross-project regression. So the signature stays plain.
 
     `project` is the project the REQUEST names — the routes pass `body.project` / the run's recorded
     project — so the admin check always targets what the caller is actually writing into.

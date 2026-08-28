@@ -136,6 +136,13 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
         try:
             yield
         finally:
+            # Close the OpenFGA client `attach_auth` opened. The SDK is aiohttp-backed, so an unclosed
+            # client leaks one half-open connection per replica (plus an "Unclosed client session" on
+            # the way out); `fga.dispose` is None-safe and suppress-wrapped, so it is safe whether or
+            # not auth was wired.
+            from service_kit.governed import fga
+
+            await fga.dispose(app)
             if runtime is not None:
                 with_suppressed = getattr(runtime, "shutdown", None)
                 if callable(with_suppressed):

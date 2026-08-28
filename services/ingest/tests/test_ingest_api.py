@@ -18,11 +18,13 @@ import json
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urljoin
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from ingest import create_app
 from ingest.api import router
 from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
@@ -135,6 +137,46 @@ def test_a2_same_idempotency_key_starts_no_second_workflow(
     assert first.json()["run_id"] == second.json()["run_id"]
     assert second.json()["deduplicated"] is True
     assert len(starter.dispatched) == 1, "a repeated Idempotency-Key started a second workflow"
+
+
+def test_the_202_location_is_a_gettable_run_under_the_real_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ING-10: the accepted run's `Location` must resolve to the run's GET, at any mount prefix.
+
+    The header was a hardcoded `/v1/ingests/{id}` while the router mounts under `RASK_API_PREFIX`
+    (`/api` in every deployment, `/api/v1` by code default) — so a client following the 202 Location
+    404s, and behind the gateway (which rewrites the request path but not the Location) an absolute
+    backend path is wrong again. A relative Location resolves against whatever public URL the caller
+    actually hit. This test goes through the REAL app factory so the mount prefix is real, not the
+    `/v1` the bare-router fixtures pin.
+    """
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
+    app = create_app()
+    starter = _RecordingStarter()
+    app.state.workflow_starter = starter
+    c = TestClient(app)
+
+    res = c.post("/api/ingests", json=BODY, headers={"Idempotency-Key": "loc"})
+    assert res.status_code == 202, res.text
+
+    resolved = urljoin(str(res.request.url), res.headers["Location"])
+    got = c.get(resolved)
+    assert got.status_code == 200, f"Location {res.headers['Location']!r} -> {resolved} is not GETtable"
+    assert got.json()["run_id"] == res.json()["run_id"]
+
+
+def test_the_dedupe_202_location_is_also_gettable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ING-10: the dedupe branch sets its own Location and it must resolve too."""
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
+    app = create_app()
+    app.state.workflow_starter = _RecordingStarter()
+    c = TestClient(app)
+
+    c.post("/api/ingests", json=BODY, headers={"Idempotency-Key": "dup"})
+    dedupe = c.post("/api/ingests", json=BODY, headers={"Idempotency-Key": "dup"})
+    assert dedupe.json()["deduplicated"] is True
+
+    resolved = urljoin(str(dedupe.request.url), dedupe.headers["Location"])
+    assert c.get(resolved).status_code == 200, f"dedupe Location {dedupe.headers['Location']!r} is not GETtable"
 
 
 def test_run_id_is_deterministic_across_processes() -> None:

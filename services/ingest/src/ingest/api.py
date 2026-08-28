@@ -247,7 +247,13 @@ async def dispatch_run(
         # "a workflow is executing" are different facts — and reading the first as the second made
         # the 503 below self-defeating: the caller did exactly what its detail said, retried with the
         # same key, and landed here on a run the engine had never been told about.
-        response.headers["Location"] = f"/v1/ingests/{run_id}"
+        #
+        # RELATIVE, resolved against the request URL — the same value the success branch below sets.
+        # A hardcoded `/v1/ingests/{id}` matched neither mount prefix (`RASK_API_PREFIX` is `/api` in
+        # deployment, `/api/v1` by code default), and an absolute BACKEND path is wrong behind the
+        # gateway too: it rewrites the request path (`/api/ingest` -> `/api`) but passes the Location
+        # header through untouched, so only a relative reference resolves to the public run URL.
+        response.headers["Location"] = f"ingests/{run_id}"
         return IngestAccepted(run_id=run_id, status=existing.status, deduplicated=True)
 
     # Re-drive, or first drive. The existing record is REUSED rather than replaced so `created_at`
@@ -315,7 +321,7 @@ async def dispatch_run(
     # instance is the fact, and it is the fact the dedupe branch reads.
     await _mark_scheduled(store, record)
 
-    response.headers["Location"] = f"/v1/ingests/{run_id}"
+    response.headers["Location"] = f"ingests/{run_id}"
     return IngestAccepted(run_id=run_id)
 
 

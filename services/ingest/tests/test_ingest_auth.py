@@ -324,3 +324,74 @@ def test_the_local_dev_posture_is_preserved(monkeypatch: pytest.MonkeyPatch) -> 
 
     with TestClient(_app()) as client:
         assert client.post("/ingests", json={"project": "demo"}).status_code == 200
+
+
+# ── ING-12 / ING-13: the signature reads as what it is, and settings are built once ──────
+
+
+def test_authorize_ingest_is_not_dependency_shaped() -> None:
+    """ING-12: `authorize_ingest` is invoked positionally at every call site, never `Depends()`d.
+
+    Its parameters therefore must not carry FastAPI `Header()`/`Depends()` bindings — those are inert
+    here (the ROUTE params carry the real header binding and pass the values in) and read as though
+    this were a dependency, which is the one thing it is not. The real risk of the misread is the
+    tempting "wire it in as a dependency" fix: as a dependency its `project` would bind as a query
+    param defaulting to None, silently scoping the admin check to the configured project instead of
+    the body's — a real cross-project regression. So the signature stays plain.
+    """
+    import inspect
+    import typing
+
+    from fastapi import params as fastapi_params
+
+    binding = (fastapi_params.Header, fastapi_params.Depends)
+    hints = typing.get_type_hints(authorize_ingest, include_extras=True)
+    annotated = [name for name, hint in hints.items() if any(isinstance(meta, binding) for meta in getattr(hint, "__metadata__", ()))]
+    defaulted = [name for name, param in inspect.signature(authorize_ingest).parameters.items() if isinstance(param.default, binding)]
+
+    offenders = sorted(set(annotated + defaulted))
+    assert not offenders, f"authorize_ingest carries inert FastAPI dependency annotations on {offenders}"
+
+
+def test_get_auth_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ING-13: the settings are constructed once, not rebuilt (and `.env` re-read from disk) per request.
+
+    `AuthSettingsDep` resolves `get_auth_settings` on every governed route; an uncached factory
+    re-instantiates the `BaseSettings` — a disk read of `.env` — on each one.
+    """
+    from ingest import auth
+
+    calls = 0
+    original_init = auth.IngestAuthSettings.__init__
+
+    def _counting_init(self: auth.IngestAuthSettings, *args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(auth.IngestAuthSettings, "__init__", _counting_init)
+    # Clear whatever earlier tests cached, so the count reflects only this test's two calls. The guard
+    # is what makes the RED legible: an uncached factory has no `cache_clear`, and the point is the two
+    # calls below then construct twice.
+    if hasattr(auth.get_auth_settings, "cache_clear"):
+        auth.get_auth_settings.cache_clear()
+
+    auth.get_auth_settings()
+    auth.get_auth_settings()
+
+    assert calls == 1, f"IngestAuthSettings was constructed {calls} times across two calls — get_auth_settings is not cached"
+
+
+def test_service_project_override_reads_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ING-13: folding the `RASK_INGEST_SERVICE_PROJECT` override into the model must not lose it."""
+    from ingest import auth
+
+    monkeypatch.setenv("RASK_INGEST_SERVICE_PROJECT", "acme")
+    if hasattr(auth.get_auth_settings, "cache_clear"):
+        auth.get_auth_settings.cache_clear()
+
+    try:
+        assert auth.get_auth_settings().service_project == "acme"
+    finally:
+        if hasattr(auth.get_auth_settings, "cache_clear"):
+            auth.get_auth_settings.cache_clear()
