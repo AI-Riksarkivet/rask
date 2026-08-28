@@ -35,6 +35,8 @@ Key deployment decisions (learned the hard way — keep them):
     the health check and kill the replica mid-pull.
 """
 
+import os
+
 import ray
 from fastapi import FastAPI, Request, Response
 from ray import serve
@@ -80,11 +82,18 @@ steps:
 api = FastAPI()
 
 
+# The estate's standard sizing knobs (open_ray-kernel.md move 3) — same names as every other
+# deployment, this script's own defaults: four replicas at a whole GPU each is the dedicated-node
+# packing this deploy path was written for.
+SERVE_REPLICAS = int(os.environ.get("RASK_SERVE_REPLICAS", "4"))
+SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "1"))
+
+
 @serve.deployment(
     name="HTRFlow",
-    num_replicas=4,
+    num_replicas=SERVE_REPLICAS,
     ray_actor_options={
-        "num_gpus": 1,
+        "num_gpus": SERVE_GPU_FRAC,
         "resources": {"gpu_ada": 0.001},
         # uv (like rask) resolves deterministically so opencv-python-headless's
         # GL-free cv2 wins over the full opencv-python htrflow pulls in -> no libGL.

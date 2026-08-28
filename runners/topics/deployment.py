@@ -13,13 +13,21 @@ excluded from the root type-check.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import worker
 from ray import serve  # type: ignore[import-not-found]
 
 
-@serve.deployment(num_replicas=1, ray_actor_options={"num_gpus": 0})
+# The estate's standard sizing knobs (open_ray-kernel.md move 3): the NAMES are uniform across
+# every runner's Serve deployment so one operator gesture sizes any workload; the DEFAULTS are
+# this workload's own — one replica, CPU (the build is LLM-bound over HTTP, not GPU-bound here).
+SERVE_REPLICAS = int(os.environ.get("RASK_SERVE_REPLICAS", "1"))
+SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "0"))
+
+
+@serve.deployment(num_replicas=SERVE_REPLICAS, ray_actor_options={"num_gpus": SERVE_GPU_FRAC})
 class TopicsDeployment:
     """Build Swedish topic layers on a Lance DB's chunks (Toponymy).
 
