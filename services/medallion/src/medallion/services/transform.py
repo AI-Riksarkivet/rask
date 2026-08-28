@@ -232,6 +232,56 @@ def accepted_input_names(*, env_from_dataset: str, declared: Any | None) -> set[
     return accepted
 
 
+async def _emit_fail_run(
+    dapr: DaprClient,
+    settings: MedallionSettings,
+    *,
+    from_namespace: str,
+    from_dataset: str,
+    to_namespace: str,
+    to_dataset: str,
+    token: str | None,
+    cascade_id: str,
+    project: str,
+    originator: str,
+    error_message: str,
+    promotion_status: str | None = None,
+) -> None:
+    """Build one FAIL RunEvent and stage-and-publish it through the outbox.
+
+    The four handler exits that record a failed run (project-unresolvable, media-underivable,
+    stage-failed, promotion-held) share this contract; the only things they vary are the ``token``
+    the run is keyed on, its ``error_message``, and — for the held promotion — a ``promotion_status``.
+    ``promotion_status`` falls through to ``build_run_event`` where a falsy value renders no facet, so
+    the three plain-FAIL sites stay byte-identical to the copies this replaced.
+    """
+    fail_event = build_run_event(
+        operation=settings.operation,
+        author=settings.author,
+        job_namespace=settings.job_namespace,
+        inputs=[(from_namespace, from_dataset)],
+        output_namespace=to_namespace,
+        output_name=to_dataset,
+        token=token,
+        cascade_id=cascade_id or None,
+        project=project or None,
+        originator=originator or None,
+        event_type="FAIL",
+        error_message=error_message,
+        promotion_status=promotion_status,
+    )
+    await outbox.publish_lineage_with_outbox(
+        dapr,
+        outbox_uri=settings.lineage_outbox_uri,
+        storage_options=settings.storage_options(),
+        run_id=fail_event["run"]["runId"],
+        event_json=json.dumps(fail_event),
+        pubsub_name=settings.pubsub,
+        topic_name=settings.lineage_topic,
+        timeout_seconds=settings.publish_timeout_seconds,
+    )
+
+
 async def handle_stage(
     dapr: DaprClient,
     settings: MedallionSettings,
@@ -941,29 +991,18 @@ async def handle_stage(
             extra={"transition": transition, "token": token, "project": project, "error": str(exc)},
         )
         with best_effort("project_unresolvable", transition=transition, token=token, project=project):
-            fail_event = build_run_event(
-                operation=settings.operation,
-                author=settings.author,
-                job_namespace=settings.job_namespace,
-                inputs=[(from_namespace, from_dataset)],
-                output_namespace=to_namespace,
-                output_name=to_dataset,
-                token=token,
-                cascade_id=trigger.cascade_id or None,
-                project=project or None,
-                originator=trigger.originator or None,
-                event_type="FAIL",
-                error_message=str(exc),
-            )
-            await outbox.publish_lineage_with_outbox(
+            await _emit_fail_run(
                 dapr,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=fail_event["run"]["runId"],
-                event_json=json.dumps(fail_event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
+                settings,
+                from_namespace=from_namespace,
+                from_dataset=from_dataset,
+                to_namespace=to_namespace,
+                to_dataset=to_dataset,
+                token=token,
+                cascade_id=trigger.cascade_id or "",
+                project=project or "",
+                originator=trigger.originator or "",
+                error_message=str(exc),
             )
         return _DROP
     except UnderivableMediaError as exc:
@@ -976,34 +1015,24 @@ async def handle_stage(
             "medallion_media_underivable",
             extra={"transition": transition, "token": token, "error": str(exc)},
         )
+        # Through the OUTBOX (#4), like every other lineage emit. This path returns _DROP — Dapr will NOT
+        # redeliver — so a lost FAIL publish means the failed run is NEVER recorded and NEVER retried:
+        # the graph silently forgets it. Staging (inside the shared emit) makes the failure durable. A
+        # staged FAIL is not a phantom: the relay re-ingests a truthful "this run failed" record; it
+        # implies no committed data.
         with best_effort("media_underivable", transition=transition, token=token):
-            fail_event = build_run_event(
-                operation=settings.operation,
-                author=settings.author,
-                job_namespace=settings.job_namespace,
-                inputs=[(from_namespace, from_dataset)],
-                output_namespace=to_namespace,
-                output_name=to_dataset,
-                token=token,
-                cascade_id=trigger.cascade_id or None,
-                project=project or None,
-                originator=trigger.originator or None,
-                event_type="FAIL",
-                error_message=str(exc),
-            )
-            # Through the OUTBOX (#4), like every other lineage emit. This path returns _DROP — Dapr will NOT
-            # redeliver — so a lost FAIL publish means the failed run is NEVER recorded and NEVER retried:
-            # the graph silently forgets it. Staging makes the failure durable. A staged FAIL is not a
-            # phantom: the relay re-ingests a truthful "this run failed" record; it implies no committed data.
-            await outbox.publish_lineage_with_outbox(
+            await _emit_fail_run(
                 dapr,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=fail_event["run"]["runId"],
-                event_json=json.dumps(fail_event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
+                settings,
+                from_namespace=from_namespace,
+                from_dataset=from_dataset,
+                to_namespace=to_namespace,
+                to_dataset=to_dataset,
+                token=token,
+                cascade_id=trigger.cascade_id or "",
+                project=project or "",
+                originator=trigger.originator or "",
+                error_message=str(exc),
             )
         return _DROP
     except Exception as exc:
@@ -1016,33 +1045,23 @@ async def handle_stage(
         # edge, no version) + the errorMessage facet; best-effort + suppressed so it can't mask the RETRY;
         # idempotent on the deterministic run_id.
         if not completed:
+            # Through the OUTBOX (#4) — see the _DROP path above. Dapr DOES redeliver here, so a lost FAIL
+            # is eventually re-emitted; staging it anyway (inside the shared emit) keeps the invariant
+            # UNIFORM ("every lineage publish is staged") rather than a special case that the next audit
+            # has to re-derive.
             with best_effort("stage_fail", transition=transition, token=token):
-                fail_event = build_run_event(
-                    operation=settings.operation,
-                    author=settings.author,
-                    job_namespace=settings.job_namespace,
-                    inputs=[(from_namespace, from_dataset)],
-                    output_namespace=to_namespace,
-                    output_name=to_dataset,
-                    token=token,
-                    cascade_id=trigger.cascade_id or None,
-                    project=project or None,
-                    originator=trigger.originator or None,
-                    event_type="FAIL",
-                    error_message=str(exc),
-                )
-                # Through the OUTBOX (#4) — see the _DROP path above. Dapr DOES redeliver here, so a lost FAIL
-                # is eventually re-emitted; staging it anyway keeps the invariant UNIFORM ("every lineage
-                # publish is staged") rather than a special case that the next audit has to re-derive.
-                await outbox.publish_lineage_with_outbox(
+                await _emit_fail_run(
                     dapr,
-                    outbox_uri=settings.lineage_outbox_uri,
-                    storage_options=settings.storage_options(),
-                    run_id=fail_event["run"]["runId"],
-                    event_json=json.dumps(fail_event),
-                    pubsub_name=settings.pubsub,
-                    topic_name=settings.lineage_topic,
-                    timeout_seconds=settings.publish_timeout_seconds,
+                    settings,
+                    from_namespace=from_namespace,
+                    from_dataset=from_dataset,
+                    to_namespace=to_namespace,
+                    to_dataset=to_dataset,
+                    token=token,
+                    cascade_id=trigger.cascade_id or "",
+                    project=project or "",
+                    originator=trigger.originator or "",
+                    error_message=str(exc),
                 )
         return _RETRY
     if quality_blocked:
@@ -1066,30 +1085,19 @@ async def handle_stage(
         # same reason every other lineage emit here is (I8): a graph outage must not convert a
         # correct refusal into a retry storm.
         with best_effort("promotion_held", transition=transition, token=token):
-            held_event = build_run_event(
-                operation=settings.operation,
-                author=settings.author,
-                job_namespace=settings.job_namespace,
-                inputs=[(from_namespace, from_dataset)],
-                output_namespace=to_namespace,
-                output_name=to_dataset,
+            await _emit_fail_run(
+                dapr,
+                settings,
+                from_namespace=from_namespace,
+                from_dataset=from_dataset,
+                to_namespace=to_namespace,
+                to_dataset=to_dataset,
                 token=f"{token}:quality-hold",
-                cascade_id=trigger.cascade_id or None,
-                project=project or None,
-                originator=trigger.originator or None,
-                event_type="FAIL",
+                cascade_id=trigger.cascade_id or "",
+                project=project or "",
+                originator=trigger.originator or "",
                 error_message=refusal_message(blocked_by, settings.to_dataset),
                 promotion_status=promotion_status_for(blocked_by),
-            )
-            await outbox.publish_lineage_with_outbox(
-                dapr,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=held_event["run"]["runId"],
-                event_json=json.dumps(held_event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
             )
         # S3/S4: with review on, the hold becomes a QUESTION rather than a verdict. The mover does
         # not decide which kind of hold this is — it publishes what the gate saw, and the review

@@ -205,6 +205,22 @@ def test_every_published_lineage_emit_stamps_originator() -> None:
     )
 
 
+def _emit_fail_run_calls() -> list[tuple[int, set[str]]]:
+    """Every `_emit_fail_run(` call in the mover, with the kwargs it stamps.
+
+    The mover's four stage-outcome FAIL emits (project-unresolvable, media-underivable, stage-failed,
+    promotion-held) route through one `_emit_fail_run` helper (MED-005), so `_emit_sites()` — which
+    walks `build_run_event(` calls — no longer sees them as four sites; it sees the helper's single
+    call. The per-outcome REACH guarantee therefore moves to the call sites, checked here.
+    """
+    transform = SRC / "services" / "transform.py"
+    out: list[tuple[int, set[str]]] = []
+    for node in ast.walk(ast.parse(transform.read_text())):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_emit_fail_run":
+            out.append((node.lineno, {k.arg for k in node.keywords if k.arg is not None}))
+    return out
+
+
 def test_the_targeting_scan_sees_every_hop_of_the_cascade() -> None:
     """Non-vacuity, and specifically about REACH rather than count.
 
@@ -216,9 +232,29 @@ def test_the_targeting_scan_sees_every_hop_of_the_cascade() -> None:
     sites = _emit_sites()
     files = {site.file for site in sites}
 
-    assert len(sites) >= 8, f"only {len(sites)} emit sites found — the cascade has more hops than that"
+    assert len(sites) >= 6, f"only {len(sites)} emit sites found — the cascade has more hops than that"
     for expected in ("services/produce.py", "services/transform.py", "workflow.py"):
         assert expected in files, f"the scan no longer reaches {expected} — it is a cascade hop with emits"
-    assert sum(1 for s in sites if s.file == "services/transform.py") >= 4, (
-        "the mover module should carry several emits (one per stage outcome); the scan is seeing too few"
+    # The mover carries the COMPLETE emit plus the shared FAIL emit (`_emit_fail_run`'s own
+    # `build_run_event`); its four stage-outcome FAILs are checked at their call sites below.
+    assert sum(1 for s in sites if s.file == "services/transform.py") >= 2, (
+        "the mover module should carry the COMPLETE emit and the shared FAIL emit; the scan is seeing too few"
     )
+
+
+def test_every_stage_outcome_reaches_the_person_through_the_fail_helper() -> None:
+    """The per-outcome REACH guarantee, at the seam MED-005 moved it to.
+
+    Consolidating the four inline FAIL blocks into `_emit_fail_run` means `_emit_sites()` sees one
+    `build_run_event` call, not four — so `test_every_published_lineage_emit_stamps_originator`
+    (which walks that helper) proves the emit CAN name the person, but not that every stage outcome
+    passes the person down to it. That is what these call sites carry: drop `originator=` at any one
+    of them and that stage's failed run reaches an inbox actor named after a chart role, exactly the
+    silent loss the sibling gate was written for. The mover has four failure exits (project
+    unresolvable, media underivable, stage failed, promotion held), so four call sites.
+    """
+    calls = _emit_fail_run_calls()
+    assert len(calls) >= 4, f"the mover should route all four stage-outcome FAILs through `_emit_fail_run`; found {len(calls)}"
+    for line, stamped in calls:
+        assert "originator" in stamped, f"_emit_fail_run call at transform.py:{line} drops `originator` — the failed run cannot reach the person who started it"
+        assert "project" in stamped, f"_emit_fail_run call at transform.py:{line} drops `project` — the watcher fan-out is skipped for this outcome"
