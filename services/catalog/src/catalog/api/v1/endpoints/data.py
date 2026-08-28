@@ -44,7 +44,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
-from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.core.identifiers import parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, InputPin, InputRef, shape_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
 from catalog.core.serialization import dump
@@ -52,12 +52,12 @@ from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
 from catalog.services import dataplane, native
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
 log = logging.getLogger(__name__)
 
 
-ARROW_STREAM = "application/vnd.apache.arrow.stream"
 ARROW_FILE = "application/vnd.apache.arrow.file"
 
 # Cap on the create payload we'll decode→re-encode in-process to stamp lineage metadata (#21). Above
@@ -105,7 +105,7 @@ async def create_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     so: StorageOptionsDep,
-    data: Annotated[bytes, Body(media_type=ARROW_STREAM)],
+    data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     properties: str | None = None,
     data_base: Annotated[list[str], Query()] = [],  # noqa: B006 — FastAPI Query default, not mutated
@@ -132,6 +132,9 @@ async def create_table(
     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
     could carry provenance.
     """
+    # A wildcard (`*`/`?`) in a segment would flow verbatim from the table's derived prefix into the
+    # vended STS session policy and widen credentials to siblings — refused at SHAPE, before any write.
+    require_safe_segments(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
     # #118: this door had NO parent guard at all — require_parent lives in tables.py and this route
     # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
     # live owner grant and no parent edge. Checked BEFORE the write: a refusal leaves nothing.
@@ -372,7 +375,7 @@ async def insert_into_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
-    data: Annotated[bytes, Body(media_type=ARROW_STREAM)],
+    data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     branch: str | None = None,
     authorization: Annotated[str | None, Header()] = None,
@@ -452,7 +455,7 @@ async def merge_insert_into_table(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     client: FgaClientDep,
-    data: Annotated[bytes, Body(media_type=ARROW_STREAM)],
+    data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     on: str | None = None,
     when_matched_update_all: bool | None = None,
     when_matched_update_all_filt: str | None = None,

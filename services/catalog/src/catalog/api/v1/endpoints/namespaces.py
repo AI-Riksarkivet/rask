@@ -42,7 +42,7 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.tables import _MAX_NAMESPACE_DEPTH, _paginate
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
-from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.core.identifiers import parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
@@ -120,6 +120,9 @@ async def create_namespace(
     # would let the ruling be bypassed one level up from the door that enforces it.
     reject_unsupported_format(body.properties if body else None)
     segments = parse_identifier(id, settings.delimiter)
+    # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to sibling objects once a table
+    # lands under this namespace — refused at SHAPE, before the namespace is created.
+    require_safe_segments(segments, delimiter=settings.delimiter)
     # A top-level namespace needs a warehouse to live in. This door cannot name one, so it is refused
     # here and the caller is sent to the warehouse-scoped route; checked BEFORE the native create, so a
     # refusal leaves nothing half-made. Nested namespaces inherit their parent's binding and pass.

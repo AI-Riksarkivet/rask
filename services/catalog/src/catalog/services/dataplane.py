@@ -76,6 +76,7 @@ from catalog.services import native
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.objectfs import s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 log = logging.getLogger(__name__)
@@ -753,14 +754,17 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
     """
     fs, base = _dataset_fs(location, so)
     prefix = base.rstrip("/") + "/data/"
-    missing: list[str] = []
-    for frag in fragments:
-        for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []:
-            if not isinstance(data_file, dict) or data_file.get("base_id") is not None:
-                continue
-            rel = data_file.get("path")
-            if rel and fs.get_file_info(prefix + rel).type == pafs.FileType.NotFound:
-                missing.append(str(rel))
+    # Collect every root-relative data file first, then resolve them in ONE batched lookup: pyarrow's
+    # list overload runs the object-store lookups concurrently, so an N-fragment commit costs one round
+    # trip instead of N serial HEADs on the commit hot path.
+    rels = [
+        str(rel)
+        for frag in fragments
+        for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []
+        if isinstance(data_file, dict) and data_file.get("base_id") is None and (rel := data_file.get("path"))
+    ]
+    infos = fs.get_file_info([prefix + rel for rel in rels]) if rels else []
+    missing = [rel for rel, info in zip(rels, infos, strict=True) if info.type == pafs.FileType.NotFound]
     if missing:
         raise InvalidInputError(
             f"commit references {len(missing)} data file(s) not present under the table location (did the direct write target the wrong prefix?): {missing[:5]}"
@@ -1239,10 +1243,7 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
         aligned = selected.cast(pa.schema([pa.field(f.name, f.type, f.nullable) for f in target]))
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as exc:
         raise InvalidInputError(f"insert rows don't match the table schema: {exc}") from exc
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, aligned.schema) as writer:
-        writer.write_table(aligned)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(aligned)
 
 
 def update_field_metadata(

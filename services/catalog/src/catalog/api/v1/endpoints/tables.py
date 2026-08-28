@@ -52,7 +52,7 @@ from catalog.api.pagination import _paginate
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.credentials import _has_external_bases
 from catalog.core.formats import reject_unsupported_format
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
     DEREGISTER_TABLE,
@@ -236,6 +236,9 @@ async def declare_table(
     # door rejected it. Before anything is reserved.
     reject_unsupported_format(body.properties if body else None)
     segments = parse_identifier(id, settings.delimiter)
+    # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to siblings — refused at SHAPE,
+    # before the location is reserved (declare mints the table's object-store prefix from these segments).
+    require_safe_segments(segments, delimiter=settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
     # its grants, so creating here would hand the new table the dead one's readers and writers.

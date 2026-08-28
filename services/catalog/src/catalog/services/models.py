@@ -26,6 +26,7 @@ import pyarrow.fs as pafs
 from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
+    ServiceUnavailableError,
     TableNotFoundError,
     TableVersionNotFoundError,
 )
@@ -45,13 +46,22 @@ def _reject_nonfinite(token: str) -> float:
 
 
 def _open(model_uri: str, storage_options: dict[str, str], *, version: int | None = None) -> lance.LanceDataset:
-    """Open the registry Lance dataset by explicit URI (missing → 404, bad version → 404)."""
+    """Open the registry Lance dataset by explicit URI (missing → 404, bad version → 404, store outage → 503).
+
+    A store outage (connection refused, an S3 timeout) is NOT a missing model: collapsing it to 404 reports
+    "model registry not found" and sends whoever is on call to the wrong system. So a bare pylance
+    ``ValueError`` (not-found / bad-version) and a genuinely absent dataset (``FileNotFoundError``) stay 404,
+    while any other ``OSError`` becomes a 503. Order matters — ``FileNotFoundError`` is an ``OSError``
+    subclass, so it must be caught on the 404 arm first.
+    """
     try:
         return lance.dataset(model_uri, storage_options=storage_options, version=version)
-    except (ValueError, OSError) as exc:
+    except (ValueError, FileNotFoundError) as exc:
         if version is not None:
             raise TableVersionNotFoundError(f"model version {version} not found") from exc
         raise TableNotFoundError("model registry not found for this model") from exc
+    except OSError as exc:
+        raise ServiceUnavailableError(f"model registry storage is unavailable: {exc}") from exc
 
 
 def metrics_at(model_uri: str, storage_options: dict[str, str], version: int) -> dict[str, Any]:

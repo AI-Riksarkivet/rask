@@ -99,7 +99,15 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier) -> dict[str, obje
     GET + List; write tier additionally allows PUT / DELETE /
     AbortMultipartUpload. As an STS *session* policy this can only RESTRICT the
     catalog's role (intersection-only), never widen it.
+
+    Raises:
+        ValueError: if ``prefix`` carries an IAM wildcard metachar (``*``/``?``). These are wildcards
+            inside a Resource ARN and an ``s3:prefix`` condition with no way to escape them, so a prefix
+            holding one would widen the grant to siblings. The create doors already reject such a segment
+            (``identifiers.require_safe_segments``); this is the belt behind that suspenders.
     """
+    if any(c in prefix for c in ("*", "?")):
+        raise ValueError(f"prefix {prefix!r} contains an IAM wildcard metacharacter ('*'/'?'); it would widen the vended policy to sibling objects")
     prefix = prefix.rstrip("/")
     obj_actions = list(_WRITE_ACTIONS if tier == "write" else _READ_ACTIONS)
     list_prefixes = [f"{prefix}/*"] if prefix else ["*"]

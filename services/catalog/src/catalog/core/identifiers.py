@@ -56,6 +56,34 @@ CONTROL_ID_RE = re.compile(rf"^{ID_PATTERN}\Z")
 MAX_NAMESPACE_DEPTH = 8
 
 
+#: Characters a namespace/table segment may never carry, because they are IAM wildcard metacharacters.
+#: `*` and `?` are wildcards inside BOTH a Resource ARN and an ``s3:prefix`` StringLike condition, so a
+#: segment holding one flows verbatim from the table's derived object-store prefix into the STS session
+#: policy that vends per-table credentials (``core.vending.build_session_policy``) and WIDENS the grant to
+#: siblings — a ``foo*`` prefix authorises ``bucket/foo*/*``, which matches ``foobar``. IAM offers no way to
+#: escape these inside a resource, so they are refused at the create door rather than neutralised downstream.
+_SEGMENT_WILDCARD_METACHARS = ("*", "?")
+
+
+def require_safe_segments(segments: list[str], *, delimiter: str) -> None:
+    """Refuse a create whose id carries an IAM wildcard metachar (``*``/``?``) in any segment — a 400.
+
+    A segment name becomes the table's object-store prefix, and that prefix is interpolated UNESCAPED
+    into the inline STS session policy that scopes vended per-table credentials. ``*`` and ``?`` are IAM
+    wildcards there with no escape, so a ``foo*`` table would be handed credentials scoped to every sibling
+    object under ``foo*``. Rung at SHAPE (identity -> shape -> parent exists -> authz -> conflict -> write),
+    before any native write: a wildcard id is malformed, not a permission problem.
+    """
+    for seg in segments:
+        hit = [c for c in _SEGMENT_WILDCARD_METACHARS if c in seg]
+        if hit:
+            raise InvalidInputError(
+                f"identifier {delimiter.join(segments)!r} has a segment {seg!r} containing the reserved "
+                f"character(s) {hit}: '*' and '?' are IAM wildcards in the vended storage policy and would "
+                f"widen credentials to sibling objects. Choose a name without them."
+            )
+
+
 def parse_identifier(id_str: str, delimiter: str) -> list[str]:
     """Split a delimited identifier into segments; empty or delimiter-only → root ``[]``."""
     if not id_str or id_str == delimiter:
