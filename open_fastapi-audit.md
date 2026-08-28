@@ -1672,7 +1672,34 @@ chart/templates/ha.yaml:82-92 — `metrics:\n  - type: Resource\n    resource:\n
 
 </details>
 
-<details><summary><b>The cascade head's span closes before the half that fails, and never sets ERROR status — unlike every other manual span in the estate</b> <i>(observability.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The cascade head's span closes before the half that fails, and never sets ERROR status — unlike every other manual span in the estate~~</b> <i>(observability.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-28**, on the finding's narrowed claim. Nobody was blind at the HTTP layer — the
+> route answers 503 and the producer runs under `opentelemetry-instrument`, so the server span
+> already went ERROR. What was wrong is the span an operator would actually FILTER on.
+>
+> `medallion.produce` and `medallion.ingest_media` now wrap the whole service function — seed, build,
+> publish — instead of the Lance seed alone, and both `except` branches call
+> `span.set_status(Status(StatusCode.ERROR, ...))` next to the existing warning, matching the four
+> spans that already had the convention. The media head has TWO such branches (the lineage emit and
+> the media-chain trigger) and the status carries which stage broke.
+>
+> **The `compute_enabled=false` hole is closed with it**, and it was the worse half: with no seed
+> there was no `with` block and therefore NO SPAN AT ALL — in exactly the configuration where the head
+> emits a synthetic event (`result is None`) and is most worth watching.
+>
+> **Not the anti-pattern `observability.md` warns about.** That one is wrapping a ROUTE body, which
+> duplicates the auto-created HTTP span. These are the service functions the routes call, held to the
+> other rule — a span must cover the operation it names, not a prefix of it.
+> Pinned by `services/medallion/tests/test_cascade_head_span.py` (5 tests, 4 RED first). Coverage is
+> proved by ORDERING rather than by reading the source: the publish is replaced with one that opens a
+> child span, and the child can only be parented to the head if the head is still open. A guard test
+> asserts a successful run is NOT marked ERROR and that the seed attributes survived the move —
+> marking everything ERROR would satisfy the other tests and prove nothing.
+> **One near-miss worth recording:** the media test first SKIPPED, because `media_head_enabled` gates
+> on four settings and the fixture set two. A skip proves nothing, so the predicate was read and the
+> fixture corrected; the RED was then re-verified against the reverted fix to confirm it failed on the
+> STATUS assertion (`StatusCode.UNSET is not StatusCode.ERROR`) rather than on the fixture.
 
 **Rule.** observability.md: § Manual spans inside routes — only for business operations (the span must cover the operation, not a prefix of it)
 

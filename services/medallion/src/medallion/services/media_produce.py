@@ -21,6 +21,7 @@ import pyarrow.fs as pafs
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from PIL import Image
 
 from medallion.core.config import MedallionSettings
@@ -103,93 +104,104 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
     """
     if not media_head_enabled(settings):
         return {"status": "media_disabled"}
-    # Idempotency: reuse a caller-supplied key (its 503-retry contract) so a retry MERGEs on the same
-    # deterministic run_ids instead of double-firing the media chain (bug hunt 2026-07-13).
+    # THE SPAN COVERS THE WHOLE OPERATION. Identical defect to `medallion.produce`: it wrapped the
+    # seed and closed before BOTH publish attempts — the lineage emit and the media-chain trigger —
+    # each of which has its own `except` returning `publish_failed`, and neither of which could touch
+    # a span that had already ended. A media run whose chain never fired reported success under the
+    # one name an operator would filter on.
     with tracer.start_as_current_span("medallion.ingest_media") as span:
+        # Idempotency: reuse a caller-supplied key (its 503-retry contract) so a retry MERGEs on the same
+        # deterministic run_ids instead of double-firing the media chain (bug hunt 2026-07-13).
         result = await run_in_threadpool(_seed_and_ingest, settings)
         span.set_attribute("lance.version", result.version)
         span.set_attribute("lance.row_count", result.row_count)
-    event = build_run_event(
-        operation="ingest_media",
-        author=settings.producer_author,
-        job_namespace=settings.job_namespace,
-        # One input per source object: the graph records source-URI -> bronze provenance in the data path.
-        #
-        # SPLIT AT THE LAST SEGMENT so the namespace keeps the URI SCHEME. `is_external_source` is
-        # literally `"://" in namespace`, and R23 rests on it: raw is the external world, never a
-        # governed tier, so these inputs must read as external. Emitted as `("source", uri)` they did
-        # not — every media event named an input that looked like a governed `table:source`, which
-        # nobody holds a grant on, so `GET /events` hid the whole event from EVERY caller under FGA
-        # (the feed shows a row only if the reader can see every dataset it references).
-        # The source-uri convention: `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
-        inputs=[_split_source_uri(uri) for uri in result.source_uris],
-        output_namespace=settings.media_bronze_namespace,
-        output_name=settings.media_bronze_dataset,
-        version=result.version,
-        row_count=result.row_count,
-        source_uri=settings.media_bronze_uri,
-        schema_fields=result.fields,  # blob-aware: the graph shows payload:blob at the media head (#24)
-        token=token,
-        # `author` is the SERVICE that performed the ingest; `originator` is the person who asked for
-        # it, resolved at the door. They are different lanes on purpose — the ORIGINATOR lane exists
-        # precisely for work a service runs on somebody's behalf. None on a service-to-service call:
-        # the shared token names nobody, and an unattributable run must stay unattributed rather than
-        # address an inbox actor named after a role.
-        originator=originator,
-    )
-    # Two SEPARATE failure domains (audit): a failed EMIT means no run landed — a retry re-ingests and
-    # emits fresh, no duplicate possible. A failed TRIGGER after a landed emit still 503s (the trigger IS
-    # the cascade); the retry then overwrites a NEW bronze version and emits for THAT version — every
-    # COMPLETE in the graph maps to a real committed write (truthful, not duplicated), and the earlier
-    # version's run simply has no derived silver, like any superseded write.
-    try:
-        # Stage-then-publish-then-drop through the outbox (#4), like every other lineage emit (produce.py,
-        # transform.py) — the MEDIA head was the one producer still bypassing it (audit 2026-07-14), leaving
-        # the multimodal path the exact commit→publish loss window #4 exists to close. A crash between the
-        # blob commit and the publish ack now leaves the FULL event staged for the reconcile relay. The
-        # media-chain TRIGGER below stays a bare publish on purpose: the outbox re-ingests lineage, it never
-        # re-fires triggers — trigger loss is the documented idempotency-token caller-retry contract.
-        await outbox.publish_lineage_with_outbox(
-            dapr,
-            outbox_uri=settings.lineage_outbox_uri,
-            storage_options=settings.storage_options(),
-            run_id=event["run"]["runId"],
-            event_json=json.dumps(event),
-            pubsub_name=settings.pubsub,
-            topic_name=settings.lineage_topic,
-            timeout_seconds=settings.publish_timeout_seconds,
+        event = build_run_event(
+            operation="ingest_media",
+            author=settings.producer_author,
+            job_namespace=settings.job_namespace,
+            # One input per source object: the graph records source-URI -> bronze provenance in the data path.
+            #
+            # SPLIT AT THE LAST SEGMENT so the namespace keeps the URI SCHEME. `is_external_source` is
+            # literally `"://" in namespace`, and R23 rests on it: raw is the external world, never a
+            # governed tier, so these inputs must read as external. Emitted as `("source", uri)` they did
+            # not — every media event named an input that looked like a governed `table:source`, which
+            # nobody holds a grant on, so `GET /events` hid the whole event from EVERY caller under FGA
+            # (the feed shows a row only if the reader can see every dataset it references).
+            # The source-uri convention: `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
+            inputs=[_split_source_uri(uri) for uri in result.source_uris],
+            output_namespace=settings.media_bronze_namespace,
+            output_name=settings.media_bronze_dataset,
+            version=result.version,
+            row_count=result.row_count,
+            source_uri=settings.media_bronze_uri,
+            schema_fields=result.fields,  # blob-aware: the graph shows payload:blob at the media head (#24)
+            token=token,
+            # `author` is the SERVICE that performed the ingest; `originator` is the person who asked for
+            # it, resolved at the door. They are different lanes on purpose — the ORIGINATOR lane exists
+            # precisely for work a service runs on somebody's behalf. None on a service-to-service call:
+            # the shared token names nobody, and an unattributable run must stay unattributed rather than
+            # address an inbox actor named after a role.
+            originator=originator,
         )
-    except Exception as exc:
-        log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "emit", "error": str(exc)})
-        return {"status": "publish_failed", "token": token}
-    try:
-        # The media-chain trigger (consumed by the media mover's durable consumer). Published AFTER the
-        # lineage emit so the graph never shows a derived silver before its bronze head exists.
-        await dapr_publish.publish_event(
-            dapr,
-            timeout_seconds=settings.publish_timeout_seconds,
-            pubsub_name=settings.pubsub,
-            topic_name=settings.media_topic,
-            data=json.dumps(
-                {
-                    "token": token,
-                    "dataset": settings.media_bronze_dataset,
-                    "namespace": settings.media_bronze_namespace,
-                    # The human the chain is for, threaded past the head. `/produce`'s cascade reads
-                    # this back off the bronze event in `_cascade_originator`; the media head fires its
-                    # own trigger instead, so without it the sub died at bronze and every derive below
-                    # authored as a role literal. Omitted (byte-identical payload) when unset — the
-                    # service path names nobody and must not invent one.
-                    **({"originator": originator} if originator else {}),
-                }
-            ),
-            data_content_type="application/json",
+        # Two SEPARATE failure domains (audit): a failed EMIT means no run landed — a retry re-ingests and
+        # emits fresh, no duplicate possible. A failed TRIGGER after a landed emit still 503s (the trigger IS
+        # the cascade); the retry then overwrites a NEW bronze version and emits for THAT version — every
+        # COMPLETE in the graph maps to a real committed write (truthful, not duplicated), and the earlier
+        # version's run simply has no derived silver, like any superseded write.
+        try:
+            # Stage-then-publish-then-drop through the outbox (#4), like every other lineage emit (produce.py,
+            # transform.py) — the MEDIA head was the one producer still bypassing it (audit 2026-07-14), leaving
+            # the multimodal path the exact commit→publish loss window #4 exists to close. A crash between the
+            # blob commit and the publish ack now leaves the FULL event staged for the reconcile relay. The
+            # media-chain TRIGGER below stays a bare publish on purpose: the outbox re-ingests lineage, it never
+            # re-fires triggers — trigger loss is the documented idempotency-token caller-retry contract.
+            await outbox.publish_lineage_with_outbox(
+                dapr,
+                outbox_uri=settings.lineage_outbox_uri,
+                storage_options=settings.storage_options(),
+                run_id=event["run"]["runId"],
+                event_json=json.dumps(event),
+                pubsub_name=settings.pubsub,
+                topic_name=settings.lineage_topic,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
+        except Exception as exc:
+            # The estate's convention, on the stage that failed — `stage` is already the log's own
+            # discriminator, so the span description says which half of the chain broke.
+            span.set_status(Status(StatusCode.ERROR, "publish_failed: emit"))
+            log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "emit", "error": str(exc)})
+            return {"status": "publish_failed", "token": token}
+        try:
+            # The media-chain trigger (consumed by the media mover's durable consumer). Published AFTER the
+            # lineage emit so the graph never shows a derived silver before its bronze head exists.
+            await dapr_publish.publish_event(
+                dapr,
+                timeout_seconds=settings.publish_timeout_seconds,
+                pubsub_name=settings.pubsub,
+                topic_name=settings.media_topic,
+                data=json.dumps(
+                    {
+                        "token": token,
+                        "dataset": settings.media_bronze_dataset,
+                        "namespace": settings.media_bronze_namespace,
+                        # The human the chain is for, threaded past the head. `/produce`'s cascade reads
+                        # this back off the bronze event in `_cascade_originator`; the media head fires its
+                        # own trigger instead, so without it the sub died at bronze and every derive below
+                        # authored as a role literal. Omitted (byte-identical payload) when unset — the
+                        # service path names nobody and must not invent one.
+                        **({"originator": originator} if originator else {}),
+                    }
+                ),
+                data_content_type="application/json",
+            )
+        except Exception as exc:
+            # The estate's convention, on the stage that failed — `stage` is already the log's own
+            # discriminator, so the span description says which half of the chain broke.
+            span.set_status(Status(StatusCode.ERROR, "publish_failed: trigger"))
+            log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "trigger", "error": str(exc)})
+            return {"status": "publish_failed", "token": token}
+        log.info(
+            "medallion_media_ingested",
+            extra={"token": token, "dataset": settings.media_bronze_dataset, "rows": result.row_count},
         )
-    except Exception as exc:
-        log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "trigger", "error": str(exc)})
-        return {"status": "publish_failed", "token": token}
-    log.info(
-        "medallion_media_ingested",
-        extra={"token": token, "dataset": settings.media_bronze_dataset, "rows": result.row_count},
-    )
-    return {"status": "ingested", "token": token, "dataset": settings.media_bronze_dataset}
+        return {"status": "ingested", "token": token, "dataset": settings.media_bronze_dataset}
