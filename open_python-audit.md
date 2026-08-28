@@ -2741,6 +2741,41 @@ error-contract epic E4 already owns).
 
 ---
 
+## Appendix G — the Ray design-patterns sweep (2026-08-28)
+
+rask's Ray usage, audited against **ray-project's own** `doc/source/ray-core/patterns/` — all 22
+docs fetched from the upstream repo, 21 patterns checked (the index is not a pattern), four
+adversarial agents by theme. Scope: `packages/ratch`, `services/medallion`, `packages/ray-kit`,
+`scripts/ray_*_job.py`, the nine sealed runners, and the chart's Serve/RayService config.
+
+**Headline: mostly compliant, with eight violations — and the two that mattered most were not about
+Ray's scheduler at all.** The estate reaches Ray through the Jobs API rather than by driving tasks
+in-process, so the whole `ray.get` family (five patterns) is structurally NOT APPLICABLE: there are
+**zero `ray.get` call sites in the repo**. The `ratch` driver was singled out as a model of the
+"fetch and process one batch at a time" rule, and `runners/htr`'s Serve fan-out as a correct use of
+nested parallelism.
+
+Every violation is CLOSED — each RED-first, none deferred.
+
+| ID | Pattern | Sev | Where | What | Closed by |
+| --- | --- | --- | --- | --- | --- |
+| `RAY-01` | `nested-tasks` | **HIGH** | `runners/htr/src/runner/transcribe_service.py` | Round-robin sharded crops, results flattened in SHARD order, zipped against entries in SORTED order — every batch of ≥4 line crops attached transcriptions to the WRONG lines, silently (`strict=True` guards length, not order) | `d680099d` |
+| `RAY-02` | `concurrent-operations-async-actor` | **HIGH** | `runners/topics/deployment.py` | `async def __call__` ran the entire Toponymy build inline — minutes to hours with the replica's event loop frozen, so Serve's health probe could not be answered and the controller restarts the replica mid-build | `dd0f2b30` |
+| `RAY-03` | `concurrent-operations-async-actor` | med | `runners/htr/src/runner/transcribe_service.py` | `async def transcribe` had zero awaits around multi-second GPU work, making `max_ongoing_requests=2`'s documented pipelining impossible | `dd0f2b30` |
+| `RAY-04` | `concurrent-operations-async-actor` | low | `runners/voiceprint/voiceprint_service.py` | Speaker-encoder forward pass inline on the loop; same shape, bounded by `MAX_SAMPLES` | `dd0f2b30` |
+| `RAY-05` | `limit-running-tasks` | med | `runners/htr/src/runner/transcribe_service.py` | A ~4 GB TrOCR replica declared no `memory`, so the scheduler was told it costs zero bytes — the OOM cascade `pipeline.py` records was prevented only by a hand-tuned actor count | `dd0f2b30` |
+| `RAY-06` | `closure-capture-large-objects` | med | `packages/ratch/src/ratch/core/driver.py` | The append stage's resume filter closed over every key tuple in the OUTPUT table, cloudpickled into every task; the comment claimed "small (key tuples only)" and nothing bounded it (measured: 870 KB per task at 200k keys) | see below |
+| `RAY-07` | `pass-large-arg-by-value` | low | `packages/ratch/src/ratch/core/driver.py` | `done_ids=frozenset(value_by_row_id)` copied the whole checkpoint once per actor in the pool, on the resume path | see below |
+| `RAY-08` | `generators` | med | `scripts/ray_stage_job.py` | The production cascade's MEDIA branch materialised the ENTIRE dataset in the driver — one `to_table()` over every blob payload plus three more full copies — so peak RSS scaled with the dataset and the lane had an OOM ceiling nothing announced | see below |
+
+**Checked and NOT APPLICABLE, so the next reader need not re-audit them:** `ray-get-loop`,
+`unnecessary-ray-get`, `nested-ray-get`, `ray-get-submission-order`, `ray-get-too-many-objects` (no
+`ray.get` anywhere — services use the Jobs REST API and Ray Data's streaming executor makes the
+intermediate-get shape structurally impossible), `global-variables`,
+`out-of-band-object-ref-serialization`, `fork-new-processes`, `redefine-task-actor-loop`,
+`too-fine-grained-tasks`, `limit-pending-tasks`, `tree-of-actors`, `pipelining`, `return-ray-put`,
+`actor-sync`.
+
 ## Appendix F — what the re-verification changed about how to read this file
 
 Three claims in the original text were falsified by the re-verification and have been **edited in place**
