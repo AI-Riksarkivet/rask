@@ -186,7 +186,7 @@ def _open(state: StateDep, table: str, token: str | None) -> lance.LanceDataset:
     """
     location = _resolve(state, table, token)
     try:
-        return lance.dataset(location, storage_options=state.settings.storage_options)
+        return lance.dataset(location, storage_options=state.settings.storage_options())
     except Exception as exc:  # noqa: BLE001 — any driver failure here is an outage, not an absence
         # A RustFS outage, expired vended credentials and a corrupt manifest all land here, and every
         # one of them was reported as a missing page. The location is deliberately absent from the

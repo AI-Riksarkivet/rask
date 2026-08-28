@@ -57,7 +57,7 @@ def _registry(state: AppState) -> DatasetRegistry:
             state.settings.registry_root,
             state.settings.descriptor_dir,
             state.settings.default_dataset_id,
-            storage_options=state.settings.storage_options,
+            storage_options=state.settings.storage_options(),
         )
     return state.registry
 
@@ -73,13 +73,18 @@ async def list_datasets(state: StateDep, client: FgaClientDep, subject: CurrentS
     Filtered, not refused: a caller with access to two of five corpora gets two, because the honest
     answer to "what can I search" is a shorter list, not a 403.
     """
-    registry = _registry(state)
-
     # Off the loop: `registry.get` opens Lance/S3 under a threading.Lock, and this is the first call
     # every zone makes on page load — inline it serialized the whole process behind one cold dataset
     # (open_python-audit VS-02). The row table is read HERE, in the same pass, so `_may_see` below
     # never re-opens the registry per dataset (the descriptor was being read twice).
+    #
+    # `_registry(state)` RUNS INSIDE the threadpool too (open_python-audit E2): building the registry
+    # reads `settings.storage_options()`, a BLOCKING Dapr secret fetch on the cold path, and it used
+    # to sit on the event loop above this function. The secret is `_store_secret`-cached, so the boot
+    # warm usually makes this free — but a request that arrives before the warm, or after a warm that
+    # failed, must not block the loop on the fetch.
     def _collect() -> list[tuple[DatasetSummary, str | None]]:
+        registry = _registry(state)
         collected: list[tuple[DatasetSummary, str | None]] = []
         for dataset_id in registry.list_ids():
             try:

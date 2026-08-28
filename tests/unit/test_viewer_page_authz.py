@@ -95,7 +95,10 @@ def _app(
     app.dependency_overrides[pg.CurrentSubject.__metadata__[0].dependency] = lambda: subject
     app.dependency_overrides[pg.RawBearerToken.__metadata__[0].dependency] = lambda: token
 
-    state = type("_State", (), {"settings": type("S", (), {"catalog_uri": "http://catalog", "storage_options": {}})()})()
+    # `storage_options` is a METHOD on the real settings (open_python-audit E2: it performs a
+    # blocking Dapr secret fetch, and a @property disguised that as a free attribute read). The
+    # double has to match, or it tests a shape production does not have.
+    state = type("_State", (), {"settings": type("S", (), {"catalog_uri": "http://catalog", "storage_options": lambda _self: {}})()})()
     app.dependency_overrides[pg.StateDep.__metadata__[0].dependency] = lambda: state
     return app
 

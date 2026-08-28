@@ -235,9 +235,16 @@ class Settings(BaseSettings):
     def default_dataset_id(self) -> str:
         return self.db_path.stem
 
-    @property
     def storage_options(self) -> dict[str, str] | None:
         """Lance ``storage_options`` for the object store (None = local filesystem).
+
+        A METHOD, not a property: on the Dapr-secret path this performs a BLOCKING secret fetch and
+        can raise, and a `@property` disguised that as a free attribute read — which is exactly how it
+        reached an event loop (`viewer datasets.list_datasets` built its registry inline, on the loop).
+        A call makes the cost visible at every site, and matches every other config in the estate
+        (`MedallionSettings`, catalog, maintenance all expose `storage_options()`). The fetch is
+        `_store_secret`-cached, so a boot-time warm (off the loop, in the lifespan) makes every
+        request-path call a pure dict build.
 
         Path-style addressing is forced (``virtual_hosted_style_request=false``)
         because RustFS/MinIO reject virtual-hosted signing — verified live.

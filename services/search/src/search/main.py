@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from starlette.concurrency import run_in_threadpool
 
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
@@ -40,7 +41,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state = AppState(settings=settings, http=httpx.Client())
     app.state.resources = state
     try:
-        handle = dataset_handle(state)  # fail-fast open of the default descriptor
+        # OFF THE STARTUP LOOP: building the default handle reads `settings.storage_options()`,
+        # a blocking Dapr secret fetch on the cold path. Threadpooled here so the lifespan does
+        # not block the event loop, and — because `_store_secret` is cached — this WARMS the
+        # secret before serving, so every request-path read is a pure dict build.
+        handle = await run_in_threadpool(dataset_handle, state)  # fail-fast open of the default descriptor
         logger.info("search: default dataset %s ready (%d tables)", handle.id, len(handle.descriptor.tables))
     except Exception:
         # /livez stays green; per-request resolution surfaces the problem as a domain 404.
