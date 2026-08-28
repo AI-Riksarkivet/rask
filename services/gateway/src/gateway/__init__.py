@@ -21,6 +21,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from urllib.parse import quote, unquote
 
 import httpx
@@ -29,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from service_kit import setup_otel
 from service_kit.draining import arm_drain_on_sigterm
@@ -372,6 +374,29 @@ app = FastAPI(
 setup_otel(app, service_name="gateway")
 
 
+# RFC 9457 FOR THE GATEWAY'S OWN ERRORS. The gateway builds its own FastAPI and never ran
+# `register_handlers`, so its 404/502/400s rendered as FastAPI's default `{"detail": …}` with
+# `application/json` while every PROXIED error from a lance service arrived as
+# `application/problem+json` — one client error path, two body shapes (GW-NO-PROBLEM-JSON). This
+# matches the FLEET taxonomy (`service_kit.exceptions._problem`): four keys, `about:blank#` type, no
+# Lance numeric `code` (the gateway is not a lance service). Proxied error bodies are untouched —
+# they stream through `proxy` and never raise, so they keep their upstream envelope.
+@app.exception_handler(StarletteHTTPException)
+async def _problem_json(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    status = int(exc.status_code)
+    return JSONResponse(
+        status_code=status,
+        media_type="application/problem+json",
+        content={
+            "type": f"about:blank#{HTTPStatus(status).name.lower()}",
+            "title": HTTPStatus(status).phrase,
+            "status": status,
+            "detail": exc.detail if isinstance(exc.detail, str) else HTTPStatus(status).phrase,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
 # THE REQUEST ID IS MINTED HERE, at the front door, so ONE value spans the whole trace.
 #
 # The gateway builds its own FastAPI and runs neither `register_middleware` nor the media one, so it
@@ -397,7 +422,11 @@ async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request],
     path = _normalize_path(request.scope["path"]).lower()
     for route in _lineage_sidecar_only_routes():
         if path.startswith(f"/api/lineage/{route}"):
-            return JSONResponse(status_code=403, content={"detail": f"sidecar-only lineage route: {route}"})
+            return JSONResponse(
+                status_code=403,
+                media_type="application/problem+json",
+                content={"type": "about:blank#forbidden", "title": "Forbidden", "status": 403, "detail": f"sidecar-only lineage route: {route}"},
+            )
     return await call_next(request)
 
 
