@@ -36,6 +36,9 @@ class _FakeProjectActor:
     async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {"task_id": payload["task_id"], "created": True}
 
+    async def send_many(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"results": [{"task_id": t["task_id"], "created": True} for t in payload["tasks"]], "counts": {}}
+
 
 class _FakeTaskActor:
     def __init__(self) -> None:

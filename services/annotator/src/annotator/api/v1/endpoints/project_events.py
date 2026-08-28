@@ -23,6 +23,7 @@ The fourth precondition — every task terminal — is NOT checked here. It live
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from enum import StrEnum
 from typing import Annotated, Any, Final, cast
@@ -78,6 +79,13 @@ SYSTEM_ONLY_EVENTS: Final[frozenset[str]] = frozenset(e for (_s, e), (_t, p) in 
 #: door 3 never fired. `target_namespace` is caller-supplied, so this was reachable by naming the
 #: namespace you would have to name anyway — the normal path, not a crafted input.
 _VALIDATOR_GATED: Final[frozenset[str]] = frozenset({"silver", "gold"})
+
+#: How many task-actor calls this service keeps in flight at once. Every fan-out here addresses one
+#: actor id PER CALL, so the calls genuinely parallelise; the bound exists because the alternative is
+#: one sidecar connection per task and a send admits 1000 of them. Deliberately NOT applied to the
+#: project actor: reentrancy is disabled estate-wide, so calls to a single id queue on that actor's
+#: turn lock whatever the caller does — those are collapsed into one batch instead.
+_ACTOR_FANOUT: Final[int] = 16
 
 
 class ProjectEventRequest(BaseModel):
@@ -437,12 +445,24 @@ def _validated_predictions(project: dict[str, Any], payload: SendItemsRequest) -
 async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Send items into the project as tasks.
 
-    Two writes per item, and the ORDER is the whole correctness argument: seed the TASK actor first,
-    then register it in the project index. A crash between them leaves a task that exists but is not
-    indexed — invisible to the publish precondition, which is the safe direction only because `send`
-    is idempotent on `task_id` and a re-send repairs it. The reverse order would index a task whose
-    actor was never seeded, and the publish precondition would then read a state for a task that
-    cannot answer for itself.
+    Two phases, and the ORDER between them is the whole correctness argument: seed EVERY task actor
+    first, then register the whole batch in the project index with one call. A crash between the
+    phases leaves tasks that exist but are not indexed — invisible to the publish precondition, which
+    is the safe direction only because `send_many` is idempotent on `task_id` and a re-send repairs
+    it. The reverse order would index tasks whose actors were never seeded, and the publish
+    precondition would then read a state for a task that cannot answer for itself.
+
+    Both phases are shaped by which actor they address, which is the thing that makes them different
+    (open_python-audit ANN-03). The seeds each address their OWN task actor id, so they fan out under
+    `_ACTOR_FANOUT`. The index writes all address the SAME project actor, which serialises them on
+    its turn lock regardless — and each one rewrote the entire index — so they are collapsed into one
+    `send_many` rather than made concurrent. At the 1000-replica cap this is 1000 bounded-concurrent
+    calls plus one, where it was 2000 strictly sequential ones.
+
+    Batching also makes the ownership refusal ATOMIC. Refusing per item left every replica before the
+    offending one already indexed, and an index entry for a task owned by another project can never
+    become terminal — `may_publish` false for the life of the project, for a prefix of the send.
+    Now a refusal writes no index entry at all.
     """
     project = await _project_proxy(project_id).get()
     if project is None:
@@ -472,7 +492,9 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
     # which half landed and `seed` is idempotent, so a retry cannot undo the part that did.
     predictions = _validated_predictions(project, payload)
 
-    created: list[str] = []
+    # EVERY replica of the whole send, built before the first actor is touched — the same reasoning
+    # as the prediction validation above, and what lets the two phases below each be one pass.
+    tasks: list[Task] = []
     for index, item in enumerate(payload.items):
         # Built HERE from the two client-supplied descriptive fields plus the project's own config.
         # Every provenance and state field takes its model default, so a sender cannot pre-set
@@ -507,19 +529,35 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
                 for k in range(1, consensus_n + 1)
             ]
         )
-        for task in replicas:
-            body = task.model_dump(mode="json")
-            # `seed` is idempotent and returns what is ALREADY there. Checking its return is what
-            # stops a client-chosen `task_id` that already belongs to another project from being
-            # indexed here: the index entry would be written from the payload, the task's own
-            # `_report_state` would only ever address its real owner, and this project's entry would
-            # freeze at its seeded value — permanently non-terminal, `may_publish` false forever.
-            seeded = await _task_proxy(task.task_id).seed(body)
-            if str(seeded.get("project_id")) != project_id:
-                raise ConflictError(f"task {task.task_id} already belongs to project {seeded.get('project_id')} — refusing to index it into {project_id}")
-            result = await _project_proxy(project_id).send(body)
-            if result.get("created"):
-                created.append(task.task_id)
+        tasks.extend(replicas)
+
+    gate = asyncio.Semaphore(_ACTOR_FANOUT)
+
+    async def _seed(task: Task) -> tuple[dict[str, Any], dict[str, Any]]:
+        body = task.model_dump(mode="json")
+        async with gate:
+            return body, await _task_proxy(task.task_id).seed(body)
+
+    # PHASE 1. `gather` preserves INPUT order, which the refusal below depends on.
+    seeded = await asyncio.gather(*(_seed(task) for task in tasks))
+
+    # Checked over the gathered results rather than inside `_seed`, so the refusal names the first
+    # offender in SEND order. Raising from inside the fan-out would name whichever call happened to
+    # finish first, making the same request refuse a different task from run to run.
+    #
+    # `seed` is idempotent and returns what is ALREADY there. Checking its return is what stops a
+    # client-chosen `task_id` that already belongs to another project from being indexed here: the
+    # index entry would be written from the payload, the task's own `_report_state` would only ever
+    # address its real owner, and this project's entry would freeze at its seeded value —
+    # permanently non-terminal, `may_publish` false forever.
+    for body, result in seeded:
+        if str(result.get("project_id")) != project_id:
+            raise ConflictError(f"task {body['task_id']} already belongs to project {result.get('project_id')} — refusing to index it into {project_id}")
+
+    # PHASE 2, and one call: see the docstring. `created` comes from the batch's per-task answers,
+    # not from the send list, so an item that was already indexed still reports as not created.
+    batch = await _project_proxy(project_id).send_many({"tasks": [body for body, _ in seeded]})
+    created = [str(row["task_id"]) for row in batch["results"] if row.get("created")]
 
     audit("project.send", SUCCESS, subject=subject, resource=project_id)
     return {"sent": len(payload.items), "created": len(created), "task_ids": created}
@@ -552,7 +590,7 @@ async def list_project_tasks(
     # this job one service over (`InboxFilter` on the notifications inbox). A Literal here would make
     # this route the outlier rather than the rule.
     include: TaskInclude | None = None,
-    # THE PAGE. `Semaphore(16)` below bounds CONCURRENCY, not COUNT — sixteen at a time, ten thousand
+    # THE PAGE. `_ACTOR_FANOUT` below bounds CONCURRENCY, not COUNT — sixteen at a time, ten thousand
     # times, is still ten thousand actor round trips. Nothing caps the collection either: the send door
     # caps one CALL at 1000 items, while tasks accumulate one per sent item per consensus replica for
     # the life of the project, and `consensus_n` multiplies each item into several.
@@ -581,15 +619,13 @@ async def list_project_tasks(
     if include is not TaskInclude.DETAILS:
         return listing
 
-    import asyncio  # noqa: PLC0415 - stdlib, endpoint-local
-
     # Rule 5 (§5.2): once the project is publishing/published/archived, EVERY task transition is
     # refused — so the details must not hand the UI actions that can only 409. The tasks' own
     # states still admit edges (accepted → reopen); the PROJECT is the gate.
     project = await _project_proxy(project_id).get()
     project_frozen = project is not None and ProjectState(project["state"]) in FROZEN_PROJECT_STATES
 
-    gate = asyncio.Semaphore(16)
+    gate = asyncio.Semaphore(_ACTOR_FANOUT)
 
     async def _detail(task_id: str) -> tuple[str, dict[str, Any] | None]:
         async with gate:

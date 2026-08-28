@@ -107,6 +107,10 @@ class AnnotationProjectActorInterface(ActorInterface):
     async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
+    @actormethod(name="SendMany")
+    async def send_many(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
     @actormethod(name="TaskStateChanged")
     async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
@@ -296,22 +300,60 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
         Idempotent on `task_id`: re-sending an item that is already here returns the index unchanged
         rather than resetting a task somebody is holding. The caller seeds the task actor; this
         records that the task belongs to the project.
+
+        A batch of one, delegated rather than reimplemented: two copies of the per-task rules (the
+        idempotency answer, the tombstone lift) are two things to keep in step, and the send door
+        now drives `send_many` for every request. Kept as a wire method even though nothing in this
+        tree calls it, because `Send` is a ROUTING id: a rolling upgrade has old pods invoking it on
+        new actors, and withdrawing it in the same release that stops calling it fails those
+        in-flight invocations.
+        """
+        batch = await self.send_many({"tasks": [payload]})
+        return {**batch["results"][0], "counts": batch["counts"]}
+
+    async def send_many(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Add a BATCH of items to the project as tasks, in ONE turn and ONE state transaction.
+
+        Per task the rules are exactly `send`'s — idempotent on `task_id`, and a re-sent REMOVED id
+        lifts its own tombstone (otherwise the new task would be live in the index and permanently
+        unable to report where it landed). What the batch changes is the cost and the atomicity.
+
+        **Why a batch rather than a concurrent caller.** Actor reentrancy is disabled estate-wide, so
+        N `Send` calls to one project id are serialised by the turn lock however the caller schedules
+        them — a `gather` over them buys queueing, not parallelism. And each one is a full
+        read-modify-write of the whole index, so N of them push O(N²) bytes through the state store
+        in N save transactions. The send door admits 1000 replicas in one request; only collapsing
+        them into a single load/mutate/save makes that affordable (open_python-audit ANN-03).
+
+        **The state gate is evaluated once, up front**, over the whole batch: a project that stops
+        accepting items part-way through one request has no meaning, and a partial refusal would be
+        the half-populated project the door already refuses to create.
+
+        Nothing is written when nothing changed, so a re-send of an already-indexed batch is a pure
+        read — the same property `send` had, and what makes a re-send safe to retry blindly.
         """
         project = await self._require()
         if project.state not in {ProjectState.DRAFT, ProjectState.LABELING}:
             raise IllegalTransition("project", project.state, "send")
 
-        task = Task.model_validate(payload)
+        tasks = [Task.model_validate(raw) for raw in payload.get("tasks") or []]
         index = await self._load_index()
-        if task.task_id in index:
-            return {"task_id": task.task_id, "created": False, "counts": _counts(index)}
-
-        index[task.task_id] = str(task.state)
-        # Re-sending a REMOVED id is a deliberate re-add, so it lifts its own tombstone — otherwise
-        # the new task would be live in the index and permanently unable to report where it landed.
         dropped = await self._load_dropped()
-        await self._store(project, index=index, dropped=dropped - {task.task_id} if task.task_id in dropped else None)
-        return {"task_id": task.task_id, "created": True, "counts": _counts(index)}
+        results: list[dict[str, Any]] = []
+        lifted = False
+        for task in tasks:
+            if task.task_id in index:
+                results.append({"task_id": task.task_id, "created": False})
+                continue
+            index[task.task_id] = str(task.state)
+            if task.task_id in dropped:
+                dropped.discard(task.task_id)
+                lifted = True
+            results.append({"task_id": task.task_id, "created": True})
+
+        if any(row["created"] for row in results):
+            await self._store(project, index=index, dropped=dropped if lifted else None)
+        return {"results": results, "counts": _counts(index)}
 
     async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
         """A task reports where it landed. Called by `AnnotationTaskActor` after it persists.

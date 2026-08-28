@@ -49,6 +49,14 @@ class _FakeProject:
         self.sent.append(payload)
         return {"task_id": payload["task_id"], "created": True, "counts": {}}
 
+    async def send_many(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # ANN-03 batched the per-task Send door into SendMany (one save_state for the whole send).
+        # `extend` keeps `project.sent` populated on the success path — so the `sent[0]` identity
+        # assertion still holds — while the atomic foreign-task refusal never reaches here, so
+        # `sent == []` on that path stays a real check of the refusal, not a vacuous one.
+        self.sent.extend(payload["tasks"])
+        return {"results": [{"task_id": t["task_id"], "created": True} for t in payload["tasks"]], "counts": {}}
+
     async def list_tasks(self) -> dict[str, Any]:
         return {"tasks": dict(self.tasks), "counts": {}, "total": len(self.tasks), "terminal": 0, "may_publish": True}
 

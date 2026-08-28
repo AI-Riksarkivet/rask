@@ -66,6 +66,10 @@ class _FakeProject:
         self.sent.append(payload)
         return {"task_id": payload["task_id"], "created": True, "counts": {}}
 
+    async def send_many(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.sent.extend(payload["tasks"])  # ANN-03: the batch door replaces per-task Send
+        return {"results": [{"task_id": t["task_id"], "created": True} for t in payload["tasks"]], "counts": {}}
+
 
 class _FakeTask:
     """Records what was seeded. `save_draft` exists ONLY so a test can prove it is never reached."""

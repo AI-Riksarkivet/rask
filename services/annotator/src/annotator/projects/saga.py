@@ -34,6 +34,7 @@ or a cluster.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -124,6 +125,11 @@ def table_id_for(project: AnnotationProject, publish_id: str, namespace: str) ->
     return f"{namespace}{CATALOG_DELIMITER}{project.slug}_{publish_id[:12]}"
 
 
+#: Bounded concurrency for the publish-path task reads — different actor ids, so this is real
+#: parallelism. Matches the send path's seed fan-out cap (`_ACTOR_FANOUT`).
+_COLLECT_FANOUT = 16
+
+
 async def collect(project_handle: ProjectHandle, task_handle: Any, task_ids: list[str]) -> list[tuple[Task, Draft | None]]:
     """Read every task and draft FROM ITS OWN ACTOR — the authoritative source, not the index.
 
@@ -132,17 +138,34 @@ async def collect(project_handle: ProjectHandle, task_handle: Any, task_ids: lis
     precondition would pass. Reading the actors makes the publish see the true state, so a stale
     index can only delay a publish.
     """
-    out: list[tuple[Task, Draft | None]] = []
-    for task_id in task_ids:
+
+    async def _one(task_id: str) -> tuple[Task, Draft | None] | None:
+        # `get` then `get_draft` stay chained — same actor, and the draft read is cheap after the
+        # state read. Different task ids are different actor ids, so the FAN-OUT below is real
+        # concurrency, not a turn-lock queue (which is why the send path needed SendMany instead).
         handle = task_handle(task_id)
         raw = await handle.get()
         if raw is None:
-            raise PublishRefusal(f"task {task_id} is in the project index but its actor holds no state — refusing to publish an incomplete project")
+            return None  # decided by the caller, in index order — see below
         task = Task.model_validate(raw)
         draft_raw = await handle.get_draft()
-        draft = Draft.model_validate(draft_raw) if draft_raw else None
-        out.append((task, draft))
-    return out
+        return task, Draft.model_validate(draft_raw) if draft_raw else None
+
+    sem = asyncio.Semaphore(_COLLECT_FANOUT)
+
+    async def _bounded(task_id: str) -> tuple[Task, Draft | None] | None:
+        async with sem:
+            return await _one(task_id)
+
+    results = await asyncio.gather(*(_bounded(t) for t in task_ids))
+    # THE REFUSAL IS DECIDED AFTER THE GATHER, on the LOWEST-INDEX missing task — `gather` preserves
+    # input order in its RESULT list even though the coroutines finish out of order, so raising here
+    # (rather than from inside `_one`) makes the message name the same task on every run. Raising
+    # inside the fan-out would surface whichever get() completed first.
+    for task_id, result in zip(task_ids, results, strict=True):
+        if result is None:
+            raise PublishRefusal(f"task {task_id} is in the project index but its actor holds no state — refusing to publish an incomplete project")
+    return [r for r in results if r is not None]
 
 
 async def run_publish(
