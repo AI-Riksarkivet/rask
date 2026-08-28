@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -38,7 +38,11 @@ from service_kit.schemas.health import Readiness, ReadinessStatus
 
 log = logging.getLogger(__name__)
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
-PROBLEM_JSON = "application/problem+json"
+
+
+def _no_disarm() -> None:
+    """The drain-disarm before the SIGTERM handler is armed — a bootstrap failure still reaches the
+    lifespan `finally` that calls it (see the note at the pre-binding site)."""
 
 
 @asynccontextmanager
@@ -63,53 +67,60 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # hygiene; nothing is served until the lifespan completes, but the loop must stay free regardless.
     await run_in_threadpool(apply_dapr_secrets, settings)
     pool = make_pool(settings.database_url, statement_timeout_seconds=settings.age_statement_timeout_seconds)
-    await pool.open()
-    app.state.pool = pool
-    repository = LineageRepository(
-        pool,
-        settings.graph,
-        events_retention=settings.events_retention,
-        # The same value the pool sets session-wide — the repository re-asserts it transaction-scoped
-        # (SET LOCAL) around the first-boot DDL so a wedged Postgres fails boot fast. (P6)
-        statement_timeout_seconds=settings.age_statement_timeout_seconds,
-    )
-    app.state.repository = repository
-    # Durable events feed: a Postgres table created on first boot. /runs folds onto the AGE (:Run)
-    # node; both now survive restart + are replica-shared — no in-memory state. (#22)
-    await repository.ensure_events_table()
-    await repository.ensure_reads_table()  # the read-audit log (#6); off unless LINEAGE_READ_AUDIT_ENABLED
-    # Create the AGE graph if absent — self-healing + the ONLY graph bootstrap on the external managed-PG
-    # path (the in-cluster age-postgres init has none). Fatal on a real failure (the graph is our storage),
-    # so it runs BEFORE ensure_graph_constraints, which needs the graph to exist. (prod-readiness P2)
-    await repository.ensure_graph()
-    # UNIQUE index per AGE vertex label so a concurrent MERGE (reconcile racing ingest) can't create a
-    # duplicate vertex (item 6). Best-effort: a per-label failure is logged, not fatal, so ingest still boots.
-    await repository.ensure_graph_constraints()
-    # Auth is opt-in; when enabled, converge on the CATALOG's store — provision is idempotent by store
-    # NAME ("lance-catalog"), so both services resolve the same store + model without the id being
-    # pinned ahead of boot. (The catalog writes the grants on create; lineage reads them — one shared
-    # Zanzibar store.)
-    #
-    # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
-    # failed build has always crashed the pod. Lineage answers "who did what to which dataset"; a
-    # replica that came up unable to authorize would serve 503s that read as a slow graph, not as a
-    # broken authorization plane.
-    await attach_auth(app, settings, service="lineage", fatal=True)
-    # Durable ingest (#25) is the Dapr subscription wired below (declarative — the sidecar drives it);
-    # there is no consumer task to manage here. The HTTP /api/v1/lineage path stays for external producers.
-    #
-    # The RELAY's publisher, and only when the outbox is on. The drain re-publishes a recovered event so a
-    # subscriber that never saw it still acts on it — without this the relay repairs the GRAPH while the
-    # cascade it was meant to restart stays halted. Built here rather than per drain (one channel per
-    # process, the same rule as the AGE pool), and skipped entirely when `outbox_uri` is empty so a
-    # deployment with the outbox off opens no sidecar channel it will never use.
-    app.state.dapr = None
-    if settings.outbox_uri:
-        from dapr.aio.clients import DaprClient
 
-        app.state.dapr = DaprClient()
-    app.state.startup_complete = True
+    # The `finally` owns `pool.close()`, so the pool must be opened INSIDE the guarded scope: a bootstrap
+    # await that raises (ensure_events_table on a wedged Postgres, attach_auth on an unreachable store)
+    # would otherwise unwind past an open pool that nothing closes — one leaked pool per crash-looping
+    # boot. `_disarm_drain` is pre-bound to a no-op because a failure before it is armed still hits the
+    # `finally` that calls it.
+    _disarm_drain: Callable[[], None] = _no_disarm
     try:
+        await pool.open()
+        app.state.pool = pool
+        repository = LineageRepository(
+            pool,
+            settings.graph,
+            events_retention=settings.events_retention,
+            # The same value the pool sets session-wide — the repository re-asserts it transaction-scoped
+            # (SET LOCAL) around the first-boot DDL so a wedged Postgres fails boot fast. (P6)
+            statement_timeout_seconds=settings.age_statement_timeout_seconds,
+        )
+        app.state.repository = repository
+        # Durable events feed: a Postgres table created on first boot. /runs folds onto the AGE (:Run)
+        # node; both now survive restart + are replica-shared — no in-memory state. (#22)
+        await repository.ensure_events_table()
+        await repository.ensure_reads_table()  # the read-audit log (#6); off unless LINEAGE_READ_AUDIT_ENABLED
+        # Create the AGE graph if absent — self-healing + the ONLY graph bootstrap on the external managed-PG
+        # path (the in-cluster age-postgres init has none). Fatal on a real failure (the graph is our storage),
+        # so it runs BEFORE ensure_graph_constraints, which needs the graph to exist. (prod-readiness P2)
+        await repository.ensure_graph()
+        # UNIQUE index per AGE vertex label so a concurrent MERGE (reconcile racing ingest) can't create a
+        # duplicate vertex (item 6). Best-effort: a per-label failure is logged, not fatal, so ingest still boots.
+        await repository.ensure_graph_constraints()
+        # Auth is opt-in; when enabled, converge on the CATALOG's store — provision is idempotent by store
+        # NAME ("lance-catalog"), so both services resolve the same store + model without the id being
+        # pinned ahead of boot. (The catalog writes the grants on create; lineage reads them — one shared
+        # Zanzibar store.)
+        #
+        # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
+        # failed build has always crashed the pod. Lineage answers "who did what to which dataset"; a
+        # replica that came up unable to authorize would serve 503s that read as a slow graph, not as a
+        # broken authorization plane.
+        await attach_auth(app, settings, service="lineage", fatal=True)
+        # Durable ingest (#25) is the Dapr subscription wired below (declarative — the sidecar drives it);
+        # there is no consumer task to manage here. The HTTP /api/v1/lineage path stays for external producers.
+        #
+        # The RELAY's publisher, and only when the outbox is on. The drain re-publishes a recovered event so a
+        # subscriber that never saw it still acts on it — without this the relay repairs the GRAPH while the
+        # cascade it was meant to restart stays halted. Built here rather than per drain (one channel per
+        # process, the same rule as the AGE pool), and skipped entirely when `outbox_uri` is empty so a
+        # deployment with the outbox off opens no sidecar channel it will never use.
+        app.state.dapr = None
+        if settings.outbox_uri:
+            from dapr.aio.clients import DaprClient
+
+            app.state.dapr = DaprClient()
+        app.state.startup_complete = True
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
         # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
         # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM

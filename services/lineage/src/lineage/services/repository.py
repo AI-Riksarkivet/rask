@@ -313,11 +313,17 @@ _BACKFILL_RUN: Final = (
 # only runs were pruned reads latest_write_version=None and the next sweep back-fills a fresh reconcile
 # run at the on-disk version, so the graph converges instead of dangling.
 _COUNT_OLD_RUNS: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff RETURN count(r)"
-# BATCHED (LIMIT 500, one transaction per batch): a single all-or-nothing DETACH DELETE over a large
-# backlog would exceed the pool's statement_timeout → QueryCanceled → full rollback → retention never
+# BATCHED (one transaction per batch): a single all-or-nothing DETACH DELETE over a large backlog
+# would exceed the pool's statement_timeout → QueryCanceled → full rollback → retention never
 # converges (each tick retries the identical oversized delete). Batches keep every statement far under
 # the timeout and make partial progress durable tick over tick.
-_PRUNE_OLD_RUNS_BATCH: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff WITH r LIMIT 500 DETACH DELETE r"
+#
+# AGE 1.5.0 does not bind SKIP/LIMIT as a param (every Cypher LIMIT in this file is a literal), so the
+# batch size is interpolated into the query text at call time rather than passed through `params`. That
+# makes _PRUNE_BATCH_SIZE the SINGLE source for both the delete's LIMIT and the loop count in
+# `prune_runs` — the two used to be a baked 500 literal and a separate Python constant that could drift.
+# The interpolated value is a code-owned int constant, never caller input, so no injection surface.
+_PRUNE_OLD_RUNS_TEMPLATE: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff WITH r LIMIT {limit} DETACH DELETE r"
 _PRUNE_BATCH_SIZE: Final = 500
 # The per-version column schema rides the same WROTE edge as the version (#24 prerequisite). Stored as
 # a JSON **string** scalar — params are JSON-encoded and ``_parse`` json.loads each cell, so a scalar
@@ -1255,9 +1261,11 @@ class LineageRepository:
             rows = await run_cypher(conn, self._graph, _COUNT_OLD_RUNS, {"cutoff": cutoff_iso})
             count = int(rows[0][0]) if rows and rows[0] else 0
             batches = -(-count // _PRUNE_BATCH_SIZE)  # ceil; 0 batches when nothing to prune
+            # One constant sizes both the loop and the delete (AGE cannot bind LIMIT — see the template).
+            delete = cast("LiteralString", _PRUNE_OLD_RUNS_TEMPLATE.format(limit=_PRUNE_BATCH_SIZE))
             for _ in range(batches):
                 async with conn.transaction():
-                    await run_cypher(conn, self._graph, _PRUNE_OLD_RUNS_BATCH, {"cutoff": cutoff_iso})
+                    await run_cypher(conn, self._graph, delete, {"cutoff": cutoff_iso})
         return count
 
     async def ensure_events_table(self) -> None:

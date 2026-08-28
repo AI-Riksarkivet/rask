@@ -48,7 +48,14 @@ def _read_lineage_jsonb(ds: Any) -> dict[str, Any] | None:
     """Read gold's embedded ``lineage`` JSONB column (one row) back into a dict."""
     try:
         column = ds.to_table(columns=["lineage"]).column("lineage").to_pylist()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        # pylance/pyarrow read faults: S3 unreachable → OSError, a corrupt manifest → ValueError, an
+        # absent/renamed ``lineage`` column → ValueError (lance projection) or KeyError (pyarrow
+        # ``.column``). Logged, not silent — this is the demo tier, so a fault degrades the lineage
+        # panel to empty rather than failing the request, but it must leave a trace. A narrower catch
+        # than `Exception` on purpose: an AttributeError/TypeError here is a bug in this code and should
+        # surface, not read as "no lineage column".
+        log.warning("demo_lineage_jsonb_read_failed error=%s", exc)
         return None
     if not column:
         return None
@@ -90,7 +97,11 @@ def _stamp(entry: dict[str, Any]) -> str | None:
 def _read_dataset(name: str, uri: str, opts: dict[str, str], max_versions: int) -> DemoDataset:
     try:
         ds = lance.dataset(uri, storage_options=opts)  # the ONE per-tick open: the change probe
-    except Exception:
+    except (OSError, ValueError, RuntimeError) as exc:
+        # The dataset genuinely not existing yet (the cascade has not written this tier) is the common
+        # case and is what exists=False reports — but so is an S3 outage, so it is logged rather than
+        # swallowed. Narrowed past `Exception`: a bug in this function must surface, not read as absent.
+        log.warning("demo_dataset_open_failed name=%s uri=%s error=%s", name, uri, exc)
         return DemoDataset(name=name, uri=uri, exists=False)
     current = int(ds.version)
     entries = list(ds.versions())[-max_versions:]  # newest K — bounds the cold tick too
@@ -110,7 +121,11 @@ def _read_dataset(name: str, uri: str, opts: dict[str, str], max_versions: int) 
         try:
             at_version = lance.dataset(uri, storage_options=opts, version=number)
             fields = [DemoField(name=f.name, type=schema.type_label(f)) for f in at_version.schema]
-        except Exception:
+        except (OSError, ValueError, RuntimeError) as exc:
+            # A single version failing to open (a pruned/compacted-away manifest, an S3 hiccup) drops
+            # that version's schema to empty rather than failing the whole peek — but it is logged, and
+            # the catch is narrow so a code bug surfaces instead of masquerading as an empty schema.
+            log.warning("demo_version_schema_read_failed uri=%s version=%s error=%s", uri, number, exc)
             fields = []
         known[number] = DemoVersion(version=number, timestamp=stamp, fields=fields)
         versions.append(known[number])

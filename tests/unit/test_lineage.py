@@ -723,6 +723,32 @@ def test_prune_runs_noop_when_nothing_old(monkeypatch: pytest.MonkeyPatch) -> No
     assert [q for q in calls if "DETACH DELETE" in q] == []  # no delete issued when nothing qualifies
 
 
+def test_prune_batch_size_is_single_sourced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One constant (_PRUNE_BATCH_SIZE) drives BOTH the loop count and the per-batch delete size.
+
+    Regression guard (F-LIN-06): the delete LIMIT was baked as a separate 500 literal in the Cypher
+    string, so lowering _PRUNE_BATCH_SIZE shrank the loop count while every delete still cut 500 —
+    under-pruning silently. With the size single-sourced, a batch of 2 over 5 old runs is ceil(5/2)=3
+    transactions, each delete bounded at LIMIT 2."""
+    import lineage.services.repository as repo_mod
+
+    monkeypatch.setattr(repo_mod, "_PRUNE_BATCH_SIZE", 2)
+    calls: list[str] = []
+
+    async def _fake(_conn: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int = 1) -> list[list[object]]:
+        calls.append(query)
+        return [[5]] if "count(r)" in query else []
+
+    monkeypatch.setattr(repo_mod, "run_cypher", _fake)
+    repo = repo_mod.LineageRepository(cast(Any, _FakePool()), "g")
+    asyncio.run(repo.prune_runs("2020-01-01T00:00:00+00:00"))
+
+    deletes = [q for q in calls if "DETACH DELETE" in q]
+    assert len(deletes) == 3  # ceil(5 / 2), driven by the monkeypatched constant
+    assert all("LIMIT 2" in q for q in deletes)  # and the delete size follows the SAME constant
+    assert not any("LIMIT 500" in q for q in deletes)  # never the stale baked literal
+
+
 # --------------------------------------------------------------------------- #
 # §7 residual: the RUNNING progress facet — model parse, the conditional
 # _SET_RUN_PROGRESS write at ingest, and the /runs fold that surfaces it.
@@ -1128,3 +1154,108 @@ def test_the_run_event_reads_its_verdict_off_the_lance_facet() -> None:
         }
     )
     assert without.promotion_status is None
+
+
+def test_pool_closed_when_bootstrap_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bootstrap step raising during lifespan startup must still close the AGE pool.
+
+    Regression guard (F-LIN-09): `await pool.open()` and the bootstrap awaits used to sit BEFORE the
+    `try:` whose `finally:` owns `await pool.close()`. A failure in any bootstrap step (here
+    ensure_events_table) raised past that guard with the connection pool open and never closed —
+    a leaked pool per crash-looping boot.
+    """
+    import types
+
+    import lineage.main as main_mod
+
+    class _LifecyclePool:
+        def __init__(self) -> None:
+            self.opened = False
+            self.closed = False
+
+        async def open(self) -> None:
+            self.opened = True
+
+        async def close(self) -> None:
+            self.closed = True
+
+    pool = _LifecyclePool()
+
+    class _BoomRepo:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            pass
+
+        async def ensure_events_table(self) -> None:
+            raise RuntimeError("bootstrap boom")
+
+    settings = types.SimpleNamespace(
+        audit_enabled=False,
+        dapr_enabled=False,
+        reconcile_binding_name=None,
+        database_url="postgresql://x",
+        age_statement_timeout_seconds=30.0,
+        graph="g",
+        events_retention=None,
+        outbox_uri="",
+    )
+
+    monkeypatch.setattr(main_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_mod, "configure_audit", lambda **_k: None)
+    monkeypatch.setattr(main_mod, "instrument_lance_if_available", lambda: None)
+    monkeypatch.setattr(main_mod, "assert_app_token_configured", lambda **_k: None)
+    monkeypatch.setattr(main_mod, "apply_dapr_secrets", lambda _s: None)
+    monkeypatch.setattr(main_mod, "make_pool", lambda *_a, **_k: pool)
+    monkeypatch.setattr(main_mod, "LineageRepository", _BoomRepo)
+
+    app = types.SimpleNamespace(state=types.SimpleNamespace())
+
+    async def _drive() -> None:
+        async with main_mod.lifespan(cast(Any, app)):
+            pass
+
+    with pytest.raises(RuntimeError, match="bootstrap boom"):
+        asyncio.run(_drive())
+
+    assert pool.opened is True
+    assert pool.closed is True  # the finally must run even when a bootstrap await raises
+
+
+def test_demo_read_failure_is_logged(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """A failed S3/pylance read in the demo peek must be logged, not swallowed silently.
+
+    Regression guard (F-LIN-11): demo.py declared a module logger and never used it — the three read
+    arms returned a fallback on a bare `except Exception` with no record, so a persistent storage
+    outage looked like an empty demo rather than a fault. The read now logs a warning AND narrows the
+    catch, so a programming error (AttributeError/TypeError) surfaces instead of being masked.
+    """
+    import logging
+
+    from lineage.api.v1.endpoints import demo
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise OSError("s3 unreachable")
+
+    monkeypatch.setattr(demo.lance, "dataset", _boom)
+    demo._reset_peek_cache()
+    with caplog.at_level(logging.WARNING, logger="lineage.api.v1.endpoints.demo"):
+        result = demo._read_dataset("bronze$events", "s3://bucket/bronze/events", {}, 5)
+
+    assert result.exists is False  # unchanged: a read failure still yields the "not present" payload
+    assert any(rec.levelno == logging.WARNING for rec in caplog.records), "the swallowed read was not logged"
+
+
+def test_demo_read_reraises_programming_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The narrowed catch lets a genuine bug through instead of reporting the dataset absent.
+
+    Regression guard (F-LIN-11): a bare `except Exception` masked AttributeError/TypeError as
+    exists=False. Narrowing to the concrete read/IO errors surfaces the bug.
+    """
+    from lineage.api.v1.endpoints import demo
+
+    def _bug(*_a: object, **_k: object) -> object:
+        raise AttributeError("typo in the peek code")
+
+    monkeypatch.setattr(demo.lance, "dataset", _bug)
+    demo._reset_peek_cache()
+    with pytest.raises(AttributeError, match="typo in the peek code"):
+        demo._read_dataset("bronze$events", "s3://bucket/bronze/events", {}, 5)
