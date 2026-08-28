@@ -67,11 +67,24 @@ actor placement/turn semantics.
 - **Configuration API** (2026-08-28): the fleet's config is ONE ConfigMap via `envFrom`, validated by
   pydantic-settings at boot, and the render-driven invariant tests depend on seeing it; change
   cadence is deliberately rollout-shaped. It solves a problem this estate chose not to have.
-- **Jobs API** (2026-08-28): the six crons stay `bindings.cron` — operator-owned schedules in values,
-  pinned by invariants (Component name = env var = served path, one string). **Revisit trigger:** the
-  first genuine ONE-SHOT future job ("retry in 10m", "expire at T+24h") — bindings cannot express
-  one-shots, the Scheduler control-plane already runs here (actor reminders use it), and Jobs is the
-  idiomatic answer THEN. Mind its guarantee: at-least-once, durability over punctuality.
+- **Jobs API** (2026-08-28, sharpened same day when per-project policies raised it again): the six
+  crons stay `bindings.cron`, and the reason is a PATTERN distinction, not conservatism —
+  **level-triggered vs edge-triggered.** Maintenance is CONVERGENCE work (idempotent, self-healing,
+  late-is-free), and the textbook pattern for convergence is the reconcile loop: one heartbeat, scan,
+  act where due — which is how per-project `compact_interval_hours` is already honoured, from the
+  policy RECORD at every tick, at 60x finer resolution (120s heartbeat vs 1h minimum interval). This
+  is what Kubernetes controllers do with a scheduler available. Per-policy Jobs would be strictly
+  worse by three structural counts: the loop must exist anyway (unpoliced datasets + the medallion
+  tiers, which CANNOT carry a policy, still need sweeping — so Jobs adds a second mechanism beside
+  the first rather than replacing it); it creates a second stateful store (the Scheduler's etcd)
+  that every policy create/update/delete/drop/undrop path must mirror, invisible to the render
+  gates and the drift report; and the sweep is single-flight, so per-target wakeups queue on the
+  same lock. **Revisit trigger — the edge-triggered case:** a discrete event that must fire ONCE at
+  a moment where lateness ≈ wrongness ("expire this grant at T+24h"; auto-purge-at-trash-deadline
+  instead of the sweep merely REPORTING expired trash). Bindings cannot express one-shots, the
+  Scheduler already runs here (actor reminders use it), and Jobs is the idiomatic answer THEN —
+  minding its guarantee: at-least-once, durability over punctuality. Calendar semantics in a policy
+  ("02:00 in the project's timezone") are NOT that trigger: still computable from data at each tick.
 
 ## The one open candidate
 
