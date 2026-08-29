@@ -92,13 +92,16 @@ def test_the_raw_sql_predicate_is_still_accepted_but_now_scoped() -> None:
 
 def test_a_caller_with_no_grant_is_REFUSED_a_named_corpus(monkeypatch) -> None:
     import service_kit.media.state as state_mod
+    from service_kit.lancekit.descriptor import Declared
 
+    # A REAL `Declared`, not an ad-hoc stub: the gate resolves the request's `?table=` through
+    # `search_named`, which only the real model can answer — and an object that answers only
+    # `.search` is precisely the superseded shape the gate used to read.
+    declared = Declared.model_validate({"identity": {"key_fields": ["doc_id"]}, "searches": [{"name": "default", "row_table": "chunks"}]})
     monkeypatch.setattr(
         state_mod,
         "dataset_handle",
-        lambda *_a, **_k: type(
-            "H", (), {"id": "vasa", "descriptor": type("D", (), {"declared": type("De", (), {"search": type("S", (), {"row_table": "chunks"})()})()})()}
-        )(),
+        lambda *_a, **_k: type("H", (), {"id": "vasa", "descriptor": type("D", (), {"declared": declared})()})(),
     )
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

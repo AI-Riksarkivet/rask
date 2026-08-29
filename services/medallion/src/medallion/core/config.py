@@ -290,13 +290,16 @@ class MedallionSettings(BaseSettings):
     #: ``medallion.services.transform_spec``. A fallback would run the old program under the declaration's name
     #: while an operator believed the record governed it, with nothing anywhere red.
     transform: str = Field(default="", validation_alias=AliasChoices("transform", "MEDALLION_TRANSFORM", "MEDALLION_LANE"))
-    # Where a mover REGISTERS its output table — the catalog service, and the
-    # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
-    # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the
-    # register seam naming the env var, never guessing — a gold table the catalog cannot govern
-    # must not report success.
+    # The catalog service a mover ASKS where its output table lives (`ensure_stage_output`) and then
+    # PUBLISHES that version through. Empty by default: the lane fails at the seam naming the env
+    # var, never guessing — a gold table the catalog cannot govern must not report success.
+    #
+    # There is no second root setting beside it any more. `MEDALLION_CATALOG_ROOT` existed so a
+    # mover-composed path could be expressed RELATIVE to the catalog's connection root (the dir
+    # backend refuses absolute URIs — the #75 lesson); the mover composes no path now, so the value
+    # had no reader. The chart still renders it into both mover templates: harmless
+    # (`extra="ignore"`), and its removal belongs to the chart's own change.
     catalog_url: str = Field(default="", alias="MEDALLION_CATALOG_URL")
-    catalog_root: str = Field(default="", alias="MEDALLION_CATALOG_ROOT")
     # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
     # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
     catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")

@@ -137,8 +137,9 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     Asserted through the pre-pass's own output rather than by constructing a real shallow clone, which
     needs a Lance feature this suite does not otherwise depend on.
     """
-    from maintenance.services import base_refs
     from maintenance.services import sweep as sweep_mod
+
+    from service_kit.lakehouse import base_refs
 
     source = _dataset(tmp_path / "source.lance")
     clone = _dataset(tmp_path / "clone.lance")
@@ -153,7 +154,10 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     monkeypatch.setattr(
         sweep_mod.base_refs,
         "protected_roots",
-        lambda uris, options=None: (seen.append(list(uris)), real_protected(uris, options))[1],
+        # Forwards **kw so the stub cannot fall behind the real signature: the sweep threads the
+        # service's configured Lance session, and a stub that silently dropped it would keep passing
+        # while the call it stands in for had moved on.
+        lambda uris, options=None, **kw: (seen.append(list(uris)), real_protected(uris, options, **kw))[1],
     )
     _run(monkeypatch, settings, [source, clone])
 

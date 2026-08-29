@@ -5039,6 +5039,139 @@
         "title": "DescribeTableIndexStatsResponse",
         "type": "object"
       },
+      "DescribeTableRequest": {
+        "description": "DescribeTableRequest",
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Branch to target. When not specified, the main branch is used. ",
+            "title": "Branch"
+          },
+          "check_declared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": false,
+            "description": "Whether to check if the table exists only as a namespace declaration without storage data. Default is false. When true, the response should populate `is_only_declared`. When false, the implementation should return null for `is_only_declared` unless another option such as `load_detailed_metadata` requires checking declared-only table state. ",
+            "title": "Check Declared"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{\"header.Authorization\": \"Bearer abc\"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{\"header.x-request-id\": \"abc123\"}`. ",
+            "title": "Context"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "load_detailed_metadata": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether to load detailed metadata that requires opening the dataset. When true, the response must include all detailed metadata such as `version`, `schema`, and `stats` which require reading the dataset. When not set, the implementation can decide whether to return detailed metadata and which parts of detailed metadata to return. ",
+            "title": "Load Detailed Metadata"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tag name to describe the table at. If specified, the server should resolve the tag to a version number and describe that version. Cannot be used together with `version` or `branch`. ",
+            "title": "Tag"
+          },
+          "vend_credentials": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether to include vended credentials in the response `storage_options`. When true, the implementation should provide vended credentials for accessing storage. When not set, the implementation can decide whether to return vended credentials. ",
+            "title": "Vend Credentials"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Version of the table to describe. If not specified, server should resolve it to the latest version. ",
+            "title": "Version"
+          },
+          "with_table_uri": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": false,
+            "description": "Whether to include the table URI in the response. Default is false. ",
+            "title": "With Table Uri"
+          }
+        },
+        "title": "DescribeTableRequest",
+        "type": "object"
+      },
       "DescribeTableResponse": {
         "description": "DescribeTableResponse",
         "properties": {
@@ -20442,7 +20575,7 @@
     },
     "/v1/table/{id}/describe": {
       "post": {
-        "description": "Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``,\noptionally at ``?version=N`` or ``?tag=<name>`` (spec 0.9: mutually exclusive).\n\n``tag`` is resolved to its version HERE via the dataplane's tag store: the native backend at\npylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 \u2014 a nonexistent tag\ndescribed the LATEST version with no error), so forwarding it would lie; the catalog resolves\n(404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead.\n\n``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response \u2014\nthe SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered\nonly a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including medallion-producer in\nREST mode) got no credentials and had no way to discover our endpoint: interop-breaking, and the one\nconfirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,\nweb-identity exchange).\n\nREAD TIER ONLY, deliberately. The router already gates describe on the reader rung; vending a WRITE\ncredential from a read-authorized call would be a privilege escalation. A write credential still requires\n``POST /{id}/credentials?tier=write``, which separately checks ``can_write_data``.\n\nMulti-base tables fall back to server-mediated (no storage_options): the STS session policy is scoped to\nthe table's PRIMARY root bucket, so a vended client could not reach fragments living in a registered data\nbase \u2014 the same #3-B \u22a5 #2 conflict the credentials endpoint already handles.",
+        "description": "Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``, optionally\npinned to a ``version`` or a ``tag`` (spec 0.9: mutually exclusive).\n\nTWO DOORS, ONE MEANING. The Lance Namespace spec puts ``with_table_uri`` / ``load_detailed_metadata`` /\n``check_declared`` in the QUERY and ``version`` / ``tag`` / ``vend_credentials`` in a\n``DescribeTableRequest`` BODY (``lance_docs/namespace.md`` \u00a7DescribeTable; the generated client's\n``_describe_table_serialize`` sends exactly that split). This route once bound all six as bare scalars,\nso FastAPI made them all query params and the body was dropped unread \u2014 a spec-conformant client\n(``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges\n``storage_options``) got a location and NO credentials, and any version pin silently read latest.\nBoth forms are now accepted: **a field present in the body wins**, because the body is the spec's form\nand the query is rask's own older shorthand that its zones and tests still speak. Presence is decided by\nthe JSON keys actually sent, not by the model's defaults. The body is OPTIONAL here (the spec marks it\nrequired) so those existing query-only callers keep working \u2014 a superset, not a deviation in meaning.\n\n``tag`` is resolved to its version HERE via the dataplane's tag store, from either door: the native\nbackend at pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 \u2014 a nonexistent\ntag described the LATEST version with no error), so forwarding it would lie; the catalog resolves\n(404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead.\n\n``branch`` (body-only) is REFUSED unless it names main \u2014 see the site below. ``identity`` and ``context``\nare ignored: the caller is the verified bearer token, not a field of the request body.\n\n``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response \u2014\nthe SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered\nonly a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including medallion-producer in\nREST mode) got no credentials and had no way to discover our endpoint: interop-breaking, and the one\nconfirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,\nweb-identity exchange).\n\nREAD TIER ONLY, deliberately. The router already gates describe on the reader rung; vending a WRITE\ncredential from a read-authorized call would be a privilege escalation. A write credential still requires\n``POST /{id}/credentials?tier=write``, which separately checks ``can_write_data``.\n\nMulti-base tables fall back to server-mediated (no storage_options): the STS session policy is scoped to\nthe table's PRIMARY root bucket, so a vended client could not reach fragments living in a registered data\nbase \u2014 the same #3-B \u22a5 #2 conflict the credentials endpoint already handles.",
         "operationId": "describe_table_v1_table__id__describe_post",
         "parameters": [
           {
@@ -20599,6 +20732,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DescribeTableRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {

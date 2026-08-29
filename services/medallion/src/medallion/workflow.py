@@ -117,6 +117,17 @@ class StageJobSpec(BaseModel):
     #: uncapped blob is therefore written thousands of times, not once. Refused at validation, which
     #: both bodies run at their first line, so an oversized spec never reaches a single turn.
     lineage_json: str = Field(default="", max_length=MAX_LINEAGE_JSON_BYTES)
+    #: THE RUN'S PROVENANCE IDENTITY, which the trigger cannot carry. `from_id`/`to_id` are the
+    #: CATALOG identifiers this hop moves (`acme-silver$features`) — resolved by
+    #: `transform.resolve_stage_identity` from the declared record or the env, so they exist nowhere on
+    #: the publisher's payload — and `run_id` is the run the mover already minted for this hop. The Ray
+    #: job emits its own OpenLineage and has no other way to learn any of the three; without them it
+    #: names its output by the URI's stem, which matches no grant, and keys its events on a run nothing
+    #: else knows. Carried here rather than re-derived in the activity for the reason `submission_id`
+    #: is: one derivation site, or the two halves drift and nothing is red.
+    from_id: str = ""
+    to_id: str = ""
+    run_id: str = ""
     #: The trigger to re-publish once the job is terminal, verbatim as the mover will re-parse it.
     #: Held as a dict rather than a `StageTrigger` so a field added to the trigger contract does not
     #: silently drop off the round trip.
@@ -388,6 +399,12 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
             # The delta boundary rides the trigger too, and reaches the job as `BASE_VERSION`. Read
             # off the raw trigger for the same reason the two above are: this is the carrier.
             from_version=(spec.trigger or {}).get("from_version"),
+            # Off the SPEC, not the trigger: the mover resolved these names and minted this run id,
+            # and the publisher's payload has never carried either. A field added to the spec and not
+            # read here reaches the state store, survives every checkpoint and never reaches the job.
+            from_id=spec.from_id,
+            to_id=spec.to_id,
+            run_id=spec.run_id,
         )
     )
 

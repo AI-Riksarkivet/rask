@@ -8,6 +8,8 @@ work (open dataset, list versions, cleanup) runs in a threadpool so the event lo
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 
@@ -18,7 +20,30 @@ from catalog.schemas import CompactRequest, CompactResult, GcPreview, GcRequest,
 from catalog.services import maintenance
 
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/v1/table", tags=["maintenance"])
+
+
+async def _base_refs(ds: object, so: dict[str, str]) -> maintenance.BaseRefs:
+    """The #114 pre-pass, run BEFORE either destructive verb.
+
+    It has to happen out here rather than inside the service function because the evidence is not on
+    this dataset: a shallow clone's SOURCE carries no flag and no base_paths, and only the referring
+    manifests say that anything resolves through its bytes. Collected per call rather than cached —
+    a clone created a minute ago must protect its source on the next click, and the listing is one
+    non-recursive call against a flat layout.
+
+    An unreadable sibling is LOGGED and the call proceeds, matching the sweep
+    (``maintenance_base_refs_incomplete``): a partial map still refuses everything it does see, and
+    failing the button closed on any unreadable directory in the warehouse would make on-demand
+    maintenance unusable. The refusals it can make are the point.
+    """
+    location = str(getattr(ds, "uri", "") or "")
+    refs = await run_in_threadpool(maintenance.sibling_base_refs, location, so)
+    if refs.unreadable:
+        log.warning("maintenance_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
+    return refs
 
 
 @router.post("/{id}/maintenance/preview")
@@ -42,7 +67,14 @@ async def run_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: 
     (``can_drop``) — the same bar as scheduling it via the retention policy."""
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
-    result = await run_in_threadpool(maintenance.run_gc, ds, retention_days=body.retention_days, retain_versions=body.retain_versions)
+    protected = await _base_refs(ds, so)
+    result = await run_in_threadpool(
+        maintenance.run_gc,
+        ds,
+        retention_days=body.retention_days,
+        retain_versions=body.retain_versions,
+        protected=protected,
+    )
     return GcRunResult(**result)
 
 
@@ -52,5 +84,11 @@ async def compact_maintenance(id: str, body: CompactRequest, ns: NamespaceDep, s
     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none."""
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
-    result = await run_in_threadpool(maintenance.compact_now, ds, target_rows_per_fragment=body.target_rows_per_fragment)
+    protected = await _base_refs(ds, so)
+    result = await run_in_threadpool(
+        maintenance.compact_now,
+        ds,
+        target_rows_per_fragment=body.target_rows_per_fragment,
+        protected=protected,
+    )
     return CompactResult(**result)

@@ -2006,13 +2006,28 @@ export interface paths {
         put?: never;
         /**
          * Describe Table
-         * @description Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``,
-         *     optionally at ``?version=N`` or ``?tag=<name>`` (spec 0.9: mutually exclusive).
+         * @description Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``, optionally
+         *     pinned to a ``version`` or a ``tag`` (spec 0.9: mutually exclusive).
          *
-         *     ``tag`` is resolved to its version HERE via the dataplane's tag store: the native backend at
-         *     pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 — a nonexistent tag
-         *     described the LATEST version with no error), so forwarding it would lie; the catalog resolves
+         *     TWO DOORS, ONE MEANING. The Lance Namespace spec puts ``with_table_uri`` / ``load_detailed_metadata`` /
+         *     ``check_declared`` in the QUERY and ``version`` / ``tag`` / ``vend_credentials`` in a
+         *     ``DescribeTableRequest`` BODY (``lance_docs/namespace.md`` §DescribeTable; the generated client's
+         *     ``_describe_table_serialize`` sends exactly that split). This route once bound all six as bare scalars,
+         *     so FastAPI made them all query params and the body was dropped unread — a spec-conformant client
+         *     (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges
+         *     ``storage_options``) got a location and NO credentials, and any version pin silently read latest.
+         *     Both forms are now accepted: **a field present in the body wins**, because the body is the spec's form
+         *     and the query is rask's own older shorthand that its zones and tests still speak. Presence is decided by
+         *     the JSON keys actually sent, not by the model's defaults. The body is OPTIONAL here (the spec marks it
+         *     required) so those existing query-only callers keep working — a superset, not a deviation in meaning.
+         *
+         *     ``tag`` is resolved to its version HERE via the dataplane's tag store, from either door: the native
+         *     backend at pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 — a nonexistent
+         *     tag described the LATEST version with no error), so forwarding it would lie; the catalog resolves
          *     (404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead.
+         *
+         *     ``branch`` (body-only) is REFUSED unless it names main — see the site below. ``identity`` and ``context``
+         *     are ignored: the caller is the verified bearer token, not a field of the request body.
          *
          *     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
          *     the SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered
@@ -5554,6 +5569,59 @@ export interface components {
              * @description Number of unindexed rows
              */
             num_unindexed_rows?: number | null;
+        };
+        /**
+         * DescribeTableRequest
+         * @description DescribeTableRequest
+         */
+        DescribeTableRequest: {
+            /**
+             * Branch
+             * @description Branch to target. When not specified, the main branch is used.
+             */
+            branch?: string | null;
+            /**
+             * Check Declared
+             * @description Whether to check if the table exists only as a namespace declaration without storage data. Default is false. When true, the response should populate `is_only_declared`. When false, the implementation should return null for `is_only_declared` unless another option such as `load_detailed_metadata` requires checking declared-only table state.
+             * @default false
+             */
+            check_declared: boolean | null;
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+            /**
+             * Load Detailed Metadata
+             * @description Whether to load detailed metadata that requires opening the dataset. When true, the response must include all detailed metadata such as `version`, `schema`, and `stats` which require reading the dataset. When not set, the implementation can decide whether to return detailed metadata and which parts of detailed metadata to return.
+             */
+            load_detailed_metadata?: boolean | null;
+            /**
+             * Tag
+             * @description Tag name to describe the table at. If specified, the server should resolve the tag to a version number and describe that version. Cannot be used together with `version` or `branch`.
+             */
+            tag?: string | null;
+            /**
+             * Vend Credentials
+             * @description Whether to include vended credentials in the response `storage_options`. When true, the implementation should provide vended credentials for accessing storage. When not set, the implementation can decide whether to return vended credentials.
+             */
+            vend_credentials?: boolean | null;
+            /**
+             * Version
+             * @description Version of the table to describe. If not specified, server should resolve it to the latest version.
+             */
+            version?: number | null;
+            /**
+             * With Table Uri
+             * @description Whether to include the table URI in the response. Default is false.
+             * @default false
+             */
+            with_table_uri: boolean | null;
         };
         /**
          * DescribeTableResponse
@@ -11562,7 +11630,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DescribeTableRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -126,8 +126,24 @@ export const fetchTableHistory = async (
 	return res.ok ? { ok: true, data: parse(TableHistorySchema, res.data) } : res;
 };
 
+/** The FIRST write of a table — create it FROM Arrow-IPC rows (built in the browser via apache-arrow).
+ *
+ * This is the door {@link insertRows} cannot be. An insert opens the table's dataset to coerce the
+ * batch to its schema, so it 404s for a table that has no dataset yet — which is every table that
+ * was only DECLARED (`declareTable` reserves the id and writes no bytes). The catalog's create path
+ * lands the first data version into a declared-only table's already-reserved location, so the same
+ * call both creates a brand-new table and fills a declared one; no `mode` is sent, because neither
+ * case is an overwrite of anything.
+ *
+ * Gated `can_create_table` on the parent namespace at the catalog; session-only through the BFF like
+ * every other data-plane write from a zone.
+ */
+export const createTableWithRows = (table: string, arrow: Uint8Array) =>
+	requestBytes(`v1/table/${enc(table)}/create`, arrow as BodyInit);
+
 /** #64 data-plane row insert — append Arrow-IPC rows (built in the browser via apache-arrow). Writer-gated
- * (can_write_data) at the catalog, session-only BFF. `mode=append` never rewrites existing versions. */
+ * (can_write_data) at the catalog, session-only BFF. `mode=append` never rewrites existing versions.
+ * Requires a table that already HOLDS data — see {@link createTableWithRows} for the first write. */
 export const insertRows = (table: string, arrow: Uint8Array) =>
 	requestBytes(`v1/table/${enc(table)}/insert?mode=append`, arrow as BodyInit);
 
@@ -232,13 +248,14 @@ export const DeleteRowsResponseSchema = v.object({
 });
 export type DeleteRowsResult = v.InferOutput<typeof DeleteRowsResponseSchema>;
 
-// AlterTableBackfillColumnsResponse: the backfill runs asynchronously — job_id is all it returns.
-export const BackfillResponseSchema = v.object({ job_id: v.string() });
-export type BackfillResult = v.InferOutput<typeof BackfillResponseSchema>;
-
-// Every function that used to live here — drop / deregister / rename / declare, the row update and
-// delete, and the async column backfill — is a remote command now (`remote/catalog.remote.ts`). The
-// parse against the schemas above moved with them, from the browser to the zone server.
+// Every function that used to live here — drop / deregister / rename / declare, and the row update
+// and delete — is a remote command now (`remote/catalog.remote.ts`). The parse against the schemas
+// above moved with them, from the browser to the zone server.
+//
+// The async column backfill went further and is GONE: `alter_table_backfill_columns` is one of the
+// six ops the pinned native backend stubs (501 for every table — `docs/COVERAGE.md`), so its client,
+// its `{job_id}` response contract and the button that called it were all deleted with the dead
+// door. What the UI says in its place is `table-detail/unavailable.ts`.
 
 // The lance-namespace DropNamespaceResponse wire contract (all fields optional — the catalog serializes
 // with response_model_exclude_none). Parsed (not cast) at the boundary per the @rask/api

@@ -60,9 +60,11 @@ _BY_TIER: Final = {"bronze": BRONZE_TARGET_ROWS, "silver": SILVER_TARGET_ROWS, "
 
 
 #: The one parent directory whose CHILD is the namespace rather than the table. The medallion cascade
-#: writes `s3://<bucket>/medallion/<tier>` — the dataset IS the tier — so `medallion` promotes its child
-#: instead of being read as the namespace itself. Kept to a single literal on purpose: every other
-#: parent segment must stay untrusted, or a table named `gold` would silently size itself as gold.
+#: writes `s3://<bucket>/medallion/<namespace>` — the dataset IS the tier — so `medallion` promotes its
+#: child instead of being read as the namespace itself. That child is a bare tier, a `<tier>-<lane>`, or
+#: a project-qualified form, and it is asked FIRST in `tier_of` for exactly that reason. Kept to a single
+#: literal on purpose: every other parent segment must stay untrusted, or a table named `gold` would
+#: silently size itself as gold.
 _CASCADE_PARENT: Final = "medallion"
 
 
@@ -93,8 +95,24 @@ def _tier_from_cascade_namespace(namespace: str) -> str | None:
     return tier if tier in _BY_TIER else None
 
 
+def _tier_from_either_end(namespace: str) -> str | None:
+    """The tier in a namespace segment that may follow EITHER convention, or ``None``.
+
+    One directory name carries both, and which one applies is not recoverable from the name alone:
+    the catalog composes `<project>-<tier>` (`acme-bronze`, reduces right) while the cascade composes
+    `<tier>-<lane>` (`bronze-media`, reduces left), and both are vended through the same flat
+    `<uuid8>_<namespace>$<table>` layout. Trying only one rule is what left every catalog-governed
+    cascade lane untiered.
+
+    The catalog's rule is tried FIRST, so an ambiguous `<a>-<b>` in which both ends name a tier keeps
+    the reading the nested layout has always given it. That is a deliberate tie-break, not an
+    accident, and it can only bite a namespace whose project or lane is itself called after a tier.
+    """
+    return _tier_from_namespace(namespace) or _tier_from_cascade_namespace(namespace)
+
+
 def tier_of(dataset_uri: str) -> str | None:
-    """The medallion tier this dataset lives in, read from the NAMESPACE — in whichever of the three
+    """The medallion tier this dataset lives in, read from the NAMESPACE — in whichever of the five
     layouts the estate actually writes.
 
     The tier is always a property of the namespace and never of the table name: matching the table
@@ -103,17 +121,27 @@ def tier_of(dataset_uri: str) -> str | None:
     resolve almost nothing in production:
 
       1. ``<bucket>/<project>-<tier>/<table>``      — nested; the namespace is `parts[-2]` (original).
-      2. ``<bucket>/medallion/<tier>``              — the CASCADE. `parts[-2]` is the literal
+      2. ``<bucket>/medallion/<tier>[-<lane>]``     — the CASCADE. `parts[-2]` is the literal
          `medallion`, so every governed tier read as untiered and the #61 defaults never once applied
          to a medallion dataset. Measured live: bronze, silver and gold all returned None.
       3. ``<bucket>/<uuid8>_<namespace>$<table>``   — the `dir` backend's FLAT layout, which does not
          nest a table under its namespace at all but encodes both in ONE directory name. Here
          `parts[-2]` is the BUCKET, so catalog-governed tables read as untiered too.
+      4. ``<bucket>/medallion/<project>$<tier>``    — the cascade under a PROJECT: `project_root`
+         reroutes the medallion base per tenant and the child of `medallion/` is project-qualified.
+      5. ``<bucket>/<uuid8>_<tier>-<lane>$<table>`` — a cascade LANE vended through the catalog, so
+         the flat layout carries the cascade's `<tier>-<lane>` order rather than `<project>-<tier>`.
 
-    Layout 3 is matched on the delimiter rather than the uuid prefix, and the prefix is stripped with a
-    single `split("_", 1)` so a namespace that itself contains an underscore (`transcripts_v2`) survives
-    intact — that one must stay untiered, which is what keeps this from degenerating into "find a tier
-    word anywhere in the path".
+    ORDER OF THE TWO BRANCHES IS THE FIX, not a tidy-up. The delimiter test used to run FIRST, so
+    layout 4 was read as flat: `acme$bronze` reduced to the namespace `acme`, which names no tier, and
+    a project's bronze — the widest rows in the estate — was handed Lance's default row-count sizing.
+    `medallion` is the one parent that promotes its child, so it has to be asked first; only then is a
+    delimiter in the leaf evidence of the flat layout.
+
+    Layout 3/5 is matched on the delimiter rather than the uuid prefix, and the prefix is stripped with
+    a single `split("_", 1)` so a namespace that itself contains an underscore (`transcripts_v2`)
+    survives intact — that one must stay untiered, which is what keeps this from degenerating into
+    "find a tier word anywhere in the path".
 
     ``None`` when the URI names no tier. That is a real case (a control-plane dataset, an untiered
     namespace) and must not be guessed at — see `target_rows_for`.
@@ -123,15 +151,21 @@ def tier_of(dataset_uri: str) -> str | None:
         return None
 
     leaf = parts[-1]
-    if CATALOG_DELIMITER in leaf:  # layout 3 — flat: the namespace is the leaf's own prefix, not a parent directory
+    if parts[-2] == _CASCADE_PARENT:  # layouts 2 + 4 — the cascade: the child IS the namespace
+        # A project-scoped cascade child carries the catalog delimiter (`acme$bronze`), so the tier may
+        # sit on either side of it. Take the first delimiter-separated segment that names one; a plain
+        # child has exactly one segment and reads as before.
+        for segment in leaf.split(CATALOG_DELIMITER):
+            if (tier := _tier_from_either_end(segment)) is not None:
+                return tier
+        return None
+
+    if CATALOG_DELIMITER in leaf:  # layouts 3 + 5 — flat: the namespace is the leaf's own prefix, not a parent directory
         namespace = leaf.split(CATALOG_DELIMITER, 1)[0]
         # Strip the dir backend's uuid8 prefix, once: `aa3bed10_silver` -> `silver`.
-        return _tier_from_namespace(namespace.split("_", 1)[1] if "_" in namespace else namespace)
+        return _tier_from_either_end(namespace.split("_", 1)[1] if "_" in namespace else namespace)
 
-    if parts[-2] == _CASCADE_PARENT:  # layout 2 — the cascade: the child IS the namespace
-        return _tier_from_cascade_namespace(leaf)
-
-    return _tier_from_namespace(parts[-2])  # layout 1 — nested
+    return _tier_from_namespace(parts[-2])  # layout 1 — nested, and the catalog's convention alone
 
 
 def target_rows_for(dataset_uri: str) -> int | None:

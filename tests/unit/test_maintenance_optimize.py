@@ -527,3 +527,94 @@ def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:
     assert features.SUPPORTED_FOR_GC == features.SUPPORTED | features.FLAG_BASE_PATHS
     assert features.describe_gc_unsupported_flags(features.FLAG_BASE_PATHS, features.FLAG_BASE_PATHS) is None
     assert features.describe_unsupported_flags(features.FLAG_BASE_PATHS, features.FLAG_BASE_PATHS) is not None
+
+
+# ---------------------------------------------------------------- the ORDER of the three steps
+
+
+class _RecordingOptimize:
+    """`ds.optimize`, recording WHICH step ran and WHEN rather than only that it ran."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def compact_files(self, **_kw: object) -> object:
+        self._calls.append("compact_files")
+        from types import SimpleNamespace
+
+        return SimpleNamespace(fragments_removed=2, fragments_added=1)
+
+    def optimize_indices(self) -> None:
+        self._calls.append("optimize_indices")
+
+
+class _RecordingDataset:
+    """The narrowest Lance dataset `compact_one` drives. A double, deliberately: the subject is the
+    ORDER of three calls, and a real dataset can only show their effects — from which order is not
+    recoverable (a reclaimed version looks the same whether it was reclaimed before or after the
+    compaction that produced it)."""
+
+    def __init__(self, calls: list[str]) -> None:
+        from types import SimpleNamespace
+
+        self._calls = calls
+        self.optimize = _RecordingOptimize(calls)
+        self.schema = SimpleNamespace(metadata={})
+        self._ds = SimpleNamespace(serialized_manifest=lambda: b"")  # no feature flags set
+
+    def describe_indices(self) -> list[object]:
+        return []
+
+    def list_indices(self) -> list[dict[str, object]]:
+        return []
+
+    def cleanup_old_versions(self, **_kw: object) -> object:
+        from types import SimpleNamespace
+
+        self._calls.append("cleanup_old_versions")
+        return SimpleNamespace(old_versions=1, bytes_removed=64)
+
+
+def test_compact_one_runs_the_three_steps_in_ORDER(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compact -> optimize_indices -> cleanup, asserted as a SEQUENCE.
+
+    This is the function's single load-bearing invariant and it was guarded by prose in three places
+    and by no assertion: `compact_one`'s docstring says the order is "FIXED, not configurable", the
+    inline comment repeats it, and `base_refs.py` builds the whole #114 refusal on compaction and
+    cleanup running as ONE ordered pass. Every existing test over `compact_one` asserts one step's
+    EFFECT, which is order-blind — reversing two steps changes none of those numbers.
+
+    Each step depends on the one before it. Compaction leaves its new fragments unindexed, so index
+    optimization must FOLLOW it or the dataset is left with indices that do not cover the data it
+    just rewrote. Cleanup runs LAST because it reclaims the superseded versions BOTH earlier steps
+    produce; run first it reclaims nothing, and run between them it deletes the versions the index
+    optimization still needs to remap through.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr("maintenance.services.optimize.lance.dataset", lambda *_a, **_k: _RecordingDataset(calls))
+
+    result = compact_one("s3://wh/t.lance", {}, older_than=timedelta(days=7))
+
+    assert result.error is None, result.error
+    assert calls == ["compact_files", "optimize_indices", "cleanup_old_versions"]
+
+
+def test_compact_one_does_not_call_a_DEPRECATED_pylance_api(tmp_path: Path, recwarn: pytest.WarningsRecorder) -> None:
+    """`list_indices` is deprecated on pylance 10 ("Use describe_indices() instead") and the sweep is
+    the estate's most frequent caller of it — every policied dataset, every 120s.
+
+    A deprecation is a REMOVAL notice, and the two calls are not interchangeable at the call site:
+    `list_indices` fans an index out into one dict PER SEGMENT while `describe_indices` returns one
+    object per index, so a straight swap on the day it is removed would silently change the count
+    this pass reports. Migrating now, with the count asserted below, is the cheap moment. The rest of
+    this service already reads `describe_indices` (`index_health.inspect_indices`), so the sweep was
+    also asking Lance the same question twice in two different shapes.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+
+    result = compact_one(uri, {}, older_than=timedelta(days=7))
+
+    assert result.error is None, result.error
+    assert result.indices_optimized == 1, "the migration must not change what the metric counts"
+    deprecated = [w for w in recwarn.list if issubclass(w.category, DeprecationWarning) and "list_indices" in str(w.message)]
+    assert not deprecated, f"compact_one still calls a deprecated pylance API: {[str(w.message) for w in deprecated]}"

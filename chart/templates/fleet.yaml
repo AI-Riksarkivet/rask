@@ -121,6 +121,16 @@ spec:
                 name: {{ $secretName }}
           env:
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
+            {{- /* The storage registry, when a deployment declares one — the same rows explorer.yaml
+                 renders, and for a second consumer: `ingest` resolves a run's declared source
+                 `endpoint` against it (`ingest/objectstore.py`). Without it the fleet sees only the
+                 built-in defaults, so every per-run endpoint override is refused as unregistered —
+                 fail-closed, but a form field that can never be filled in. An unregistered endpoint
+                 is refused rather than read from the deployment's own store, because a bucket of the
+                 same name here would answer and the run would ingest the wrong bytes in silence. */}}
+            {{- with $root.Values.storage }}{{- if .stores }}
+            - { name: RASK_STORES, value: {{ toJson .stores | quote }} }
+            {{- end }}{{- end }}
             {{- if $svc.rayClient }}
             {{- /* Ray token auth (gate 7 / R3): only the services flagged rayClient in
                  .Values.services (compute) get the pair — least

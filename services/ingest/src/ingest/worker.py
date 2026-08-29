@@ -132,9 +132,16 @@ class ChunkOutcome(BaseModel):
 
 
 class Fetcher(Protocol):
-    """Fetches one unit's bytes. A Protocol so a worker is testable without the network."""
+    """Fetches one unit's bytes. A Protocol so a worker is testable without the network.
 
-    async def fetch(self, key: str) -> bytes: ...
+    `source_endpoint` is the object store the RUN declared, taken off the task rather than resolved
+    here — a worker knows a URI and a scheme, never a source. Keyword-only and defaulted because
+    most schemes address no store at all (`http`, `file`) and simply ignore it; it exists because
+    an `s3://` key is meaningless without saying WHICH S3, and the estate default is the wrong
+    answer for a run pointed at an external bucket of the same name.
+    """
+
+    async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes: ...
 
 
 class Validator(Protocol):
@@ -349,7 +356,7 @@ class Worker:
         logger.warning("unit %s failed transiently, redelivering: %s", task.key, exc)
 
     async def _one(self, task: UnitTask) -> tuple[str, bytes] | tuple[None, str]:
-        payload = await self._fetch.fetch(task.key)
+        payload = await self._fetch.fetch(task.key, source_endpoint=task.source_endpoint)
         reason = self._validate.check(task.key, payload)
         if reason is not None:
             return None, reason

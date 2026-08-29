@@ -107,8 +107,6 @@ const WRITE_ROUTES: Record<string, unknown> = {
 	[`POST /v1/table/${TABLE}/drop_columns`]: { version: 4 },
 	[`POST /v1/table/${TABLE}/update_field_metadata`]: { version: 4 },
 	[`POST /v1/table/${TABLE}/schema_metadata/update`]: { version: 4 },
-	// backfill is the async native job — its response is a job_id, not a version
-	[`POST /v1/table/${TABLE}/backfill_column`]: { job_id: 'j1' },
 	[`POST /v1/table/${TABLE}/drop`]: { id: ['db1', 't'] },
 	[`POST /v1/table/${TABLE}/deregister`]: {
 		id: ['db1', 't'],
@@ -698,29 +696,34 @@ test('a 403 row update renders the writer-denied state (#85)', async ({ page }) 
 	await expect(section).toContainText('Denied: row changes need writer access (can_write_data).');
 });
 
-// --- #85 backfill_column: the async columns op beside add/alter/drop ---
+// --- #85 backfill_column: a spec-wired op the DEPLOYED backend does not implement ---
+//
+// Two specs used to live here, and they drove the button through the mock catalog to a seeded
+// `{job_id: "j1"}`. That fixture was the whole problem: `alter_table_backfill_columns` is one of the
+// six ops stubbed in the native `dir` backend the chart pins, so the real catalog answers 501 for
+// every caller on every table (`docs/COVERAGE.md`) — the suite was green about a control that could
+// only ever error in the estate. Both are replaced by the one assertion that is true of the deployed
+// system: the affordance stays visible, carries its reason, and reaches no catalog.
 
-test('backfill posts {column, where} and surfaces the job id (#85)', async ({ page }) => {
+test('the backfill affordance is shown gated, and reaches no catalog (#85)', async ({ page }) => {
 	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
-	await section.getByRole('button', { name: 'backfill id' }).click();
-	await section.getByLabel('backfill id where').fill('id > 0');
-	await section.getByRole('button', { name: 'run' }).click();
-	await expect
-		.poll(() => bodyOf(page, `/v1/table/${TABLE}/backfill_column`))
-		.toEqual({ column: 'id', where: 'id > 0' });
-	// async job — the UI surfaces the job_id (no version to refresh yet)
-	await expect(section).toContainText('Backfill of id started · job j1.');
-});
+	const backfill = section.getByRole('button', { name: 'backfill id' });
 
-test('backfill with no predicate omits the where key (#85)', async ({ page }) => {
-	await page.goto('/lakehouse/catalog/tables/db1%24t');
-	const section = page.locator('section', { hasText: 'Schema' }).first();
-	await section.getByRole('button', { name: 'backfill id' }).click();
-	await section.getByRole('button', { name: 'run' }).click();
-	await expect
-		.poll(() => bodyOf(page, `/v1/table/${TABLE}/backfill_column`))
-		.toEqual({ column: 'id' });
+	// Shown, never hidden — hiding it would teach the reader the capability does not exist.
+	await expect(backfill).toBeVisible();
+	// Gated by @rask/ui's GatedAction: `aria-disabled` on the wrapper, not `disabled` on the button,
+	// so the control keeps hover + focus and its reason stays reachable.
+	await expect(section.locator('[data-slot="gated-action"]').first()).toHaveAttribute(
+		'aria-disabled',
+		'true',
+	);
+
+	await backfill.click({ force: true });
+
+	// No editor opens, and nothing is sent: the click is swallowed by the gate.
+	await expect(section.getByLabel('backfill id where')).toHaveCount(0);
+	await expect.poll(() => callTo(page, `/v1/table/${TABLE}/backfill_column`)).toBeUndefined();
 });
 
 // --------------------------------------------------------------------------- //

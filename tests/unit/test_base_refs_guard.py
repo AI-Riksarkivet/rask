@@ -24,8 +24,8 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from maintenance.services.base_refs import protected_roots
 
+from service_kit.lakehouse.base_refs import protected_roots
 from service_kit.lakehouse.features import manifest_base_paths, manifest_feature_flags
 
 
@@ -267,7 +267,7 @@ def test_the_pre_pass_actually_USES_the_credentials_it_is_given(monkeypatch: pyt
         seen.append({"uri": uri, **kwargs})
         raise RuntimeError("stop here — the call itself is the assertion")
 
-    monkeypatch.setattr("maintenance.services.base_refs.lance.dataset", _fake_dataset)
+    monkeypatch.setattr("lance.dataset", _fake_dataset)
     creds = {"access_key_id": "k", "secret_access_key": "s", "endpoint": "http://rustfs:9000"}
     protected_roots(["s3://bucket/a.lance"], creds)
 
@@ -276,3 +276,43 @@ def test_the_pre_pass_actually_USES_the_credentials_it_is_given(monkeypatch: pyt
     # The #102 bounded session, for the same reason every other maintenance open threads it: without it
     # each dataset mints Lance's default 1 GiB metadata + 6 GiB index caches against a 512Mi pod.
     assert seen[0].get("session") is not None, "the bounded Lance session was not threaded into the open"
+
+
+def test_the_whole_estate_prepass_threads_the_SERVICE_session() -> None:
+    """The pre-pass must use the operator's configured cache caps, not ``base_refs``' own defaults.
+
+    ``MAINTENANCE_LANCE_METADATA_CACHE_MB`` / ``_INDEX_CACHE_MB`` are the cap for a 512Mi pod, and the
+    pre-pass is the one loop that opens EVERY dataset in the estate. ``protected_roots`` MINTS a
+    default-sized session when a caller passes none, so omitting it never failed — it silently ignored
+    the operator's cap and minted a SECOND session competing with the tick's own. That is why this is a
+    source-level pin rather than a behavioural one: at default config ``lance_session`` is ``@cache``d
+    and int-keyed, so the two sessions COINCIDE and no runtime assertion can tell them apart. Only a
+    tuned-down cap diverges, and the bug is invisible until the estate that needs the cap hits it.
+
+    The sibling assertion above (``session is not None``) cannot catch this: an internally-minted
+    session satisfies it.
+    """
+    import ast
+    from pathlib import Path
+
+    for module, func in (("sweep", "run_sweep"), ("purge", None)):
+        src = Path(f"services/maintenance/src/maintenance/services/{module}.py").read_text()
+        calls = [
+            node
+            for node in ast.walk(ast.parse(src))
+            if isinstance(node, ast.Call)
+            and (
+                (isinstance(node.func, ast.Attribute) and node.func.attr == "protected_roots")
+                or (isinstance(node.func, ast.Name) and node.func.id == "protected_roots")
+            )
+        ]
+        assert calls, f"{module}.py no longer calls protected_roots — if the pre-pass moved, move this pin with it"
+        for call in calls:
+            threaded = [kw for kw in call.keywords if kw.arg == "session"]
+            assert threaded, (
+                f"{module}.py calls protected_roots without session= — the operator's MAINTENANCE_LANCE_*_CACHE_MB cap will not reach the whole-estate pre-pass"
+            )
+            assert any(isinstance(n, ast.Name) and n.id == "shared_lance_session" for n in ast.walk(threaded[0].value)), (
+                f"{module}.py threads a session that is not the service's shared_lance_session()"
+            )
+        del func

@@ -77,6 +77,9 @@ log = logging.getLogger(__name__)
 #: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
 #: dispatches on.
 _MAX_LIST_LIMIT = 1000
+#: The default branch every branch-unaware read answers off. The spec's ``branch`` field says "when not
+#: specified, the main branch is used", so a body naming it explicitly asks for what this door already does.
+_MAIN_BRANCH = "main"
 
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
@@ -278,6 +281,7 @@ def describe_table(
     settings: SettingsDep,
     so: StorageOptionsDep,
     vendor: VendorDep,
+    body: DescribeTableRequest | None = None,
     with_table_uri: bool | None = None,
     load_detailed_metadata: bool | None = None,
     check_declared: bool | None = None,
@@ -285,13 +289,28 @@ def describe_table(
     tag: str | None = None,
     vend_credentials: bool | None = None,
 ) -> DescribeTableResponse:
-    """Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``,
-    optionally at ``?version=N`` or ``?tag=<name>`` (spec 0.9: mutually exclusive).
+    """Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``, optionally
+    pinned to a ``version`` or a ``tag`` (spec 0.9: mutually exclusive).
 
-    ``tag`` is resolved to its version HERE via the dataplane's tag store: the native backend at
-    pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 — a nonexistent tag
-    described the LATEST version with no error), so forwarding it would lie; the catalog resolves
+    TWO DOORS, ONE MEANING. The Lance Namespace spec puts ``with_table_uri`` / ``load_detailed_metadata`` /
+    ``check_declared`` in the QUERY and ``version`` / ``tag`` / ``vend_credentials`` in a
+    ``DescribeTableRequest`` BODY (``lance_docs/namespace.md`` §DescribeTable; the generated client's
+    ``_describe_table_serialize`` sends exactly that split). This route once bound all six as bare scalars,
+    so FastAPI made them all query params and the body was dropped unread — a spec-conformant client
+    (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges
+    ``storage_options``) got a location and NO credentials, and any version pin silently read latest.
+    Both forms are now accepted: **a field present in the body wins**, because the body is the spec's form
+    and the query is rask's own older shorthand that its zones and tests still speak. Presence is decided by
+    the JSON keys actually sent, not by the model's defaults. The body is OPTIONAL here (the spec marks it
+    required) so those existing query-only callers keep working — a superset, not a deviation in meaning.
+
+    ``tag`` is resolved to its version HERE via the dataplane's tag store, from either door: the native
+    backend at pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 — a nonexistent
+    tag described the LATEST version with no error), so forwarding it would lie; the catalog resolves
     (404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead.
+
+    ``branch`` (body-only) is REFUSED unless it names main — see the site below. ``identity`` and ``context``
+    are ignored: the caller is the verified bearer token, not a field of the request body.
 
     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
     the SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered
@@ -309,6 +328,33 @@ def describe_table(
     base — the same #3-B ⊥ #2 conflict the credentials endpoint already handles.
     """
     segments = parse_identifier(id, settings.delimiter)
+    if body is not None:
+        # PRESENCE, not value, decides. `DescribeTableRequest` defaults `with_table_uri`/`check_declared`
+        # to False, so merging on the parsed model would let a body carrying only `{"version": 1}` reset a
+        # caller's `?with_table_uri=true` to False. `model_fields_set` is exactly the set of keys the JSON
+        # actually carried, which is the only thing that can tell "sent false" from "not sent".
+        sent = body.model_fields_set
+        segments = reconcile_body_id(segments, body.id)
+        if body.branch is not None and body.branch != _MAIN_BRANCH:
+            # This door describes main: `describe_table` answers off the namespace manifest, which has no
+            # branch selector, and the branch-aware read lives in the dataplane (`open_dataset(branch=...)`).
+            # Refusing is the point — SILENTLY describing main for a caller who pinned a branch is the same
+            # class of wrong-but-plausible answer as the ignored `version` this door used to give.
+            raise InvalidInputError(f"`branch` is not supported by describe (got {body.branch!r}); use the branch operations under /v1/table/{{id}}/branches")
+        # `identity` and `context` are deliberately NOT honoured: the caller is the bearer token the router
+        # already verified, and letting a request body name a principal would be an impersonation door.
+        if "with_table_uri" in sent:
+            with_table_uri = body.with_table_uri
+        if "load_detailed_metadata" in sent:
+            load_detailed_metadata = body.load_detailed_metadata
+        if "check_declared" in sent:
+            check_declared = body.check_declared
+        if "version" in sent:
+            version = body.version
+        if "tag" in sent:
+            tag = body.tag
+        if "vend_credentials" in sent:
+            vend_credentials = body.vend_credentials
     if tag is not None:
         if version is not None:
             raise InvalidInputError("`tag` cannot be used together with `version` (spec 0.9)")

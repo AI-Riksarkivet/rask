@@ -13,15 +13,25 @@ every other lane wrote ungoverned bytes. Nothing in the logic was ever workload-
 an id and a URI. Governance belongs to the CASCADE, or every new workload starts ungoverned by
 default — the exact opposite of an agnostic platform.
 
-Register — not create-through-the-catalog. The mover owns where it WRITES (the cascade's standing
-rule) and `register_table` exists precisely for data written outside the catalog's own doors.
-Idempotent by treating 409 as success: the stage is overwrite-idempotent and re-registers on every
-redelivery; the FIRST registration is the one that seeds ownership.
+THE MOVER ASKS THE CATALOG, IT DOES NOT TELL IT — and this paragraph said the opposite for as long
+as that was true. It read "Register — not create-through-the-catalog. The mover owns where it
+WRITES", which described the ORIGINAL `register_stage_output` shape: compose `{root}/medallion/
+{tier}`, write there, then register the path after the fact. That ordering was the defect (I2 on the
+write side): the catalog's binding said somewhere else, so the publish that followed opened the
+catalog's answer and found nothing. `ensure_stage_output` — the seam every mover calls now — DOES
+create through the catalog's own door (`POST /v1/table/{id}/create` when `describe` 404s) and takes
+the location from that response, and `transform.py` calls it BEFORE the write. Registration is still
+the goal; asking first is how the goal is reached.
 
-The location must be RELATIVE to the catalog's connection root — the #75 undrop lesson, learned
-the hard way: `register_table` refuses absolute URIs on the `dir` backend. A `to_uri` outside the
-root cannot be expressed relatively and raises here, naming both, rather than letting the catalog
-answer an opaque 400.
+THE TELLING-AFTER-THE-FACT FORM IS GONE. `register_stage_output` — compose a path, write there,
+then register it — outlived its last caller when the ordering above was fixed, and a door only tests
+open is not a door: three suites went on stubbing it, which reads as coverage and is none. Deleted
+with `relative_location` (the catalog's connection root is only expressible for a path this module
+composed) and the `MEDALLION_CATALOG_ROOT` setting that fed it. Two lessons it carried are now
+STRUCTURAL rather than enforced: a mover cannot mint a top-level namespace, because no namespace
+call remains here; and a registration cannot disagree with where the stage wrote, because the stage
+writes where `ensure_stage_output` said. Bytes written outside the catalog entirely still belong at
+the catalog's own register door — reached from wherever that writing happens, not from a mover.
 """
 
 from __future__ import annotations
@@ -49,17 +59,6 @@ class RegisterError(RuntimeError):
     catalog outage is rarer than a Serve one; splitting the stage into resumable halves is P7b's
     re-cut, not a quiet retry layer here.
     """
-
-
-def relative_location(to_uri: str, catalog_root: str) -> str:
-    """``to_uri`` expressed relative to the catalog's connection root, or raise naming both."""
-    root = catalog_root.rstrip("/")
-    if not root or not to_uri.startswith(root + "/"):
-        raise RegisterError(
-            f"cannot register {to_uri!r}: not under the catalog root {catalog_root!r} "
-            "(MEDALLION_CATALOG_ROOT must be the catalog's own connection root — the dir backend refuses absolute locations)"
-        )
-    return to_uri[len(root) + 1 :]
 
 
 def _credential(
@@ -98,71 +97,6 @@ def _credential(
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def register_stage_output(
-    *,
-    catalog_url: str,
-    catalog_root: str,
-    table_id: str,
-    to_uri: str,
-    delimiter: str = CATALOG_DELIMITER,
-    token: str | None = None,
-    app_token: str | None = None,
-    service_identity: str | None = None,
-    dedicated_token: Callable[[str], str | None] | None = None,
-    timeout_seconds: float = 30.0,
-    client: httpx.Client | None = None,
-) -> None:
-    """Register the just-written dataset as ``table_id``; 409 means already governed.
-
-    ``catalog_url`` empty raises naming the env var — the same fail-at-the-seam rule as the
-    transcribe endpoint: a lane whose output the catalog cannot govern must not report success.
-    """
-    if not catalog_url:
-        raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot register its output table")
-    location = relative_location(to_uri, catalog_root)
-    segments = table_id.split(delimiter)
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
-    with _catalog_client(catalog_url, timeout_seconds, client) as client:
-        # Creates are top-down (the catalog's require_parent guard, live-verified: registering into
-        # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier
-        # namespaces, so the lane ensures its parent exists rather than demanding a manual
-        # provisioning step nobody documented. 409 = already there, the steady state.
-        # A TOP-LEVEL parent is the WAREHOUSE's to create, never this lane's. `require_warehouse_scoped`
-        # refuses one outright — and it runs BEFORE the existence check, so an already-existing `silver`
-        # answers 400, not the 409 this treats as the steady state. Measured in-cluster on the first run
-        # register ever made: every hop dead-lettered on that 400. A missing top-level namespace is an
-        # operator's problem, stated by the register call's own error rather than papered over here.
-        parent_segments = segments[:-1]
-        parent = delimiter.join(parent_segments) if len(parent_segments) > 1 else ""
-        if parent:
-            try:
-                ns = client.post(f"/v1/namespace/{parent}/create", json={"id": segments[:-1]}, headers=headers)
-            except httpx.HTTPError as exc:
-                raise RegisterError(f"catalog unreachable creating parent namespace {parent!r}: {exc}") from exc
-            if ns.status_code not in (200, 201, 409):
-                raise RegisterError(f"catalog refused parent namespace {parent!r}: HTTP {ns.status_code} — {ns.text[:200]}")
-        try:
-            response = client.post(f"/v1/table/{table_id}/register", json={"id": segments, "location": location}, headers=headers)
-        except httpx.HTTPError as exc:
-            raise RegisterError(f"catalog unreachable registering {table_id!r}: {exc}") from exc
-        if response.status_code == 409:
-            # Already registered — every redelivery after the first lands here. But "already
-            # registered" is not "registered WHERE I am writing", and the difference is invisible
-            # from this side. Measured live: `silver$features` was registered at
-            # `s3://bind86-wh/...` (a leftover warehouse) while the mover wrote to
-            # `s3://lance-catalog/...`. The 409 read as convergence, the publish that followed
-            # opened the stale location, found nothing there and 500'd — and the rows this stage
-            # really wrote were governed as living somewhere they did not.
-            #
-            # Inside the `with`: the check reuses this client rather than opening a second pool.
-            _require_same_location(client, table_id, location, catalog_root, headers)
-            log.info("stage_output_already_registered", extra={"table_id": table_id})
-            return
-    if response.status_code >= 400:
-        raise RegisterError(f"catalog refused to register {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
-    log.info("stage_output_registered", extra={"table_id": table_id, "location": location})
-
-
 class PublishOutcome(BaseModel):
     """What the catalog decided about a version the mover just wrote.
 
@@ -176,39 +110,6 @@ class PublishOutcome(BaseModel):
     to_version: int | None = None
     failed_assertions: list[str] = Field(default_factory=list)
     accepted: list[str] = Field(default_factory=list)
-
-
-def _require_same_location(
-    client: httpx.Client,
-    table_id: str,
-    location: str,
-    catalog_root: str,
-    headers: dict[str, str],
-) -> None:
-    """Refuse a 409 whose registration points somewhere other than where this stage wrote.
-
-    An unreadable describe is NOT agreement: a check that cannot be made has not passed, and treating
-    it as one restores the exact silence this closes.
-    """
-    # The CALLER's open client, not a second one: a fresh `httpx.Client` re-opens the connection pool,
-    # so verifying a 409 was costing a second pool inside the first one's `with`.
-    try:
-        described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
-    except httpx.HTTPError as exc:
-        raise RegisterError(f"catalog unreachable verifying where {table_id!r} is registered: {exc}") from exc
-    if described.status_code >= 400:
-        raise RegisterError(
-            f"{table_id!r} is already registered but the catalog would not say where "
-            f"(HTTP {described.status_code}) — refusing to assume it matches {location!r}"
-        )
-    registered = str((described.json() or {}).get("location") or "")
-    expected = f"{catalog_root.rstrip('/')}/{location.lstrip('/')}"
-    if registered.rstrip("/") != expected.rstrip("/"):
-        raise RegisterError(
-            f"{table_id!r} is registered at {registered!r} but this stage wrote {expected!r} — "
-            "the catalog governs a different copy of this table. Re-point the registration (deregister "
-            "then register at the written location) rather than letting the two drift."
-        )
 
 
 def publish_stage_output(

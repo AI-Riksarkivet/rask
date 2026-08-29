@@ -3,7 +3,15 @@
 	// sortable columns, a text search, and a medallion STAGE filter (goal cond 3 — the stage is
 	// derived from the namespace segment, shown as a tier badge per row). Same stack-mode states as
 	// before: governed without a session ⇒ sign-in, unreachable ⇒ retrying, open ⇒ data or the
-	// honest empty state. The #85 "Declare table" form (the browser-shaped create) is preserved.
+	// honest empty state.
+	//
+	// THE #85 "Declare table" FORM NOW HAS ITS SECOND HALF. Declaring reserves an id and writes no
+	// bytes, and nothing in the zone could put the first rows in: the append door (`insertRows`)
+	// opens the table's dataset to coerce the batch, so it 404s for a table that has none yet. The
+	// row field below sends the same submit through the catalog's create door instead, which lands
+	// the first data version into a declared-only table's already-reserved location — so declare and
+	// fill are two visits to one form rather than a dead end. This is the ONLY surface where that can
+	// live: a declared-only table has no dataset to describe, so its detail page is not reachable.
 	import {
 		createSvelteTable,
 		DataTable,
@@ -23,6 +31,8 @@
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
+	import { tableFromJSON, tableToIPC } from 'apache-arrow';
+	import { createTableWithRows } from './catalog';
 	import { declareTable, fetchTables } from './remote/catalog.remote';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
@@ -39,13 +49,20 @@
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
+	// What a BARE declare leaves behind, said where the user decides to make one — the dead end was
+	// not only missing a door, it was silent about being a dead end.
+	const DECLARE_ONLY_NOTE =
+		'Left empty, this reserves the name and writes no data: the table has no version, no schema and no detail page until its first write, and appending rows to it is refused. Come back here with the same namespace and name to land that first version.';
+
 	// #85 declare-table form state — hidden behind a toggle so the registry stays a list by default.
 	let declaring = $state(false);
 	let declNs = $state('');
 	let declName = $state('');
 	let declLocation = $state(''); // optional — empty means the catalog picks the location
+	let declRows = $state(''); // optional — a JSON array of row objects turns this into a create
 	let declBusy = $state(false);
 	let declMsg = $state<{ ok: boolean; text: string } | null>(null);
+	const hasRows = $derived(declRows.trim().length > 0);
 
 	async function load(): Promise<void> {
 		const res = await fetchTables();
@@ -66,6 +83,26 @@
 	// still honest.
 	liveRead(lineageTick, () => load());
 
+	/** The refusal wording both submit paths share — one denial, worded once. */
+	function declFail(verb: string, ns: string, status: number, detail: string): void {
+		if (status === 401) declMsg = { ok: false, text: `Sign in to ${verb} a table.` };
+		else if (status === 403)
+			declMsg = {
+				ok: false,
+				text: `Denied: ${verb === 'create' ? 'creating' : 'declaring'} in ${ns} needs create access (can_create_table).`,
+			};
+		else if (status === 0)
+			declMsg = { ok: false, text: `Catalog unreachable — the ${verb} was not applied.` };
+		else declMsg = { ok: false, text: detail };
+	}
+
+	function clearDeclareForm(): void {
+		declNs = '';
+		declName = '';
+		declLocation = '';
+		declRows = '';
+	}
+
 	async function runDeclare(): Promise<void> {
 		const ns = declNs.trim();
 		const name = declName.trim();
@@ -81,30 +118,73 @@
 			if (res.ok) {
 				declMsg = {
 					ok: true,
-					text: `declared ${ns}$${name}${res.data.location ? ` @ ${res.data.location}` : ''}`,
+					// The reservation is real but EMPTY, and saying only "declared" is what sent people to a
+					// 404 detail page next. State what exists and what does not.
+					text: `declared ${ns}$${name}${res.data.location ? ` @ ${res.data.location}` : ''} — no data yet. ${DECLARE_ONLY_NOTE}`,
 				};
-				declNs = '';
-				declName = '';
-				declLocation = '';
+				clearDeclareForm();
 				await load(); // pull the declared table into the registry
-			} else if (res.status === 401) {
-				declMsg = { ok: false, text: 'Sign in to declare a table.' };
-			} else if (res.status === 403) {
-				declMsg = {
-					ok: false,
-					text: `Denied: declaring in ${ns} needs create access (can_create_table).`,
-				};
-			} else if (res.status === 0) {
-				declMsg = { ok: false, text: 'Catalog unreachable — the declare was not applied.' };
-			} else {
-				declMsg = { ok: false, text: res.detail };
-			}
+			} else declFail('declare', ns, res.status, res.detail);
 		} catch (err) {
 			// the parse boundary throws on a wire-contract drift — surface it, never render from a lie
 			declMsg = { ok: false, text: `declare response drifted from the contract: ${String(err)}` };
 		} finally {
 			declBusy = false;
 		}
+	}
+
+	/** The first write: create the table FROM the typed rows. Serves a brand-new id and a previously
+	 *  declared one identically — the catalog lands the first data version into whichever location the
+	 *  id already holds, which is why `location` is not sent here and is ignored when rows are given. */
+	async function runCreateWithRows(): Promise<void> {
+		const ns = declNs.trim();
+		const name = declName.trim();
+		if (declBusy || !ns || !name) return;
+		let rows: Record<string, unknown>[];
+		try {
+			const parsed: unknown = JSON.parse(declRows);
+			if (!Array.isArray(parsed) || parsed.length === 0) {
+				throw new Error('expected a non-empty JSON array of row objects');
+			}
+			rows = parsed as Record<string, unknown>[];
+		} catch (e) {
+			declMsg = {
+				ok: false,
+				text: `Invalid rows: ${e instanceof Error ? e.message : String(e)}`,
+			};
+			return;
+		}
+		declBusy = true;
+		declMsg = null;
+		try {
+			// Browser-side Arrow-IPC encode (apache-arrow), exactly as the detail page's insert does —
+			// the inferred schema BECOMES the table's schema on a create.
+			const arrow = tableToIPC(tableFromJSON(rows), 'stream');
+			const res = await createTableWithRows(`${ns}$${name}`, arrow);
+			if (res.ok) {
+				declMsg = {
+					ok: true,
+					text: `Created ${ns}$${name} with ${rows.length} row${rows.length === 1 ? '' : 's'}.`,
+				};
+				clearDeclareForm();
+				// EXPLICIT refresh, unlike the declare path. `declareTable` is a remote command and
+				// single-flights `fetchTables().refresh()` on the zone server; this write is a keep-bytes
+				// BFF route, so nothing invalidates the query cache for it — `load()` alone would re-read
+				// the CACHED list and the new table would not appear until something else advanced the
+				// live cursor. (Caught by the e2e, which was flaky exactly as often as the cursor ticked.)
+				await fetchTables().refresh();
+				await load();
+			} else declFail('create', ns, res.status, res.detail);
+		} catch (e) {
+			declMsg = { ok: false, text: `Encode failed: ${e instanceof Error ? e.message : String(e)}` };
+		} finally {
+			declBusy = false;
+		}
+	}
+
+	function submitDeclareForm(): void {
+		if (hasRows) void runCreateWithRows();
+		else void runDeclare();
 	}
 
 	// ── the DataTable (goal cond 4) ──
@@ -229,25 +309,50 @@
 	</header>
 
 	{#if declaring && !unauthorized}
-		<!-- #85 the browser-shaped create: declare an empty table (JSON, no Arrow). -->
+		<!-- #85 the browser-shaped create. Empty rows → declare (JSON, no Arrow): the id is reserved and
+		     nothing is written. Rows → create: the browser encodes them to Arrow IPC and the catalog
+		     lands the table's first data version, whether or not the id was declared earlier. -->
 		<form
 			class="declare"
 			onsubmit={(e) => {
 				e.preventDefault();
-				runDeclare();
+				submitDeclareForm();
 			}}
 		>
-			<input class="mono" bind:value={declNs} placeholder="namespace" aria-label="Namespace" />
-			<input class="mono" bind:value={declName} placeholder="table name" aria-label="Table name" />
-			<input
-				class="mono loc"
-				bind:value={declLocation}
-				placeholder="location (optional — catalog picks)"
-				aria-label="Location"
-			/>
-			<button class="btn" type="submit" disabled={declBusy || !declNs.trim() || !declName.trim()}>
-				{declBusy ? '…' : 'Declare'}
-			</button>
+			<div class="row">
+				<input class="mono" bind:value={declNs} placeholder="namespace" aria-label="Namespace" />
+				<input
+					class="mono"
+					bind:value={declName}
+					placeholder="table name"
+					aria-label="Table name"
+				/>
+				<input
+					class="mono loc"
+					bind:value={declLocation}
+					placeholder="location (optional — catalog picks)"
+					aria-label="Location"
+					disabled={hasRows}
+					title={hasRows
+						? 'Ignored when rows are given: the create lands into the location the id already holds.'
+						: undefined}
+				/>
+			</div>
+			<textarea
+				class="mono rows"
+				bind:value={declRows}
+				placeholder={'rows (optional) — [{ "id": 1, "name": "a" }]'}
+				aria-label="Initial rows"></textarea>
+			<p class="hint">
+				{hasRows
+					? 'The rows are encoded to Arrow and become the schema and first version of this table.'
+					: DECLARE_ONLY_NOTE}
+			</p>
+			<div class="row">
+				<button class="btn" type="submit" disabled={declBusy || !declNs.trim() || !declName.trim()}>
+					{declBusy ? '…' : hasRows ? 'Create with rows' : 'Declare'}
+				</button>
+			</div>
 		</form>
 	{/if}
 	{#if declMsg}
@@ -369,11 +474,17 @@
 	}
 	.declare {
 		display: flex;
-		flex-wrap: wrap;
+		flex-direction: column;
 		gap: 8px;
 		margin-bottom: 12px;
 	}
-	.declare input {
+	.declare .row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.declare input,
+	.declare textarea {
 		background: var(--panel-2);
 		border: 1px solid var(--line);
 		border-radius: var(--radius-sm);
@@ -381,9 +492,21 @@
 		font-size: 12px;
 		padding: 4px 8px;
 	}
+	.declare input:disabled {
+		opacity: 0.5;
+	}
 	.declare .loc {
 		flex: 1;
 		min-width: 220px;
+	}
+	.declare .rows {
+		min-height: 56px;
+		resize: vertical;
+	}
+	.hint {
+		margin: 0;
+		color: var(--faint);
+		font-size: 12px;
 	}
 	.btn {
 		background: var(--panel-2);

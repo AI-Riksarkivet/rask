@@ -50,7 +50,6 @@ def _settings(tmp_path: Path, **over: Any) -> MedallionSettings:
         "MEDALLION_PUB_TOPIC": "medallion.silver",
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_CATALOG_URL": "http://catalog.test",
-        "MEDALLION_CATALOG_ROOT": "s3://lance-catalog",
         "MEDALLION_FROM_URI": str(tmp_path / "bronze.lance"),
         "MEDALLION_TO_URI": str(tmp_path / "composed.lance"),
     }
@@ -113,23 +112,29 @@ class TestWithoutACatalog:
 
 
 class TestThereIsNothingLeftToRegister:
-    """`ensure_stage_output` CREATES the table, which registers it. Registering again afterwards is
-    not merely redundant — under per-tenant routing it reintroduces the P0 it was part of.
+    """`ensure_stage_output` CREATES the table, which registers it. Registering again afterwards was
+    not merely redundant — under per-tenant routing it reintroduced the P0 it was part of: the old
+    `register_stage_output` resolved the location against a single hardwired `MEDALLION_CATALOG_ROOT`,
+    while a tenant's vended location lives in that tenant's warehouse (`s3://acme-bucket/<hash>_silver$features`),
+    so the call raised AFTER the Lance write had committed — ungoverned bytes plus a poison retry no
+    redelivery could clear.
 
-    `register_stage_output` calls `relative_location(to_uri, MEDALLION_CATALOG_ROOT)`, and that root is
-    a single hardwired bucket. The vended location for a tenant lives in that tenant's warehouse —
-    `s3://acme-bucket/<hash>_silver$features` — which is not under it, so the call raises AFTER the
-    Lance write has committed: ungoverned bytes plus a poison retry no redelivery can clear.
+    THE ASSERTION IS NOW STRUCTURAL. That door has been deleted, so the mover cannot make the call
+    even by mistake, and a test that stubbed it would be stubbing nothing. What is left worth pinning
+    is the property the deletion bought: resolving the location is the LAST catalog call before the
+    write, and no second call re-states where the table lives.
     """
 
-    def test_the_mover_does_not_register_after_asking(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
-        registered: list[Any] = []
-        monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **k: registered.append(k))
-        monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
+    def test_the_mover_makes_no_catalog_call_that_RE_STATES_the_location(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
+        from medallion.services import catalog_register
+
+        assert not hasattr(catalog_register, "register_stage_output"), (
+            "the telling-after-the-fact door is back; a mover that both asks and tells has two answers for where its table lives"
+        )
+
+        asked: list[dict[str, Any]] = []
+        monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **k: asked.append(k) or str(upstream / "vended.lance"))
 
         asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream), _event()))
 
-        assert registered == [], (
-            "the mover registered a table the catalog had just created for it — under per-tenant "
-            "routing that call raises on a vended location outside MEDALLION_CATALOG_ROOT"
-        )
+        assert len(asked) == 1, f"the location was resolved {len(asked)} times for one write"

@@ -76,7 +76,6 @@ def published(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
         return PublishOutcome(published=True, from_version=1, to_version=2)
 
     monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _publish)
-    monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **_: None)
     # The mover now ASKS the catalog where to write before writing. Without this the fixture's
     # catalog URL would make a real HTTP call; the stub hands back a path under tmp_path so the
     # compute still lands somewhere writable.
@@ -115,7 +114,6 @@ class TestARefusalBecomesTheHold:
     def test_a_refused_publish_stops_the_cascade_and_names_its_assertions(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
         holds: list[Any] = []
 
-        monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **_: None)
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
         monkeypatch.setattr(
             transform.catalog_register,
@@ -154,7 +152,6 @@ class TestTheDefaultIsUntouched:
         through the catalog or it does not promote.
         """
         called: list[Any] = []
-        monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **_: None)
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
         monkeypatch.setattr(transform.catalog_register, "publish_stage_output", lambda **k: called.append(k))
         dapr = _Dapr()

@@ -239,7 +239,7 @@ async def search_post(
     dataset: Annotated[str | None, Query(description="Dataset id (default DB when omitted)")] = None,
     table: Annotated[str | None, Query(description="Searchable table name (the corpus default when omitted)")] = None,
 ) -> list[dict[str, Any]]:
-    await require_search(state, dataset, subject=subject, checker=checker, settings=settings)
+    await require_search(state, dataset, table=table, subject=subject, checker=checker, settings=settings)
     image_bytes = None
     if image is not None:
         # Bound the read so a large multipart part can't be buffered whole
@@ -284,7 +284,7 @@ def _run_similar(state: AppState, spec: SimilarSpec, dataset: str | None, table:
         # still rank. Here it is the only leg, so absent means the request cannot be answered.
         raise ValidationError(f"vector table {binding.table!r} could not be opened")
 
-    where = key_predicate(spec.key, target.key_fields)
+    where = key_predicate(handle.descriptor.declared, spec.key)
     vec = seed_vector(vec_tbl, where=where, column=binding.column)
 
     hits = vector_search(
@@ -346,7 +346,7 @@ async def search_similar(
     # AUTHORIZED BEFORE THE SEED IS READ. This route takes a raw SQL `where` ANDed into the query
     # (open_python-audit VS-13 names that as the sharp edge of the service having no authz at all);
     # the predicate stays — `duration > 60` is a real feature — but it can now only ever run against
-    # a corpus this caller may read.
-    await require_search(state, dataset, subject=subject, checker=checker, settings=settings)
+    # the corpus TABLE this caller may read — `table=`, the same one `_run_similar` resolves rows from.
+    await require_search(state, dataset, table=table, subject=subject, checker=checker, settings=settings)
     spec = SimilarSpec(key=key, n=n, space=space, where=where)
     return await run_in_threadpool(_run_similar, state, spec, dataset, table)

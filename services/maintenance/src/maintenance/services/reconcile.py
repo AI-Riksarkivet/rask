@@ -317,7 +317,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter:
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
     manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
     table = dataset.to_table(columns=["object_id", "object_type"])
     return sorted(
         {

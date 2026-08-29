@@ -157,6 +157,29 @@ class ExternalBaseOf(Protocol):
 
 
 @runtime_checkable
+class EndpointOf(Protocol):
+    """The object-store ENDPOINT this run's bytes are on, or None for the deployment's own store.
+
+    Registered beside the adapter for the same reason `partition_of` and `external_base_of` are:
+    only the adapter knows what its `options` mean, and `publish_chunk_units` reading
+    `options["endpoint"]` itself would put one kind's option name into the plane's publish path —
+    the coupling I1 removed.
+
+    It exists because the answer has to CROSS THE QUEUE. `s3-prefix` advertised an `endpoint` option
+    that only its enumeration half ever read: the worker built its client from
+    `RASK_S3_ENDPOINT_URL`, so a run pointed at an external store was fetched from the estate's own
+    — every unit onto the DLQ at best, and at worst a same-named local bucket answering under an
+    external `source_uri` with no error at all. The declared endpoint now travels on `UnitTask` and
+    the fetcher resolves it (`ingest.objectstore`).
+
+    Returning None is the ordinary answer: `local-dir` and `lance-append` address no object store,
+    and an `s3-prefix` run that declares no override stays on the deployment default.
+    """
+
+    def __call__(self, spec: SourceSpec) -> str | None: ...
+
+
+@runtime_checkable
 class FetcherFactory(Protocol):
     """How this kind turns one unit KEY into bytes, when a URI scheme cannot say it.
 
@@ -181,9 +204,14 @@ class Fetcher(Protocol):
 
     `worker` imports from `sources`; re-importing it back would make the cycle that `TYPE_CHECKING`
     blocks elsewhere in this file exist at runtime.
+
+    STRUCTURALLY IDENTICAL is a requirement, not an observation: `drain_chunk_units` passes a
+    `fetcher_for(...)` result straight into `Worker`, so the two signatures diverging is a type
+    error at that seam — which is exactly what caught `source_endpoint` being added to one and not
+    the other.
     """
 
-    async def fetch(self, key: str) -> bytes: ...
+    async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes: ...
 
 
 class _Registration(BaseModel):
@@ -196,6 +224,7 @@ class _Registration(BaseModel):
     partition_of: PartitionOf | None = None
     fetcher: FetcherFactory | None = None
     external_base_of: ExternalBaseOf | None = None
+    endpoint_of: EndpointOf | None = None
     unusable: UnusableReason | None = None
 
 
@@ -213,6 +242,7 @@ def register(
     partition_of: PartitionOf | None = None,
     fetcher: FetcherFactory | None = None,
     external_base_of: ExternalBaseOf | None = None,
+    endpoint_of: EndpointOf | None = None,
     unusable: UnusableReason | None = None,
 ) -> None:
     """Register a source kind. Called at import time by the adapter modules themselves.
@@ -232,6 +262,7 @@ def register(
         partition_of=partition_of,
         fetcher=fetcher,
         external_base_of=external_base_of,
+        endpoint_of=endpoint_of,
         unusable=unusable,
     )
 
@@ -282,6 +313,22 @@ def external_base_for(spec: SourceSpec) -> str | None:
     if reg is None or reg.external_base_of is None:
         return None
     return reg.external_base_of(spec)
+
+
+def source_endpoint_for(spec: SourceSpec) -> str | None:
+    """The object-store endpoint this run declared, as the ADAPTER reads its own options.
+
+    Carried onto every `UnitTask` by `publish_chunk_units`, so a worker can honour it without ever
+    seeing the source spec — the same shape as `partition_key_for`, and for the same reason: the
+    worker resolves units by URI scheme and must not learn what a kind's options are called.
+
+    An unknown kind answers None, not an error: an older build's chunk can name a kind this process
+    no longer registers, and the honest answer for it is the deployment default.
+    """
+    reg = _REGISTRY.get(spec.kind)
+    if reg is None or reg.endpoint_of is None:
+        return None
+    return reg.endpoint_of(spec)
 
 
 def fetcher_for(kind: str) -> Fetcher | None:

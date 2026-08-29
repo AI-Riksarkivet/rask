@@ -20,8 +20,8 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
-from maintenance.services.base_refs import BaseRefs
 from maintenance.services.index_health import inspect_indices
+from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
     describe_gc_unsupported_flags,
     describe_unsupported_flags,
@@ -177,7 +177,7 @@ def compact_one(
     try:
         # The shared bounded session (#102): per-tick reopens are correct for a mutating pass, but
         # each must not mint-and-discard gigabyte-scale default caches.
-        ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+        ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
         # Read the flags inside the same guard: a manifest we cannot PARSE is a dataset we could not
         # read, which is exactly what `open:` means. Refusing on it would be a lie (we know nothing
         # about its layout), and maintaining it would be the shallow-clone mistake again.
@@ -202,9 +202,29 @@ def compact_one(
     # (pylance 9.0.0). `optimize_indices` writes a delta into the clone's own root and leaves the base
     # byte-identical.
     #
-    # So flag 16 gates COMPACTION alone — not for safety but for cost: compacting a clone silently
+    # So flag 16 gates COMPACTION alone — not for safety but for cost: compacting a CLONE silently
     # materialises the shared data into its own root (1,072 -> 108,199 bytes against a 119,693-byte
     # base), defeating the point of cloning. A refusal that says so beats doing it behind someone's back.
+    #
+    # THE COST OF THAT REFUSAL IS OPEN, AND IT IS THE INGEST TIER. Two different layouts set flag 16
+    # and only the clone was measured: the other is a bronze table whose base is the external blob
+    # prefix its payload bytes already live at (`ingest/lander.py::create_empty` registers one through
+    # `initial_bases`). Its own data files are its own, so compacting it copies nothing — measured on
+    # pylance 10.0.0 as 4 fragments -> 1, every row still readable, the base untouched — yet it is
+    # refused here, so the estate's widest-rowed, most-fragmented tier accumulates fragments forever
+    # while this pass reports a clean pass over it.
+    #
+    # NOT WIDENED, because the manifest cannot carry the distinction that would make it safe.
+    # `service_kit.lakehouse.features.describe_compaction_unsupported_flags` separates a CLONE from a
+    # non-clone base (`BasePath.is_dataset_root`, measured), and that much is decidable. What is not
+    # is the non-clone half: `initial_bases` (an external blob prefix, no Lance data file will ever
+    # live there) and `add_bases` (a registered ALTERNATE base a later write may place data files
+    # under) produce BYTE-IDENTICAL manifest entries — verified on pylance 10.0.0 — and this service
+    # already refuses the second on purpose
+    # (`tests/unit/test_maintenance_optimize.py::test_compaction_refuses_a_registered_but_unused_base`,
+    # whose stated reason is exactly "the very next write can land under that base"). Permitting one
+    # permits the other. Which way that goes is an owner's call, not a gate's; until it is made this
+    # keeps the strict flags-only refusal.
     gc_refusal = describe_gc_unsupported_flags(reader_flags, writer_flags)
     if gc_refusal is not None:
         log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": gc_refusal})
@@ -234,7 +254,7 @@ def compact_one(
         # index maintenance "no longer conflict" (lance_docs/guide.md:3150) — cuts the CommitConflict class
         # of maintain: failures at the source. The optimize_indices() right below folds the compacted
         # fragments into the indices; the interplay is pinned by
-        # tests/unit/test_compaction_optimize.py::test_compact_one_defer_index_remap_keeps_indices_working.
+        # tests/unit/test_maintenance_optimize.py::test_compact_one_defer_index_remap_keeps_indices_working.
         # #76 target-size tuning: the #50 policy's target_rows_per_fragment (None → Lance default sizing).
         size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
         # Rows are not a unit of memory — see the docstring. Passed to BOTH compaction attempts below,
@@ -296,7 +316,14 @@ def compact_one(
                 # must report 0 rather than the number of indices that happen to exist. Reporting a
                 # count for a step that did not run is the same dishonesty as a toast built from the
                 # request instead of the response.
-                result.indices_optimized = len([ix for ix in ds.list_indices() if not ix["name"].startswith("__")])
+                #
+                # `describe_indices`, not the DEPRECATED `list_indices` pylance 10 warns on: the two do
+                # not agree at this call site, so waiting for the removal would have silently changed
+                # the number. `list_indices` fans an index out into one dict PER SEGMENT (its own body
+                # is a nested comprehension over `describe_indices()`), so a delta-heavy index counted
+                # several times; one object per index is what "indices optimized" has always meant.
+                # It is also the shape `index_health.inspect_indices` already reads two lines below.
+                result.indices_optimized = len([ix for ix in ds.describe_indices() if not str(ix.name).startswith("__")])
                 # #60 — AFTER the optimize, ask what it did NOT fix. `indices_optimized` counts the
                 # call; these are the states that survive it (rows still unindexed, delta fan-out, a
                 # column with no index at all), each of which degrades queries to a full scan while

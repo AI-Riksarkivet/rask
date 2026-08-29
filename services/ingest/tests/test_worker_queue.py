@@ -51,9 +51,12 @@ class _StubFetcher:
         self.fail = fail or set()
         self.corrupt = corrupt or set()
         self.fetched: list[str] = []
+        #: The object store each unit named — None for a run on the deployment's own.
+        self.endpoints: list[str | None] = []
 
-    async def fetch(self, key: str) -> bytes:
+    async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes:
         self.fetched.append(key)
+        self.endpoints.append(source_endpoint)
         if key in self.fail:
             raise RuntimeError(f"transient failure for {key}")
         if key in self.corrupt:

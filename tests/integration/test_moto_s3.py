@@ -463,6 +463,35 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
     assert both.status_code == 400, both.text  # spec 0.9: tag and version are mutually exclusive
 
 
+def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestClient) -> None:
+    """Against REAL bytes: the spec puts `version`/`tag`/`vend_credentials` in the request BODY, and this
+    route once bound them as query params only — so a generic client's pin was read, ignored, and answered
+    with the latest version. The mock-namespace tests assert what we hand the backend; this one asserts the
+    version that actually comes back off disk."""
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert _create(moto_client, "dbody$t", rows).status_code == 200
+    assert (
+        moto_client.post(
+            "/v1/table/dbody$t/insert?mode=append",
+            content=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
+            headers=ARROW,
+        ).status_code
+        == 200
+    )  # → v2 on disk; v1 is history
+    assert moto_client.post("/v1/table/dbody$t/tags/create", json={"tag": "stable", "version": 1}).status_code == 200
+
+    pinned = moto_client.post("/v1/table/dbody$t/describe", json={"version": 1, "load_detailed_metadata": True})
+    assert pinned.status_code == 200, pinned.text
+    assert pinned.json()["version"] == 1  # the PINNED version, not the latest
+
+    tagged = moto_client.post("/v1/table/dbody$t/describe", json={"tag": "stable", "load_detailed_metadata": True})
+    assert tagged.status_code == 200, tagged.text
+    assert tagged.json()["version"] == 1  # a body tag resolves exactly like the query tag
+
+    latest = moto_client.post("/v1/table/dbody$t/describe", json={"load_detailed_metadata": True})
+    assert latest.json()["version"] == 2  # an unpinned body still answers latest
+
+
 # --------------------------------------------------------------------------- #
 # §4: every create door refuses a table whose namespace does not exist (#118)
 # --------------------------------------------------------------------------- #

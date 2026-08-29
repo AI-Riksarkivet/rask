@@ -43,10 +43,14 @@ via `--runtime-env-json` (exec-level env is NOT propagated to a Ray job). The jo
 RAY-LANCE ALL OK
 ```
 
-- **Distributed WRITE + stable row ids** — `lance_ray.write_lance` has no `enable_stable_row_ids` param, so we
-  create `dst` with stable ids (an empty table of the output schema) and then distributed-**append** the Ray
-  fragments into it (`mode="append"`, `min_rows_per_file<max` → 4 fragments in parallel + one commit).
-  Stable-row-ids is a dataset-level property, so the appended rows inherit it — `has_stable_row_ids=True`.
+- **Distributed WRITE + stable row ids** — the job creates `dst` with stable ids (an empty table of the output
+  schema) and then distributed-**appends** the Ray fragments into it (`mode="append"`, `min_rows_per_file<max`
+  → 4 fragments in parallel + one commit). Stable-row-ids is a dataset-level property, so the appended rows
+  inherit it — `has_stable_row_ids=True`. This line used to justify the two-step as "`lance_ray.write_lance`
+  has no `enable_stable_row_ids` param", which was true at 0.4.2 and is **false at the fleet's 0.5.0** — the
+  parameter is in the signature, and finding 3 below already recorded that. The two-step is kept anyway, for
+  the reason finding 3 gives (it is correct at BOTH versions and the single-call form has not been confirmed
+  on a cluster), not because the parameter is missing.
 - **DATA EVOLUTION** — `lance_ray.add_columns` distributively adds `tripled = v*3`; the schema and version
   advance, and time-travel to the pre-evolution version still shows the old schema (immutable versions).
 - **COMPACTION** — `lance_ray.compact_files(CompactionOptions(target_rows_per_fragment=…))` merges 4 → 2
@@ -87,6 +91,12 @@ RAY-LANCE ALL OK
    `add_columns_from`, `merge_columns_from`, `vector_search`, `init_global_pool`/`set_global_pool`
    (reusable Ray Pool — upstream currently wires it to `vector_search` only), and `write_lance`'s
    `target_bases` / `external_blob_mode` / `allow_external_blob_outside_bases`.
+7. **The VENDORED upstream doc is a version behind — check the signature, not `lance_docs/ray.md`.** That file
+   is an unedited upstream snapshot (do not edit it; re-vendor it). Its `write_lance` parameter table omits
+   `enable_stable_row_ids`, `namespace_impl`/`namespace_properties`, `stream`, `batch_size` and `resume_rows`,
+   and still names a `namespace` parameter the installed 0.5.0 does not have — and it documents **neither
+   `add_columns_from` nor `merge_columns_from`**, the two column helpers finding 6 lists. So an absence there
+   is not evidence lance-ray cannot do something; `inspect.signature` on the installed package is.
 
 ## Event-driven cascade integration (wired, not just a demo)
 

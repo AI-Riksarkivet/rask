@@ -1,11 +1,15 @@
 """Source adapters, registered — the concrete half of I1.
 
 Every adapter here already existed. `LocalDirSource` and `S3Source` have been in
-`service_kit.lakehouse.sources` all along, and `S3PrefixSource` + its `s3_input()` lineage twin have
-sat in `medallion/services/s3_harvest.py` unit-tested against moto with NO ROUTE WIRED — recorded as
-open work for months. They were unreachable not because they were unfinished but because reaching
-them meant adding another head route, another settings block, another produce module. That is the
-cost I1 removes.
+`service_kit.lakehouse.sources` all along, and were unreachable not because they were unfinished but
+because reaching them meant adding another head route, another settings block, another produce
+module. That is the cost I1 removes.
+
+`S3PrefixSource` in `medallion/services/s3_harvest.py` is NOT among them, and this docstring claimed
+it was. The `s3-prefix` kind registered below is built from `service_kit.lakehouse.sources.S3Source`;
+nothing outside that module's own unit test imports `S3PrefixSource`, so it remains unwired and its
+`s3_input()` lineage twin with it. Read the `register()` calls below as the list of what is actually
+reachable — a name in this prose is not a route.
 
 Adding a source is now: one adapter (often already written), one `register()` call, one lineage
 twin. Gate A9 says a diff that does more than that has re-welded something.
@@ -183,7 +187,10 @@ class LanceFragmentFetcher:
     illegal now fails closed rather than reading whatever it currently points at.
     """
 
-    async def fetch(self, key: str) -> bytes:
+    async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes:
+        """`source_endpoint` is accepted and IGNORED — this kind's bytes are synthesised from a local
+        dataset's fragments, so there is no object store to point at. Present because the `Fetcher`
+        protocol carries it for the schemes that do address one."""
         return await asyncio.to_thread(self._read, key)
 
     @staticmethod
@@ -228,27 +235,44 @@ def _lance_append_partition(spec: SourceSpec, key: str) -> str | None:
 
 
 def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
-    """An S3 prefix over the estate's provider-agnostic client.
+    """An S3 prefix over the estate's provider-agnostic client, on the endpoint the RUN declared.
 
     `storage.s3_client` rather than boto3 directly — the estate's rule, and the reason a bucket can
     move between RustFS, MinIO, HCP and AWS with env vars instead of a code change.
-    """
-    from pyarrow import fs as pafs
 
+    **A declared `endpoint` is resolved through the storage registry, not trusted as typed.** This
+    used to build `pafs.S3FileSystem(endpoint_override=...)` and `s3_client(endpoint)` from the raw
+    option, which reached an arbitrary host with the DEPLOYMENT's credentials — and the raw pyarrow
+    constructor also dropped the scheme, region and credential handling the shared builder carries.
+    `objectstore.resolve_source_connection` refuses an endpoint no `RASK_STORES` entry accounts for
+    and takes that store's credentials from the Dapr secret store; see its module docstring for why
+    an env fallback there is the silent wrong-bucket read.
+
+    This is door one of two. The worker re-resolves the same endpoint at fetch time, because a unit
+    key crosses the queue and the run that admitted it is gone by the time a worker reads it — the
+    same two-door rule `confine_to_local_root` follows.
+    """
+    from ingest.objectstore import resolve_source_connection, source_filesystem, source_s3_client
     from service_kit.lakehouse.sources import S3Source
 
     bucket = str(spec.options.get("bucket") or "")
     if not bucket:
         raise ValueError("s3-prefix source requires options.bucket")
-    endpoint = spec.options.get("endpoint")
-    fs = pafs.S3FileSystem(endpoint_override=str(endpoint)) if endpoint else pafs.S3FileSystem()
+    connection = resolve_source_connection(_s3_prefix_endpoint(spec), bucket)
     # The storage client rides along for the VERSIONED listing (ETags): pyarrow FileInfo carries
-    # no ETag, and the estate rule is storage.s3_client, never raw boto3. Same endpoint resolution
-    # as the filesystem, so the two views of the bucket cannot diverge.
-    from storage import s3_client
+    # no ETag, and the estate rule is storage.s3_client, never raw boto3. Built from the SAME
+    # resolved connection as the filesystem, so the two views of the bucket cannot diverge.
+    return S3Source(source_filesystem(connection), bucket, str(spec.options.get("prefix") or ""), client=source_s3_client(connection))
 
-    client = s3_client(str(endpoint)) if endpoint else s3_client()
-    return S3Source(fs, bucket, str(spec.options.get("prefix") or ""), client=client)
+
+def _s3_prefix_endpoint(spec: SourceSpec) -> str | None:
+    """The run's declared object-store endpoint, or None for the deployment's own store.
+
+    The `endpoint_of` twin: `publish_chunk_units` asks the adapter rather than reading
+    `options["endpoint"]` itself, so the option's NAME stays this kind's business — the same rule
+    `partition_of` and `external_base_of` follow.
+    """
+    return str(spec.options.get("endpoint") or "") or None
 
 
 def _s3_prefix_lineage(spec: SourceSpec) -> LineageInput:
@@ -407,6 +431,7 @@ def register_builtin_sources() -> None:
             lineage_input=_s3_prefix_lineage,
             partition_of=_s3_prefix_partition,
             external_base_of=_s3_prefix_external_base,
+            endpoint_of=_s3_prefix_endpoint,
             label="S3 prefix",
             description="Every object under a bucket prefix, through the estate's provider-agnostic client — RustFS, MinIO, HCP or AWS.",
             options=[
@@ -416,7 +441,11 @@ def register_builtin_sources() -> None:
                     name="endpoint",
                     label="Endpoint URL",
                     placeholder="(the configured default)",
-                    help="Override only when the bucket is not on the estate's own endpoint.",
+                    help=(
+                        "Override only when the bucket is not on the estate's own endpoint. It must name a store "
+                        "registered in RASK_STORES — that entry is where its credentials come from, and an "
+                        "unregistered endpoint is refused rather than read from the deployment's own store."
+                    ),
                 ),
             ],
         )

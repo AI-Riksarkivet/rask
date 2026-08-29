@@ -1,21 +1,23 @@
 <script lang="ts">
 	// #74 schema evolution — the schema table plus add (name + SQL expr) / rename / re-type / drop
-	// columns and the #85 backfill (async native job). All writer-gated (can_write_data); the
-	// catalog's refusal is surfaced verbatim.
+	// columns. All writer-gated (can_write_data); the catalog's refusal is surfaced verbatim.
+	//
+	// BACKFILL IS STATED, NOT OFFERED. This section used to wire a fourth per-column action to
+	// `alter_table_backfill_columns`, which is one of the six ops the pinned native `dir` backend
+	// stubs — a 501 for every caller on every table (`docs/COVERAGE.md`), never a wrong argument or a
+	// missing grant. The control stays on screen carrying its reason (#143: show disabled, never
+	// hide) and the work itself is done by the "Update / delete rows" section, which SETs an existing
+	// column to a SQL expression under an optional predicate. See `./unavailable`.
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — an editor opened on table A cannot leak into B, by
 	// construction rather than by a hand-written reset list.
+	import { GatedAction } from '@rask/ui/gated-action';
 	import { Select } from '@rask/ui/select';
 	import { RETYPE_TYPES } from '../catalog';
-	import {
-		addColumn,
-		backfillColumn,
-		dropColumn,
-		renameColumn,
-		retypeColumn,
-	} from '../remote/catalog.remote';
+	import { addColumn, dropColumn, renameColumn, retypeColumn } from '../remote/catalog.remote';
 	import { typeName, type SchemaField } from './type-name';
+	import { BACKFILL_UNAVAILABLE } from './unavailable';
 
 	let {
 		table,
@@ -31,12 +33,6 @@
 	let renameTo = $state('');
 	let retyping = $state<string | null>(null); // the column currently being re-typed (#74 tail)
 	let retypeTo = $state(''); // the target scalar Arrow type (bits-ui Select string)
-
-	// #85 backfill values into a column (async native job — the response is a job_id; the version
-	// bump is reconciled when the job lands, so there is nothing to refresh here).
-	let backfilling = $state<string | null>(null); // the column currently being backfilled
-	let backfillWhere = $state('');
-	let backfillMsg = $state<string | null>(null);
 
 	function colFail(status: number, detail: string): void {
 		if (status === 401) colError = 'Sign in to change the schema.';
@@ -111,30 +107,6 @@
 			colBusy = false;
 		}
 	}
-
-	async function runBackfill(): Promise<void> {
-		const column = backfilling;
-		if (colBusy || !column) return;
-		colBusy = true;
-		colError = null;
-		backfillMsg = null;
-		try {
-			const res = await backfillColumn({
-				table,
-				column,
-				where: backfillWhere.trim() || undefined,
-			});
-			if (res.ok) {
-				backfilling = null;
-				backfillWhere = '';
-				backfillMsg = `Backfill of ${column} started · job ${res.data.job_id}.`;
-			} else colFail(res.status, res.detail);
-		} catch (err) {
-			colError = `backfill response drifted from the contract: ${String(err)}`;
-		} finally {
-			colBusy = false;
-		}
-	}
 </script>
 
 <section>
@@ -182,17 +154,6 @@
 									>
 									<button class="btn ghost" onclick={() => (retyping = null)}>×</button>
 								</div>
-							{:else if backfilling === f.name}
-								<!-- #85 backfill — async native job over the column; the optional `where` bounds it. -->
-								<input
-									class="mono rn"
-									bind:value={backfillWhere}
-									placeholder="where (optional)"
-									aria-label="backfill {f.name} where"
-									onkeydown={(e) => e.key === 'Enter' && runBackfill()}
-								/>
-								<button class="btn ghost" disabled={colBusy} onclick={runBackfill}>run</button>
-								<button class="btn ghost" onclick={() => (backfilling = null)}>×</button>
 							{:else}
 								<button
 									class="chip-x"
@@ -214,16 +175,12 @@
 										retypeTo = '';
 									}}>⇄</button
 								>
-								<button
-									class="chip-x"
-									title="backfill column"
-									aria-label="backfill {f.name}"
-									disabled={colBusy}
-									onclick={() => {
-										backfilling = f.name;
-										backfillWhere = '';
-									}}>⤵</button
-								>
+								<!-- Never `allowed`, and never natively `disabled`: GatedAction needs the control to
+								     keep receiving hover and focus, or the reason it carries can never be read
+								     (see gated-action.svelte). It dims and blocks the click itself. -->
+								<GatedAction allowed={false} action="Backfill column" reason={BACKFILL_UNAVAILABLE}>
+									<button class="chip-x" aria-label="backfill {f.name}">⤵</button>
+								</GatedAction>
 								<button
 									class="chip-x"
 									title="drop column"
@@ -267,7 +224,6 @@
 		</button>
 	</form>
 	{#if colError}<p class="error">{colError}</p>{/if}
-	{#if backfillMsg}<p class="mut">{backfillMsg}</p>{/if}
 </section>
 
 <style>

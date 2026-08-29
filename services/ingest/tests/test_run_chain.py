@@ -184,7 +184,8 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: Wo
     assert await publish_chunk_units(chunk) == 4
 
     class _FileFetcher:
-        async def fetch(self, key: str) -> bytes:
+        async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes:
+            # `local-dir` addresses no object store, so the endpoint the protocol carries is None here.
             return Path(key.replace("file://", "")).read_bytes()
 
     queue = await WorkQueue.connect(NATS_URL)

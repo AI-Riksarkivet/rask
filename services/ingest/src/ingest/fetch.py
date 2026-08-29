@@ -4,6 +4,11 @@ A worker receives a `UnitTask`, and a task carries a key, not a source spec. Tha
 task is the only thing that crosses the queue, and making it carry an adapter's configuration would
 put source-specific knowledge back on the wire — the coupling I1 exists to remove.
 
+The one thing a task does carry besides the key is `source_endpoint`: WHICH object store an `s3://`
+key names. That is not an adapter's configuration — no kind, no option names, no listing rules — it
+is the other half of the address, and without it "no source knowledge" collapsed into "the estate's
+own store, always", which silently answered an external key from a same-named local bucket.
+
 **This module knows about SCHEMES. It must never know about SOURCES.**
 
 That is not a stylistic preference, it is the plane's reason to exist, and the first version broke
@@ -51,14 +56,20 @@ _RETRYABLE_4XX = frozenset({408, 425, 429})
 
 
 class UriFetcher:
-    """The default `Fetcher`: resolves a unit key by its URI scheme, with no source knowledge."""
+    """The default `Fetcher`: resolves a unit key by its URI scheme, with no source knowledge.
 
-    async def fetch(self, key: str) -> bytes:
+    `source_endpoint` is the object store the RUN declared, carried on the task. It is CONNECTION
+    config for the `s3` scheme, not source knowledge: this module still cannot name a kind, read an
+    adapter's options, or tell an S3 prefix from a IIIF volume — it is told which S3, the way it is
+    told which URL. Schemes that address no store ignore it.
+    """
+
+    async def fetch(self, key: str, *, source_endpoint: str | None = None) -> bytes:
         scheme = urlparse(key).scheme
         if scheme in ("http", "https"):
             return await asyncio.to_thread(_fetch_http, key)
         if scheme == "s3":
-            return await asyncio.to_thread(_fetch_s3, key)
+            return await asyncio.to_thread(_fetch_s3, key, source_endpoint)
         if scheme in ("file", ""):
             return await asyncio.to_thread(_fetch_file, key)
         raise ValueError(f"no fetcher for scheme {scheme!r} (unit key {key!r})")
@@ -103,13 +114,26 @@ def _fetch_http(url: str) -> bytes:
     raise last
 
 
-def _fetch_s3(uri: str) -> bytes:
+def _fetch_s3(uri: str, endpoint: str | None = None) -> bytes:
     """Through the estate's provider-agnostic client, never boto3 directly — which is what keeps a
-    bucket movable between RustFS, MinIO, HCP and AWS by env var rather than by a code change."""
-    from storage import s3_client, split_s3_uri
+    bucket movable between RustFS, MinIO, HCP and AWS by env var rather than by a code change.
+
+    **On the endpoint the RUN declared, not the estate's.** This read `RASK_S3_ENDPOINT_URL`
+    unconditionally, so a run whose source lives on an external store was fetched from the
+    deployment's own: at best every unit parked on the DLQ, at worst a bucket of the same name here
+    answered and the run ingested the wrong bytes under an external `source_uri` with no error at
+    all. `objectstore.resolve_source_connection` refuses an endpoint the storage registry does not
+    account for and takes its credentials from the Dapr secret store — never from env, which holds
+    the WAREHOUSE's keys.
+
+    `None` keeps the previous behaviour exactly: `storage.s3_client` resolves the endpoint from env
+    itself, which is why the explicit `os.getenv` is gone rather than moved.
+    """
+    from ingest.objectstore import resolve_source_connection, source_s3_client
+    from storage import split_s3_uri
 
     bucket, key = split_s3_uri(uri)
-    client = s3_client(os.getenv("RASK_S3_ENDPOINT_URL"))
+    client = source_s3_client(resolve_source_connection(endpoint, bucket))
     return client.get_object(Bucket=bucket, Key=key)["Body"].read()
 
 

@@ -85,7 +85,12 @@ def test_each_kind_declares_the_options_its_adapter_READS(sources: list[SourceDe
         # `_external_base` is the third twin (the §4.1 blob placement) and arrived the same way: it
         # read `options["root"]`, which local-dir DOES describe, and this gate reported it as an
         # undescribed option of a kind that does not exist.
-        kind = func.name.lstrip("_").removesuffix("_lineage").removesuffix("_partition").removesuffix("_external_base").replace("_", "-")
+        # `_endpoint` is the fourth (which object store the run's keys are on, carried to the worker)
+        # and arrived the same way again: it reads `options["endpoint"]`, which s3-prefix DOES
+        # describe, and the gate reported a phantom kind `s3-prefix-endpoint`.
+        kind = (
+            func.name.lstrip("_").removesuffix("_lineage").removesuffix("_partition").removesuffix("_external_base").removesuffix("_endpoint").replace("_", "-")
+        )
         for node in ast.walk(func):
             is_options_get = (
                 isinstance(node, ast.Call)

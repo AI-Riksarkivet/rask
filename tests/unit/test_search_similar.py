@@ -31,9 +31,13 @@ from search.services.similar import (
 )
 
 from service_kit.exceptions import NotFoundError, ValidationError
+from service_kit.lancekit.descriptor import Declared
 
 
 KEY_FIELDS = ["doc_id", "speech_id", "chunk_id"]
+#: `key_predicate` renders through `lancekit.keys`, which needs the whole identity (which field
+#: is the doc key, and therefore which segments are integer sub-keys) — not just the field names.
+DECLARED = Declared.model_validate({"identity": {"key_fields": KEY_FIELDS, "doc_key": "doc_id"}})
 
 
 # --------------------------------------------------------------------------------------------------
@@ -42,7 +46,7 @@ KEY_FIELDS = ["doc_id", "speech_id", "chunk_id"]
 
 
 def test_a_key_compiles_to_an_equality_over_every_key_field() -> None:
-    where = key_predicate("d1/2/3", KEY_FIELDS)
+    where = key_predicate(DECLARED, "d1/2/3")
 
     assert "doc_id" in where
     assert "speech_id" in where
@@ -54,27 +58,27 @@ def test_a_short_key_is_REFUSED_not_treated_as_a_prefix() -> None:
     """`d1/2` against three key fields matches every chunk of that speech. Seeding from "whichever
     row came back first" is a different answer every time the table compacts."""
     with pytest.raises(ValidationError) as exc:
-        key_predicate("d1/2", KEY_FIELDS)
+        key_predicate(DECLARED, "d1/2")
 
     assert "3" in str(exc.value), "the refusal must say how many parts were expected"
 
 
 def test_a_long_key_is_refused_too() -> None:
     with pytest.raises(ValidationError):
-        key_predicate("d1/2/3/4", KEY_FIELDS)
+        key_predicate(DECLARED, "d1/2/3/4")
 
 
 def test_a_quote_in_a_key_cannot_break_out_of_the_predicate() -> None:
     """The key is user input reaching a SQL string. `eq` is the injection boundary; this pins that
     it is actually the thing being used."""
-    where = key_predicate("d'1/2/3", KEY_FIELDS)
+    where = key_predicate(DECLARED, "d'1/2/3")
 
     assert "''" in where or "\\'" in where, f"the quote was not escaped: {where}"
 
 
 def test_an_empty_key_is_refused() -> None:
     with pytest.raises(ValidationError):
-        key_predicate("", KEY_FIELDS)
+        key_predicate(DECLARED, "")
 
 
 # --------------------------------------------------------------------------------------------------

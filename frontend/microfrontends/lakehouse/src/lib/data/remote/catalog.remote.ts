@@ -3,13 +3,11 @@ import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
-	BackfillResponseSchema,
 	DeclareTableResponseSchema,
 	DeleteRowsResponseSchema,
 	RenameTableResponseSchema,
 	TableLifecycleResponseSchema,
 	UpdateRowsResponseSchema,
-	type BackfillResult,
 	type CompactResult,
 	type CreateIndexBody,
 	type DeclareTableResult,
@@ -40,8 +38,8 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 // (each has its own "Sign in to …" copy for status 401).
 //
 // PARSING follows the same rule the routes did — every parse that existed moves server-side, and none
-// is invented. The lance-namespace lifecycle contracts (drop/deregister/rename/declare/update/delete/
-// backfill) were valibot-parsed in the browser and are parsed HERE now; the OpenAPI-generated shapes
+// is invented. The lance-namespace lifecycle contracts (drop/deregister/rename/declare/update/delete)
+// were valibot-parsed in the browser and are parsed HERE now; the OpenAPI-generated shapes
 // (detail aggregate, policy, GC, compaction, tags, branches, indexes) were passed through untyped and
 // still are — hand-mirroring six generated schemas in valibot would be a second source of truth.
 //
@@ -342,19 +340,11 @@ export const setTableProperties = command(
 		post(`/v1/table/${enc(table)}/schema_metadata/update`, { metadata }),
 );
 
-/** #85 backfill values into a column (async native job — the response is a job_id, and the version
- *  bump is reconciled when the job lands). Optional `where` bounds the backfill. Writer-gated. */
-export const backfillColumn = command(
-	v.object({ table: v.string(), column: v.string(), where: v.optional(v.string()) }),
-	async ({ table, column, where }): Promise<ApiResult<BackfillResult>> => {
-		const body: { column: string; where?: string } = { column };
-		if (where) body.where = where;
-		return parsed(
-			await post(`/v1/table/${enc(table)}/backfill_column`, body),
-			BackfillResponseSchema,
-		);
-	},
-);
+// There is deliberately NO `backfillColumn` here. `alter_table_backfill_columns` is a
+// `NotImplementedError` stub in the native `dir` backend the chart pins, so the command could only
+// ever return 501 (`docs/COVERAGE.md`); the schema table now STATES that (`table-detail/
+// unavailable.ts`) and points at `updateRows` below, which writes a SQL expression into an existing
+// column under an optional predicate — a bounded backfill, on a door that is backed.
 
 // ── indexes ────────────────────────────────────────────────────────────────────────────────────
 

@@ -54,7 +54,7 @@ _stage_other_lane = _meter.create_counter(
 _stage_refused = _meter.create_counter(
     "medallion.stage.refused",
     unit="{trigger}",
-    description="Stage triggers DROPped by the shape guard — malformed payload, or a from_uri outside this stage's storage root.",
+    description="Stage triggers REFUSED before any read or write, by reason (malformed|unconfined_uri|bad_project|routing_disabled|unresolvable_lane).",
 )
 
 
@@ -237,18 +237,24 @@ def record_other_lane(transition: str) -> None:
 def record_refused(transition: str, reason: str) -> None:
     """Count one trigger DROPped by the shape guard, by transition and REASON.
 
-    The same argument `record_other_lane` makes, for the guard's two refusals: a DROP is an ack, so
-    Dapr neither redelivers nor dead-letters and nothing downstream records the event. Without this
-    the two most security-relevant refusals in the handler — a malformed payload, and a `from_uri`
-    naming a location outside this stage's storage root — are the only DROPs that leave no trace,
-    which is exactly backwards: a rejected `from_uri` is the signal that someone is publishing
-    triggers this mover should not honour, and it is worth an alert.
+    The same argument `record_other_lane` makes, for every PRE-FLIGHT refusal: a DROP is an ack, so
+    Dapr neither redelivers nor dead-letters and nothing downstream records the event. A rejected
+    `from_uri` is the signal that someone is publishing triggers this mover should not honour, and a
+    tenant trigger arriving with registry resolution off is a deployment gap that halts that tenant's
+    cascade permanently — both are worth an alert, and neither raises one from a log line.
 
-    `reason` is a CLOSED vocabulary set by this module's callers (`malformed`, `unconfined_uri`) and
-    never a value off the payload — the estate's bounded-cardinality rule. The offending token, URI
-    and dataset name stay on the log line, where per-event data belongs; a counter labelled by a
-    caller-supplied string is an unbounded series and, here, would also publish attacker-chosen
-    strings into the metrics store.
+    THIS COUNTS EVERY UNCOUNTED HALT, not merely the shape guard's two. It said "the two most
+    security-relevant refusals … are the only DROPs that leave no trace", which described the
+    vocabulary of the day rather than the handler: three more refusals had a log line and nothing
+    else. They are the reason the medallion's lineage lane must NOT carry them — a repeating
+    operational condition is a metric, not an event (`docs/DECISIONS.md`, 2026-08-16) — so this is
+    where they land.
+
+    `reason` is a CLOSED vocabulary set by this module's callers — `malformed`, `unconfined_uri`,
+    `bad_project`, `routing_disabled`, `unresolvable_lane` — and never a value off the payload, the
+    estate's bounded-cardinality rule. The offending token, URI, project and dataset name stay on the
+    log line, where per-event data belongs; a counter labelled by a caller-supplied string is an
+    unbounded series and, here, would also publish attacker-chosen strings into the metrics store.
     """
     _stage_refused.add(1, {"lance.medallion.transition": transition, "lance.medallion.reason": reason})
 

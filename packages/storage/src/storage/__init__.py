@@ -9,6 +9,7 @@ carrying a single workload's protocol is how that workload becomes privileged, s
 """
 
 from storage.client import S3Client as S3Client
+from storage.client import configured_endpoint as configured_endpoint
 from storage.client import derive_hcp_creds as derive_hcp_creds
 from storage.client import s3_client as s3_client
 from storage.errors import BucketNotFoundError as BucketNotFoundError

@@ -124,6 +124,9 @@ async def submit_stage_job(
     originator: str = "",
     project: str = "",
     from_version: int | None = None,
+    from_id: str = "",
+    to_id: str = "",
+    run_id: str = "",
 ) -> str:
     """Submit (or re-attach to) the stage transform on the Ray cluster and RETURN — never block.
 
@@ -141,6 +144,14 @@ async def submit_stage_job(
     the job writes the ``lineage`` JSONB column in the SAME commit as the data — the distributed path
     must not produce a governed dataset the in-process path would have stamped. It is provenance, never
     a credential, so echoing it back through the jobs API (which mirrors runtime_env) is harmless.
+
+    ``from_id``/``to_id``/``run_id`` are the run's PROVENANCE IDENTITY, and are not derivable from the
+    two URIs beside them: a catalog identifier (``acme-silver$features``) is what the lineage graph and
+    the FGA objects are keyed by, while a storage URI is a location. The job emits its own OpenLineage
+    (no Dapr sidecar on Ray pods), so without these it names its output by the URI's stem — a node no
+    grant matches, which hides the run from every recipient while the job acks SUCCESS — and mints its
+    own run id, which cannot MERGE onto the run the mover emitted for the same hop. Empty is the
+    UNWIRED case and omits the variable, leaving the runner's documented stem fallback in place.
     """
     # A named-but-undeclared lane RAISES rather than falling back: a fallback would run the chart's
     # old program under the declaration's name. Unset lane keeps the chart settings.
@@ -204,6 +215,17 @@ async def submit_stage_job(
         # one is what the job stamps on its own events. Carrying only one loses the other lane.
         **({"ORIGINATOR": originator} if originator else {}),
         **({"PROJECT": project} if project else {}),
+        # WHAT THIS RUN IS, as the graph names it — the other half of the same problem the two above
+        # solve. `FROM_URI`/`TO_URI` say where to read and write; these say which governed TABLES those
+        # locations are, and which run the job's events belong to. The runner documents all three as
+        # required and nothing set them, so every distributed hop emitted provenance under a URI stem:
+        # well-formed, unmatched by any grant, and therefore delivered to nobody.
+        #
+        # OMITTED when empty, like `ORIGINATOR` and `PROJECT`: an unwired lane must reach the runner's
+        # own stem fallback rather than a blank the platform asserted.
+        **({"FROM_ID": from_id} if from_id else {}),
+        **({"TO_ID": to_id} if to_id else {}),
+        **({"RUN_ID": run_id} if run_id else {}),
         # Unset URL => `emit()` returns early. The service TOKEN is deliberately absent from this
         # dict — it is the estate's shared credential and rode the echoed runtime_env (the same P0 as
         # S3_SECRET above); the Ray pods hold LINEAGE_SERVICE_TOKEN themselves and the job reads it

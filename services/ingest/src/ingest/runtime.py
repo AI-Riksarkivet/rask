@@ -327,9 +327,15 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
         await queue.ensure_stream()
         # The partition label is computed HERE, at publish, where the run's SourceSpec is still in
         # hand — the worker only ever sees a URI and a scheme.
-        from ingest.sources import SourceSpec, partition_key_for
+        from ingest.sources import SourceSpec, partition_key_for, source_endpoint_for
 
         spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
+        # WHICH object store the keys name, asked of the adapter for the same reason the partition
+        # label is: only the kind knows what its options are called. Resolved once per chunk (it is a
+        # property of the run, not of a unit) and carried on every task, because the worker's client
+        # otherwise defaults to the estate's own store — which answers an external `s3://pages/x` from
+        # a local `pages` bucket if one exists, silently ingesting the wrong bytes.
+        source_endpoint = source_endpoint_for(spec)
         # THE UNITS, from the pointer (§2.13) or from the descriptor itself. A chunk now names a window
         # into the run's unit manifest instead of carrying its keys, which is what took the workflow's
         # payloads from O(units) to O(chunks). The inline branch is the ROLLOUT path and not dead code:
@@ -364,6 +370,7 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
                 dataset_uri=chunk.dataset_uri,
                 traceparent=traceparent,
                 partition_key=partition_key_for(spec, key),
+                source_endpoint=source_endpoint,
                 token=token,
             )
             for key, token in pairs
@@ -377,9 +384,11 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
     """Run a worker over this chunk until its units are accounted for.
 
     The fetcher is SCHEME-resolved (`ingest.fetch.UriFetcher`), so a worker needs no source spec —
-    only the key its task already carries. That is what keeps I1's "one adapter, one registry entry"
-    claim true at the far end of the queue: a new source kind producing `s3://` or `https://` keys
-    needs no worker change at all.
+    only the key and the endpoint its task already carries. That is what keeps I1's "one adapter,
+    one registry entry" claim true at the far end of the queue: a new source kind producing `s3://`
+    or `https://` keys needs no worker change at all. The endpoint rides on the task rather than
+    being re-read from the chunk here, so a unit is self-describing wherever it is drained from —
+    including a DLQ replay, whose whole point is that the run around it is gone.
 
     The validator is `packages/validate`, a package with zero consumers since it was written. A
     corrupt TIFF becomes a tracked error and a DLQ entry here, rather than a poisoned row that fails

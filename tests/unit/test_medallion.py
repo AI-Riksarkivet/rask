@@ -187,12 +187,29 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
         trigger: Any,
         event_time: str | None = None,
         pre_row_count: int | None = None,
+        from_id: str = "",
+        to_id: str = "",
+        run_id: str = "",
     ) -> str:
         # `pre_row_count` is RECORDED, not merely tolerated: the dispatch pass measuring the
         # destination before the Ray job overwrites it is the only way that lane can ever compare row
         # counts, and a double that accepted the argument without asserting it would let the fix be
-        # deleted silently.
-        dispatched.update({"from": from_uri, "to": to_uri, "token": token, "lineage": lineage_json, "trigger": trigger, "pre_row_count": pre_row_count})
+        # deleted silently. The three identity fields are recorded for the same reason: the Ray job
+        # emits its own provenance, and it can only name the TABLES it moved (rather than a URI stem
+        # that matches no grant) if the dispatch hands them over.
+        dispatched.update(
+            {
+                "from": from_uri,
+                "to": to_uri,
+                "token": token,
+                "lineage": lineage_json,
+                "trigger": trigger,
+                "pre_row_count": pre_row_count,
+                "from_id": from_id,
+                "to_id": to_id,
+                "run_id": run_id,
+            }
+        )
         return "stage-ray-silver-tok-abc"
 
     monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
@@ -213,6 +230,10 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
 
     assert status == {"status": "SUCCESS"}
     assert {k: dispatched[k] for k in ("from", "to", "token")} == {"from": "/tmp/from", "to": "/tmp/to", "token": "tok"}
+    assert (dispatched["from_id"], dispatched["to_id"]) == (_RAY_MOVER.from_dataset, _RAY_MOVER.to_dataset), (
+        "the job would name its datasets by their URI stems, which match no grant"
+    )
+    assert dispatched["run_id"], "the job would emit its lineage under a run id nothing else knows"
     assert measured_uris == {}, "the ray branch measured before the job could have written anything"
     assert first.calls == [], "a COMPLETE was emitted for a job that had not run"
 

@@ -3,8 +3,15 @@
 External raw spans several source families, and each is now ONE registry entry in the ingest
 plane rather than a head route here (open_ingest.md I1). This module is the S3 half of that:
 ``S3PrefixSource`` plus the ``s3_input()`` lineage twin, which sat here unit-tested against moto
-with NO ROUTE WIRED for months — precisely because reaching it meant adding another head. It is
-registered by ``ingest.adapters`` now; the code below is kept as the harvest mechanics.
+with NO ROUTE WIRED for months — precisely because reaching it meant adding another head.
+
+STILL UNWIRED, and this docstring claimed otherwise. It said "It is registered by ``ingest.adapters``
+now", which is not what happened: the ingest plane's ``s3-prefix`` adapter registers
+``service_kit.lakehouse.sources.S3Source`` directly (``ingest/adapters.py``), reaching this module
+only in prose. Nothing imports ``S3PrefixSource`` outside ``tests/unit/test_s3_harvest.py``, so the
+"registered now" sentence turned a still-open gap into a closed one on paper — the exact failure mode
+the module's own history is about. Either point the registry entry here or delete the module; leaving
+it described as wired is the one option that costs a reader time.
 """
 
 from __future__ import annotations

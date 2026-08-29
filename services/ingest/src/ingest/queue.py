@@ -101,6 +101,20 @@ class UnitTask(BaseModel):
     #: URI scheme and must not learn what a volume or a prefix is. Optional: a kind that registers no
     #: `partition_of` sends nothing and the column is written null.
     partition_key: str | None = None
+    #: The object-store ENDPOINT this unit's bytes are on, when the run declared one
+    #: (`sources.source_endpoint_for`). None means the deployment's own store.
+    #:
+    #: IT HAS TO CROSS THE QUEUE. `s3-prefix` advertises an `endpoint` option and only its
+    #: enumeration half ever read it — the worker built its client from `RASK_S3_ENDPOINT_URL`, so a
+    #: run pointed at an external store was fetched from the estate's own. Best case every unit
+    #: parked on the DLQ; worst case a same-named LOCAL bucket answered and the run ingested the
+    #: wrong bytes under an external `source_uri`, with no error anywhere.
+    #:
+    #: The ENDPOINT only — never credentials. Those are resolved from the storage registry and the
+    #: Dapr secret store at each end (`ingest.objectstore`), so nothing secret is ever published to a
+    #: subject, held in a stream, or parked on the DLQ. Optional so a task enqueued by an older build
+    #: still validates.
+    source_endpoint: str | None = None
     #: The source object's VERSION TOKEN at enumeration (S3 listing ETag) — identity material,
     #: not metadata: `identity.unit_id` folds it into the row id, so a replaced object lands as
     #: a NEW row. None for token-less kinds (snapshot semantics). Optional so tasks enqueued by

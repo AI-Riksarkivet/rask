@@ -22,7 +22,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from service_kit.exceptions import NotFoundError, ValidationError
-from service_kit.lancekit.predicate import eq
+from service_kit.lancekit.descriptor import Declared
+from service_kit.lancekit.keys import chunk_key_filter
 
 
 logger = logging.getLogger(__name__)
@@ -60,20 +61,43 @@ class SimilarSpec(BaseModel):
         return self.n + 1
 
 
-def key_predicate(key: str, key_fields: Sequence[str]) -> str:
+def key_predicate(declared: Declared, key: str) -> str:
     """Compile a key path into an equality over EVERY identity field.
 
-    The arity check is the load-bearing part. `d1/2` against three key fields is a PREFIX, and a
-    prefix matches every chunk of that speech — the seed would then be "whichever row Lance returned
-    first", which is a different answer after every compaction and identical-looking every time.
+    The RENDERING is `service_kit.lancekit.keys.chunk_key_filter` — the estate's one key→predicate
+    boundary, which viewer and annotator already run every identity filter through. This module used
+    to render its own, quoting every segment as SQL text, and that duplication was the bug: identity
+    is mixed-type by contract (a text doc key beside integer sub-keys), so `speech_id = '0'` against
+    an int64 column is not a narrower filter but an expression Lance refuses outright. Every seed
+    lookup on an integer-keyed corpus — the only kind `scripts/seed_demo_corpus.py` produces — came
+    back 400 "seed lookup failed".
 
-    The key is user input reaching a SQL string, so `eq` (the shared escaping boundary) does the
-    quoting; the field names come from the descriptor and are trusted.
+    The arity check stays HERE, because the shared helper deliberately pairs positionally with
+    `strict=False` for the viewer's fixed-arity routes and cannot make it. `d1/2` against three key
+    fields is a PREFIX, and a prefix matches every chunk of that speech — the seed would then be
+    "whichever row Lance returned first", which is a different answer after every compaction and
+    identical-looking every time.
+
+    The key is user input reaching a SQL string; `chunk_key_filter` escapes the doc key through `eq`
+    (the shared escaping boundary) and casts the rest to int, so neither segment can inject. Field
+    names come from the descriptor and are trusted.
     """
+    identity = declared.identity
+    key_fields = identity.key_fields
     parts = key.split(KEY_SEP) if key else []
     if len(parts) != len(key_fields) or not all(parts):
         raise ValidationError(f"key {key!r} has {len(parts)} part(s); this corpus is identified by {len(key_fields)} ({KEY_SEP.join(key_fields)})")
-    return " AND ".join(eq(field, value) for field, value in zip(key_fields, parts, strict=True))
+
+    values = dict(zip(key_fields, parts, strict=True))
+    if identity.doc_key not in values:
+        # A descriptor whose identity omits its own doc key would make `chunk_key_filter` AND in a
+        # clause over a column outside identity — a predicate that matches rows nobody asked for.
+        raise ValidationError(f"this corpus's identity ({KEY_SEP.join(key_fields)}) does not include its doc key {identity.doc_key!r}")
+    try:
+        rest = [int(values[field]) for field in key_fields if field != identity.doc_key]
+    except ValueError as e:
+        raise ValidationError(f"key {key!r}: every identity field after {identity.doc_key!r} is an integer sub-key") from e
+    return chunk_key_filter(declared, values[identity.doc_key], rest)
 
 
 def seed_vector(table: Any, *, where: str, column: str) -> list[float]:

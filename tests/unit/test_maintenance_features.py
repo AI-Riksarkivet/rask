@@ -179,3 +179,94 @@ def test_a_wire_type_it_cannot_skip_stops_rather_than_misreading() -> None:
         _ds = _Manifest()
 
     assert features.manifest_feature_flags(_Dataset()) == (0, 0)
+
+
+# --------------------------------------------------------------------------- #
+# flag 16, the OTHER half: an external blob BASE is not a shallow clone.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_manifest_says_WHICH_kind_of_base_a_dataset_declares(tmp_path: pathlib.Path) -> None:
+    """`BasePath.is_dataset_root` — the discriminator, measured off real manifest bytes.
+
+    Flag 16 means "this dataset spans bases" and says nothing about WHAT the bases are, which is why
+    one bit could not carry both answers. Two shapes set it and they are not the same object:
+
+      * a SHALLOW CLONE's base is another DATASET's root, and every one of the clone's data files
+        resolves through it — compacting the clone materialises that dataset's bytes into its own root;
+      * an INGEST bronze table's base is a plain object-store prefix where the external blobs already
+        live (`ingest/lander.py::create_empty` registers exactly one through `initial_bases`), and the
+        dataset's own data files sit under its own root like any other table's.
+
+    Measured on pylance 10.0.0, submessage bytes: the clone's carries field 3 (`is_dataset_root`) set
+    to 1, the external base's omits it (proto3 drops a false) and carries a `name` instead.
+    """
+    source = str(tmp_path / "src.lance")
+    src = lance.write_dataset(_table(), source)
+    clone = str(tmp_path / "clone.lance")
+    src.shallow_clone(clone, reference=src.version)
+
+    external = tmp_path / "external"
+    external.mkdir()
+    based = str(tmp_path / "bronze.lance")
+    lance.write_dataset(_table(), based, initial_bases=[DatasetBasePath(str(external), "external")])
+
+    clone_refs = features.manifest_base_path_refs(lance.dataset(clone))
+    assert [(ref.path, ref.is_dataset_root) for ref in clone_refs] == [(source, True)]
+
+    base_refs = features.manifest_base_path_refs(lance.dataset(based))
+    assert [(ref.path, ref.is_dataset_root) for ref in base_refs] == [(str(external), False)]
+
+    # …and the paths-only view every caller already uses stays exactly what it was.
+    assert features.manifest_base_paths(lance.dataset(clone)) == [source]
+
+
+def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a_clone(tmp_path: pathlib.Path) -> None:
+    """The cost refusal must land on the case it was measured on, and on no other.
+
+    The blanket flag-16 exclusion was justified by ONE measurement — a pristine clone going
+    1,072 -> 108,199 bytes against a 119,693-byte base, because compaction materialises the shared
+    data into the clone's own root. That reasoning does not reach a dataset whose base is an external
+    blob prefix: its data files were always its own, so compaction merges its own fragments and copies
+    nothing. Measured on pylance 10.0.0 for the blob case: 4 fragments -> 1, 40 rows still readable,
+    the base directory untouched.
+
+    With the two folded together, every ingest bronze table — the tier with the widest rows and the
+    most fragments in the estate — accumulated fragments forever while the sweep reported success.
+    """
+    external = tmp_path / "external"
+    external.mkdir()
+    based = str(tmp_path / "bronze.lance")
+    lance.write_dataset(_table(), based, initial_bases=[DatasetBasePath(str(external), "external")])
+    ds = lance.dataset(based)
+    assert features.manifest_feature_flags(ds) == (16, 16), "fixture must really set flag 16"
+
+    reader, writer = features.manifest_feature_flags(ds)
+    assert features.describe_compaction_unsupported_flags(reader, writer, features.manifest_base_path_refs(ds)) is None
+
+    source = str(tmp_path / "src.lance")
+    src = lance.write_dataset(_table(), source)
+    clone = str(tmp_path / "clone.lance")
+    src.shallow_clone(clone, reference=src.version)
+    cds = lance.dataset(clone)
+    refusal = features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(cds), features.manifest_base_path_refs(cds))
+    assert refusal is not None and "16" in refusal, f"the clone refusal must survive, got: {refusal}"
+
+
+def test_an_UNREADABLE_base_list_keeps_the_flag_16_refusal(tmp_path: pathlib.Path) -> None:
+    """The whitelist is loud on purpose, so the allowance only applies where the evidence is present.
+
+    If the manifest sets flag 16 and yet no `BasePath` could be parsed out of it — a renumbered field,
+    a wire type the walker stops on — we do not know which kind of base it is, and "we could not tell"
+    must read as the refusal rather than as permission. Same direction as every other gate here.
+    """
+    assert features.describe_compaction_unsupported_flags(16, 16, []) is not None
+    # A mixed manifest is a clone as far as this gate is concerned: one dataset-root base is enough.
+    mixed = [
+        features.BasePathRef(path="/x/external", is_dataset_root=False),
+        features.BasePathRef(path="/x/src.lance", is_dataset_root=True),
+    ]
+    assert features.describe_compaction_unsupported_flags(16, 16, mixed) is not None
+    # And an unrelated unknown flag is never waved through by the base-path allowance.
+    external_only = [features.BasePathRef(path="/x/external", is_dataset_root=False)]
+    assert features.describe_compaction_unsupported_flags(16 | 64, 16 | 64, external_only) is not None

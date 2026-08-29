@@ -67,12 +67,12 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
-from maintenance.services.base_refs import BaseRefs
 from maintenance.services.reconcile import MANIFEST_DIR, ReconcileReport
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
 from service_kit.lakehouse import trash, warehouse_records
+from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -270,7 +270,7 @@ def live_object_ids(root: str, storage_options: StorageOptions) -> set[str] | No
         if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
             return set()
         manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
-        dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+        dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
         return {str(v) for v in dataset.to_table(columns=["object_id"]).column("object_id").to_pylist() if v}
     except Exception:  # noqa: BLE001 — ANY failure here must fail toward not-deleting, not toward a partial set
         log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
@@ -363,7 +363,7 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     RustFS/S3 5xx and swallowing that would report a purge over bytes that are still there.
 
     ``protected`` is the #128d guard: the estate's foreign ``base_paths`` collected by
-    :func:`maintenance.services.base_refs.protected_roots`. When this location is one of them — or
+    :func:`service_kit.lakehouse.base_refs.protected_roots`. When this location is one of them — or
     sits under one — a live shallow clone resolves its data files through these bytes and deleting
     them breaks it. Refuses with :class:`ProtectedBaseError` rather than deleting.
 
@@ -617,8 +617,8 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions) -> BaseR
     gaps narrow the protection rather than widening the deletion, which is the safe direction — but a
     caller reading this should know the set is a floor, not a proof of completeness.
     """
-    from maintenance.services.base_refs import protected_roots
     from maintenance.services.optimize import discover_datasets
+    from service_kit.lakehouse.base_refs import protected_roots
 
     uris: list[str] = []
     for root in sorted(roots):
@@ -628,7 +628,7 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions) -> BaseR
             uris.extend(discover_datasets(fs, bucket).uris)
         except Exception as exc:  # noqa: BLE001 — an unlistable root must not abort the purge
             log.warning("trash_purge_base_ref_discovery_failed", extra={"root": root, "error": str(exc)})
-    return protected_roots(uris, storage_options)
+    return protected_roots(uris, storage_options, session=shared_lance_session())
 
 
 def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None) -> tuple[int, int]:

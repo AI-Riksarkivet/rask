@@ -99,6 +99,9 @@ def _dispatch_stage_workflow(
     trigger: StageTrigger,
     event_time: str | None = None,
     pre_row_count: int | None = None,
+    from_id: str = "",
+    to_id: str = "",
+    run_id: str = "",
 ) -> str:
     """Schedule `stage_run` for this trigger and return its instance id (S1).
 
@@ -110,6 +113,12 @@ def _dispatch_stage_workflow(
     a second watcher over the same job. Dapr answers a duplicate `schedule_new_workflow` for a live
     instance with an error, which is why that is caught and reported as the re-attach it is: the first
     instance is still watching, and that is the correct outcome, not a failure to dispatch.
+
+    `from_id`/`to_id`/`run_id` are what the JOB emits its own provenance under — the catalog
+    identifiers this hop moves and the run the mover already minted for it. They are handed over here
+    because this is the only layer that holds them: `resolve_stage_identity` runs in the handler, and
+    the trigger the workflow round-trips has never carried either. Defaulted empty so the seam stays
+    callable without them, which is also the runner's documented unwired case.
     """
     import dapr.ext.workflow as wf
 
@@ -135,6 +144,9 @@ def _dispatch_stage_workflow(
         token=token,
         lineage_json=lineage_json,
         trigger=carried,
+        from_id=from_id,
+        to_id=to_id,
+        run_id=run_id,
     )
     client = wf.DaprWorkflowClient()
     try:
@@ -310,6 +322,11 @@ async def handle_stage(
     its own service identity. Unauthorized -> ``DROP`` (redelivery won't grant the role): the cascade
     enforces the ReBAC, so a mover lacking the validator role genuinely cannot promote to gold.
 
+    A mover configured for a declared TRANSFORM resolves that record first, and a record it cannot
+    read — undeclared, or unreadable because no control root is configured — is DROPped and counted
+    like every other deterministic refusal. It used to RAISE out of this handler, which the
+    subscription answers 500 to and the broker redelivers into forever.
+
     ``dataset`` on the trigger names the lane that fired (bronze$events vs a page lane's
     bronze$pages, which share the ``medallion.bronze`` topic). A name that is not this mover's input is
     the other lane's and is DROPped; an ABSENT name makes no claim and proceeds.
@@ -377,7 +394,22 @@ async def handle_stage(
     # `trigger.project` RAW, not the validated `project` below — that resolution happens after this
     # guard, and moving it earlier would change the fail-closed ordering it exists for. An absent or
     # wrong project simply finds no record, and the guard falls back to env-only: the old behaviour.
-    declared_lane = await resolve_transform_async(settings, project=trigger.project or "") if settings.transform else None
+    try:
+        declared_lane = await resolve_transform_async(settings, project=trigger.project or "") if settings.transform else None
+    except UndeclaredTransformError as exc:
+        # DROP, never RAISE. This call sat outside every `try`, so a mover naming a transform the
+        # catalog has no declaration for — or one it cannot look up at all, which is what an empty
+        # control root and a project-less trigger both are — threw out of the handler and into the
+        # subscription route: a 500 per delivery, redelivered until maxDeliver, for a condition no
+        # redelivery can change. That is the poisoned subscription DATA-CONTRACT §7.3 and this
+        # module's header both forbid, and it is the loudest possible way to report nothing.
+        # Deterministic → the same DROP + counted refusal its sibling below already takes.
+        log.warning(
+            "medallion_stage_lane_undeclared",
+            extra={"transition": transition, "token": token, "project": trigger.project or "", "error": str(exc)},
+        )
+        record_refused(transition, "unresolvable_lane")
+        return _DROP
     accepted = accepted_input_names(env_from_dataset=settings.from_dataset, declared=declared_lane)
     if arrived is not None and arrived not in accepted:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
@@ -399,7 +431,12 @@ async def handle_stage(
     if raw_project is not None:
         if not is_safe_project(raw_project):
             # Deterministic garbage (would become an S3 prefix / lineage name) — DROP, never repair.
+            # COUNTED as well as logged, for `unconfined_uri`'s reason: a tenant id shaped like a
+            # traversal is the same evidence that someone is publishing triggers this mover must not
+            # honour, and a DROP is an ack — without a series there is nothing to alert on. The
+            # offending value stays on the log line; the counter carries only the closed reason.
             log.warning("medallion_stage_bad_project", extra={"transition": transition, "token": token})
+            record_refused(transition, "bad_project")
             return _DROP
         project = raw_project
     if project and not settings.control_root:
@@ -409,6 +446,11 @@ async def handle_stage(
             "medallion_stage_project_routing_disabled",
             extra={"transition": transition, "token": token, "project": project},
         )
+        # A DEPLOYMENT gap, and therefore permanent: every tenant trigger this mover ever receives
+        # halts here until an operator sets the registry root, and an operator is not prompted by a
+        # log line nobody is reading. A counted, alertable steady state is the instrument
+        # `docs/DECISIONS.md` names for exactly this (a repeating operational condition is a metric).
+        record_refused(transition, "routing_disabled")
         return _DROP
     # WHAT THIS RUN READS AND WRITES — the declared lane record when there is one, else the env,
     # project-qualified exactly as before. This is the line that decided a mover served one edge:
@@ -417,13 +459,17 @@ async def handle_stage(
     # these four names, so they follow the declaration automatically.
     try:
         identity = resolve_stage_identity(settings, spec=declared_lane, project=project)
-    except (UndeclaredTransformError, ValueError) as exc:
-        # A named-but-undeclared lane, or a declared id with no namespace. Both are DETERMINISTIC —
-        # redelivery cannot make a missing record appear — so DROP rather than RETRY, and say which.
+    except ValueError as exc:
+        # A declared id that names no namespace. DETERMINISTIC — redelivery cannot repair a record —
+        # so DROP rather than RETRY, and say which. `UndeclaredTransformError` was caught here too
+        # and could never arrive: `resolve_stage_identity` reads a spec it is handed and never
+        # resolves one, so the only raise site is the resolution above — where it now IS caught,
+        # rather than escaping the handler entirely.
         log.warning(
             "medallion_stage_lane_unresolvable",
             extra={"transition": transition, "token": token, "project": project, "error": str(exc)},
         )
+        record_refused(transition, "unresolvable_lane")
         return _DROP
     from_namespace = identity.from_namespace
     from_dataset = identity.from_dataset
@@ -447,6 +493,20 @@ async def handle_stage(
             )
             return _RETRY
         if not allowed:
+            # DROP, COUNT, LOG — AND EMIT NO LINEAGE. Ruled 2026-08-16 (`docs/DECISIONS.md`, "Lineage
+            # records what happened to DATA; an authorization denial is not a data event") against a
+            # proposal to emit a FAIL from exactly this branch, and the reasoning covers every
+            # PRE-FLIGHT halt above and below it — a malformed payload, an unsafe project, an
+            # unresolvable lane, a `from_uri` outside the root: nothing is read and nothing is
+            # written, so a FAIL run would mint provenance for a run that never ran, and a
+            # permanently un-granted mover would emit one on every trigger forever. `record_denied`
+            # is the right instrument; `test_mover_denied_when_not_authorized` pins the silence.
+            #
+            # THE RESIDUE, so it is not re-derived as this defect: the person whose cascade stopped is
+            # still told nothing. That belongs on the CONTROL lane (a `NAMED_ACTIONS` action carrying
+            # `extra.subject` = `trigger.originator`), which needs a `ControlAction`, a
+            # `NAMED_ACTIONS` member and a `NotificationReason` — three files in two other components,
+            # and a stored-reason compatibility surface. Not a mover-local change.
             record_denied(transition)
             log.warning(
                 "medallion_stage_denied",
@@ -619,6 +679,14 @@ async def handle_stage(
                             trigger=trigger,
                             event_time=event_time,
                             pre_row_count=pre_rows,
+                            # WHAT the job is moving, not merely where. These are the names the graph
+                            # and the FGA objects use, and the run the job's own events must MERGE
+                            # onto — all three resolved here and, until now, dropped here: the job
+                            # fell back to the URI's stem, naming a node no grant matches, so a
+                            # distributed hop's provenance reached nobody while acking SUCCESS.
+                            from_id=from_dataset,
+                            to_id=to_dataset,
+                            run_id=lineage_doc.run_id,
                         )
                         log.info(
                             "medallion_stage_dispatched_to_workflow",
@@ -680,11 +748,12 @@ async def handle_stage(
                     if to_dataset:
                         if settings.catalog_url:
                             # NOTHING LEFT TO REGISTER. `ensure_stage_output` above created the table,
-                            # which registered it — and registering again is not merely redundant:
-                            # `register_stage_output` resolves the location against the single
-                            # hardwired MEDALLION_CATALOG_ROOT, while a vended tenant location lives in
-                            # that tenant's warehouse. It would raise AFTER the Lance write committed,
-                            # which is ungoverned bytes plus a retry no redelivery can clear.
+                            # which registered it — and the telling-after-the-fact door that would
+                            # have registered it a second time is gone, because a second claim about
+                            # where this table lives can only disagree with the catalog's own: it
+                            # resolved the location against one hardwired root while a vended tenant
+                            # location lives in that tenant's warehouse, and it raised AFTER the Lance
+                            # write committed — ungoverned bytes plus a retry no redelivery clears.
                             span.set_attribute("lance.catalog.registered", to_dataset)
                         else:
                             # AN UNGOVERNED WRITE IS LOUD, NEVER SILENT. Without a catalog URL this

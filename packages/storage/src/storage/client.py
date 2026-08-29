@@ -33,6 +33,16 @@ def _env_first(names: tuple[str, ...]) -> str | None:
     return None
 
 
+def configured_endpoint() -> str | None:
+    """The deployment's OWN S3 endpoint, as `s3_client` resolves it when given none.
+
+    Public because a caller that honours a per-run endpoint override has to know when the override
+    IS the default — `RASK_S3_ENDPOINT_URL` and its two aliases are resolved in one place, and a
+    second copy of that precedence list in a service is exactly the drift this returns instead.
+    """
+    return _env_first(_ENDPOINT_ENVS)
+
+
 def derive_hcp_creds() -> dict[str, str] | None:
     """Opt-in HCP credential bridge; returns `{access_key, secret_key}` or None.
 
@@ -88,7 +98,7 @@ def s3_client(
         read_timeout=60,
     )
     kwargs: dict = {
-        "endpoint_url": endpoint or _env_first(_ENDPOINT_ENVS),
+        "endpoint_url": endpoint or configured_endpoint(),
         "region_name": os.getenv("AWS_REGION", "us-east-1"),
         "config": cfg,
     }

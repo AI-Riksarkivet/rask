@@ -59,7 +59,6 @@ def _settings(tmp_path: Path, **over: Any) -> MedallionSettings:
         "MEDALLION_PUB_TOPIC": "medallion.silver",
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_CATALOG_URL": "http://catalog.test",
-        "MEDALLION_CATALOG_ROOT": "s3://lance-catalog",
         "MEDALLION_FROM_URI": str(tmp_path / "bronze.lance"),
         "MEDALLION_TO_URI": str(tmp_path / "composed.lance"),
     }

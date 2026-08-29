@@ -90,12 +90,17 @@ class Store(BaseModel):
 #: `None` rather than a required field: the governed tiers genuinely do share the deployment default,
 #: and forcing every entry to repeat it would invite four copies of one value that drift apart.
 #:
-#: NOT YET SOLVED, and deliberately not faked here: `storage.s3_client(endpoint)` resolves CREDENTIALS
-#: from process env, so a store on a different provider needs its own credentials and there is nowhere
-#: to put them. Attaching a bucket that shares the deployment's credentials works today; attaching one
-#: that does not needs a secret reference resolved through the Dapr secret store (OpenBao), which is a
-#: separate change. Until then such a store fails with an auth error, which is at least a loud and
-#: explicable failure rather than a silently empty listing.
+#: SOLVED, by `secret` above — this note said the opposite until 2026-08-29 and the stale sentence was
+#: load-bearing. It read "NOT YET SOLVED … a store on a different provider needs its own credentials and
+#: there is nowhere to put them", which is false: `secret` names a Dapr/OpenBao bundle holding
+#: `{access_key, secret_key}`, and both readers of this registry resolve it fail-closed (the object
+#: browser's `_client_for`, and ingest's `objectstore.resolve_source_connection`). Left standing, it
+#: reads as licence to reach an external endpoint with the deployment's own keys — which is either a
+#: loud InvalidAccessKeyId or, when a bucket of that name exists here too, someone else's bytes served
+#: under the caller's URI with no error at all.
+#:
+#: A store that declares NO secret still uses the deployment's env credentials. That is an OPERATOR's
+#: registered decision (they wrote the entry), not a fallback a request can trigger.
 class StoreRegistry(BaseModel):
     """Every store the catalog knows, newest contract first.
 
@@ -162,3 +167,26 @@ def registered_stores(raw: str | None = None) -> list[Store]:
 def store_by_name(name: str, raw: str | None = None) -> Store | None:
     """One store by its registered name, or None — the membership check that replaced the Literal."""
     return next((s for s in registered_stores(raw) if s.name == name), None)
+
+
+def normalise_endpoint(endpoint: str | None) -> str:
+    """An endpoint reduced to what makes two of them the SAME store: no case, no trailing slash.
+
+    `https://Objects.Example.org/` and `https://objects.example.org` are one host, and a registry
+    lookup that treats them as two answers "not registered" for a store the operator did register.
+    Only the scheme and host are case-folded in practice — S3 endpoints carry no path — so a plain
+    lower-cased strip is the honest normalisation rather than a URL parse that invites more.
+    """
+    return (endpoint or "").strip().rstrip("/").lower()
+
+
+def store_for_endpoint(endpoint: str, bucket: str, raw: str | None = None) -> Store | None:
+    """The registered store holding `bucket` on `endpoint`, or None.
+
+    The lookup a caller needs when the ENDPOINT is what it was handed — an ingest run declaring
+    `{bucket, endpoint}` in its source options — rather than a store name from a URL. Both halves
+    must match: an endpoint alone can host many buckets, and a bucket name alone is exactly the
+    collision that makes an unresolved override dangerous (`pages` exists here too).
+    """
+    wanted = normalise_endpoint(endpoint)
+    return next((s for s in registered_stores(raw) if s.bucket == bucket and normalise_endpoint(s.endpoint) == wanted), None)

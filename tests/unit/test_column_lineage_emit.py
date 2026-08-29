@@ -317,7 +317,13 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
         trigger: Any,
         event_time: str | None = None,
         pre_row_count: int | None = None,
+        from_id: str = "",
+        to_id: str = "",
+        run_id: str = "",
     ) -> str:
+        # The identity the real dispatch hands the job (`from_id`/`to_id`/`run_id`) is accepted and
+        # unused here: this test is about the column edges the MOVER reconstructs after the job, and
+        # `test_the_job_is_told_which_tables_it_moves.py` is where that handover is asserted.
         _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_json)
         return "stage-ray-silver-t1-abc"
 

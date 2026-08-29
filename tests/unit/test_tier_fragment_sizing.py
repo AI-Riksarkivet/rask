@@ -34,7 +34,7 @@ presented as tuned.
 from __future__ import annotations
 
 import pytest
-from maintenance.services.tiers import GOLD_TARGET_ROWS, SILVER_TARGET_ROWS, target_rows_for
+from maintenance.services.tiers import GOLD_TARGET_ROWS, SILVER_TARGET_ROWS, target_rows_for, tier_of
 
 
 @pytest.mark.parametrize(
@@ -182,3 +182,59 @@ def test_the_tier_is_read_from_the_NAMESPACE_not_the_table_name() -> None:
     that lives in silver."""
     assert target_rows_for("s3://wh/acme-silver/gold_summary.lance") == SILVER_TARGET_ROWS
     assert target_rows_for("s3://wh/acme-gold/bronze_audit.lance") == GOLD_TARGET_ROWS
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("s3://lance-catalog/medallion/acme$bronze", 512),
+        ("s3://lance-catalog/medallion/acme$silver", SILVER_TARGET_ROWS),
+        ("s3://lance-catalog/medallion/acme$gold", GOLD_TARGET_ROWS),
+        ("s3://lance-catalog/medallion/acme-bronze", 512),
+        ("s3://lance-catalog/medallion/acme-gold", GOLD_TARGET_ROWS),
+    ],
+)
+def test_the_PROJECT_SCOPED_cascade_layout_is_tiered(uri: str, expected: int) -> None:
+    """A cascade tier under a PROJECT still lives beneath `medallion/`, and it must size like its tier.
+
+    The cascade is multi-tenant: `project_root` reroutes the whole medallion base per project and
+    `medallion/workflow.py::_qualified` prefixes the namespace, so the child of `medallion/` is
+    `<project>-<tier>` or the catalog-delimited `<project>$<tier>` rather than a bare tier. Both read
+    as untiered while the delimiter branch was tested BEFORE the `medallion` parent: `acme$bronze`
+    reduced to the namespace `acme`, which names no tier, so a project's bronze — the widest rows in
+    the estate — was handed Lance's default row-count sizing.
+    """
+    assert target_rows_for(uri) == expected
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("s3://wh/abc12345_bronze-media$pages", 512),
+        ("s3://wh/aa3bed10_silver-media$lines", SILVER_TARGET_ROWS),
+        ("s3://wh/deadbeef_gold-htr$alto", GOLD_TARGET_ROWS),
+    ],
+)
+def test_the_FLAT_layout_carries_cascade_LANES_too(uri: str, expected: int) -> None:
+    """The catalog vends `<uuid8>_<ns>$<table>` for EVERY table it governs — including the cascade's
+    own lanes, whose namespace is `<tier>-<lane>` rather than `<project>-<tier>`.
+
+    The flat branch reduced the namespace from the RIGHT only, which is the catalog's
+    `<project>-<tier>` convention. A lane reduces to its LANE that way (`bronze-media` -> `media`),
+    which names no tier — so precisely the datasets the cascade writes through the catalog fell back
+    to default sizing. Both reductions have to be tried, because one directory name carries both
+    conventions.
+    """
+    assert target_rows_for(uri) == expected
+
+
+def test_ALL_FIVE_layouts_the_estate_writes_resolve_to_a_tier() -> None:
+    """The coverage assertion, so a sixth layout cannot be added by fixing five in a helper and
+    leaving `tier_of` reading only some of them. Every shape here is one the live estate writes."""
+    assert [
+        tier_of("s3://wh/acme-bronze/pages.lance"),  # 1 nested catalog
+        tier_of("s3://lance-catalog/medallion/bronze-pages"),  # 2 cascade lane
+        tier_of("s3://wh/abc12345_acme-bronze$pages"),  # 3 flat catalog
+        tier_of("s3://lance-catalog/medallion/acme$bronze"),  # 4 project-scoped cascade
+        tier_of("s3://wh/abc12345_bronze-media$pages"),  # 5 flat cascade lane
+    ] == ["bronze"] * 5

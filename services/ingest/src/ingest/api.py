@@ -81,12 +81,20 @@ async def list_sources() -> list[SourceDescriptor]:
 class IngestRequest(BaseModel):
     """A source-agnostic request — I1/I2: no source-specific route, no dataset path.
 
-    `project` + `dataset` are this plane's TWO-level addressing and they do NOT mirror the catalog's
-    four-level hierarchy (`project > warehouse > namespace > table`). What `catalog_service.ensure`
-    actually does: creates a NAMESPACE named after the project, then a table id `{project}${dataset}`.
-    So `project` names a namespace, `dataset` is a table, the warehouse is never chosen, and a nested
-    namespace is unreachable. Named here so nobody reads these two fields as the hierarchy; the
-    conflation itself is open work.
+    `project` + `dataset` are this plane's TWO-level addressing, and they now RESOLVE into the
+    catalog's four-level hierarchy (`project > warehouse > namespace > table`) rather than being
+    conflated with it. `ingest/naming.py` owns that resolution, in one place, because two writers of
+    one convention drift: `project` selects the STORAGE ROOT via the warehouse registry, the NAMESPACE
+    is the project-qualified bronze TIER (`bronze_namespace_for("bind86")` -> `bind86-bronze`), and
+    `dataset` is the table within it (`bronze_table_id("bind86", "pages")` -> `bind86-bronze$pages`).
+    `catalog_service.ensure` takes that namespace and dataset and creates both if absent.
+
+    This docstring described the shape naming.py replaced — "creates a NAMESPACE named after the
+    project, then a table id `{project}${dataset}`" — and called the conflation open work. It is
+    closed. It mattered because `namespace:bind86` never existed in the governance store, so a run
+    composing that name got a 403 on a table nobody had granted anything on. What is STILL true is
+    that the warehouse is never chosen by the caller (the registry picks the project's active one) and
+    a deeper nested namespace is not addressable through this door.
     """
 
     kind: str = Field(description="registered source kind, e.g. 's3-prefix' | 'local-dir'")

@@ -163,12 +163,17 @@ export const grantMember = command(
 );
 
 /** Revoke one rung. The server REFUSES the last owner/manager — a project nobody can administer is
- *  not a state anyone can undo from inside the product, so the refusal arrives as a named 409. */
+ *  not a state anyone can undo from inside the product, so the refusal arrives as a named 409.
+ *  Query params, not a body: a DELETE body has no defined semantics and some intermediaries strip
+ *  it, so the annotator service binds `user`+`relation` from the query string. */
 export const revokeMember = command(
 	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
 	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
 		const result = parsed(
-			await write('DELETE', `/projects/${projectId}/members`, { user, relation }),
+			await write(
+				'DELETE',
+				`/projects/${projectId}/members?user=${enc(user)}&relation=${enc(relation)}`,
+			),
 			MemberListSchema,
 		);
 		if (result.ok) void fetchMembers({ projectId }).refresh();

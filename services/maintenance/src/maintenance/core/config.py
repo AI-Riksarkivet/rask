@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
+
+
+if TYPE_CHECKING:
+    import lance
 
 
 class MaintenanceSettings(BaseSettings):
@@ -240,7 +245,7 @@ class MaintenanceSettings(BaseSettings):
         )
 
 
-def shared_lance_session() -> object:
+def shared_lance_session() -> lance.Session:
     """The process-wide bounded Lance session (#102). Every maintenance open threads this, so a
     tick's second dataset (and the orphan scan's 500 version checkouts) HIT the cache instead of
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf

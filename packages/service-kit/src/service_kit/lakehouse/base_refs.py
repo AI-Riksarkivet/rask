@@ -35,6 +35,14 @@ WHY ONE PRE-PASS SERVES BOTH. #128d and #114 are the same question ("does anythi
 through these bytes?") asked by two callers. Fixing either alone re-opens the other: a purge guard
 leaves compaction free to rewrite the source, and a compaction guard leaves purge free to delete it.
 
+AND WHY IT LIVES IN SERVICE-KIT rather than inside the maintenance service, where it began. There is
+a THIRD caller: the catalog's on-demand maintenance doors run the same three verbs behind a UI button
+(``catalog/services/maintenance.py``), and a guard the cron has and the button does not is not a
+guard — it is a slower path to the same deleted bytes. The catalog cannot import the maintenance
+service, so leaving this there meant either an unguarded door or a second copy of the compare, and a
+duplicated "two spellings of one path" comparator is the failure mode :func:`normalise` documents:
+one that silently never matches looks exactly like having no guard at all.
+
 WHAT THIS DELIBERATELY DOES NOT DO. It does not try to be complete across an estate it cannot
 enumerate. If the referring dataset is in a bucket the caller did not pass, its reference is invisible
 here — which is why :func:`protected_roots` reports what it FAILED to read, and callers refuse rather
@@ -47,20 +55,28 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import lance
 from pydantic import BaseModel, Field
 
-from maintenance.core.config import shared_lance_session
 from service_kit.lakehouse.features import manifest_base_paths
+from service_kit.lakehouse.lance_session import lance_session
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    import lance
+
     from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
+
+#: Cache caps for the session this module mints when a caller supplies none. The same numbers the
+#: maintenance pod defaults to (`MaintenanceSettings.lance_metadata_cache_mb` / `_index_cache_mb`),
+#: sized for a few-hundred-Mi pod — against Lance's own 1 GiB + 6 GiB PER OPEN, which is the #102
+#: defect. A service with a different memory budget passes its own `session`.
+DEFAULT_METADATA_CACHE_MB = 128
+DEFAULT_INDEX_CACHE_MB = 256
 
 
 class BaseRefs(BaseModel):
@@ -117,7 +133,12 @@ def normalise(uri: str) -> str:
 _normalise = normalise
 
 
-def protected_roots(dataset_uris: Iterable[str], storage_options: StorageOptions | None = None) -> BaseRefs:
+def protected_roots(
+    dataset_uris: Iterable[str],
+    storage_options: StorageOptions | None = None,
+    *,
+    session: lance.Session | None = None,
+) -> BaseRefs:
     """Collect every root referenced by any of ``dataset_uris``, so callers can refuse to touch them.
 
     Opens each dataset and reads its manifest's ``base_paths``. A dataset that references only itself
@@ -140,16 +161,28 @@ def protected_roots(dataset_uris: Iterable[str], storage_options: StorageOptions
     ``maintenance_base_refs_incomplete`` and proceeds — so an empty protected set read as "no clones in
     this estate" rather than "this pre-pass cannot open anything".
 
-    The ``session`` is the #102 bounded one for the same reason every other maintenance open threads it
-    (``orphans.py``, ``purge.py``, ``reconcile.py``, ``optimize.py``): without it each dataset mints
-    Lance's default 1 GiB metadata + 6 GiB index caches, against a pod limited to 512Mi.
+    The Lance open is ALWAYS SESSION-BOUND (#102), and never optionally: without a session each
+    dataset mints Lance's own 1 GiB metadata + 6 GiB index cache ceilings and discards them with the
+    handle, and this function opens every dataset in the estate in a loop. ``session`` lets a caller
+    thread the same bounded session its other passes use — the maintenance service does (`sweep` and
+    `purge` pass `shared_lance_session()`; the catalog's on-demand door has no session of its own and
+    correctly takes the default minted below), so a tick's
+    later opens hit the cache instead of re-minting it — and when it is omitted this mints one at
+    :data:`DEFAULT_METADATA_CACHE_MB` / :data:`DEFAULT_INDEX_CACHE_MB` rather than leaving the open
+    unbounded. A caller can narrow the caps; it cannot opt out of having them.
+
+    ``lance`` is imported inside the call, not at module scope, for the reason every other lakehouse
+    module in this library does it: ``service-kit``'s base install carries no pylance, and a top-level
+    import would make merely importing ``service_kit.lakehouse`` require the ``lancekit`` extra.
     """
+    import lance
+
+    if session is None:
+        session = lance_session(DEFAULT_METADATA_CACHE_MB << 20, DEFAULT_INDEX_CACHE_MB << 20)
     refs = BaseRefs()
     for uri in dataset_uris:
         try:
-            paths = manifest_base_paths(
-                lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
-            )
+            paths = manifest_base_paths(lance.dataset(uri, storage_options=storage_options, session=session))
         except Exception as exc:
             refs.unreadable.append((uri, f"{type(exc).__name__}: {exc}"))
             continue

@@ -148,7 +148,7 @@ def open_dataset(dataset_uri: str, storage_options: dict[str, str] | None = None
     Split out of :func:`referenced_paths` so :func:`scan_dataset` can hold the handle and hand it to
     the layout gate (which reads the manifest's feature flags) without a second open.
     """
-    return lance.dataset(dataset_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+    return lance.dataset(dataset_uri, storage_options=storage_options, session=shared_lance_session())
 
 
 def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = None) -> tuple[set[str], int, str | None]:

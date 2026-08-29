@@ -20,7 +20,7 @@ import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import (
     record_dataset_swept,
@@ -31,11 +31,11 @@ from maintenance.core.metrics import (
     record_run_started,
     record_trashed_skipped,
 )
-from maintenance.services import base_refs, purge
+from maintenance.services import purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse import base_refs, maintenance_policies, trash, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -230,7 +230,11 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     #
     # Cost is one manifest read per dataset and no data file is opened — the same order as discovery
     # itself, paid once per tick.
-    protected = base_refs.protected_roots(uris, options)
+    # The SERVICE's session, not one minted per call: `MAINTENANCE_LANCE_METADATA_CACHE_MB` /
+    # `_INDEX_CACHE_MB` are the operator's cap, and this pre-pass is the one loop that opens EVERY
+    # dataset in the estate. Omitting it let base_refs mint its own default-sized session, so a
+    # tuned-down cap silently did not apply here and a second session competed with the tick's.
+    protected = base_refs.protected_roots(uris, options, session=shared_lance_session())
     if protected.protected:
         log.info("maintenance_protected_bases", extra={"count": len(protected.protected), "roots": sorted(protected.protected)[:20]})
     if protected.unreadable:
