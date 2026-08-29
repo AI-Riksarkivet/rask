@@ -59,7 +59,7 @@ silently removes a real defect from the backlog. **Recounted 2026-08-29 by count
 themselves** (Appendix A's 280 + Appendix D's 24), after the 2026-08-28/29 drain campaign, the
 adversarial re-audit of its ledger-keeping (see *Ledger corrections* below), and the batch-4 drain
 (17 rows, closed 2026-08-29 in the working tree):
-**130 OPEN, 34 PARTIAL, 107 FIXED, 9 OWNER** (a design decision only the owner can make),
+**118 OPEN, 34 PARTIAL, 119 FIXED, 9 OWNER** (a design decision only the owner can make),
 **20 DISSOLVED** (the code the finding described was deleted or moved into a sealed runner),
 **2 OBSOLETE, 2 WRONG**. The three rows the drain campaign had mislabelled WRONG were relabelled
 (`CAT-CORE-08` → PARTIAL, `ANN-05` → OWNER, `ING-09` → DISSOLVED); the two WRONG standing now
@@ -67,26 +67,26 @@ adversarial re-audit of its ledger-keeping (see *Ledger corrections* below), and
 `SK-14`'s did not: it split into a refuted half and a half blocked on the unlanded `SK-08`, so it
 stands **PARTIAL**, not closed (each row records the reasoning).
 
-Of what remains open or partial: **7 high, 89 medium, 68 low.**
+Of what remains open or partial: **7 high, 88 medium, 57 low.**
 
 | Scope | Findings | OPEN | PARTIAL | FIXED | OWNER | DISSOLVED | OBSOLETE | WRONG |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `catalog-api` | 20 | 10 | 2 | 6 | 1 | 0 | 0 | 1 |
 | `catalog-core` | 18 | 9 | 1 | 7 | 1 | 0 | 0 | 0 |
-| `ingest-flow` | 18 | 5 | 3 | 8 | 2 | 0 | 0 | 0 |
+| `ingest-flow` | 18 | 2 | 3 | 11 | 2 | 0 | 0 | 0 |
 | `ingest-domain` | 18 | 7 | 3 | 7 | 0 | 1 | 0 | 0 |
-| `annotator` | 20 | 11 | 0 | 8 | 1 | 0 | 0 | 0 |
-| `lineage` | 16 | 7 | 2 | 7 | 0 | 0 | 0 | 0 |
+| `annotator` | 20 | 7 | 0 | 12 | 1 | 0 | 0 | 0 |
+| `lineage` | 16 | 3 | 2 | 11 | 0 | 0 | 0 | 0 |
 | `medallion` | 16 | 1 | 4 | 7 | 1 | 0 | 2 | 1 |
 | `viewer-search` | 24 | 9 | 3 | 12 | 0 | 0 | 0 | 0 |
 | `maintenance` | 15 | 7 | 2 | 6 | 0 | 0 | 0 | 0 |
-| `flows-fleet` | 20 | 6 | 0 | 14 | 0 | 0 | 0 | 0 |
+| `flows-fleet` | 20 | 5 | 0 | 15 | 0 | 0 | 0 | 0 |
 | `service-kit-core` | 22 | 12 | 2 | 8 | 0 | 0 | 0 | 0 |
 | `service-kit-governed` | 17 | 13 | 3 | 1 | 0 | 0 | 0 | 0 |
 | `packages-small` | 27 | 21 | 1 | 4 | 1 | 0 | 0 | 0 |
 | `ratch` | 19 | 0 | 0 | 0 | 0 | 19 | 0 | 0 |
 | cross-service (structure + duplication) | 34 | 12 | 8 | 12 | 2 | 0 | 0 | 0 |
-| **total** | **304** | **130** | **34** | **107** | **9** | **20** | **2** | **2** |
+| **total** | **304** | **118** | **34** | **119** | **9** | **20** | **2** | **2** |
 
 (Appendix D's 22 FIXED + 2 OBSOLETE are folded into their scopes' FIXED/OBSOLETE columns; `ratch`'s
 19 rows went DISSOLVED with the package on 2026-08-28.)
@@ -103,6 +103,19 @@ closed another 85 (batch 4's 14 included), put 9 to the owner and refuted 2 (`ME
 `catalog-api-08` — each re-verified against HEAD before the label stood); 164 remain open or partial.
 
 ## Ledger corrections (2026-08-29)
+
+**A commit message claimed 26 closures the file did not carry (2026-08-29).** `d3dd4452`'s message
+lists 26 findings as FIXED. At the moment it was written the file carried **14** — the batch-4 rows.
+The 12 batch-5 rows (`ingest-flow-15/17/18`, `F-LIN-13/14/15/16`, `ANN-17/18/19/20`,
+`COMPUTE-UNBOUNDED-QUERY-PARAMS`) had their CODE committed in the same push and were genuinely fixed
+in the tree, but their rows were never flipped: the ledger pass ran before batch 5 finished, and the
+two were conflated when the message was written. The code was right and the record was wrong — the
+same class of defect the re-audit above was commissioned to find, committed while correcting it.
+Closed here: the 12 rows are flipped against the tree (each verified present before being written),
+the scorecard is recounted (130→118 OPEN, 107→119 FIXED), and the severity line is recomputed
+(164→152, matching OPEN+PARTIAL). `F-LIN-14` is included: its row lagged a further pass because the
+agent flipping it hit a session limit mid-file.
+
 
 An adversarial re-audit of the drain campaign found the LEDGER — not the code — was its least
 trustworthy artefact, and this section is the record of putting that right. Nothing here re-opens a
@@ -376,7 +389,7 @@ their real dependencies — closing the undeclared-import hole several findings 
 | `VS-13` | **FIXED** | med | L | The search service has no authn/authz at all yet accepts a raw SQL `where` expression ANDed into every query | `services/search/src/search/api/v1/router.py:294` |
 | `X9` | **FIXED** | med | S | `make_service_app` publishes /docs, /redoc and /openapi.json unconditionally, while all seven lance services gate them behind a *_DOCS… | `packages/service-kit/src/service_kit/__init__.py:126` |
 | `catalog-api-12` | **OPEN** | med | S | The batch authorizer loops sequential fga.check calls for owner-tier operations instead of batch_check | `services/catalog/src/catalog/api/fga_deps.py:383` |
-| `F-LIN-13` | **OPEN** | low | S | A loop of sequential single check() calls where the module's own batch_check filter is available, and a duplicate-laden batch payload | `services/lineage/src/lineage/api/v1/endpoints/demo.py:148` |
+| `F-LIN-13` | **FIXED** | low | S | A loop of sequential single check() calls where the module's own batch_check filter is available, and a duplicate-laden batch payload | `services/lineage/src/lineage/api/v1/endpoints/demo.py:148` |
 | `ING-17` | **OPEN** | low | S | The queue diagnostic returns raw exception text in its response body, and the catalog's existence probe treats any exception as 'absent' | `services/ingest/src/ingest/queue_health.py:125` |
 | `MAINT-14` | **FIXED** | low | S | docs_enabled defaults to True and the chart never sets it false, so /docs and /openapi.json are served in production despite the comment… | `services/maintenance/src/maintenance/core/config.py:32` |
 | `MED-010` | **WRONG** | low | S | The service-token comparison (env read + dev-open + compare_digest) has a second home in `authorize_produce`, though the dual-auth… *(2026-08-29: REFUTED, verified against HEAD — the env-read step fell with MED-009's fix (`settings.app_api_token`), and the remaining comparison cannot delegate to the shared body: `require_dapr_token`/`service_principal` raise on failure where the dual-auth door must fall through to the OIDC bearer path, and unset-token is dev-open here vs a refusal there — deliberate, documented contract differences, not a drift-prone copy.)* | `services/medallion/src/medallion/api/produce_auth.py:76` |
@@ -555,7 +568,7 @@ The ingest/medallion/flows/annotator planes lose, duplicate, or strand work. The
 | `ingest-flow-14` | **FIXED** | med | S | publish_units awaits one JetStream publish per unit and discards the PubAck, so a chunk is 1000 sequential round-trips and dedupes are… | `services/ingest/src/ingest/queue.py:214` |
 | `ratch-006` | **DISSOLVED** | med | M | No retry or backoff anywhere on the model-server HTTP boundary, in a pipeline designed for hours-long runs | `packages/ratch/src/ratch/clients/base.py:43` |
 | `ratch-013` | **DISSOLVED** | med | S | Two ffmpeg subprocesses run with no timeout while every sibling ffmpeg call sets one | `packages/ratch/src/ratch/modalities/av/thumbnails.py:51` |
-| `ingest-flow-17` | **OPEN** | low | S | ensure_stream treats every add_stream exception as "already exists" and logs it at DEBUG | `services/ingest/src/ingest/queue.py:148` |
+| `ingest-flow-17` | **FIXED** | low | S | ensure_stream treats every add_stream exception as "already exists" and logs it at DEBUG | `services/ingest/src/ingest/queue.py:148` |
 | `ratch-019` | **DISSOLVED** | low | M | `_gate_filter` inlines every admitted doc id into one unbounded SQL `IN` list | `packages/ratch/src/ratch/core/driver.py:184` |
 
 ### E4 — Error contract: one taxonomy, no fail-open, no silent swallow
@@ -913,12 +926,12 @@ The user's original complaint, quantified: five modules over 700 lines carrying 
 | `ingest-flow-10` | **OPEN** | med | M | drain_chunk and finalize_run are oversized multi-purpose functions with nested closures and a coroutine redefined inside a loop | `services/ingest/src/ingest/worker.py:289` |
 | `ingest-flow-12` | **OWNER** | med | M | The scope is ~45-58% prose (52% overall, measured), and the prose is PR narrative — dated measurements, named test files, and a changelog… | `services/ingest/src/ingest/runtime.py:29` |
 | `ratch-012` | **DISSOLVED** | med | L | Six functions run 65-120 lines doing several distinct jobs, two of them near-duplicates of each other | `packages/ratch/src/ratch/cli/speaker.py:177` |
-| `ANN-17` | **OPEN** | low | S | Throwaway class as a response stand-in, and a doubled `.json()` parse, in the publish transport | `services/annotator/src/annotator/projects/lakehouse.py:155` |
-| `ANN-19` | **OPEN** | low | S | Function-local stdlib imports beyond the cases the convention justifies | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:499` |
-| `ANN-20` | **OPEN** | low | S | Member grant/revoke uses DELETE with a required request body | `services/annotator/src/annotator/api/v1/endpoints/members.py:136` |
+| `ANN-17` | **FIXED** | low | S | Throwaway class as a response stand-in, and a doubled `.json()` parse, in the publish transport | `services/annotator/src/annotator/projects/lakehouse.py:155` |
+| `ANN-19` | **FIXED** | low | S | Function-local stdlib imports beyond the cases the convention justifies | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:499` |
+| `ANN-20` | **FIXED** | low | S | Member grant/revoke uses DELETE with a required request body | `services/annotator/src/annotator/api/v1/endpoints/members.py:136` |
 | `CAT-CORE-17` | **OPEN** | low | S | `create_table` is a 36-line pass-through that forwards every argument to `_create_table_direct` | `services/catalog/src/catalog/services/dataplane.py:155` |
-| `COMPUTE-UNBOUNDED-QUERY-PARAMS` | **OPEN** | low | S | `lines` is forwarded unbounded to the Ray dashboard; both it and `tail` are declared without `Annotated[..., Query(...)]` | `services/compute/src/compute/routes.py:35` |
-| `F-LIN-14` | **OPEN** | low | S | Only one of eight routers under api/v1/endpoints/ carries a version prefix, producing a double-/api path for ingest | `services/lineage/src/lineage/api/v1/endpoints/ingest.py:22` |
+| `COMPUTE-UNBOUNDED-QUERY-PARAMS` | **FIXED** | low | S | `lines` is forwarded unbounded to the Ray dashboard; both it and `tail` are declared without `Annotated[..., Query(...)]` | `services/compute/src/compute/routes.py:35` |
+| `F-LIN-14` | **FIXED** | low | S | Only one of eight routers under api/v1/endpoints/ carries a version prefix, producing a double-/api path for ingest | `services/lineage/src/lineage/api/v1/endpoints/ingest.py:22` |
 | `GW-ROUTE-TUPLE` | **FIXED** | low | S | Route rows are positional 4-tuples read by index, and `_merged_openapi` returns a bare `dict` | `services/gateway/src/gateway/__init__.py:94` |
 | `ING-18` | **PARTIAL** | low | S | Query-parameter clamping done by hand instead of declared, and a frozen-model idiom used on a mutable model *(2026-08-29: demoted from FIXED — `Query(ge=1, le=200)` is declared at api.py:446, but two sites survive: the now-dead hand-clamp `min(max(limit, 0), 200)` at api.py:470, six lines below the :444 comment claiming it was replaced, and the frozen-model `model_copy(update=...)` idiom at api.py:550.)* | `services/ingest/src/ingest/api.py:232` |
 | `MAINT-13` | **OPEN** | low | M | Routes are registered at import time from a module-level get_settings(), with tags on each route instead of the APIRouter | `services/maintenance/src/maintenance/api/routes.py:157` |
@@ -1063,11 +1076,11 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 | `VS-16` | **PARTIAL** | med | M | Voice similarity issues one Lance scan per hit (N+1) and a fresh ThreadPoolExecutor per encoder call | `services/viewer/src/viewer/services/voice_service.py:423` |
 | `catalog-api-11` | **OPEN** | med | M | Cascade and enumeration paths await independent object-store I/O one item at a time | `services/catalog/src/catalog/api/v1/endpoints/tables.py:148` |
 | `ingest-flow-13` | **FIXED** | med | S | A boto3 client is constructed per staging call (twice per read/purge), and the S3 response bodies are never closed | `services/ingest/src/ingest/staging.py:310` |
-| `ingest-flow-15` | **OPEN** | med | S | InMemoryRunStore grows without bound and re-sorts the whole map on every recent() call | `services/ingest/src/ingest/runs.py:100` |
+| `ingest-flow-15` | **FIXED** | med | S | InMemoryRunStore grows without bound and re-sorts the whole map on every recent() call | `services/ingest/src/ingest/runs.py:100` |
 | `ratch-005` | **DISSOLVED** | med | S | Every vLLM client opens an httpx connection pool that nothing ever closes | `packages/ratch/src/ratch/clients/base.py:34` |
 | `ANN-11` | **OPEN** | low | M | Actor documents grow without bound and are fully re-serialized on every event | `services/annotator/src/annotator/projects/actor.py:171` |
 | `F-LIN-09` | **FIXED** | low | S | The AGE pool leaks if any of the seven lifespan bootstrap steps fails after pool.open() | `services/lineage/src/lineage/main.py:62` |
-| `F-LIN-15` | **OPEN** | low | S | Module-level mutable caches in the demo endpoint, with a test-only reset seam instead of app.state | `services/lineage/src/lineage/api/v1/endpoints/demo.py:75` |
+| `F-LIN-15` | **FIXED** | low | S | Module-level mutable caches in the demo endpoint, with a test-only reset seam instead of app.state | `services/lineage/src/lineage/api/v1/endpoints/demo.py:75` |
 | `ING-11` | **FIXED** | low | S | The OpenFGA client is built on app.state and never closed — the lifespan's cleanup block disposes only the workflow runtime | `services/ingest/src/ingest/__init__.py:85` |
 | `MAINT-03` | **FIXED** | low | S | reconcile's load_sources awaits six independent stores sequentially where one asyncio.gather would do | `services/maintenance/src/maintenance/services/reconcile.py:511` |
 | `PS-11` | **OPEN** | low | S | tracker owns an Engine + a long-lived Session but is not a context manager | `packages/tracker/src/tracker/_base.py:71` |
@@ -1223,7 +1236,7 @@ Boundaries carried as `dict[str, Any]`, routes returning bare dicts (no response
 | `CAT-CORE-15` | **OPEN** | low | S | Maintenance ops type their dataset parameter as `Any` where a small Protocol would state the contract (style, not a gate violation) | `services/catalog/src/catalog/services/maintenance.py:21` |
 | `CAT-CORE-16` | **OPEN** | low | S | `@dataclass` value object and a duplicated legacy type alias in the data plane | `services/catalog/src/catalog/services/dataplane.py:724` |
 | `CP-CR-UNVALIDATED` | **OPEN** | low | M | Kubernetes CRs are walked as `dict[str, Any]` with `.get()` chains instead of validated at the boundary | `services/controlplane/src/controlplane/service.py:24` |
-| `F-LIN-16` | **OPEN** | low | S | Generic return widened to Any internally, bare list defaults on two Pydantic fields, and unannotated conn params | `services/lineage/src/lineage/api/fga_deps.py:246` |
+| `F-LIN-16` | **FIXED** | low | S | Generic return widened to Any internally, bare list defaults on two Pydantic fields, and unannotated conn params | `services/lineage/src/lineage/api/fga_deps.py:246` |
 | `MED-013` | **PARTIAL** | low | S | Two handler seams are typed `Any` with an ANN401 suppression while every sibling handler is concretely typed | `services/medallion/src/medallion/services/publication_trigger.py:66` |
 | `PS-12` | **OPEN** | low | S | `TrackerProtocol` omits `flush()`, which is in every backend's documented usage | `packages/tracker/src/tracker/protocol.py:11` |
 | `PS-14` | **OPEN** | low | S | `@dataclass` used for a value object (Pydantic-only estate) | `packages/validate/src/validate/rules.py:12` |
@@ -1248,7 +1261,7 @@ Whole modules, packages and settings with zero callers — including one that re
 | `PS-09` | **OWNER** | med | S | `packages/tracker` has zero consumers and reintroduces the relational store P7a removed — while pulling sqlmodel + psycopg into the root… | `packages/tracker/src/tracker/__init__.py:1` |
 | `PS-13` | **OPEN** | med | S | `validate/rules.py` is entirely unconsumed — 5 exported symbols, 0 callers, 0 tests | `packages/validate/src/validate/rules.py:20` |
 | `ratch-008` | **DISSOLVED** | med | S | Two whole modules and four helpers/settings with no caller anywhere in the repo | `packages/ratch/src/ratch/lineage.py:1` |
-| `ANN-18` | **OPEN** | low | S | Shutdown closes resource slots the annotator never populates | `services/annotator/src/annotator/main.py:104` |
+| `ANN-18` | **FIXED** | low | S | Shutdown closes resource slots the annotator never populates | `services/annotator/src/annotator/main.py:104` |
 | `F-LIN-12` | **FIXED** | low | S | An unused module constant, and a 45-line 'consumer side' of the run hierarchy that no production code reads | `services/lineage/src/lineage/main.py:38` |
 | `ING-16` | **OPEN** | low | S | Three dead entry points, two of them carrying docstrings that assert they are load-bearing | `services/ingest/src/ingest/lineage.py:69` |
 | `MED-015` | **FIXED** | low | S | Unreachable return, a stale line reference, a truncated docstring — plus one inline comment (not a docstring) whose open-count claim is… | `services/medallion/src/medallion/services/ray_submit.py:199` |
@@ -1256,7 +1269,7 @@ Whole modules, packages and settings with zero callers — including one that re
 | `PS-22` | **OPEN** | low | S | Orphaned `#:` doc-comment in `submit.py` documents a constant that no longer exists | `packages/ray-kit/src/ray_kit/submit.py:45` |
 | `SK-21` | **OPEN** | low | S | Stale references to deleted packages, migrated gates and a renamed frontend layout | `packages/service-kit/src/service_kit/openlineage.py:17` |
 | `catalog-api-20` | **OPEN** | low | S | Two task-listing routes declare a CurrentToken dependency their bodies never use | `services/catalog/src/catalog/api/v1/endpoints/tables.py:479` |
-| `ingest-flow-18` | **OPEN** | low | S | Unreferenced helper and a legacy field still written on every manifest | `services/ingest/src/ingest/lander.py:235` |
+| `ingest-flow-18` | **FIXED** | low | S | Unreferenced helper and a legacy field still written on every manifest | `services/ingest/src/ingest/lander.py:235` |
 
 ---
 
@@ -1528,10 +1541,10 @@ sites and the evidence as measured at `871b5e14`.
 | `ingest-flow-12` | **OWNER** | E7 | med | readability | M | The scope is ~45-58% prose (52% overall, measured), and the prose is PR narrative — dated measurements, named test files, and a changelog of past defects | `services/ingest/src/ingest/runtime.py:29`, `services/ingest/src/ingest/lander.py:147` *(+5 more)* |
 | `ingest-flow-13` | **FIXED** | E8 | med | resources | S | A boto3 client is constructed per staging call (twice per read/purge), and the S3 response bodies are never closed | `services/ingest/src/ingest/staging.py:310`, `services/ingest/src/ingest/staging.py:104` *(+3 more)* |
 | `ingest-flow-14` | **FIXED** | E3 | med | resilience | S | publish_units awaits one JetStream publish per unit and discards the PubAck, so a chunk is 1000 sequential round-trips and dedupes are reported as accepted | `services/ingest/src/ingest/queue.py:214`, `services/ingest/src/ingest/queue.py:216` *(+1 more)* |
-| `ingest-flow-15` | **OPEN** | E8 | med | resources | S | InMemoryRunStore grows without bound and re-sorts the whole map on every recent() call | `services/ingest/src/ingest/runs.py:100`, `services/ingest/src/ingest/runs.py:105` *(+1 more)* |
+| `ingest-flow-15` | **FIXED** | E8 | med | resources | S | InMemoryRunStore grows without bound and re-sorts the whole map on every recent() call | `services/ingest/src/ingest/runs.py:100`, `services/ingest/src/ingest/runs.py:105` *(+1 more)* |
 | `ingest-flow-16` | **PARTIAL** | E4 | low | typing | S | Generator workflows annotated as returning their final value, plus Any seams and a stale type-ignore that the QueueMessage Protocol already covers | `services/ingest/src/ingest/workflow.py:170`, `services/ingest/src/ingest/workflow.py:341` *(+7 more)* |
-| `ingest-flow-17` | **OPEN** | E3 | low | error-handling | S | ensure_stream treats every add_stream exception as "already exists" and logs it at DEBUG | `services/ingest/src/ingest/queue.py:148`, `services/ingest/src/ingest/queue.py:151` *(+2 more)* |
-| `ingest-flow-18` | **OPEN** | E12 | low | dead-code | S | Unreferenced helper and a legacy field still written on every manifest | `services/ingest/src/ingest/lander.py:235`, `services/ingest/src/ingest/staging.py:98` |
+| `ingest-flow-17` | **FIXED** | E3 | low | error-handling | S | ensure_stream treats every add_stream exception as "already exists" and logs it at DEBUG | `services/ingest/src/ingest/queue.py:148`, `services/ingest/src/ingest/queue.py:151` *(+2 more)* |
+| `ingest-flow-18` | **FIXED** | E12 | low | dead-code | S | Unreferenced helper and a legacy field still written on every manifest | `services/ingest/src/ingest/lander.py:235`, `services/ingest/src/ingest/staging.py:98` |
 
 **Unfiled extras** — spotted by the verifier, not yet issues (file them with the epic named):
 
@@ -1645,10 +1658,10 @@ sites and the evidence as measured at `871b5e14`.
 | `ANN-11` | **OPEN** | E8 | low | resources | M | Actor documents grow without bound and are fully re-serialized on every event | `services/annotator/src/annotator/projects/actor.py:171`, `services/annotator/src/annotator/projects/actor.py:212` *(+3 more)* |
 | `ANN-15` | **FIXED** | E11 | low | typing | S | `@dataclass` on a value object where the house rule is Pydantic | `services/annotator/src/annotator/projects/saga.py:38`, `services/annotator/src/annotator/projects/saga.py:93` |
 | `ANN-16` | **FIXED** | E11 | low | typing | S | `Any` used for collaborators that already have a declared Protocol | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:158`, `services/annotator/src/annotator/api/v1/endpoints/project_events.py:165` *(+7 more)* |
-| `ANN-17` | **OPEN** | E7 | low | readability | S | Throwaway class as a response stand-in, and a doubled `.json()` parse, in the publish transport | `services/annotator/src/annotator/projects/lakehouse.py:155`, `services/annotator/src/annotator/projects/lakehouse.py:103` |
-| `ANN-18` | **OPEN** | E12 | low | dead-code | S | Shutdown closes resource slots the annotator never populates | `services/annotator/src/annotator/main.py:104` |
-| `ANN-19` | **OPEN** | E7 | low | structure | S | Function-local stdlib imports beyond the cases the convention justifies | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:499`, `services/annotator/src/annotator/projects/project_actor.py:380` *(+2 more)* |
-| `ANN-20` | **OPEN** | E7 | low | fastapi | S | Member grant/revoke uses DELETE with a required request body | `services/annotator/src/annotator/api/v1/endpoints/members.py:136` |
+| `ANN-17` | **FIXED** | E7 | low | readability | S | Throwaway class as a response stand-in, and a doubled `.json()` parse, in the publish transport | `services/annotator/src/annotator/projects/lakehouse.py:155`, `services/annotator/src/annotator/projects/lakehouse.py:103` |
+| `ANN-18` | **FIXED** | E12 | low | dead-code | S | Shutdown closes resource slots the annotator never populates | `services/annotator/src/annotator/main.py:104` |
+| `ANN-19` | **FIXED** | E7 | low | structure | S | Function-local stdlib imports beyond the cases the convention justifies | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:499`, `services/annotator/src/annotator/projects/project_actor.py:380` *(+2 more)* |
+| `ANN-20` | **FIXED** | E7 | low | fastapi | S | Member grant/revoke uses DELETE with a required request body | `services/annotator/src/annotator/api/v1/endpoints/members.py:136` |
 
 **Unfiled extras** — spotted by the verifier, not yet issues (file them with the epic named):
 
@@ -1702,10 +1715,10 @@ sites and the evidence as measured at `871b5e14`.
 | `F-LIN-06` | **FIXED** | E6 | low | duplication | S | prune_runs' batch size is duplicated as a Python constant and a literal baked into the Cypher — a change to one silently under-prunes | `services/lineage/src/lineage/services/repository.py:291`, `services/lineage/src/lineage/services/repository.py:292` *(+1 more)* |
 | `F-LIN-09` | **FIXED** | E8 | low | resources | S | The AGE pool leaks if any of the seven lifespan bootstrap steps fails after pool.open() | `services/lineage/src/lineage/main.py:62`, `services/lineage/src/lineage/main.py:81` *(+2 more)* |
 | `F-LIN-12` | **FIXED** | E12 | low | dead-code | S | An unused module constant, and a 45-line 'consumer side' of the run hierarchy that no production code reads | `services/lineage/src/lineage/main.py:38`, `services/lineage/src/lineage/models.py:290` *(+2 more)* |
-| `F-LIN-13` | **OPEN** | E1 | low | fga | S | A loop of sequential single check() calls where the module's own batch_check filter is available, and a duplicate-laden batch payload | `services/lineage/src/lineage/api/v1/endpoints/demo.py:148`, `services/lineage/src/lineage/api/v1/endpoints/columns.py:61` *(+1 more)* |
-| `F-LIN-14` | **OPEN** | E7 | low | structure | S | Only one of eight routers under api/v1/endpoints/ carries a version prefix, producing a double-/api path for ingest | `services/lineage/src/lineage/api/v1/endpoints/ingest.py:22`, `services/lineage/src/lineage/api/v1/endpoints/datasets.py:21` *(+4 more)* |
-| `F-LIN-15` | **OPEN** | E8 | low | resources | S | Module-level mutable caches in the demo endpoint, with a test-only reset seam instead of app.state | `services/lineage/src/lineage/api/v1/endpoints/demo.py:75`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:76` *(+1 more)* |
-| `F-LIN-16` | **OPEN** | E11 | low | typing | S | Generic return widened to Any internally, bare list defaults on two Pydantic fields, and unannotated conn params | `services/lineage/src/lineage/api/fga_deps.py:246`, `services/lineage/src/lineage/schemas.py:36` *(+4 more)* |
+| `F-LIN-13` | **FIXED** | E1 | low | fga | S | A loop of sequential single check() calls where the module's own batch_check filter is available, and a duplicate-laden batch payload | `services/lineage/src/lineage/api/v1/endpoints/demo.py:148`, `services/lineage/src/lineage/api/v1/endpoints/columns.py:61` *(+1 more)* |
+| `F-LIN-14` | **FIXED** | E7 | low | structure | S | Only one of eight routers under api/v1/endpoints/ carries a version prefix, producing a double-/api path for ingest | `services/lineage/src/lineage/api/v1/endpoints/ingest.py:22`, `services/lineage/src/lineage/api/v1/endpoints/datasets.py:21` *(+4 more)* |
+| `F-LIN-15` | **FIXED** | E8 | low | resources | S | Module-level mutable caches in the demo endpoint, with a test-only reset seam instead of app.state | `services/lineage/src/lineage/api/v1/endpoints/demo.py:75`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:76` *(+1 more)* |
+| `F-LIN-16` | **FIXED** | E11 | low | typing | S | Generic return widened to Any internally, bare list defaults on two Pydantic fields, and unannotated conn params | `services/lineage/src/lineage/api/fga_deps.py:246`, `services/lineage/src/lineage/schemas.py:36` *(+4 more)* |
 
 
 <details><summary><b>Re-verification evidence — 13 still-open findings in <code>lineage</code> (2026-08-24)</b></summary>
@@ -1725,7 +1738,7 @@ sites and the evidence as measured at `871b5e14`.
 | `F-LIN-11` | OPEN (med) | `services/lineage/src/lineage/api/v1/endpoints/demo.py:31`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:51`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:93`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:113` | The file is BYTE-IDENTICAL to the audit base — `git diff --stat 0ea0b7c2..HEAD -- services/lineage/src/lineage/api/v1/endpoints/demo.py` prints nothing, and `grep -n 'except\\|^log' ` returns the same line numbers on both revisions (31, 51, 60, 93, 113, 150). Current: :31 `log = logging.getLogger(__name__)` with `grep -n 'log\.' demo.py` returning NOTHING — the logger is declared and never used. Three un-logged swall … **2026-08-29: FIXED** — the swallows log and the BaseException catch is narrowed (8540c1c4). |
 | `F-LIN-12` | OPEN (low) | `services/lineage/src/lineage/main.py:39`, `services/lineage/src/lineage/models.py:361`, `services/lineage/src/lineage/models.py:381` | Unused constant: main.py:39 `PROBLEM_JSON = "application/problem+json"`; `grep -rn 'PROBLEM_JSON' services/ packages/` shows lineage's is defined and referenced nowhere — the only other users define their OWN (`services/medallion/.../ingest_media.py:18 _PROBLEM_JSON`, `services/flows/src/flows/routes.py:39` imports it from `service_kit.exceptions`). Dead consumer side: models.py:362 `def parent_run_id(self) -&gt; str … **2026-08-29: FIXED** — main.py's unused constant went in 8540c1c4, which is when this cell was flipped, but the 45-line consumer side the row also names (models.py `parent_run_id`/`root_run_id`) was still standing, so the flip was premature. The 2026-08-29 working tree deletes models.py:361-405 and the tests reading those symbols; the deletion is verified in the tree. |
 | `F-LIN-13` | OPEN (low) | `services/lineage/src/lineage/api/v1/endpoints/demo.py:147`, `services/lineage/src/lineage/api/v1/endpoints/columns.py:61`, `services/lineage/src/lineage/api/fga_deps.py:263` | Both halves intact; both files are byte-identical to the audit base (`git diff --stat 0ea0b7c2..HEAD -- .../demo.py .../columns.py` prints nothing). Sequential single checks: demo.py:147-151 `for name, path in _LAYOUT:` / `try:` / `await require_metadata_access(name, request, settings, token)  # 401/503 propagate; 403 -&gt; skip` / `except PermissionDeniedError: continue` — one round trip per dataset, while `DatasetF |
-| `F-LIN-14` | OPEN (low) | `services/lineage/src/lineage/api/v1/endpoints/ingest.py:22`, `services/lineage/src/lineage/api/v1/endpoints/datasets.py:21`, `services/lineage/src/lineage/api/v1/endpoints/dlq.py:40`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:33` | `grep -n 'APIRouter(' services/lineage/src/lineage/api/v1/endpoints/*.py` — exactly one router carries a version prefix: ingest.py:22 `router = APIRouter(prefix="/api/v1", tags=["ingest"])`, whose only route is :25 `@router.post("/lineage", status_code=201)` -&gt; `/api/v1/lineage`. Every sibling under the same `api/v1/` tree is unversioned: datasets.py:21 `prefix="/datasets"`, columns.py:21, governance.py:37/42/99 ( |
+| `F-LIN-14` | OPEN (low) | `services/lineage/src/lineage/api/v1/endpoints/ingest.py:22`, `services/lineage/src/lineage/api/v1/endpoints/datasets.py:21`, `services/lineage/src/lineage/api/v1/endpoints/dlq.py:40`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:33` | `grep -n 'APIRouter(' services/lineage/src/lineage/api/v1/endpoints/*.py` — exactly one router carries a version prefix: ingest.py:22 `router = APIRouter(prefix="/api/v1", tags=["ingest"])`, whose only route is :25 `@router.post("/lineage", status_code=201)` -&gt; `/api/v1/lineage`. Every sibling under the same `api/v1/` tree is unversioned: datasets.py:21 `prefix="/datasets"`, columns.py:21, governance.py:37/42/99 ( … **2026-08-29: FIXED** — the version prefix moved off the endpoint router to the composition layer (`api/v1/router.py` `include_router(ingest.router, prefix="/api/v1")`); ingest.py:22 is now unversioned like its seven siblings. The finding's own prescribed fix (mount every router under `settings.api_prefix`) was NOT applied — it would have moved every lineage route under /api/v1 and broken the gateway's `Route("/api/lineage", "")` root-rewrite plus every frontend caller. The public path `/api/v1/lineage` — the OpenLineage HTTP-transport contract — is byte-identical, pinned by `services/lineage/tests/test_router_version_prefix.py` (d3dd4452). |
 | `F-LIN-15` | OPEN (low) | `services/lineage/src/lineage/api/v1/endpoints/demo.py:75`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:76`, `services/lineage/src/lineage/api/v1/endpoints/demo.py:79` | demo.py:75 `_PAYLOADS: dict[str, tuple[int, str \| None, DemoDataset]] = {}  # uri -&gt; (version, stamp, payload)` and :76 `_VERSION_FIELDS: dict[str, dict[int, DemoVersion]] = {}  # uri -&gt; version -&gt; entry (stamp inside)` — both module-level mutables, mutated from `_read_dataset` at :101 `known = _VERSION_FIELDS.setdefault(uri, {})`, :115 `known[number] = DemoVersion(...)`, :121 `del known[number]`, :131 `_PA |
 | `F-LIN-16` | OPEN (low) | `services/lineage/src/lineage/api/fga_deps.py:288`, `services/lineage/src/lineage/schemas.py:36`, `services/lineage/src/lineage/schemas.py:43`, `services/lineage/src/lineage/services/repository.py:655` | All three sub-defects reproduce. Generic widened to Any: fga_deps.py:276 `async def governed[T](...) -&gt; list[T]:` but :288 `kept: list[Any] = []`, returned at :295 — the T is lost inside the body. Bare list defaults on Pydantic fields: schemas.py:36 `dangling_blob_columns: list[str] = []` and schemas.py:43 `missing_declared_columns: list[str] = []` (no `Field(default_factory=list)`). Unannotated conn params — `gre |
 
@@ -1927,7 +1940,7 @@ sites and the evidence as measured at `871b5e14`.
 | `GW-BUFFERS-REQUEST-BODY` | **OPEN** | E8 | med | resources | M | Every proxied request body is fully buffered in memory, though responses are correctly streamed | `services/gateway/src/gateway/__init__.py:327`, `services/gateway/src/gateway/__init__.py:341` |
 | `GW-NO-PROBLEM-JSON` | **FIXED** | E4 | med | error-handling | S | The gateway is the only service in the fleet that does not answer RFC 9457 problem+json | `services/gateway/src/gateway/__init__.py:266`, `services/gateway/src/gateway/__init__.py:318` *(+2 more)* |
 | `GW-OPENAPI-SEQUENTIAL` | **FIXED** | E8 | med | resilience | S | `/openapi.json` fetches ten backends sequentially with a 10 s timeout each — worst case ~100 s on a client-facing request | `services/gateway/src/gateway/__init__.py:238`, `services/gateway/src/gateway/__init__.py:241` *(+1 more)* |
-| `COMPUTE-UNBOUNDED-QUERY-PARAMS` | **OPEN** | E7 | low | fastapi | S | `lines` is forwarded unbounded to the Ray dashboard; both it and `tail` are declared without `Annotated[..., Query(...)]` | `services/compute/src/compute/routes.py:35`, `services/compute/src/compute/routes.py:66` |
+| `COMPUTE-UNBOUNDED-QUERY-PARAMS` | **FIXED** | E7 | low | fastapi | S | `lines` is forwarded unbounded to the Ray dashboard; both it and `tail` are declared without `Annotated[..., Query(...)]` | `services/compute/src/compute/routes.py:35`, `services/compute/src/compute/routes.py:66` |
 | `CP-CR-UNVALIDATED` | **OPEN** | E11 | low | typing | M | Kubernetes CRs are walked as `dict[str, Any]` with `.get()` chains instead of validated at the boundary | `services/controlplane/src/controlplane/service.py:24`, `services/controlplane/src/controlplane/service.py:32` *(+1 more)* |
 | `FLOWS-422-BYPASSES-HIERARCHY` | **OPEN** | E4 | low | error-handling | M | `create_run` hand-builds a problem+json body and returns `RunState \| JSONResponse` because the shared exception hierarchy cannot carry extension members | `services/flows/src/flows/routes.py:66`, `services/flows/src/flows/routes.py:80` *(+2 more)* |
 | `GW-OPENAPI-SILENT-SHADOW` | **FIXED** | E10 | low | observability | S | The merged OpenAPI silently drops colliding paths — every service's `/api/health` overwrites the previous one | `services/gateway/src/gateway/__init__.py:248`, `services/gateway/src/gateway/__init__.py:249` |
