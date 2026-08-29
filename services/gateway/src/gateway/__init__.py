@@ -37,6 +37,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from service_kit import setup_otel
 from service_kit.draining import arm_drain_on_sigterm
+from service_kit.exceptions import register_handlers
 from service_kit.middleware import RequestIDMiddleware
 from service_kit.probes import make_probes_router
 from service_kit.schemas.health import Liveness
@@ -416,13 +417,25 @@ app = FastAPI(
 setup_otel(app, service_name="gateway")
 
 
-# RFC 9457 FOR THE GATEWAY'S OWN ERRORS. The gateway builds its own FastAPI and never ran
-# `register_handlers`, so its 404/502/400s rendered as FastAPI's default `{"detail": …}` with
-# `application/json` while every PROXIED error from a lance service arrived as
-# `application/problem+json` — one client error path, two body shapes (GW-NO-PROBLEM-JSON). This
-# matches the FLEET taxonomy (`service_kit.exceptions._problem`): four keys, `about:blank#` type, no
-# Lance numeric `code` (the gateway is not a lance service). Proxied error bodies are untouched —
-# they stream through `proxy` and never raise, so they keep their upstream envelope.
+# RFC 9457 FOR THE GATEWAY'S OWN ERRORS — ALL of them, which takes two registrations
+# (GW-NO-PROBLEM-JSON, and its re-audit).
+#
+# `register_handlers` is the FLEET's error plane, taken whole rather than mirrored: it carries the
+# catch-all `Exception` handler (without it an unexpected gateway fault answers starlette's
+# `text/plain` — the "third error envelope" its own comment names — while every sibling answers
+# problem+json, and `str(exc)` internals would otherwise reach the wire) and the
+# `RequestValidationError` handler. Reusing the module means the gateway cannot drift from the
+# taxonomy it claims parity with.
+#
+# The `StarletteHTTPException` handler below stays LOCAL because `register_handlers` deliberately
+# maps only `DomainError`: the gateway is a proxy, and its 404 (`no upstream`), 502 (`upstream
+# unreachable`) and 400 (`bad path`) are raised as plain `HTTPException`s. It renders the same
+# four-key `about:blank#` body, with no Lance numeric `code` — the gateway is not a lance service, so
+# it must not claim a spec code it has no contract for. Proxied error bodies are untouched either
+# way: they stream through `proxy` and never raise, so they keep their upstream envelope.
+register_handlers(app)
+
+
 @app.exception_handler(StarletteHTTPException)
 async def _problem_json(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
     status = int(exc.status_code)

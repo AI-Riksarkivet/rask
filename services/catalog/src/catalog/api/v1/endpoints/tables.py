@@ -777,6 +777,9 @@ async def rename_table(
     # namespace, i.e. all source segments but the last) + ``new_table_name``.
     dest_parent = list(body.new_namespace_id) if body.new_namespace_id else segments[:-1]
     new_segments = [*dest_parent, body.new_table_name]
+    # Rename is the FOURTH minting door (CAT-CORE-02 re-audit): a wildcard (`*`/`?`) in the destination
+    # would widen the vended STS policy to siblings exactly as at create — refused before anything moves.
+    require_safe_segments(new_segments, delimiter=settings.delimiter)
     # A rename can MINT an orphan as surely as a create: `new_namespace_id: []` moves the table to a
     # parentless id. Same rule, same door — checked before the native call, so a refused rename leaves
     # the source exactly where it was.

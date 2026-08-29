@@ -38,33 +38,6 @@ from service_kit.exceptions import register_handlers
 TABLE = "bronze$pages"
 
 
-class _Rows:
-    """The aligned table `read_aligned_table` returns — only what the routes actually read."""
-
-    def __init__(self, ids: list[int], payloads: list[bytes | None]) -> None:
-        self._cols = {
-            "id": ids,
-            "source_uri": [f"iiif://vol/{i}" for i in ids],
-            "stage": ["bronze"] * len(ids),
-            "payload": payloads,
-        }
-        self.num_rows = len(ids)
-
-    def column(self, name: str) -> Any:
-        return _Col(self._cols[name])
-
-
-class _Col:
-    def __init__(self, values: list[Any]) -> None:
-        self._values = values
-
-    def __getitem__(self, i: int) -> Any:
-        return type("S", (), {"as_py": lambda _self, v=self._values[i]: v})()
-
-    def to_pylist(self) -> list[Any]:
-        return list(self._values)
-
-
 def _app(
     *,
     allow: Any,
@@ -121,11 +94,11 @@ def _fake_dataset(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.Temp
     forwarded nothing. Stubbing one layer deeper — `lance.dataset` — keeps the catalog round-trip on
     the real code path, which is the thing being asserted.
 
-    A REAL tiny blob-v2 dataset now, not a `read_aligned_table` monkeypatch: VS-05's fix moved the
-    routes off the whole-corpus read onto `id -> _rowid -> take_blobs`, so a patch on the old seam
-    stubbed a function the routes no longer call — nine authz tests errored on an AttributeError
-    while the gate they pin went unexecuted. Serving real bytes through the real read path is the
-    shape a route double cannot drift from.
+    A REAL tiny blob-v2 dataset rather than a hand-built double of the read seam: the routes read
+    through Lance's own take-path (`id -> _rowid -> take_blobs`), and a double of an internal seam
+    dies silently the moment the read path moves — this file has already had all nine of its gate
+    tests error against a double of a function the routes no longer called. Real bytes through the
+    real read path cannot drift out from under the gate.
     """
     import lance
     import pyarrow as pa

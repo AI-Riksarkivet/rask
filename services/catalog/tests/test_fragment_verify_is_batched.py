@@ -18,9 +18,9 @@ class _CountingFS:
 
     def __init__(self, missing: set[str]) -> None:
         self._missing = missing
-        self.calls: list[object] = []
+        self.calls: list[str | list[str]] = []
 
-    def get_file_info(self, paths: object) -> object:
+    def get_file_info(self, paths: str | list[str]) -> pafs.FileInfo | list[pafs.FileInfo]:
         self.calls.append(paths)
         # Mirror pyarrow: a list argument returns a list of FileInfo, a single str returns one FileInfo.
         if isinstance(paths, list):

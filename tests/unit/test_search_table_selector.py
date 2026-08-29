@@ -10,7 +10,7 @@ for is a wrong answer, and it would be invisible in the results.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from search.services.spec import SearchSpec
@@ -18,6 +18,7 @@ from search.services.target import resolve_target
 
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import DatasetDescriptor
+from service_kit.lancekit.registry import DatasetHandle
 
 
 def _descriptor(searches: list[dict[str, Any]]) -> DatasetDescriptor:
@@ -62,7 +63,7 @@ class _Handle:
 
     A structural stand-in, not a subclass: building a real handle needs a Lance DB on disk, and the
     function under test only reads `descriptor`, `db.open_table` and `sync_table_info`. Call sites
-    carry `# ty: ignore[invalid-argument-type]` for exactly that reason.
+    go through `_as_handle`, the one seam where the stand-in is cast to the nominal type.
     """
 
     def __init__(self, descriptor: DatasetDescriptor) -> None:
@@ -80,6 +81,15 @@ class _Handle:
         return None
 
 
+def _as_handle(fake: _Handle) -> DatasetHandle:
+    """Cast the structural stand-in to the nominal parameter type, at ONE seam.
+
+    `resolve_target`/`cache_key` take `DatasetHandle`, but a real one cannot be built without a Lance
+    DB on disk; the fakes carry exactly the attributes those functions read. Keeping the fake's own
+    type on the test-local variable is deliberate — `.opened`/`.asked` assertions stay checked."""
+    return cast("DatasetHandle", fake)
+
+
 PAGES_AND_LINES = [
     {"name": "pages", "row_table": "pages", "filterable": ["language"]},
     {"name": "lines", "row_table": "lines", "filterable": ["hand"]},
@@ -89,7 +99,7 @@ PAGES_AND_LINES = [
 def test_omitting_the_table_selects_the_corpus_DEFAULT() -> None:
     handle = _Handle(_descriptor(PAGES_AND_LINES))
 
-    target = resolve_target(handle, None)  # ty: ignore[invalid-argument-type]
+    target = resolve_target(_as_handle(handle), None)
 
     assert target.row_table_name == "pages"
 
@@ -98,7 +108,7 @@ def test_naming_a_table_searches_THAT_table() -> None:
     """The capability, stated directly: it used to be impossible."""
     handle = _Handle(_descriptor(PAGES_AND_LINES))
 
-    target = resolve_target(handle, "lines")  # ty: ignore[invalid-argument-type]
+    target = resolve_target(_as_handle(handle), "lines")
 
     assert target.row_table_name == "lines"
 
@@ -108,8 +118,8 @@ def test_each_table_brings_its_OWN_filterable_fields() -> None:
     accept filters for fields the searched rows do not have, and drop the ones they do."""
     handle = _Handle(_descriptor(PAGES_AND_LINES))
 
-    pages = resolve_target(handle, "pages")  # ty: ignore[invalid-argument-type]
-    lines = resolve_target(handle, "lines")  # ty: ignore[invalid-argument-type]
+    pages = resolve_target(_as_handle(handle), "pages")
+    lines = resolve_target(_as_handle(handle), "lines")
 
     assert pages.filterable == ["language"]
     assert lines.filterable == ["hand"]
@@ -121,7 +131,7 @@ def test_an_UNKNOWN_table_is_refused_and_names_what_IS_declared() -> None:
     handle = _Handle(_descriptor(PAGES_AND_LINES))
 
     with pytest.raises(ValidationError) as caught:
-        resolve_target(handle, "ghost")  # ty: ignore[invalid-argument-type]
+        resolve_target(_as_handle(handle), "ghost")
 
     message = str(caught.value)
     assert "ghost" in message
@@ -134,7 +144,7 @@ def test_an_unknown_table_never_OPENS_the_default() -> None:
     handle = _Handle(_descriptor(PAGES_AND_LINES))
 
     with pytest.raises(ValidationError):
-        resolve_target(handle, "ghost")  # ty: ignore[invalid-argument-type]
+        resolve_target(_as_handle(handle), "ghost")
 
     assert handle.opened == []
 
@@ -144,7 +154,7 @@ def test_a_corpus_with_NO_search_block_still_says_so() -> None:
     handle = _Handle(_descriptor([]))
 
     with pytest.raises(ValidationError) as caught:
-        resolve_target(handle, None)  # ty: ignore[invalid-argument-type]
+        resolve_target(_as_handle(handle), None)
 
     assert "no search bindings" in str(caught.value)
 
@@ -171,7 +181,7 @@ def test_a_LEGACY_single_table_corpus_resolves_exactly_as_before() -> None:
         }
     )
 
-    target = resolve_target(_Handle(descriptor), None)  # ty: ignore[invalid-argument-type]
+    target = resolve_target(_as_handle(_Handle(descriptor)), None)
 
     assert target.row_table_name == "chunks"
 
@@ -210,9 +220,7 @@ class _CacheHandle(_Handle):
         return f"/nonexistent/{table}.lance"
 
 
-def _spec(table: str | None) -> object:
-    from search.services.spec import SearchSpec
-
+def _spec(table: str | None) -> SearchSpec:
     return SearchSpec.model_validate({"q": "cat", "table": table} if table else {"q": "cat"})
 
 
@@ -221,8 +229,8 @@ def test_two_searchable_tables_never_share_a_cache_entry() -> None:
     from search.services.result_cache import cache_key
 
     handle = _CacheHandle(_descriptor(PAGES_AND_LINES))
-    key_alpha = cache_key(handle, _spec(None), None, None)  # ty: ignore[invalid-argument-type]
-    key_beta = cache_key(handle, _spec("lines"), None, None)  # ty: ignore[invalid-argument-type]
+    key_alpha = cache_key(_as_handle(handle), _spec(None), None, None)
+    key_beta = cache_key(_as_handle(handle), _spec("lines"), None, None)
     assert key_alpha != key_beta, "two different tables' searches share one cache entry — the second caller gets the first table's rows, labelled as its own"
 
 
@@ -233,7 +241,7 @@ def test_the_signature_consults_the_SELECTED_tables_versions() -> None:
     from search.services.result_cache import cache_key
 
     handle = _CacheHandle(_descriptor(PAGES_AND_LINES))
-    cache_key(handle, _spec("lines"), None, None)  # ty: ignore[invalid-argument-type]
+    cache_key(_as_handle(handle), _spec("lines"), None, None)
     assert "lines" in handle.asked, f"the signature versioned {handle.asked} while the caller searched `lines` — its writes can never invalidate this entry"
 
 
@@ -243,6 +251,6 @@ def test_the_default_and_its_own_name_share_one_entry() -> None:
     from search.services.result_cache import cache_key
 
     handle = _CacheHandle(_descriptor(PAGES_AND_LINES))
-    named = cache_key(handle, _spec("pages"), None, None)  # ty: ignore[invalid-argument-type]
-    omitted = cache_key(handle, _spec(None), None, None)  # ty: ignore[invalid-argument-type]
+    named = cache_key(_as_handle(handle), _spec("pages"), None, None)
+    omitted = cache_key(_as_handle(handle), _spec(None), None, None)
     assert named == omitted, "naming the default split one question into two cache entries"

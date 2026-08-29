@@ -28,25 +28,32 @@ There is **no base class** — Source/Sink is a duck-typed structural contract:
 `s3_client(endpoint=None)` builds a boto3 client tuned for HCP/MinIO:
 
 - **path-style addressing** (required by HCP/MinIO),
-- s3v4 signing, adaptive retries (legacy S3 retry handler unregistered),
+- s3v4 signing, adaptive retries,
 - checksum calculation/validation set to `when_required` (HCP compatibility),
 - 10s connect / 60s read timeouts.
 
-**TLS precedence:** `HCP_CA_BUNDLE` (custom CA) wins; else `HCP_INSECURE`
-(`1`/`true`/`yes`) sets `verify=False` and silences urllib3 warnings; else system
+**TLS precedence:** a custom CA (`RASK_S3_CA_BUNDLE`, else `S3_CA_BUNDLE`) wins;
+else insecure (`RASK_S3_INSECURE`, `S3_INSECURE` or `HCP_INSECURE` set to
+`1`/`true`/`yes`) sets `verify=False` and silences urllib3 warnings; else system
 trust. HCP serves a self-signed cert, so dev usually sets `HCP_INSECURE`.
 
 ## HCP credential derivation
 
-`derive_hcp_creds()` populates the standard AWS env vars from HCP tenant
-credentials, by HCP's fixed convention:
+`derive_hcp_creds()` **returns** `{access_key, secret_key}` derived from HCP tenant
+credentials by HCP's fixed convention, or `None`:
 
-- `AWS_ACCESS_KEY_ID = base64(HCP_USERNAME)`
-- `AWS_SECRET_ACCESS_KEY = md5(HCP_PASSWORD)` (hex)
+- `access_key = base64(HCP_USERNAME)`
+- `secret_key = md5(HCP_PASSWORD)` (hex)
 
-It is a **no-op unless both** `HCP_USERNAME` and `HCP_PASSWORD` are set, and it
-**never overwrites** pre-existing `AWS_*` vars. It is not called by `s3_client` —
-callers invoke it explicitly at startup (the runner does directly; the fleet services derive it via service-kit `build_settings()`).
+It returns `None` unless both `HCP_USERNAME` and `HCP_PASSWORD` are set, and also
+when an `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` is already set — so MinIO,
+rustfs and real AWS are left untouched.
+
+It is **pure: it never writes to `os.environ`**, which is what lets one process
+address more than one backend. `s3_client` applies it per client (`client.py:98`),
+so callers do not invoke it themselves — a bare call is dead code, and anything
+building a raw `boto3.client` must pass the returned pair explicitly or it will run
+unauthenticated. Legacy — drop this bridge once off HCP.
 
 ## IIIF read-through cache
 

@@ -202,4 +202,3 @@ async def test_resolve_by_name_emits_the_structured_diagnostic(caplog: pytest.Lo
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_resolved_by_name"), None)
     assert rec is not None, "the unpinned resolve-by-name diagnostic (was maintenance's reconcile_fga_resolved_by_name) is gone"
     assert getattr(rec, "store_id", None) and getattr(rec, "hint", None), "the diagnostic lost its store_id/hint extra"
-

@@ -68,31 +68,38 @@ def test_serve_proxy_restores_trailing_slash(client: TestClient, monkeypatch: py
     assert captured["path"] == "api/serve/applications/"
 
 
-def test_serve_proxy_strips_stale_body_headers(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`ray_kit.dashboard.proxy` returns the httpx-DECODED body but relays Ray's original
-    `content-encoding`/`content-length` headers, which describe the compressed body. Forwarding
-    them makes the browser re-inflate plaintext or hit a length mismatch — the proxy must drop
-    both and let Starlette recompute the length for the decoded bytes."""
-    from ray_kit import dashboard
-    from ray_kit.schemas import ProxyResponse
+def test_serve_proxy_never_relays_stale_body_headers(client: TestClient) -> None:
+    """A gzip-encoded Ray response reaches the browser with headers describing the DECODED body.
+
+    httpx decompresses the dashboard's body but keeps its `content-encoding`/`content-length` (which
+    describe the compressed bytes); forwarding them makes the browser re-inflate plaintext or hit a
+    length mismatch. The strip lives in ray_kit's `_RESPONSE_STRIP` — the seam that decoded — so this
+    fakes at the HTTP layer and drives the REAL `dashboard.proxy`, pinning the whole relay chain."""
+    import gzip
+
+    import httpx
 
     payload = b'{"applications": {}}'
+    compressed = gzip.compress(payload)
 
-    async def fake_proxy(http, dashboard_url, path, method, query, headers, body):
-        return ProxyResponse(
-            content=payload,  # already decoded by httpx
-            status_code=200,
-            headers={
-                "content-type": "application/json",
-                "content-encoding": "gzip",  # describes the ORIGINAL compressed body, not `payload`
-                "content-length": "11",  # the compressed length, not len(payload)
-            },
+    def _gzipped(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "content-encoding": "gzip"},
+            content=compressed,
         )
 
-    monkeypatch.setattr(dashboard, "proxy", fake_proxy)
+    from compute import app
 
-    resp = client.get("/api/serve/applications/")
+    real_http = app.state.http
+    app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(_gzipped))
+    try:
+        resp = client.get("/api/serve/applications/")
+    finally:
+        app.state.http = real_http
+
     assert resp.status_code == 200
+    assert resp.content == payload
     assert "content-encoding" not in resp.headers
     assert resp.headers["content-length"] == str(len(payload))
 
@@ -117,6 +124,49 @@ def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(dependencies, "build_client", _boom)
     assert dependencies.get_ray_client(request) is sentinel  # served from cache
+
+
+def test_the_documented_cooldown_env_name_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recorded knob is RASK_COMPUTE_RAY_CLIENT_RETRY_COOLDOWN_S — it must actually bind.
+
+    The field shipped with no alias, so under `Settings`' `env_prefix="RASK_"` the only name that
+    bound was the undocumented RASK_RAY_CLIENT_RETRY_COOLDOWN_S; the documented name was a no-op and
+    an operator turning the knob changed nothing."""
+    from compute.config import ComputeSettings
+
+    monkeypatch.setenv("RASK_COMPUTE_RAY_CLIENT_RETRY_COOLDOWN_S", "3.5")
+    assert ComputeSettings().ray_client_retry_cooldown_s == 3.5
+
+
+def test_get_ray_client_retries_after_the_cooldown_elapses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Self-heal: once the cooldown has elapsed, the next request tries the build again.
+
+    The cooldown is monkeypatched to zero rather than slept through — wall-clock waits are what make
+    a suite flaky, and the elapsed/not-elapsed branch is the same either way."""
+    from compute import dependencies
+    from compute.config import ComputeSettings
+
+    app = FastAPI()
+    app.state.settings = build_settings().model_copy(update={"ray_dashboard_url": "http://ray:8265"})
+    app.state.ray_client = None
+    request = Request({"type": "http", "app": app})
+
+    monkeypatch.setattr(dependencies, "get_compute_settings", lambda: ComputeSettings(ray_client_retry_cooldown_s=0.0))
+
+    calls = 0
+    sentinel = object()
+
+    def _flaky(url: str) -> object | None:
+        nonlocal calls
+        calls += 1
+        return None if calls == 1 else sentinel  # down on the first try, up on the second
+
+    monkeypatch.setattr(dependencies, "build_client", _flaky)
+
+    assert dependencies.get_ray_client(request) is None  # Ray down; attempt recorded
+    assert dependencies.get_ray_client(request) is sentinel  # cooldown (0s) elapsed -> retried, healed
+    assert calls == 2
+    assert app.state.ray_client is sentinel  # cached; later requests stop rebuilding
 
 
 def test_get_ray_client_negative_caches_while_ray_down(monkeypatch: pytest.MonkeyPatch) -> None:

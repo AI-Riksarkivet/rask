@@ -1,1 +1,1 @@
-"""FastAPI-coupled glue for the compaction service (the Dapr cron route + DI)."""
+"""FastAPI-coupled glue for the maintenance service (the Dapr cron route + DI)."""

@@ -73,6 +73,7 @@ async def list_datasets(state: StateDep, client: FgaClientDep, subject: CurrentS
     Filtered, not refused: a caller with access to two of five corpora gets two, because the honest
     answer to "what can I search" is a shorter list, not a 403.
     """
+
     # Off the loop: `registry.get` opens Lance/S3 under a threading.Lock, and this is the first call
     # every zone makes on page load — inline it serialized the whole process behind one cold dataset
     # (open_python-audit VS-02). The row table is read HERE, in the same pass, so `_may_see` below

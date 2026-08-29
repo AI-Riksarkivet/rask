@@ -27,6 +27,48 @@ def test_client_does_not_strip_its_own_retry_handler():
     assert 'unregister("needs-retry.s3")' not in src
 
 
+def test_s3_client_retries_transient_errors_to_the_configured_attempts(monkeypatch):
+    """Behavioural pin for PS-01: the retry policy must actually fire, not merely sit in Config.
+
+    The textual pin above cannot catch the wrongPrescription PS-01 warned about — an
+    unregister that PASSES the handler (or its `retry-config-s3` unique_id) really does
+    strip botocore's retry handler, silently disabling the adaptive retries the Config
+    block asks for. So this observes the behaviour: a transient 500 is retried to the
+    configured 4 total attempts; a stripped handler drops that to 1 and fails here.
+    """
+    import pytest
+    from botocore.awsrequest import AWSResponse
+    from botocore.compat import HTTPHeaders
+    from botocore.exceptions import ClientError
+
+    from storage import s3_client
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    # Retry backoff sleeps between attempts (botocore.endpoint); the delay is not under test.
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    client = s3_client("http://s3.invalid")
+    attempts = 0
+
+    class _EmptyBody:
+        def stream(self):
+            yield b""
+
+    def respond_500(request, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return AWSResponse(request.url, 500, HTTPHeaders(), _EmptyBody())
+
+    # Short-circuits the wire: botocore takes a non-None before-send response as THE
+    # http response, so the retry loop runs for real with no network.
+    client.meta.events.register("before-send.s3.HeadBucket", respond_500)
+    with pytest.raises(ClientError):
+        client.head_bucket(Bucket="smoke")
+
+    assert attempts == 4  # 1 + the 3 retries Config(retries={"max_attempts": 3}) configures
+
+
 def test_derive_hcp_creds_returns_creds_without_mutating_environ(monkeypatch):
     from storage import derive_hcp_creds
 

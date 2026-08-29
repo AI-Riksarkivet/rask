@@ -1,4 +1,4 @@
-"""Best-effort OpenLineage emission from the compaction service to the lineage graph (#7b).
+"""Best-effort OpenLineage emission from the maintenance service to the lineage graph (#7b).
 
 A maintenance sweep compacts small fragments + GCs old versions of each Lance dataset; when
 ``lineage_emit_enabled`` is on it records each *materially-compacted* dataset as an OpenLineage
@@ -10,7 +10,7 @@ compaction runs (and failures) show up in ``producers()`` alongside the writes.
 The sidecar owns retry/backoff + trace-propagation (no DLQ — see docs/RESILIENCE.md gap #2) as component
 config (no broker client here).
 
-Self-contained: the compaction service never imports the catalog (zero cross-service imports — the
+Self-contained: the maintenance service never imports the catalog (zero cross-service imports — the
 mergeability invariant). The only shared code is ``service_kit.governed.fga`` for the id↔namespace derivation, so the
 lineage ``Dataset`` name == the OpenFGA object id == the catalog table id across all three governance axes.
 

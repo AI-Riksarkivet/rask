@@ -172,7 +172,7 @@ _TERMINAL_TYPES: Final = "('COMPLETE','FAIL','ABORT','RECONCILED')"
 _DEDUP_TERMINAL: Final = (
     "DELETE FROM public.lineage_events a USING public.lineage_events b "
     "WHERE a.seq > b.seq AND a.run_id = b.run_id AND a.event_type = b.event_type "
-    # noqa-justified: _TERMINAL_TYPES is a module-level Final literal, not user input — no external
+    # Justified: _TERMINAL_TYPES is a module-level Final literal, not user input — no external
     # data reaches this f-string, so S608's injection premise does not apply.
     f"AND a.event_type IN {_TERMINAL_TYPES}"  # noqa: S608
 )

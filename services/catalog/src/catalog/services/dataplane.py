@@ -16,6 +16,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
@@ -633,10 +634,16 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
     fragments as a brand-new version. Append never conflicts with Append (transaction.md), so nothing
     in the format refuses the duplicate; only recognizing our own commit can.
 
-    Bounded by construction: the scan walks versions AFTER the retry's `read_version`, which in the
+    Bounded by construction: the scan covers versions AFTER the retry's `read_version`, which in the
     replay case is at most a handful (our own commit plus whatever landed concurrently). A version
     whose transaction is ABSENT (pre-transaction-file history, GC'd) is SKIPPED, not fatal — an
     absent stranger's version must not fail a legitimate first commit.
+
+    The transaction reads are BATCHED like the sibling `_verify_fragment_data_files` (CAT-CORE-10
+    named both loops): `read_transaction` is one object-store round trip per version and pylance has
+    no multi-version read, so a thread pool overlaps the round trips. The DECISIONS below still run
+    in the versions' original order, so which version answers — and which failure raises first — is
+    identical to the serial walk's.
 
     IT FAILS CLOSED, and that is the difference between absent and BROKEN. Both handlers here used to
     be blanket `except Exception`: the open said "no dataset yet -> certainly no prior commit", which
@@ -660,21 +667,29 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
                 f"and proceeding would risk appending the same rows twice: {exc}"
             ) from exc
         return None  # genuinely no dataset yet -> certainly no prior commit by this run
-    for version_info in dataset.versions():
-        version = int(version_info["version"])
-        if version <= read_version:
-            continue
+    candidates = [version for version_info in dataset.versions() if (version := int(version_info["version"])) > read_version]
+    if not candidates:
+        return None
+
+    def _read_props(version: int) -> tuple[int, dict[str, Any] | None, BaseException | None]:
+        """One round trip; the error is CARRIED, not judged — judgement stays in version order below."""
         try:
             transaction = dataset.read_transaction(version)
-            props = getattr(transaction, "transaction_properties", None) or {}
+            return version, getattr(transaction, "transaction_properties", None) or {}, None
         except Exception as exc:
+            return version, None, exc
+
+    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as pool:
+        results = list(pool.map(_read_props, candidates))
+    for version, props, exc in results:
+        if exc is not None:
             if not _is_absence(exc):
                 raise ServiceUnavailableError(
                     f"cannot read version {version} while checking whether run {run_id!r} already committed — "
                     f"this may be the run's own commit, and skipping it would append the rows twice: {exc}"
                 ) from exc
             continue
-        if props.get("__lance_commit_message") == marker:
+        if (props or {}).get("__lance_commit_message") == marker:
             rows = lance.dataset(location, version=version, storage_options=dict(so) if so else None).count_rows()
             return version, rows
     return None

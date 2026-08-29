@@ -1,1 +1,1 @@
-"""Core configuration + cross-cutting infra for the compaction service (no FastAPI imports)."""
+"""Core configuration + cross-cutting infra for the maintenance service (no FastAPI imports)."""

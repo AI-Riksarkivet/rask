@@ -85,3 +85,8 @@ def test_a_read_and_purge_cycle_builds_one_client(monkeypatch: pytest.MonkeyPatc
     staging.purge_staged(dataset, "run-13")
 
     assert len(built) == 1, f"the staging client was constructed {len(built)} times across one read+purge cycle"
+    # The flow-13 fix's second half: a pooled client makes an unclosed body a LEAK, not a one-off —
+    # every response holds a pool connection until GC, so the reuse above would starve its own pool.
+    unclosed = [i for i, body in enumerate(built[0].bodies) if not body.closed]
+    assert not unclosed, f"response bodies {unclosed} were read but never closed — each pins a pooled connection"
+    assert built[0].bodies, "the read path returned no bodies — the close assertion above checked nothing"

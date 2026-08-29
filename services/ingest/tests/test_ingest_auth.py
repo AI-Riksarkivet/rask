@@ -364,7 +364,9 @@ def test_get_auth_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
     original_init = auth.IngestAuthSettings.__init__
 
-    def _counting_init(self: auth.IngestAuthSettings, *args: object, **kwargs: object) -> None:
+    # `Any`, not `object`: this wrapper forwards verbatim into pydantic-settings' typed `__init__`,
+    # and `object` would fail every one of its keyword parameters at the forwarding call.
+    def _counting_init(self: auth.IngestAuthSettings, *args: Any, **kwargs: Any) -> None:
         nonlocal calls
         calls += 1
         original_init(self, *args, **kwargs)

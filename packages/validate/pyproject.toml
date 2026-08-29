@@ -2,7 +2,7 @@
 name = "validate"
 version = "0.1.0"
 description = "Pre-upload image file validation — TIFF/JPEG/PNG corruption detection + pluggable rules."
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     "pillow>=11.0",

@@ -19,11 +19,10 @@ from rich.logging import RichHandler
 
 from htr.iiif import DEFAULT_IIIF_BASE, IIIFCachedSource
 from runner.pipeline import PIPELINES
-from storage import build_sink, build_source, derive_hcp_creds
+from storage import build_sink, build_source
 
 
 load_dotenv()
-derive_hcp_creds()
 
 app = typer.Typer(name="runner", help="Ray Data batch driver for HTR.")
 console = Console()

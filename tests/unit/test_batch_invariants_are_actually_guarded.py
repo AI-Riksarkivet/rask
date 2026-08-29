@@ -122,5 +122,3 @@ class TestB3TheDeployAxisIsFedByTheChart:
 # dissolution (2026-08-28, open_ray-kernel.md): `ratch.core.runners.runner_ray_remote_args` —
 # the runtime_env channel it pinned shut — no longer exists, which closes the hazard by
 # construction rather than by shape-pin.
-
-

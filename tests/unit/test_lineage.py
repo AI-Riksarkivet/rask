@@ -51,119 +51,16 @@ def test_author_absent_is_none() -> None:
     assert event.author is None
 
 
-# --------------------------------------------------------------------------------------------------
-# the `parent` run facet — the consumer side of the run hierarchy (OPEN-WORK E1)
-# --------------------------------------------------------------------------------------------------
+def test_the_run_hierarchy_consumer_side_stays_deleted() -> None:
+    """F-LIN-12, second half (owner ruling): DELETE the ``parent``-facet consumer side.
 
-
-def _parented(run_id: str, parent: str, *, root: str | None = None, root_job: str = "htr_pipeline") -> RunEvent:
-    facet: dict[str, Any] = {"run": {"runId": parent}, "job": {"namespace": "lance-jobs", "name": "stage"}}
-    if root is not None:
-        facet["root"] = {"run": {"runId": root}, "job": {"namespace": "lance-jobs", "name": root_job}}
-    return RunEvent.model_validate(
-        {
-            "eventType": "COMPLETE",
-            "eventTime": "2026-07-28T09:00:00Z",
-            "run": {"runId": run_id, "facets": {"parent": facet}},
-            "job": {"namespace": "lance-jobs", "name": "transcribe"},
-        }
-    )
-
-
-def test_child_run_resolves_to_its_root() -> None:
-    """The goal of the facet: an actor run must name the pipeline invocation that caused it.
-
-    Asserted two ways that must agree — the facet's own ``root`` (one hop, what a consumer uses) and
-    walking ``parent_run_id`` up the chain (what the graph would traverse). If those ever disagreed,
-    grouping by root and traversing edges would tell different stories about the same run.
+    ``parent_run_id``/``root_run_id`` were speculative — nothing in the estate emits the ``parent``
+    run facet and no production code read either property; only their own tests did. The owner ruled
+    the consumer-before-producer argument in their docstrings void. (``lineage_kit.context``'s
+    ``root_run_id`` is a different, live symbol on the emitter side and is unaffected.)
     """
-    # actor → stage → job. Every child carries the SAME root, which is what makes one-hop grouping work.
-    actor = _parented("actor-1", parent="stage-1", root="job-1")
-    stage = _parented("stage-1", parent="job-1", root="job-1")
-
-    assert actor.parent_run_id == "stage-1"
-    assert actor.root_run_id == "job-1"
-
-    by_id = {e.run.run_id: e for e in (actor, stage)}
-    walked, cursor = "actor-1", actor
-    while (nxt := cursor.parent_run_id) is not None:
-        walked = nxt
-        if (cursor := by_id.get(nxt)) is None:
-            break
-    assert walked == actor.root_run_id == "job-1"
-
-
-def test_root_absent_falls_back_to_the_immediate_parent() -> None:
-    """``root`` is optional in the spec: no root means a one-level hierarchy, so the parent IS the root.
-
-    Returning None here instead would drop every such run out of a root-grouped view — the events
-    most likely to omit ``root`` are exactly the simple two-level ones.
-    """
-    child = _parented("child-1", parent="job-1")
-    assert child.parent_run_id == "job-1"
-    assert child.root_run_id == "job-1"
-
-
-def test_no_parent_facet_means_the_run_is_its_own_root() -> None:
-    event = RunEvent.model_validate({"eventType": "START", "eventTime": "t", "run": {"runId": "r2"}, "job": {"namespace": "j", "name": "n"}})
-    assert event.parent_run_id is None and event.root_run_id is None
-
-
-@pytest.mark.parametrize(
-    "facet",
-    [
-        "not-a-dict",
-        {},
-        {"run": "not-a-dict"},
-        {"run": {}},
-        {"run": {"runId": ""}},
-        {"run": {"runId": None}},
-        {"run": {"runId": "p1"}, "root": "not-a-dict"},
-        {"run": {"runId": "p1"}, "root": {"run": {}}},
-    ],
-    ids=["scalar", "empty", "run-scalar", "run-empty", "blank-id", "null-id", "root-scalar", "root-no-id"],
-)
-def test_malformed_parent_facet_never_raises(facet: Any) -> None:
-    """Poison-message contract, same as ``progress``: this runs inside the Dapr subscriber, where one
-    raise turns a single malformed event into an infinite redelivery loop. Malformed means "no parent"."""
-    event = RunEvent.model_validate(
-        {
-            "eventType": "COMPLETE",
-            "eventTime": "t",
-            "run": {"runId": "r", "facets": {"parent": facet}},
-            "job": {"namespace": "j", "name": "n"},
-        }
-    )
-    # Never raises; a partially-valid facet may still yield the parent it did state.
-    assert event.parent_run_id in (None, "p1")
-    assert event.root_run_id in (None, "p1")
-
-
-def test_consumer_parses_the_exact_shape_lineage_kit_emits() -> None:
-    """Cross-plane contract: the emitter and the consumer are separate models in separate packages.
-
-    ``lineage_kit.schemas.ParentRunFacet`` (what a Ray stage/actor will emit) and
-    ``lineage.models.RunEvent`` (what the graph ingests) were written independently, so nothing but a
-    test stops one from saying ``parentRun`` while the other reads ``parent``, or from disagreeing on
-    ``runId`` vs ``run_id``. Built from the REAL emitter model and serialized the way the wire does.
-    """
-    from lineage_kit.schemas import JobRef, ParentRunFacet, RootRef, RunRef
-
-    emitted = ParentRunFacet(
-        run=RunRef.model_validate({"runId": "stage-1"}),
-        job=JobRef(namespace="lance-jobs", name="stage"),
-        root=RootRef(run=RunRef.model_validate({"runId": "job-1"}), job=JobRef(namespace="lance-jobs", name="htr_pipeline")),
-    )
-    consumed = RunEvent.model_validate(
-        {
-            "eventType": "COMPLETE",
-            "eventTime": "t",
-            "run": {"runId": "actor-1", "facets": {"parent": emitted.model_dump(by_alias=True)}},
-            "job": {"namespace": "lance-jobs", "name": "transcribe"},
-        }
-    )
-    assert consumed.parent_run_id == "stage-1", "the consumer cannot read the shape the emitter produces"
-    assert consumed.root_run_id == "job-1"
+    assert not hasattr(RunEvent, "parent_run_id")
+    assert not hasattr(RunEvent, "root_run_id")
 
 
 def _output_with_stats(facets: dict[str, Any]) -> Any:

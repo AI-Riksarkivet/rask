@@ -131,9 +131,7 @@ def _build(args: argparse.Namespace) -> int:
         ]
     )
     if not (np.isfinite(embedding_vectors).all() and np.isfinite(clusterable_vectors).all()):
-        sys.exit(
-            "text_embedding or atlas_x/atlas_y contains NULL/NaN — rebuild those columns so every chunk is populated before topic modelling."
-        )
+        sys.exit("text_embedding or atlas_x/atlas_y contains NULL/NaN — rebuild those columns so every chunk is populated before topic modelling.")
     print(
         f"topics: {len(documents)} chunks · embed {embedding_vectors.shape} · map {clusterable_vectors.shape}",
         file=sys.stderr,

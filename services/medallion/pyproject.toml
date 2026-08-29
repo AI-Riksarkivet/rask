@@ -16,7 +16,8 @@ dependencies = [
     "pydantic-settings>=2.5",
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
-    "openfga-sdk>=0.9",
+    # >=0.10.4 with service-kit: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
+    "openfga-sdk>=0.10.4",
     "pillow>=12.3.0",
     "pyarrow",
     "pylance[otel]>=10.0.0",

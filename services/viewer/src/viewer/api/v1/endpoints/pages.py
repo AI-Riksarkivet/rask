@@ -12,7 +12,9 @@ harvest or a skipped page is exactly that case. Neither route here pairs anythin
 listing reads only the blob DESCRIPTORS, which arrive in the same scan as the tabular columns, and
 the byte route resolves ``id`` -> stable ``_rowid`` -> ``take_blobs(ids=[rowid])``, where ``None`` in
 the slot IS the null signal. ``blobs.py`` says the same in its own words — "the take-path remains
-correct for single-row serving (``ids=[rowid]``, where an empty result IS the null signal)".
+correct for single-row serving (``ids=[rowid]``, where an empty result IS the null signal)". A plain
+``large_binary`` payload has no take-path at all; both routes decide that shape from ``ds.schema``
+and serve it from the request-bounded filtered scan instead (see ``_page_rows`` / ``_take_page``).
 
 READS MUST BE BOUNDED BY THE REQUEST, NOT BY THE DATASET (VS-05). Both routes used to run one
 unfiltered, unbounded ``read_aligned_table`` at ``blob_handling="all_binary"``, which materialises
@@ -29,6 +31,7 @@ See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind 
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 from typing import Annotated
 
 import httpx
@@ -272,15 +275,26 @@ def _page_rows(ds: lance.LanceDataset, limit: int) -> tuple[pa.Table, bool]:
     return rows, is_blob_field(ds.schema.field("payload"))
 
 
-def _take_page(ds: lance.LanceDataset, table: str, page_id: int) -> tuple[BlobFile, int, str]:
-    """Resolve one page's ``id`` to its blob handle, size and sniffed media type. All blocking IO.
+def _take_page(ds: lance.LanceDataset, table: str, page_id: int) -> tuple[BlobFile | BytesIO, int, str]:
+    """Resolve one page's ``id`` to an open payload handle, size and sniffed media type. All blocking IO.
 
-    ``id`` -> stable ``_rowid`` -> ``take_blobs(ids=[...])``: ``ids`` survive deletes and compaction
-    where positional ``indices`` do not, and no step pairs a blob read against a second scan, so the
-    null-row landmine in this module's docstring cannot apply. The whole corpus is no longer read to
-    find one row (VS-05).
+    TWO SHAPES, decided by ``ds.schema`` exactly as `_page_rows` decides its listing: ``table`` is a
+    free caller-supplied catalog id, so a ``payload`` that is a plain ``large_binary`` column rather
+    than blob-v2 is a reachable shape. ``take_blobs`` refuses a non-blob column outright, so an
+    unconditional take made the same table answer 200 on the listing and 500 here.
 
-    First match wins, preserving what ``ids.index(page_id)`` did for a non-unique ``id`` column.
+    Blob-v2: ``id`` -> stable ``_rowid`` -> ``take_blobs(ids=[...])``. ``ids`` survive deletes and
+    compaction where positional ``indices`` do not, and no step pairs a blob read against a second
+    scan, so the null-row landmine in this module's docstring cannot apply. The whole corpus is no
+    longer read to find one row (VS-05).
+
+    Plain ``large_binary``: there is no take-path, so the filtered scan itself carries the bytes —
+    still bounded by the request (one matched row, ``limit=1``), and the cell's own validity is the
+    null signal. The bytes are wrapped in a ``BytesIO`` so both shapes hand the caller the same
+    seekable handle contract.
+
+    First match wins on both shapes, preserving what ``ids.index(page_id)`` did for a non-unique
+    ``id`` column.
 
     Only 12 bytes are read to sniff: ``_MAGIC``'s longest prefix is 8 and the RIFF branch needs the
     four bytes at offset 8, so 12 is exact. The handle is rewound afterwards because the caller reads
@@ -290,6 +304,15 @@ def _take_page(ds: lance.LanceDataset, table: str, page_id: int) -> tuple[BlobFi
     ``services/viewer/tests/test_media_null_payload.py`` exists to enforce: once a streaming response
     has sent its headers the status is already chosen and an exception can no longer become one.
     """
+    if not is_blob_field(ds.schema.field("payload")):
+        rows = ds.to_table(columns=["payload"], filter=eq("id", page_id), limit=1)
+        if rows.num_rows == 0:
+            raise NotFoundError(f"no page with id {page_id} in {table!r}")
+        cell = rows.column("payload")[0]
+        if not cell.is_valid:
+            raise NotFoundError(f"row {page_id} in {table!r} has no payload")
+        payload = bytes(cell.as_py())
+        return BytesIO(payload), len(payload), sniff_media_type(payload[:12])
     ids = ds.to_table(columns=["id"], filter=eq("id", page_id), with_row_id=True)
     if ids.num_rows == 0:
         raise NotFoundError(f"no page with id {page_id} in {table!r}")
@@ -306,7 +329,7 @@ def _take_page(ds: lance.LanceDataset, table: str, page_id: int) -> tuple[BlobFi
     return blob, size, sniff_media_type(head)
 
 
-def _read_all(blob: BlobFile, size: int) -> bytes:
+def _read_all(blob: BlobFile | BytesIO, size: int) -> bytes:
     """The whole payload, for a blob small enough to buffer."""
     with blob as f:
         return f.read(size)

@@ -18,6 +18,7 @@ import logging
 import math
 import re
 from collections.abc import Iterator
+from io import BytesIO
 from typing import Annotated
 from urllib.parse import quote
 
@@ -134,8 +135,13 @@ def blob_response(blob: BlobFile, *, mime: str, empty_detail: str) -> Response:
     return Response(content=data, media_type=mime, headers=_DERIVATIVE_CACHE)
 
 
-def _stream_handle(blob: BlobFile, size: int) -> Iterator[bytes]:
-    """Yield a whole blob in bounded chunks, closing the handle when the client goes away."""
+def _stream_handle(blob: BlobFile | BytesIO, size: int) -> Iterator[bytes]:
+    """Yield a whole payload handle in bounded chunks, closing it when the client goes away.
+
+    ``BytesIO`` beside ``BlobFile`` because `pages._take_page` serves a plain ``large_binary``
+    payload — a shape with no blob take-path — through the same streaming branch; the generator only
+    ever reads, seeks and closes, which both handles honour.
+    """
     with blob as f:
         remaining = size
         while remaining > 0:

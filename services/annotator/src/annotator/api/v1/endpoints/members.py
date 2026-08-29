@@ -21,7 +21,7 @@ from fastapi import APIRouter, Path, status
 from pydantic import BaseModel, Field
 
 from annotator.api.dependencies import ControlEmitterDep
-from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
+from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker, FgaClientDep
 from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError
 from service_kit.governed import fga
@@ -76,7 +76,7 @@ def _user_string(raw: str) -> str:
     return raw if ":" in raw else f"user:{raw}"
 
 
-async def _require_manage(checker: Any, subject: str, project_id: str, action: str) -> str:
+async def _require_manage(checker: FgaChecker, subject: str, project_id: str, action: str) -> str:
     obj = f"annotation_project:{project_id}"
     if not await checker(user=subject, relation="can_manage", obj=obj):
         audit(action, FAILURE, subject=subject, resource=project_id, relation="can_manage")

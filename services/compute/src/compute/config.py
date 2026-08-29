@@ -28,6 +28,10 @@ class ComputeSettings(GovernedAuthSettings, Settings):
     ray_client_retry_cooldown_s: float = Field(
         default=10.0,
         ge=0.0,
+        # Explicit, service-scoped alias: without one, `Settings`' env_prefix bound the bare
+        # RASK_RAY_CLIENT_RETRY_COOLDOWN_S while every record of the knob names the COMPUTE_ form —
+        # so the documented name was a no-op and the knob was untunable in any deployment.
+        alias="RASK_COMPUTE_RAY_CLIENT_RETRY_COOLDOWN_S",
         description="Minimum seconds between JobSubmissionClient (re)build attempts while the Ray "
         "dashboard is unreachable. Each attempt issues blocking version-check HTTP calls, so this "
         "caps the reconstruction storm to one try per interval; the client still self-heals once Ray "

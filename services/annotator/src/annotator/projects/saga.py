@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
@@ -129,7 +130,7 @@ def table_id_for(project: AnnotationProject, publish_id: str, namespace: str) ->
 _COLLECT_FANOUT = 16
 
 
-async def collect(project_handle: ProjectHandle, task_handle: Any, task_ids: list[str]) -> list[tuple[Task, Draft | None]]:
+async def collect(project_handle: ProjectHandle, task_handle: Callable[[str], TaskHandle], task_ids: list[str]) -> list[tuple[Task, Draft | None]]:
     """Read every task and draft FROM ITS OWN ACTOR — the authoritative source, not the index.
 
     This is the step that closes the index's one unsafe direction. `reopen` moves a task backwards
@@ -170,7 +171,7 @@ async def collect(project_handle: ProjectHandle, task_handle: Any, task_ids: lis
 async def run_publish(
     *,
     project_handle: ProjectHandle,
-    task_handle: Any,
+    task_handle: Callable[[str], TaskHandle],
     publisher: Publisher,
     namespace: str,
     subject: str,

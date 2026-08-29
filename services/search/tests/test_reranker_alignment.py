@@ -52,7 +52,9 @@ def _reranker(results: list[RerankResult], monkeypatch: pytest.MonkeyPatch) -> V
 
 def test_a_full_unordered_reply_still_maps_each_score_to_its_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     """The case that always worked, kept: an out-of-order full reply lands each score on its own row."""
-    r = _reranker([RerankResult(index=2, relevance_score=0.9), RerankResult(index=0, relevance_score=0.1), RerankResult(index=1, relevance_score=0.5)], monkeypatch)
+    r = _reranker(
+        [RerankResult(index=2, relevance_score=0.9), RerankResult(index=0, relevance_score=0.1), RerankResult(index=1, relevance_score=0.5)], monkeypatch
+    )
     assert r.rerank("q", ["a", "b", "c"]) == [0.1, 0.5, 0.9]
 
 

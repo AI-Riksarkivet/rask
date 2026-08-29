@@ -1,1 +1,1 @@
-"""Business logic for the compaction service (the maintenance sweep + per-dataset optimize)."""
+"""Business logic for the maintenance service (the maintenance sweep + per-dataset optimize)."""

@@ -6,8 +6,9 @@ different, secret-bearing input depending on whose machine ran it, and the local
 diverged from CI rather than reproducing it. That is the opposite of what a hermetic build is for.
 
 It compounds a real behaviour rather than being theoretical: `service_kit.build_settings()` calls
-`load_dotenv()` and then `derive_hcp_creds()`, which writes derived credentials into `os.environ`
-permanently. Every app any test builds inside that container would have read the developer's values.
+`load_dotenv()`, which loads a `.env` sitting in the container into `os.environ` — and
+`storage.s3_client` then derives per-client credentials from those variables (the HCP bridge).
+Every app any test builds inside that container would have read the developer's values.
 
 Verified live, not reasoned. A probe counting `.env` entries in the container's `/src`:
 

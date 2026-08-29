@@ -22,7 +22,6 @@ from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
 from service_kit.probes import ReadyCheck, make_probes_router
 from service_kit.slash import SlashToleranceMiddleware
-from storage import derive_hcp_creds
 
 
 def setup_logging() -> None:
@@ -87,7 +86,6 @@ def setup_logging() -> None:
 
 def build_settings() -> Settings:
     load_dotenv()
-    derive_hcp_creds()
     return Settings.model_validate({})
 
 

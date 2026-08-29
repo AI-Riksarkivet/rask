@@ -15,17 +15,28 @@ mapping is declared — it cannot drift.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 
 if TYPE_CHECKING:
     from dapr.actor import ActorInterface
 
 
+class WireDispatch(Protocol):
+    """What the wrapper needs from the wrapped proxy: WIRE-named attributes resolving to calls.
+
+    A Protocol rather than `ActorProxy` for the same reason `interface` stays a bare `type` (see
+    `typed_proxy`): unit-test fakes implement the wire-attribute contract without inheriting dapr's
+    class, and the contract really is just "attribute access by wire name".
+    """
+
+    def __getattr__(self, name: str, /) -> Any: ...
+
+
 class TypedActorProxy:
     """Wraps an `ActorProxy`, translating Python method names to the interface's wire names."""
 
-    def __init__(self, proxy: Any, interface: type) -> None:
+    def __init__(self, proxy: WireDispatch, interface: type) -> None:
         self._proxy = proxy
         self._interface = interface
 

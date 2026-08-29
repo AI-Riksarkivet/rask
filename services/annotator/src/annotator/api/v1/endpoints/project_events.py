@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     # Resolves the `_task_proxy` return type without importing the actor module (which pulls in
     # `dapr.actor`) at module scope — the runtime import stays lazy inside the function.
     from annotator.projects.actor import AnnotationTaskActorInterface
-from service_kit.media.state import dataset_handle
+from service_kit.media.state import AppState, dataset_handle
 
 
 logger = logging.getLogger(__name__)
@@ -370,7 +370,7 @@ async def drop_task(
     return result
 
 
-def _refuse_unknown_datasets(state: Any, payload: SendItemsRequest) -> None:
+def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest) -> None:
     """Refuse the WHOLE send if any item names a media dataset that does not resolve.
 
     Removal (`DELETE .../tasks/{id}`) is the escape hatch; this is the thing that stops the trap
@@ -402,7 +402,9 @@ def _refuse_unknown_datasets(state: Any, payload: SendItemsRequest) -> None:
             return
     if unknown:
         try:
-            known = sorted(state.registry.list_ids())
+            # `dataset_handle` above populated the registry slot on first use, but the slot is
+            # Optional by declaration — narrow rather than assume; an empty `known` degrades fine.
+            known = sorted(state.registry.list_ids()) if state.registry is not None else []
         except Exception:  # noqa: BLE001 - naming the alternatives is a nicety, never the refusal
             known = []
         detail = f"dataset(s) {unknown} do not exist — an item naming one could never be opened, claimed or completed"

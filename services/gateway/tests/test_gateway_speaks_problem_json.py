@@ -65,3 +65,47 @@ def test_the_sidecar_guard_403_is_problem_json(gw) -> None:
     if not routes:
         pytest.skip("no sidecar-only lineage routes configured in this build")
     _assert_problem(_client(gw).get(f"/api/lineage/{next(iter(routes))}"), 403)
+
+
+def test_a_400_bad_path_is_problem_json(gw) -> None:
+    """The fourth site the finding named, previously the only one untested: the proxy's 400 for a
+    path whose raw and decoded views disagree (a dot-segment hidden behind an encoded slash)."""
+    r = _client(gw).get("/api/catalog/a%2F..%2Fb")
+    _assert_problem(r, 400)
+    assert "ambiguous" in r.json()["detail"]
+
+
+def test_an_unexpected_gateway_500_is_problem_json(gw, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parity with the fleet's catch-all, which the gateway did not have: an exception no handler
+    claims must answer the SAME envelope as every sibling (`service_kit`'s `_unexpected`), not
+    starlette's `text/plain` third shape — and it must leak nothing of the exception onto the wire."""
+
+    def _boom(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("s3 credential x/y/z expired at /internal/path")
+
+    monkeypatch.setattr(gw, "_pick_route", _boom)
+    r = _client(gw).get("/api/catalog/v1/x")
+    _assert_problem(r, 500)
+    assert r.json()["detail"] == "Internal Server Error", "the exception's own text must reach the log, never the wire"
+    assert "internal/path" not in r.text
+
+
+def test_a_request_validation_error_is_problem_json(gw) -> None:
+    """Parity with the fleet's `RequestValidationError` handler, the other half the gateway lacked.
+
+    No gateway route binds a typed parameter today (`/api/{path:path}` accepts anything), so the
+    handler is exercised through a throwaway typed route on this test's freshly reloaded app — the
+    real registered handler on the real app, not a unit call into the handler function.
+    """
+
+    @gw.app.get("/__validation_probe")
+    async def _typed(n: int) -> dict[str, int]:  # pragma: no cover - never reached with a bad param
+        return {"n": n}
+
+    r = _client(gw).get("/__validation_probe", params={"n": "not-an-int"})
+    assert r.status_code == 422
+    assert r.headers["content-type"].startswith("application/problem+json"), f"not problem+json: {r.headers.get('content-type')}"
+    body = r.json()
+    assert body["type"] == "about:blank#validation"
+    assert body["status"] == 422
+    assert any(e["field"].endswith("n") for e in body["errors"])

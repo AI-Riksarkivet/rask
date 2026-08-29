@@ -82,7 +82,11 @@ class MaintenanceSettings(BaseSettings):
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MAINTENANCE_PUBLISH_TIMEOUT_SECONDS")
     lineage_pubsub: str = Field(default="lineage-pubsub", alias="MAINTENANCE_LINEAGE_PUBSUB")
     lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
-    lineage_job_namespace: str = Field(default="compaction", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
+    # "maintenance", the SERVICE, not "compaction", the operation: the namespace lands on every
+    # emitted RunEvent's job and is persisted into AGE — the pre-rename default meant a service named
+    # `maintenance` signed the graph as a service that no longer exists. (The job NAME keeps its
+    # `compaction.<table_id>` form — that half names the operation.)
+    lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
     # The catalog id delimiter — to derive a dataset's parent namespace from its table id (matches the
     # catalog's LANCE_DELIMITER default). The catalog lays tables out as <uuid>_<table_id>; table_id is the
     # canonical lineage Dataset name == OpenFGA object id, and its parent is all-but-the-last segment.

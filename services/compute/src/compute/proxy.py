@@ -24,12 +24,6 @@ router = APIRouter(include_in_schema=False, dependencies=[Depends(security.requi
 # can reach the ingress. Never widen this without an auth layer in front of /api.
 _PROXY_METHODS = ["GET", "HEAD"]
 
-# `ray_kit.dashboard.proxy` returns the httpx-DECODED body, but its headers still carry the Ray
-# dashboard's original `content-encoding`/`content-length`, which describe the compressed bytes.
-# Relaying them makes the browser re-inflate plaintext (a DecodingError) or trust a wrong length, so
-# both are dropped here and Starlette recomputes `content-length` for the decoded body.
-_STALE_BODY_HEADERS = frozenset({"content-encoding", "content-length"})
-
 
 def _canonical(path: str) -> str:
     """Ray's Serve REST API is trailing-slash-strict — `/api/serve/applications/`
@@ -51,8 +45,10 @@ async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: s
         dict(request.headers),
         body,
     )
-    headers = {k: v for k, v in resp.headers.items() if k.lower() not in _STALE_BODY_HEADERS}
-    return Response(content=resp.content, status_code=resp.status_code, headers=headers)
+    # `resp.headers` are already consistent with the DECODED `resp.content` — ray_kit strips the
+    # compressed-transfer `content-encoding`/`content-length` at its own boundary (`_RESPONSE_STRIP`)
+    # — so they relay verbatim and Starlette computes the length for the bytes actually sent.
+    return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
 
 
 def _register_proxy(prefix: str) -> None:

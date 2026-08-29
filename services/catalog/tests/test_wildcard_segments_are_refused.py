@@ -10,6 +10,8 @@ would be handed credentials scoped to every sibling object under `foo*` (`bucket
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from catalog.core.identifiers import require_safe_segments
 from catalog.core.vending import build_session_policy
@@ -28,8 +30,10 @@ def test_policy_builder_refuses_a_wildcard_prefix_rather_than_widen_the_grant() 
 
 def test_policy_builder_still_scopes_a_clean_prefix() -> None:
     policy = build_session_policy("b", "ns/pages", "read")
-    statements = policy["Statement"]
-    obj = next(s for s in statements if s["Sid"] == "TableObjects")  # type: ignore[index]
+    # The builder's return type is `dict[str, object]`; "Statement" is by IAM-policy construction a
+    # list of statement dicts, so narrow it here instead of suppressing the checker.
+    statements = cast("list[dict[str, object]]", policy["Statement"])
+    obj = next(s for s in statements if s["Sid"] == "TableObjects")
     assert obj["Resource"] == "arn:aws:s3:::b/ns/pages/*"
 
 

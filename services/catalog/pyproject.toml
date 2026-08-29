@@ -14,7 +14,8 @@ dependencies = [
     "pyarrow",
     "pylance[otel]>=10.0.0",
     "lance-namespace>=0.11.0",
-    "openfga-sdk>=0.9",
+    # >=0.10.4 with service-kit: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
+    "openfga-sdk>=0.10.4",
     "boto3>=1.34",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",

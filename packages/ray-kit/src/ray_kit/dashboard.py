@@ -123,7 +123,11 @@ _HOP_BY_HOP = {
 # Ray's `ray-authentication-token` browser cookie. Outbound: Ray's /api/authenticate sets that
 # cookie — it must never reach the browser, so the token lives only in pod env + server-side calls.
 _REQUEST_STRIP = _HOP_BY_HOP | {"host", "authorization", "x-ray-authorization", "cookie"}
-_RESPONSE_STRIP = _HOP_BY_HOP | {"set-cookie"}
+# `content-encoding`/`content-length` join the strip because `proxy` returns the httpx-DECODED body:
+# both headers describe the COMPRESSED transfer httpx already undid, so relaying them makes a
+# downstream client re-inflate plaintext or trust a wrong length. The caller (or its framework)
+# recomputes the length for the bytes actually returned.
+_RESPONSE_STRIP = _HOP_BY_HOP | {"set-cookie", "content-encoding", "content-length"}
 _BYTE_UNITS = {
     "B": 1,
     "KB": 1000,
@@ -670,6 +674,11 @@ async def proxy(
     inbound browser auth/cookies never reach Ray (the httpx client's own default
     Bearer token authenticates server-side), and Ray's auth cookie never reaches
     the browser.
+
+    `content` is the httpx-DECODED body, and the returned headers are consistent
+    with it: `content-encoding`/`content-length` (which describe the compressed
+    transfer) are stripped here, so a caller relays the headers verbatim and lets
+    its framework recompute the length.
     """
     url = f"{dashboard_url}/{path.lstrip('/')}"
     fwd = {k: v for k, v in headers.items() if k.lower() not in _REQUEST_STRIP}

@@ -1,7 +1,7 @@
-"""Standalone HCP S3 smoke test — list, read, write, list-existing.
+"""Standalone S3 smoke test — head-bucket + list, against any backend (HCP / MinIO / rustfs / AWS).
 
 Run:
-    HCP_INSECURE=1 uv run python scripts/smoke_s3.py
+    HCP_INSECURE=1 uv run python scripts/smoke_s3.py [bucket] [prefix]
 or with creds via .env at the repo root.
 """
 
@@ -14,38 +14,30 @@ from dotenv import load_dotenv
 
 def main() -> None:
     load_dotenv()
-    from storage import derive_hcp_creds
+    # The client the estate actually ships: `storage.s3_client` resolves endpoint,
+    # insecure/CA flags and credentials — including the per-client HCP bridge — so
+    # smoking IT smokes the production path. `derive_hcp_creds` is pure (it returns
+    # the pair, mutating nothing), so it serves only the diagnostic print here.
+    from storage import derive_hcp_creds, s3_client
 
-    derive_hcp_creds()  # HCP cred bridge; no-op for MinIO/rustfs/AWS
     endpoint = os.getenv("RASK_S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT_URL") or os.getenv("HCP_ENDPOINT")
     print(f"endpoint: {endpoint}", flush=True)
-    print(f"akid set: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}", flush=True)
+    if os.getenv("AWS_ACCESS_KEY_ID"):
+        creds_source = "env AWS_*"
+    elif derive_hcp_creds() is not None:
+        creds_source = "derived from HCP_USERNAME/PASSWORD (applied per client)"
+    else:
+        creds_source = "NONE RESOLVED — requests will be unsigned"
+    print(f"creds: {creds_source}", flush=True)
 
-    import boto3
-    from botocore.config import Config
-
-    cfg = Config(
-        signature_version="s3v4",
-        s3={"addressing_style": "path"},
-        request_checksum_calculation="when_required",
-        response_checksum_validation="when_required",
-        retries={"max_attempts": 1},
-        connect_timeout=5,
-        read_timeout=15,
-    )
-    kwargs: dict = {"endpoint_url": endpoint, "config": cfg}
-    if os.getenv("HCP_INSECURE", "").lower() in ("1", "true", "yes"):
-        import urllib3
-
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        kwargs["verify"] = False
-    if ca := os.getenv("HCP_CA_BUNDLE"):
-        kwargs["verify"] = ca
+    # `s3_client` reads RASK_S3_CA_BUNDLE / S3_CA_BUNDLE; HCP_CA_BUNDLE is this
+    # script's documented legacy spelling, so bridge it (this process only).
+    if (ca := os.getenv("HCP_CA_BUNDLE")) and not os.getenv("RASK_S3_CA_BUNDLE"):
+        os.environ["RASK_S3_CA_BUNDLE"] = ca
 
     print("building client...", flush=True)
     t0 = time.perf_counter()
-    c = boto3.client("s3", **kwargs)
-    c.meta.events.unregister("needs-retry.s3")
+    c = s3_client()
     print(f"  built in {time.perf_counter() - t0:.2f}s", flush=True)
 
     bucket = sys.argv[1] if len(sys.argv) > 1 else "images-batch"

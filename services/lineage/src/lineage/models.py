@@ -359,51 +359,6 @@ class RunEvent(BaseModel):
         return None
 
     @property
-    def parent_run_id(self) -> str | None:
-        """The IMMEDIATE parent run id from the standard ``parent`` run facet, if this run is a child.
-
-        The consumer side of the hierarchy exists BEFORE anything emits one on purpose. A child event
-        whose parent nothing reads is worse than no child event at all: it lands in the graph as an
-        extra unattached root, so the estate looks like it grew a pile of orphan jobs rather than
-        gaining detail (``OPEN-WORK.md`` E1 — ``parent`` is the facet that would link an actor run
-        to its stage run). With this in place, whatever emits first is understood on arrival.
-
-        Malformed means None, never a raise — same contract as :attr:`progress`: this runs inside the
-        Dapr subscriber, where an exception turns one bad event into an infinite redelivery loop.
-        """
-        facet = (self.run.facets or {}).get("parent")
-        if not isinstance(facet, dict):
-            return None
-        run = facet.get("run")
-        run_id = run.get("runId") if isinstance(run, dict) else None
-        return run_id if isinstance(run_id, str) and run_id else None
-
-    @property
-    def root_run_id(self) -> str | None:
-        """The TOPMOST run of this run's hierarchy (``parent.root.run.runId``).
-
-        Distinct from :attr:`parent_run_id`, and the one a consumer actually wants: to group every
-        actor run under the pipeline invocation that caused it you need the root, and walking
-        parent-by-parent requires a graph query per hop (and cannot terminate on an event whose
-        ancestors have not arrived yet). OpenLineage puts the root ON the facet precisely so a
-        consumer does not have to walk.
-
-        ``root`` is optional in the spec. When it is absent the hierarchy is one level deep by
-        definition — the parent has no parent — so the immediate parent IS the root, and that is what
-        this returns rather than None.
-        """
-        facet = (self.run.facets or {}).get("parent")
-        if not isinstance(facet, dict):
-            return None
-        root = facet.get("root")
-        if isinstance(root, dict):
-            run = root.get("run")
-            run_id = run.get("runId") if isinstance(run, dict) else None
-            if isinstance(run_id, str) and run_id:
-                return run_id
-        return self.parent_run_id
-
-    @property
     def progress(self) -> tuple[int, int] | None:
         """Batch progress ``(done, total)`` from our custom ``progress`` run facet, if present.
 

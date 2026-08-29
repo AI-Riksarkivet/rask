@@ -1,11 +1,15 @@
-"""OpenTelemetry domain metrics for the compaction service (exported OTLP-direct to GreptimeDB)."""
+"""OpenTelemetry domain metrics for the maintenance service (exported OTLP-direct to GreptimeDB).
+
+The counters keep their ``compaction.*`` names on purpose: they count the compaction OPERATION the
+sweep performs, and renaming a metric orphans its history. Only the instrumentation scope names the
+service."""
 
 from __future__ import annotations
 
 from opentelemetry import metrics
 
 
-_meter = metrics.get_meter("lance.compaction")
+_meter = metrics.get_meter("lance.maintenance")
 
 _runs = _meter.create_counter(
     "compaction.runs",
