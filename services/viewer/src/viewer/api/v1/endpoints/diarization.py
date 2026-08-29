@@ -20,7 +20,7 @@ from fastapi import APIRouter
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit import store
 from service_kit.lancekit.predicate import eq
-from service_kit.media.deps import StateDep
+from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA
 from viewer.schemas.diarization import DiarizationResponse, SpeakerTurn
@@ -44,7 +44,7 @@ def _not_built(doc_id: str) -> DiarizationResponse:
 
 
 @router.get("/{doc_id}", dependencies=[REQUIRE_CORPUS_DATA])
-def get_diarization(doc_id: str, state: StateDep, dataset: str | None = None) -> DiarizationResponse:
+def get_diarization(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> DiarizationResponse:
     """A recording's speaker turns (sorted by start), or ``built: false`` if absent."""
     handle = dataset_handle(state, dataset)
     # Whitelist the path param against the descriptor's identity pattern BEFORE

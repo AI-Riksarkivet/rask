@@ -2,7 +2,9 @@
 
 Ported from the retired rask ``volumes-api`` in the R6/R20 media wave
 (docs/architecture/lance-ns-merge.md): one delimiter-scoped listing, a HEAD,
-and a byte download over the two fixed rask buckets. Public paths ride the
+and a STREAMED byte download over any bucket in the catalog's storage registry
+(it was two fixed buckets once — that premise died with `LANCE_STORES`, and it
+is why the download streams rather than buffers). Public paths ride the
 existing ``/api/explorer`` gateway row (``/api/explorer/objects`` → ``/api/objects``
 here), so the gateway grows zero new rows.
 
@@ -24,14 +26,14 @@ only a genuine outage — unreachable endpoint, bad credentials — still reache
 """
 
 import logging
-import os
+from collections.abc import Iterator
 from functools import lru_cache
 from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Query
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
@@ -40,11 +42,16 @@ from service_kit.governed.secrets import fetch_dapr_secret
 from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 from viewer.api.security import BROWSE_STORAGE, CheckerDep, CurrentSubject, SettingsDep
+from viewer.core.config import get_viewer_settings
 
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["objects"])
+
+#: Bytes pulled from S3 per `download_object` step. 1 MiB amortizes the per-read overhead while
+#: bounding what one in-flight download holds — the same trade `media.py` makes for blob ranges.
+_DOWNLOAD_CHUNK = 1 << 20
 
 
 #: R28: the bucket a request may name is validated against the CATALOG'S STORAGE REGISTRY, not a
@@ -91,7 +98,7 @@ def _creds(secret: str) -> tuple[str, str]:
     existed). The empty/incomplete bundle is the ONLY failure signal, so the 503 says the credentials
     could not be read and asserts nothing about which of the three states caused it.
     """
-    store = os.getenv("RASK_SECRET_STORE", "lance-secrets")
+    store = get_viewer_settings().secret_store
     data = fetch_dapr_secret(store, secret, retries=1)
     ak, sk = data.get("access_key"), data.get("secret_key")
     if not (ak and sk):
@@ -185,7 +192,7 @@ def _missing_bucket(bucket: str) -> NotFoundError:
     )
 
 
-def _resolve_missing(client: object, exc: ObjectNotFoundError) -> NotFoundError:
+def _resolve_missing(client: object, exc: ObjectNotFoundError, *, store: str) -> NotFoundError:
     """Turn a key-level not-found into the RIGHT 404, on any S3 backend.
 
     A `HEAD` has no response body, so some backends answer a missing bucket with a bare
@@ -193,12 +200,18 @@ def _resolve_missing(client: object, exc: ObjectNotFoundError) -> NotFoundError:
     `NoSuchBucket`; AWS does not). Rather than let the answer depend on which store is
     plugged in — the storage-agnostic contract forbids exactly that — probe the bucket
     once, on the error path only, and say which thing is actually absent.
+
+    `exc.bucket` is the real bucket (that is what the boto call named), while `store` is what the
+    CALLER addressed. The key-level answer uses the caller's vocabulary and the bucket-level one
+    uses the operator's — VS-22: both used to be the store name, so the bucket-not-found 404 sent an
+    operator to look for a `rustfs.buckets` entry that had never been named that.
     """
-    return _missing_bucket(exc.bucket) if _bucket_missing(client, exc.bucket) else NotFoundError(f"object not found: {exc.bucket}/{exc.key}")
+    return _missing_bucket(exc.bucket) if _bucket_missing(client, exc.bucket) else NotFoundError(f"object not found: {store}/{exc.key}")
 
 
 def _bucket_missing(client: object, bucket: str) -> bool:
-    """True only when the store positively reports the bucket as absent.
+    """True only when the store positively reports the bucket as absent. ``bucket`` is the REAL
+    bucket, not the store name — this call goes straight to S3.
 
     A probe that fails for any OTHER reason returns False: an inconclusive probe must
     never manufacture a "your chart did not provision this" claim.
@@ -208,7 +221,7 @@ def _bucket_missing(client: object, bucket: str) -> bool:
         return False
     try:
         with s3_errors(bucket=bucket):
-            head_bucket(Bucket=_registered_bucket(bucket))
+            head_bucket(Bucket=bucket)
     except BucketNotFoundError:
         return True
     except Exception:  # noqa: BLE001 — an inconclusive probe is not evidence; fall back to the key answer
@@ -264,15 +277,20 @@ async def list_objects(
         # NoSuchBucket, happened on ITERATION — and it iterated to exhaustion, which is the defect:
         # slicing a fully-drained paginator would have satisfied a `max_keys` parameter while still
         # reading the whole prefix into memory. Still inside `s3_errors` for the same translation.
+        #
+        # The REAL bucket, resolved once and used for both the call and the error translation: a
+        # `s3_errors(bucket=<store name>)` makes `exc.bucket` a store name, and the 404 it feeds
+        # then talks about a bucket nobody registered under that name (VS-22).
+        real_bucket = _registered_bucket(bucket)
         request: dict[str, object] = {
-            "Bucket": _registered_bucket(bucket),
+            "Bucket": real_bucket,
             "Prefix": prefix,
             "Delimiter": "/",
             "MaxKeys": max_keys,
         }
         if continuation_token:
             request["ContinuationToken"] = continuation_token
-        with s3_errors(bucket=bucket):
+        with s3_errors(bucket=real_bucket):
             page = client.list_objects_v2(**request)
         prefixes.extend(cp["Prefix"] for cp in page.get("CommonPrefixes", []))
         for obj in page.get("Contents", []):
@@ -320,13 +338,14 @@ async def head_object(
 
     def _blocking() -> dict:
         client = _client_for(bucket)
+        real_bucket = _registered_bucket(bucket)
         try:
-            with s3_errors(bucket=bucket, key=key):
-                return client.head_object(Bucket=_registered_bucket(bucket), Key=key)
+            with s3_errors(bucket=real_bucket, key=key):
+                return client.head_object(Bucket=real_bucket, Key=key)
         except BucketNotFoundError as exc:
             raise _missing_bucket(exc.bucket) from exc
         except ObjectNotFoundError as exc:
-            raise _resolve_missing(client, exc) from exc
+            raise _resolve_missing(client, exc, store=bucket) from exc
 
     resp = await run_in_threadpool(_blocking)
     last_modified = resp.get("LastModified")
@@ -347,36 +366,59 @@ async def download_object(
     settings: SettingsDep,
     bucket: BucketName,
     key: Annotated[str, Query(description="Full object key to download.")],
-) -> Response:
+) -> StreamingResponse:
     """The object's bytes with a download disposition (404 if missing).
 
-    Reads fully into memory: the two rask buckets hold page images (~MBs) and
-    ALTO XML (small), so streaming isn't worth the boto3 client-lifetime juggling.
-    Doubles as the browser's inline `<img src>` — a disposition header never stops
-    an `<img>` fetch from rendering.
+    STREAMED, in `_DOWNLOAD_CHUNK` pieces (VS-10 is the disposition; VS-15 is this). It used to
+    `read()` the whole object into the process before sending a byte, defended by a premise that had
+    already been deleted: "the two rask buckets hold page images (~MBs) and ALTO XML (small)". The
+    bucket list became CONFIGURATION (`store_by_name` over the registry, `DEFAULT_STORES`), and the
+    registered stores include the warehouse and the observability bucket — multi-GB objects, one
+    full copy per concurrent request, on a route with no size bound. Bounded memory is not a
+    micro-optimisation here; it is the difference between a large download and an OOM.
 
-    Same 404 split as the HEAD sibling (missing key vs missing bucket); outages still
-    surface as outages.
+    Doubles as the browser's inline `<img src>` — a disposition header never stops an `<img>` fetch
+    from rendering, and a streamed body is still a normal 200 with a `Content-Length`.
+
+    Same 404 split as the HEAD sibling (missing key vs missing bucket), and it still happens BEFORE
+    the response starts: the GET is issued in the threadpool and only its BODY is deferred, so an
+    absence is a 404 rather than an error rendered mid-download. Outages still surface as outages.
     """
     await _require_browse(checker, subject, settings, bucket, "viewer.object.download")
 
-    def _blocking() -> tuple[dict, bytes]:
+    def _blocking() -> tuple[Any, dict]:
+        # The client is RETURNED, not discarded: the streaming body borrows its connection pool, so
+        # letting the client fall out of scope here would break the transfer mid-flight.
         client = _client_for(bucket)
+        real_bucket = _registered_bucket(bucket)
         try:
-            with s3_errors(bucket=bucket, key=key):
-                resp = client.get_object(Bucket=_registered_bucket(bucket), Key=key)
-                return resp, resp["Body"].read()
+            with s3_errors(bucket=real_bucket, key=key):
+                return client, client.get_object(Bucket=real_bucket, Key=key)
         except BucketNotFoundError as exc:
             raise _missing_bucket(exc.bucket) from exc
         except ObjectNotFoundError as exc:
-            raise _resolve_missing(client, exc) from exc
+            raise _resolve_missing(client, exc, store=bucket) from exc
 
-    resp, data = await run_in_threadpool(_blocking)
-    content_type = resp.get("ContentType") or "application/octet-stream"
-    return Response(
-        content=data,
-        media_type=content_type,
-        headers={"Content-Disposition": _attachment_disposition(key.rsplit("/", 1)[-1] or "download")},
+    client, resp = await run_in_threadpool(_blocking)
+    body = resp["Body"]
+
+    def _chunks(_client: Any = client) -> Iterator[bytes]:  # noqa: ANN401 — the boto3 client, bound to keep its
+        # connection pool alive for as long as the body is being read; see `_blocking`.
+        try:
+            yield from body.iter_chunks(_DOWNLOAD_CHUNK)
+        finally:
+            body.close()
+
+    headers = {"Content-Disposition": _attachment_disposition(key.rsplit("/", 1)[-1] or "download")}
+    length = resp.get("ContentLength")
+    if length is not None:
+        headers["Content-Length"] = str(length)
+    return StreamingResponse(
+        # `iterate_in_threadpool`, because every `iter_chunks` pull is a blocking socket read and
+        # this handler is async: iterating the generator inline would read S3 on the event loop.
+        iterate_in_threadpool(_chunks()),
+        media_type=resp.get("ContentType") or "application/octet-stream",
+        headers=headers,
     )
 
 

@@ -1,15 +1,20 @@
 # packages/storage
 
-A small, **Ray-free** abstraction over three byte stores — the local filesystem,
-S3/HCP buckets, and the Riksarkivet IIIF Image API — behind a uniform
-Source/Sink shape. It also bundles the boto3 S3 client factory tuned for HCP and
-the HCP credential derivation.
+A small, **Ray-free** abstraction over two byte stores — the local filesystem and
+S3-compatible buckets — behind a uniform Source/Sink shape. It also bundles the
+boto3 S3 client factory and the HCP credential derivation.
+
+**Protocol-agnostic on purpose.** A read-through cache for one image API lived here
+until 2026-08-17 with exactly one consumer and moved to `runners/htr`: a shared
+package carrying a single workload's protocol is how that workload becomes
+privileged.
 
 → Auto-generated symbol docs: **[API reference](../reference/storage.md)**.
 
 ## The Source/Sink contract
 
-There is **no base class** — Source/Sink is a duck-typed structural contract:
+`storage.protocol` states it, as two runtime-checkable Protocols — structural, so an
+adapter that lives in a caller satisfies them without importing anything from here:
 
 - **Source** — `keys() -> Iterable[str]` and `read(key) -> bytes`
 - **Sink** — `existing_keys(suffix="") -> Iterable[str]` and `write(key, data)`
@@ -17,8 +22,10 @@ There is **no base class** — Source/Sink is a duck-typed structural contract:
 | Implementation | Module | Notes |
 |---|---|---|
 | `FSSource` / `FSSink` | `fs.py` | Local filesystem; `FSSink.__init__` eagerly creates its root. |
-| `S3Source` / `S3Sink` | `s3.py` | S3/HCP; keyword-only; needs `client` (tests) or `client_factory` (picklable Ray runs). `S3Sink` defaults `content_type="application/xml"` (ALTO). |
-| `IIIFCachedSource` | `iiif.py` | Read-through cache: S3 first, IIIF on miss, write-through to the cache bucket. |
+| `S3Source` / `S3Sink` | `s3.py` | S3; keyword-only; needs `client` (tests) or `client_factory` (picklable Ray runs). Both inherit the lazy-client/pickle behaviour from one `_LazyClientAdapter`. `S3Sink` defaults `content_type="application/xml"`. |
+
+Every S3 call is wrapped in `s3_errors`, so a caller meets `BucketNotFoundError` /
+`ObjectNotFoundError` and never a raw botocore `ClientError`.
 
 `build_source(uri, …)` / `build_sink(uri, …)` (in `uri.py`) dispatch on the URI:
 `s3://…` → S3 with an `s3_client` factory; anything else → filesystem.

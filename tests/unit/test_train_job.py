@@ -123,7 +123,7 @@ def test_complete_event_carries_the_registry_version_and_schema() -> None:
     parsed = RunEvent.model_validate(_event(event_type="COMPLETE", version=3))
     out = parsed.outputs[0]
     assert out.facets["version"]["datasetVersion"] == "3"  # model version == Lance version
-    assert [f["name"] for f in out.fields] == ["artifact", "payload", "meta"]
+    assert [f.name for f in out.fields] == ["artifact", "payload", "meta"]
     assert out.source_uri == _REGISTRY
 
 

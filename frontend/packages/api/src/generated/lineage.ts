@@ -141,6 +141,11 @@ export interface paths {
          * @description The column-level lineage subgraph around ``name`` (#24) — the field-to-field analogue of
          *     ``/graph``, for a DAG view of how each column was produced.
          *
+         *     ``depth`` counts DATASET hops outward; 1 is the single-hop answer this returned before the
+         *     parameter existed, so every existing caller is unaffected. The bound is FastAPI's here AND the
+         *     repository's — governance below runs over whatever the walk returned, so a depth the service did
+         *     not agree to would enlarge the set being filtered, not the set being disclosed.
+         *
          *     Nodes/edges touching a dataset the caller can't see are dropped (an edge needs BOTH endpoints'
          *     datasets visible); ``name``'s own columns are always shown (the route gate authorized it).
          */
@@ -290,6 +295,19 @@ export interface paths {
         /**
          * Get Graph
          * @description The connected lineage subgraph around ``name`` (nodes + edges) for a DAG view.
+         *
+         *     ``depth`` bounds the walk to that many hops in each direction, making this a ROOTED
+         *     NEIGHBOURHOOD rather than a whole connected component — the shape Marquez serves at
+         *     ``/lineage?nodeId=&depth=N``. Omitted, the walk is unbounded, which is the previous behaviour and
+         *     still what an un-rooted caller wants.
+         *
+         *     Bounding here rather than in the client is the point: a UI depth control that filters an
+         *     already-fetched window cannot reach anything the window excluded, however small the depth.
+         *
+         *     `ge=1, le=MAX_WALK_DEPTH` is the FIRST of two guards and the one that answers the caller: a bad
+         *     depth is a 422 here rather than a 500 from the repository. The repository re-checks anyway,
+         *     because the hop range is interpolated into Cypher and that check must not depend on every caller
+         *     having gone through this route.
          *
          *     Nodes the caller may not see (and edges touching them) are dropped; the requested ``name``
          *     is already authorized by the route gate.
@@ -462,8 +480,9 @@ export interface paths {
          *
          *     GOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3
          *     with the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every
-         *     other lineage read gates on ``can_get_metadata``; this now does the same — authenticate (401 unauth /
-         *     503 if FGA unwired, via ``require_metadata_access``) and filter to the datasets the caller may read.
+         *     other lineage read gates on ``can_get_metadata``; this does the same via the shared batch filter —
+         *     ONE ``batch_check`` over the layout, not a per-dataset round-trip loop (F-LIN-13). The ladder is
+         *     unchanged: 401 unauthenticated / 503 FGA unwired propagate; a denied dataset is dropped, not fatal.
          *     FGA off → pass-through (the dev demo).
          */
         get: operations["demo_datasets_demo_datasets_get"];
@@ -1326,22 +1345,16 @@ export interface components {
          *     unreadable. Non-empty = those columns failed a real 1-byte probe read.
          */
         ReconcileStatus: {
-            /**
-             * Dangling Blob Columns
-             * @default []
-             */
-            dangling_blob_columns: string[];
+            /** Dangling Blob Columns */
+            dangling_blob_columns?: string[];
             /** Dataset */
             dataset: string;
             /** Graph Version */
             graph_version?: number | null;
             /** In Sync */
             in_sync: boolean;
-            /**
-             * Missing Declared Columns
-             * @default []
-             */
-            missing_declared_columns: string[];
+            /** Missing Declared Columns */
+            missing_declared_columns?: string[];
             /**
              * Stale
              * @default false
@@ -1695,7 +1708,9 @@ export interface operations {
     };
     get_dataset_columns_datasets__name__columns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                depth?: number;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -1946,7 +1961,9 @@ export interface operations {
     };
     get_graph_datasets__name__graph_get: {
         parameters: {
-            query?: never;
+            query?: {
+                depth?: number | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;

@@ -153,10 +153,12 @@ def resolve_target(handle: DatasetHandle, table: str | None = None) -> SearchTar
     alignments_column: str | None = None
     alignments_ref = declared.capabilities.get(_ALIGNMENTS_CAPABILITY)
     if alignments_ref:
-        table, _, column = alignments_ref.partition(".")
+        # NOT `table`: that parameter is the searchable table the CALLER selected, and rebinding it
+        # here left one name meaning two different things in one function (VS-23).
+        alignments_table, _, column = alignments_ref.partition(".")
         # Only a row-table column can ride on hits; a foreign-table target would
         # make the pop strip an unrelated same-named hit field.
-        if column and table == search.row_table:
+        if column and alignments_table == search.row_table:
             alignments_column = column
 
     scene = search.vectors.get(SearchMode.SCENE.value)

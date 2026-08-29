@@ -50,7 +50,14 @@ _ROOT = Path(__file__).resolve().parents[2]
 #: are here anyway: they cost milliseconds, and they are the ones a future edit would break silently.
 _SETTINGS: list[tuple[str, str, str]] = [
     ("packages/service-kit", "service_kit.config", "Settings"),
-    ("packages/service-kit", "service_kit.media.config", "Settings"),
+    # `MediaSettings`, renamed from a second class called `Settings` (SK-10) — one distribution held
+    # two of that name, on `RASK_*` and `MEDIA_*` respectively. `service_kit.media.config.Settings`
+    # survives as an alias for the three services that import it, so this roster names the DEFINITION.
+    ("packages/service-kit", "service_kit.media.config", "MediaSettings"),
+    # The Dapr-delivered door's environment (SKG-10). `APP_API_TOKEN` is deliberately unprefixed —
+    # daprd injects that exact name from `dapr.io/app-token-secret`, so it IS the declared name and
+    # the bare-name rule below skips it rather than flagging it.
+    ("packages/service-kit", "service_kit.governed.dapr_auth", "DaprDoorSettings"),
     ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
     ("packages/ray-kit", "ray_kit.auth", "RayAuthSettings"),
     # ratch's two rows (JobsSettings RATCH_*, RunnersSettings) died with the package at the
@@ -66,6 +73,10 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("services/notifications", "notifications.config", "NotificationsSettings"),
     ("services/flows", "flows.config", "FlowsSettings"),
     ("services/ingest", "ingest.auth", "IngestAuthSettings"),
+    # The OPERATIONAL half of the same service — every `RASK_INGEST_*` / upstream-address knob, moved
+    # off 44 scattered `os.getenv` reads (ING-07). No `populate_by_name`, so the alias half of this
+    # gate is the whole of its declaration.
+    ("services/ingest", "ingest.config", "IngestSettings"),
     # The two services the gateway publishes that had NO auth code path at all until 2026-08-26 —
     # so no settings class either, and nothing for this roster to check. `ComputeSettings` subclasses
     # the shared `Settings` (it reads ray_dashboard_url and the rest of the common surface);

@@ -4,17 +4,14 @@ At merge, lance-ns's mover emits lineage when the write routes through the catal
 until then we emit it ourselves from the write path, using the kernel's OpenLineage
 primitives (``service_kit.lancekit.openlineage``, whose spec constants match
 ``service_kit.openlineage``) so a pre-merge event and a merged event describe
-the same run identically. Configurable sink (``MEDIA_LINEAGE_SINK=stdout|log|none``)
+the same run identically. Configurable sink (``MEDIA_LINEAGE_SINK=log|none``)
 — no external dependency; the catalog/NATS transport is the merge step.
 """
-# TRANSITIONAL: ported verbatim from common.lancekit.lineage_emit for gate 3 (R19).
-# Gate 5 (R21) swaps emitters onto packages/lineage-kit; no emission-shape changes here.
 
 from __future__ import annotations
 
 import json
 import logging
-import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -24,7 +21,11 @@ from service_kit.lancekit.openlineage import WriteResult, build_run_event, facet
 if TYPE_CHECKING:
     import lance
 
-logger = logging.getLogger("lineage")
+# `__name__`, NOT the hardcoded "lineage" this used. That name is the LINEAGE SERVICE's package tree
+# — the one `obs.configure_app_logging` raises to INFO — so this emitter, which runs inside the
+# annotator, borrowed another service's logger: its level was governed by a service that does not run
+# in this process, and every record it wrote was attributed to a service that did not produce it.
+logger = logging.getLogger(__name__)
 
 #: Lineage namespace for the annotation plane (media units + the annotations table).
 _NS = "media"
@@ -74,7 +75,11 @@ def emit_save(
     operation: str = "MERGE_INSERT",
 ) -> dict[str, Any] | None:
     """Build + emit the save's RunEvent to the configured sink; returns it (or None
-    when the sink is ``none``) so callers/tests can inspect it."""
+    when the sink is ``none``) so callers/tests can inspect it.
+
+    ``sink`` is a :class:`service_kit.media.config.LineageSink` value, taken as ``str`` so this
+    module stays below the media settings rather than importing back up into them.
+    """
     if sink == "none":
         return None
     event = build_save_event(
@@ -84,9 +89,9 @@ def emit_save(
         unit_key=unit_key,
         operation=operation,
     )
-    line = json.dumps(event, separators=(",", ":"))
-    if sink == "stdout":
-        sys.stdout.write(line + "\n")
-    else:
-        logger.info("openlineage %s", line)
+    # THROUGH THE LOGGING SYSTEM, always. A `sys.stdout.write` branch used to serve
+    # ``MEDIA_LINEAGE_SINK=stdout``, which put the one record describing a governed write past the
+    # request-id correlation filter, past the level gate and past the OTLP export — while landing on
+    # the same stream `setup_logging()` already writes to. See `LineageSink` for why the option went.
+    logger.info("openlineage %s", json.dumps(event, separators=(",", ":")))
     return event

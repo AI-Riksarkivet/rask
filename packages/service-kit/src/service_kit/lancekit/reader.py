@@ -50,6 +50,8 @@ from service_kit.exceptions import (
     ValidationError,
 )
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lancekit.catalog_client import catalog_api_client
+from service_kit.lancekit.catalog_client import request_headers as _request_headers
 from service_kit.lancekit.errors import is_not_found
 
 
@@ -364,21 +366,23 @@ class RestCatalogTransport:
         retries: int = 3,
         timeout: float = 30.0,
     ) -> None:
-        from lance_namespace_urllib3_client import ApiClient, Configuration  # optional dep
         from lance_namespace_urllib3_client.api.data_api import DataApi
 
-        config = Configuration(host=base_url, retries=retries)
-        client = ApiClient(config)
-        if token:
-            client.set_default_header("Authorization", f"Bearer {token}")
-        self._api = DataApi(client)
+        # ONE client (and so one connection pool) per catalog, shared with every other transport
+        # aimed at it — this ctor runs per `open_reader` call, i.e. per request.
+        self._api = DataApi(catalog_api_client(base_url, retries=retries))
+        self._token = token
         self._delimiter = delimiter
         self._timeout = timeout
+
+    def request_headers(self) -> dict[str, str]:
+        """THIS caller's bearer, per request — never a default header on the shared client."""
+        return _request_headers(self._token)
 
     def query(self, request: QueryTableRequest) -> bytes:
         id_str = self._delimiter.join(request.id or [])
         with translate_catalog_errors():
-            raw = self._api.query_table(id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout)
+            raw = self._api.query_table(id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout, _headers=self.request_headers())
         return bytes(raw)
 
     def count(self, table_id: list[str], filter: str | None, *, version: int | None = None) -> int:
@@ -390,7 +394,7 @@ class RestCatalogTransport:
         # compare-versions history shows.
         request = CountTableRowsRequest(id=table_id, predicate=filter, version=version)
         with translate_catalog_errors():
-            return int(self._api.count_table_rows(id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout))
+            return int(self._api.count_table_rows(id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout, _headers=self.request_headers()))
 
     def table_version(self, table_id: list[str]) -> int:
         # THEIR version primitive: a plain describe returns location-only (version
@@ -408,6 +412,7 @@ class RestCatalogTransport:
                 delimiter=self._delimiter,
                 load_detailed_metadata=True,
                 _request_timeout=self._timeout,
+                _headers=self.request_headers(),
             )
         if response.version is None:
             raise ServiceUnavailableError(f"catalog describe returned no version for {table_id}")
@@ -428,6 +433,7 @@ class RestCatalogTransport:
                 limit=limit,
                 descending=True,
                 _request_timeout=self._timeout,
+                _headers=self.request_headers(),
             )
         return [CatalogVersion(version=int(v.version), timestamp_millis=v.timestamp_millis) for v in response.versions or []]
 

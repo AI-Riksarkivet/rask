@@ -163,8 +163,8 @@ def test_source_rowid_traces_every_derived_row_back_to_its_exact_bronze_source_r
 
     def _srid_edge(output_name: str) -> tuple[str, str, str]:
         out = Dataset.model_validate(pubs[output_name]["outputs"][0])
-        edge = next(e for e in out.column_edges if e["out_field"] == "source_rowid")
-        return edge["name"], edge["field"], edge["subtype"]
+        edge = next(e for e in out.column_edges if e.out_field == "source_rowid")
+        return edge.name, edge.field, edge.subtype
 
     assert _srid_edge("silver$features") == ("bronze$events", "_rowid", "IDENTITY")  # minted at the first derive
     assert _srid_edge("gold$catalog") == ("silver$features", "source_rowid", "IDENTITY")  # carried forward
@@ -220,9 +220,14 @@ def _next_trigger_from_publication(hop: tuple[str, str, str, str, str], previous
     """
     _op, _from_ns, _from_ds, to_ns, to_ds = hop
     trigger = {"token": previous["token"], "dataset": to_ds, "namespace": to_ns}
-    # `publication_trigger` copies the project onto the trigger when the catalog names it on the
-    # event (`extra.project`), and omits the key entirely when it does not — byte-identical for a
-    # projectless estate. Mirrored exactly here.
+    # Both of these are read off the control event's `extra`, which the catalog composes: the mover
+    # sends them on its publish body and `publication_extra` echoes them, omitting either when empty
+    # — byte-identical for a projectless, personless estate. Mirrored exactly here.
+    #
+    # The ORIGINATOR line used to describe a mechanism that did not exist: the head derived it from
+    # the event's ACTOR, which for a cascade publish is the mover's own service identity, so this
+    # helper carried `alice` while production carried `service-bronze-to-silver`. The hand-off is now
+    # what this mirrors (`tests/unit/test_cascade_originator.py` drives the real head end to end).
     if previous.get("project"):
         trigger["project"] = previous["project"]
     if previous.get("originator"):

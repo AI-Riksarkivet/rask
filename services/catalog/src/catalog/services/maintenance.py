@@ -5,6 +5,10 @@ current version, tag pins (a tagged version is NEVER collected), the retain-last
 cutoff — it never mutates. ``run_gc`` performs the reclaim with the SAME tag exemption the sweep uses
 (``error_if_tagged_old_versions=False``), so a long-lived promotion tag can't stall GC. Pure over a Lance
 dataset handle, so both are unit-testable with a fake ``ds``.
+
+The destructive verbs are gated by :func:`require_compactable` and :func:`require_reclaimable`, which
+ask the SWEEP's gates per verb rather than one stricter gate of their own — see either for why a button
+that refuses what the cron performs unattended protects nothing.
 """
 
 from __future__ import annotations
@@ -17,8 +21,14 @@ import pyarrow.fs as pafs
 from lance_namespace import UnsupportedOperationError
 
 from service_kit.lakehouse.base_refs import BaseRefs, protected_roots
-from service_kit.lakehouse.features import unsupported_features
-from service_kit.lakehouse.objectfs import fs_and_base
+from service_kit.lakehouse.features import (
+    FLAG_BASE_PATHS,
+    describe_compaction_unsupported_flags,
+    describe_gc_unsupported_flags,
+    gather_compaction_bases,
+    manifest_feature_flags,
+)
+from service_kit.lakehouse.objectfs import dataset_root_probe, fs_and_base
 
 
 if TYPE_CHECKING:
@@ -28,24 +38,88 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def require_maintainable(ds: Any, protected: BaseRefs | None = None) -> None:
-    """#121 + #114: refuse a dataset this door must not rewrite, for either of the two reasons.
+def require_compactable(ds: Any, storage_options: StorageOptions, protected: BaseRefs | None = None) -> None:
+    """#121 + #114 for the COMPACT door: refuse a dataset this button must not rewrite.
 
-    **Its own layout (#121).** The SWEEP got this gate at #64 — measured then: compacting a shallow
-    clone (flag 16) returned ``fragments_removed=8, error=None`` and silently materialised a full
-    local copy of data the clone had only referenced. These on-demand doors are the SAME operations
-    wired to a button in the table UI, and they shipped with no gate at all — the "actively
-    destructive" defect stayed one click away after the sweep was fixed. The refusal names the flags,
-    because an operator needs to know they are looking at a shallow clone, not a broken dataset.
+    **THE GATE IS THE SWEEP'S, per verb — not a stricter one.** It asks
+    :func:`~service_kit.lakehouse.features.describe_compaction_unsupported_flags`, exactly what
+    ``maintenance.services.optimize`` asks before its own ``compact_files``, and it gathers the same
+    three readings to answer it (the manifest's ``BasePath.is_dataset_root``, an object-store probe of
+    each base, and whether any ``DataFile`` resolves through one). It used to ask the flags-only
+    :func:`~service_kit.lakehouse.features.unsupported_features`, which refuses ``base_paths`` in
+    every form — and once the sweep's gate moved to evidence (#6), this door was the STRICTER of the
+    two while its refusal told the operator the sweep agreed with it.
 
-    **Somebody else's layout (#114), which the flag check structurally cannot see.** Flag 16 marks
-    the dataset that SPANS bases — the CLONE. The dataset in danger here is the SOURCE, and it
-    carries no flag and no ``base_paths`` of its own; measured, source ``(0, 0)`` with no base_paths
-    against clone ``(16, 16)`` naming the source. Its data files are the only copy the clone resolves
-    through, so this door's three verbs destroy them: ``compact_files`` ADDS the merged file (4 -> 5,
-    the clone still opens) and ``cleanup_old_versions`` then removes the obsoleted originals (-> 1),
-    after which the clone will not open in a fresh process. The evidence lives only on the referring
-    side, so it has to be collected across the estate first — :func:`sibling_base_refs`.
+    Strictness here protects nothing, which is why the divergence was closed rather than documented:
+    the cron runs these same operations unattended against these same datasets every tick, so a
+    button that refuses what the cron performs does not prevent the rewrite — it only denies the
+    operator the remedy. The concrete cost was total: ``ingest/lander.py::create_empty`` and
+    ``medallion/services/compute.py`` register an external blob prefix through ``initial_bases``, so
+    every ingest bronze table and every medallion tier sets flag 16 and every "compact now" on the
+    estate's most-fragmented tables answered with a refusal that was measurably false about them (4
+    fragments -> 1, the base directory byte-identical, 20/20 external payloads still resolving).
+
+    The relaxation is not a loosening of posture: that gate FAILS CLOSED on every unknown — no
+    evidence, an unparseable ``BasePath``, an unanswerable probe, an unreadable fragment list — and it
+    still refuses a real shallow clone (a cost refusal: compacting one materialises the shared data
+    into its own root, 1,072 -> 108,199 bytes against a 119,693-byte base). ``storage_options`` is
+    REQUIRED rather than defaulted because the probe must be bound to the store this dataset lives in:
+    a manifest states its base as ``/bucket/ns/t.lance`` while the dataset is ``s3://bucket/…``, and
+    probing the schemeless spelling reads it as a local path, finds nothing, and answers "not a
+    dataset root" — a wrong PERMIT on a real clone, the one direction this gate must never take.
+
+    **Somebody else's layout (#114) is the other half, and no flag can see it** — see
+    :func:`_refuse_a_referring_datasets_source`.
+    """
+    reader, writer = manifest_feature_flags(ds)
+    location = str(getattr(ds, "uri", "") or "")
+    bases = (
+        # Gathered ONLY when the flag is set — this is the one place the gate costs IO, and almost no
+        # dataset declares a base. A dataset that cannot say where it lives cannot have its bases
+        # probed either, so it reaches the gate with no evidence, which the gate reads as a refusal.
+        gather_compaction_bases(ds, dataset_root_probe(location, storage_options)) if location and (reader | writer) & FLAG_BASE_PATHS else None
+    )
+    if (reason := describe_compaction_unsupported_flags(reader, writer, bases)) is not None:
+        raise UnsupportedOperationError(
+            f"maintenance refused: {reason}. Compacting here could rewrite bytes this dataset does not own — "
+            "the sweep's compaction gate weighs this same evidence and refuses it too."
+        )
+    _refuse_a_referring_datasets_source(ds, protected)
+
+
+def require_reclaimable(ds: Any, protected: BaseRefs | None = None) -> None:
+    """#121 + #114 for the GC door: refuse a dataset whose versions this button must not reclaim.
+
+    **THE GATE IS THE SWEEP'S, per verb** — :func:`~service_kit.lakehouse.features.describe_gc_unsupported_flags`,
+    which is what ``maintenance.services.optimize`` asks before its own ``cleanup_old_versions``.
+    Version reclamation and index maintenance are ROOT-SCOPED, so ``base_paths`` (16) does not
+    endanger them: measured on pylance 9.0.0 across six cleanup shapes and ten repeat cycles, one
+    ``cleanup_old_versions`` on a clone with dead fragments on both sides removed the 2 clone-owned
+    files, left all 4 base-owned ones, and the base still read in a fresh process. Everything else —
+    flag 64, anything unknown — refuses exactly as before.
+
+    This door used to ask the flags-only gate and therefore refused a clone the cron reclaims on a
+    120 s timer; the refusal preserved nothing and claimed the sweep agreed with it.
+    """
+    reader, writer = manifest_feature_flags(ds)
+    if (reason := describe_gc_unsupported_flags(reader, writer)) is not None:
+        raise UnsupportedOperationError(
+            f"maintenance refused: {reason}. Reclaiming versions here would act on a layout this pass cannot correctly rewrite — "
+            "the sweep's version-reclamation gate refuses it too."
+        )
+    _refuse_a_referring_datasets_source(ds, protected)
+
+
+def _refuse_a_referring_datasets_source(ds: Any, protected: BaseRefs | None) -> None:
+    """#114: refuse a dataset ANOTHER one resolves its files through — the half no flag check can see.
+
+    Flag 16 marks the dataset that SPANS bases — the CLONE. The dataset in danger here is the SOURCE,
+    and it carries no flag and no ``base_paths`` of its own; measured, source ``(0, 0)`` with no
+    base_paths against clone ``(16, 16)`` naming the source. Its data files are the only copy the
+    clone resolves through, so this door's verbs destroy them: ``compact_files`` ADDS the merged file
+    (4 -> 5, the clone still opens) and ``cleanup_old_versions`` then removes the obsoleted originals
+    (-> 1), after which the clone will not open in a fresh process. The evidence lives only on the
+    referring side, so it has to be collected across the estate first — :func:`sibling_base_refs`.
 
     The sweep got that guard at #114 and this door did not, which is not a smaller version of the
     same defect: it is the same irreversible deletion, one click away instead of one cron tick away.
@@ -55,11 +129,6 @@ def require_maintainable(ds: Any, protected: BaseRefs | None = None) -> None:
     is REFUSED rather than waved through — "we could not tell" reads as the refusal here for the same
     reason it does everywhere else in this gate: what it guards is unrecoverable.
     """
-    reason = unsupported_features(ds)
-    if reason is not None:
-        raise UnsupportedOperationError(
-            f"maintenance refused: {reason}. This dataset's layout carries features the rewrite would corrupt (the sweep refuses it for the same reason)."
-        )
     if protected is None:
         return
     location = str(getattr(ds, "uri", "") or "")
@@ -70,13 +139,13 @@ def require_maintainable(ds: Any, protected: BaseRefs | None = None) -> None:
     if (root := protected.is_protected(location)) is not None:
         raise UnsupportedOperationError(
             f"maintenance refused: another dataset resolves its files through {root} (shallow clone / multi-base) — "
-            "compacting or reclaiming here would break it (the sweep refuses it for the same reason)."
+            "compacting or reclaiming here would break it (the sweep's base-reference guard refuses it for the same reason)."
         )
 
 
 def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRefs:
     """Every root referenced by a dataset laid out ALONGSIDE ``location`` — the map
-    :func:`require_maintainable` checks against.
+    :func:`require_compactable` and :func:`require_reclaimable` check against.
 
     THE BOUND IS THE WAREHOUSE ROOT, and it is stated rather than implied. A referrer in some other
     warehouse is invisible here, exactly as a referrer outside its configured buckets is invisible to
@@ -158,9 +227,11 @@ def run_gc(ds: Any, *, retention_days: int | None, retain_versions: int | None, 
 
     THE STEP THAT ACTUALLY DELETES, which is why ``protected`` matters most here: measured, compaction
     adds the merged file and removes nothing, and it is this call that then removes the obsoleted
-    originals a shallow clone still resolves through. See :func:`require_maintainable`.
+    originals a shallow clone still resolves through. See :func:`require_reclaimable`, which gates
+    this door on the sweep's own root-scoped gate — the same one the cron applies to the same dataset
+    every tick.
     """
-    require_maintainable(ds, protected)
+    require_reclaimable(ds, protected)
     older_than = timedelta(days=retention_days) if retention_days else timedelta(0)
     stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
     return {
@@ -170,13 +241,16 @@ def run_gc(ds: Any, *, retention_days: int | None, retain_versions: int | None, 
     }
 
 
-def compact_now(ds: Any, *, target_rows_per_fragment: int | None, protected: BaseRefs | None = None) -> dict[str, Any]:
+def compact_now(ds: Any, *, target_rows_per_fragment: int | None, storage_options: StorageOptions, protected: BaseRefs | None = None) -> dict[str, Any]:
     """#76 on-demand compaction — merge small fragments now (the operator's manual 'compact now', the analog
     of the sweep's per-table pass). Plain (non-deferred) compaction: a single on-demand pass isn't racing a
     concurrent index build, so it needs no defer_index_remap. Then keep the indices covering the new
     fragments (best-effort — a no-index dataset must not fail the compaction). Non-destructive: it writes a
-    new version, never removes one."""
-    require_maintainable(ds, protected)
+    new version, never removes one.
+
+    ``storage_options`` is what the gate's base probe is bound to, not plumbing this function itself
+    uses — see :func:`require_compactable` for why it cannot be defaulted."""
+    require_compactable(ds, storage_options, protected)
     size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
     # #93's floor, applied to this door too: rows are not a unit of memory, and the default batch
     # size on a blob tier read ~15 GB/thread — the OOM measured on the maintenance pod is just as

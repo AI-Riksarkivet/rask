@@ -14,8 +14,6 @@ a facet's published version moves. That gate was missing until 2026-07-26, and t
 already drifted (``SchemaDatasetFacet`` 1-1-1→1-2-0, ``DatasourceDatasetFacet`` and ``ErrorMessageRunFacet``
 1-0-0→1-0-1 — the 1-0-0 facets ``$ref`` the retired ``1-0-2`` core spec while our envelope declares 2-0-2).
 """
-# TRANSITIONAL: ported verbatim from common.openlineage for gate 3 (R19).
-# Gate 5 (R21) swaps emitters onto packages/lineage-kit; no emission-shape changes here.
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 [project]
 name = "validate"
 version = "0.1.0"
-description = "Pre-upload image file validation — TIFF/JPEG/PNG corruption detection + pluggable rules."
+description = "Pre-upload image file validation — TIFF/JPEG/PNG corruption detection over bytes or paths."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [

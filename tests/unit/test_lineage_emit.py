@@ -144,7 +144,7 @@ def test_build_write_event_attaches_schema_facet_and_round_trips() -> None:
     assert schema["_producer"] and schema["_schemaURL"].endswith("SchemaDatasetFacet")
     # The lineage model reads it back off the standard facet → real per-version columns on the WROTE edge.
     parsed = RunEvent.model_validate(event)
-    assert parsed.outputs[0].fields == fields
+    assert [f.model_dump(exclude_none=True) for f in parsed.outputs[0].fields] == fields
 
 
 def test_build_write_event_without_schema_omits_facet() -> None:

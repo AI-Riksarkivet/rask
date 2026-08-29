@@ -24,7 +24,13 @@ import ast
 #: Reads that resolve against the live process environment. `environ` covers both subscript
 #: (`os.environ['X']`) and method (`os.environ.get('X')`) forms, because they are the same hazard
 #: wearing two syntaxes and a gate that caught only one would be trivially worked around by accident.
-_ENV_ATTRS = frozenset({"getenv", "environ"})
+#:
+#: `settings` joined them when the plane's knobs moved onto `ingest.config.IngestSettings`. That model
+#: is deliberately UNCACHED — it reads `os.environ` per call, which is the whole point — so
+#: `settings().max_units` inside a workflow body is `os.getenv("RASK_INGEST_MAX_UNITS")` with one more
+#: frame in front of it. A gate that stopped at the syntax would have been silently retired by a
+#: refactor that changed nothing about the hazard.
+_ENV_ATTRS = frozenset({"getenv", "environ", "settings"})
 
 
 def _reads_env(node: ast.AST) -> bool:

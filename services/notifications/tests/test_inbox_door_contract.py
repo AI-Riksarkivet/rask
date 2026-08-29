@@ -22,6 +22,7 @@ a client: the door's own resolution is what is under test, and a patch would rou
 
 import base64
 import json
+import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -39,6 +40,7 @@ from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxCursor, InboxDismiss
 from notifications.proxies import TypedActorProxy
 from service_kit import exceptions
 from service_kit.exceptions import register_handlers
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -112,7 +114,13 @@ def plane() -> _Plane:
 
 def _app(plane: _Plane, monkeypatch: pytest.MonkeyPatch, *, resolve_subject: bool) -> FastAPI:
     app = FastAPI()
+    # BOTH installers, because `make_service_app` — which builds the real app — installs both, and the
+    # governed door raises across both taxonomies: a missing bearer is a `lance_namespace`
+    # `UnauthenticatedError` (so its 401 carries the spec `code`), an unwired verifier a fleet
+    # `ServiceUnavailableError` (so its 503 keeps the message naming the knob). With only the fleet
+    # half this fixture answered a shape the deployed service never produces.
     register_handlers(app)
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True

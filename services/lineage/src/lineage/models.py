@@ -10,8 +10,42 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from lineage.schemas import SchemaField
+
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class ColumnLineageEdge(BaseModel):
+    """One *input column -> output column* dependency declared by a ``columnLineage`` facet (#24).
+
+    ``(name, field)`` identify the SOURCE column and ``out_field`` the produced one; ``type``/``subtype``
+    carry the transformation kind and ``masking`` the governance bit. A model rather than the flat dict
+    this used to be: the repository's ingest and the FGA dependency-collector index seven of these keys
+    between them, and a mistyped key is a ``KeyError`` raised on a live event at ingest time.
+    """
+
+    out_field: str
+    namespace: str = ""
+    name: str
+    field: str
+    type: str = ""
+    subtype: str = ""
+    description: str = ""
+    masking: bool = False
+
+
+class OutputStatistics(BaseModel):
+    """Runtime-measured ``(row_count, size_bytes)`` for one written dataset, from ``outputStatistics``.
+
+    Named rather than a positional 2-tuple: the one call site that persists these writes them into two
+    separate Cypher params, and swapping the pair there would record a size as a row count while passing
+    every type check. Either half may be absent — the spec makes both fields optional — but never both
+    (the property returns ``None`` for the whole facet then, rather than a pair of nulls).
+    """
+
+    row_count: int | None = None
+    size_bytes: int | None = None
 
 
 def vertex_name_for(namespace: str, name: str) -> str:
@@ -103,33 +137,34 @@ class Dataset(BaseModel):
         return uri if isinstance(uri, str) and uri else None
 
     @property
-    def fields(self) -> list[dict[str, str]]:
-        """Column schema from the standard ``schema`` facet — ``[{name, type[, description]}]``.
+    def fields(self) -> list[SchemaField]:
+        """Column schema from the standard ``schema`` facet, as the read path's own :class:`SchemaField`.
 
         This is the per-version schema the lineage service persists onto the ``WROTE`` edge (#24
-        prerequisite); previously the ``SchemaDatasetFacet`` was received and discarded.
+        prerequisite); previously the ``SchemaDatasetFacet`` was received and discarded. The SAME model
+        ``dataset_schema`` validates the persisted JSON back into — one description of a column, not a
+        write-path dict and a read-path model that can drift apart. ``description`` stays ``None`` when
+        the producer omitted it, so ``model_dump(exclude_none=True)`` reproduces the stored wire form
+        byte for byte.
         """
         facet = self.facet("schema")
         items = facet.get("fields") if facet else None
         if not isinstance(items, list):
             return []
-        out: list[dict[str, str]] = []
+        out: list[SchemaField] = []
         for item in items:
             if not isinstance(item, dict) or not item.get("name"):
                 continue
-            entry = {"name": str(item["name"]), "type": str(item.get("type") or "")}
-            if item.get("description"):
-                entry["description"] = str(item["description"])
-            out.append(entry)
+            description = str(item["description"]) if item.get("description") else None
+            out.append(SchemaField(name=str(item["name"]), type=str(item.get("type") or ""), description=description))
         return out
 
     @property
-    def column_edges(self) -> list[dict[str, Any]]:
+    def column_edges(self) -> list[ColumnLineageEdge]:
         """Flattened column-lineage edges from the standard ``columnLineage`` facet (#24).
 
-        Each entry is one *input→output* column dependency on THIS (output) dataset:
-        ``{out_field, namespace, name, field, type, subtype, masking}`` where ``(name, field)`` identify
-        the SOURCE column and ``out_field`` the produced column. The first transformation (modern
+        Each entry is one *input→output* column dependency on THIS (output) dataset — see
+        :class:`ColumnLineageEdge`. The first transformation (modern
         ``inputFields[].transformations``) carries the kind (``DIRECT``/``IDENTITY`` vs a real change)
         and the ``masking`` governance flag. Previously this facet was received and discarded on ingest.
         """
@@ -137,7 +172,7 @@ class Dataset(BaseModel):
         fields = facet.get("fields") if facet else None
         if not isinstance(fields, dict):
             return []
-        edges: list[dict[str, Any]] = []
+        edges: list[ColumnLineageEdge] = []
         for out_field, spec in fields.items():
             # Guard the output key too (symmetric with the input name/field + schema-name guards): a
             # malformed facet with an empty key must not materialise a junk ``(:Column {field:""})``.
@@ -160,22 +195,22 @@ class Dataset(BaseModel):
                 # one), with a fallback for the deprecated facet's MASKED transformation type.
                 masking = any(t.get("masking") for t in transforms) or dep_type.upper().startswith("MASK")
                 edges.append(
-                    {
-                        "out_field": str(out_field),
-                        "namespace": str(inp.get("namespace") or ""),
-                        "name": str(inp["name"]),
-                        "field": str(inp["field"]),
-                        "type": str(first.get("type") or "") or dep_type,
-                        "subtype": str(first.get("subtype") or ""),
-                        "description": str(first.get("description") or "") or dep_desc,
-                        "masking": bool(masking),
-                    }
+                    ColumnLineageEdge(
+                        out_field=str(out_field),
+                        namespace=str(inp.get("namespace") or ""),
+                        name=str(inp["name"]),
+                        field=str(inp["field"]),
+                        type=str(first.get("type") or "") or dep_type,
+                        subtype=str(first.get("subtype") or ""),
+                        description=str(first.get("description") or "") or dep_desc,
+                        masking=bool(masking),
+                    )
                 )
         return edges
 
     @property
-    def statistics(self) -> tuple[int | None, int | None] | None:
-        """Observed ``(row_count, size_bytes)`` from the standard ``outputStatistics`` facet, else ``None``.
+    def statistics(self) -> OutputStatistics | None:
+        """Observed :class:`OutputStatistics` from the standard ``outputStatistics`` facet, else ``None``.
 
         Present only on a real measured write (the medallion fake-Ray / medallion-producer compute reads the exact
         rows + on-disk bytes it produced); a dummy emit or an input dataset omits the facet. These are the
@@ -190,9 +225,9 @@ class Dataset(BaseModel):
         row_count, size = facet.get("rowCount"), facet.get("size")
         if not isinstance(row_count, int) and not isinstance(size, int):
             return None
-        return (
-            row_count if isinstance(row_count, int) else None,
-            size if isinstance(size, int) else None,
+        return OutputStatistics(
+            row_count=row_count if isinstance(row_count, int) else None,
+            size_bytes=size if isinstance(size, int) else None,
         )
 
     @property

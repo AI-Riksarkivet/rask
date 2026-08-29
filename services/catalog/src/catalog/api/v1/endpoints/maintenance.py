@@ -89,6 +89,9 @@ async def compact_maintenance(id: str, body: CompactRequest, ns: NamespaceDep, s
         maintenance.compact_now,
         ds,
         target_rows_per_fragment=body.target_rows_per_fragment,
+        # The gate's base probe has to ask THIS dataset's store — see `require_compactable`. Handed
+        # down rather than re-derived so the button and the sweep read the same bases the same way.
+        storage_options=so,
         protected=protected,
     )
     return CompactResult(**result)

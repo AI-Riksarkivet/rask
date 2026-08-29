@@ -39,7 +39,7 @@ from ingest.sources import SourceSpec, register
 
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
+    from collections.abc import Awaitable, Callable, Iterable, Iterator
 
     from service_kit.lakehouse.sources import SourceObject
 
@@ -616,11 +616,17 @@ def test_only_a_refusal_filters_a_row(
         "unauthenticated": UnauthenticatedError("invalid token"),
     }
 
-    async def _authorize(_request: object, _settings: object, project: str | None = None, *_a: object, **_k: object) -> None:
-        if project == "p2":
-            raise errors[raised]
+    # The PAGE door, not the per-row one: the listing resolves its distinct projects and asks once
+    # (ING-05). `p2` is the unreadable project either way — a REFUSAL is now expressed by leaving it
+    # out of the permitted set (that is what "filters a row" means at this seam), while the two
+    # call-level faults still raise, which is exactly the distinction this test exists to pin.
+    async def _authorize(_request: object, _settings: object, projects: Iterable[str] = (), *_a: object, **_k: object) -> frozenset[str]:
+        named = set(projects)
+        if raised == "permission":
+            return frozenset(named - {"p2"})
+        raise errors[raised]
 
-    monkeypatch.setattr(api_mod, "authorize_ingest", _authorize)
+    monkeypatch.setattr(api_mod, "authorize_ingest_projects", _authorize)
 
     res = c.get("/v1/ingests")
 
@@ -645,7 +651,7 @@ def test_an_authz_outage_is_never_rendered_as_an_empty_list(
     async def _down(*_a: object, **_k: object) -> None:
         raise ServiceUnavailableError("openfga unreachable")
 
-    monkeypatch.setattr(api_mod, "authorize_ingest", _down)
+    monkeypatch.setattr(api_mod, "authorize_ingest_projects", _down)
 
     res = c.get("/v1/ingests")
 

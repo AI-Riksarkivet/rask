@@ -21,12 +21,12 @@ from fastapi import APIRouter, File, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from service_kit.exceptions import ServiceUnavailableError, ValidationError
-from service_kit.media.deps import StateDep
+from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import AppState, dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from viewer.services import voice_service
-from viewer.services.voice_service import MAX_N
+from viewer.services.voice_service import MAX_N, MAX_UPLOAD_BYTES
 
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ def voice_encoder(state: AppState) -> "ServeEncoder":
 
 
 @router.get("/status", dependencies=[REQUIRE_CORPUS_METADATA])
-def voice_status(state: StateDep, dataset: str | None = None) -> VoiceStatusResponse:
+def voice_status(state: StateDep, dataset: DatasetParam = None) -> VoiceStatusResponse:
     """Whether the voice tables exist + their row counts (no error when absent)."""
     return voice_service.voice_status(dataset_handle(state, dataset))
 
@@ -90,7 +90,7 @@ def voice_similar(
     # advertised an unbounded integer for a vector-search fan-out.
     n: Annotated[int, Query(ge=1, le=MAX_N)] = 20,
     exclude_same_doc: bool = True,
-    dataset: str | None = None,
+    dataset: DatasetParam = None,
 ) -> VoiceSimilarResponse:
     """Voice-ranked hits for exactly one anchor: ``turn_id`` | ``speaker`` | ``t``.
 
@@ -112,7 +112,7 @@ def voice_similar(
 
 
 @router.get("/identity", dependencies=[REQUIRE_CORPUS_DATA])
-def voice_identity(state: StateDep, doc_id: str, speaker: str, dataset: str | None = None) -> VoiceIdentityResponse:
+def voice_identity(state: StateDep, doc_id: str, speaker: str, dataset: DatasetParam = None) -> VoiceIdentityResponse:
     """The global identity cluster for one (``doc_id``, ``speaker``).
 
     503 until the speakers table has been built; 404 for an unknown speaker;
@@ -131,7 +131,7 @@ async def voice_similar_upload(
     # DECLARED, not clamped: `voice_service` applies `max(1, min(n, _MAX_N))`, so the schema
     # advertised an unbounded integer for a vector-search fan-out.
     n: Annotated[int, Query(ge=1, le=MAX_N)] = 20,
-    dataset: str | None = None,
+    dataset: DatasetParam = None,
 ) -> VoiceSimilarResponse:
     """Voice-ranked hits for an uploaded snippet (any container ffmpeg decodes).
 
@@ -155,7 +155,7 @@ async def voice_similar_upload(
     # dataset_handle opens Lance on a cold miss — offload it so the async upload
     # handler never blocks the event loop (fastapi skill: no blocking I/O in async def).
     handle = await run_in_threadpool(dataset_handle, state, dataset)
-    file_bytes = await file.read(voice_service._MAX_UPLOAD_BYTES + 1)
+    file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
     return await run_in_threadpool(
         voice_service.similar_voices_for_upload,
         handle,

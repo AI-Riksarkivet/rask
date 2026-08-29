@@ -52,3 +52,22 @@ def test_every_declared_dependency_is_imported():
         if not re.search(rf"\b(?:import\s+{module}|from\s+{module})\b", sources):
             unused.append(dist)
     assert not unused, f"declared but never imported: {unused}"
+
+
+# ── The narrative doc describes the package that exists ──────────────────────────────────────
+
+_DOCS = _ROOT.parents[1] / "docs"
+
+
+def test_the_narrative_doc_does_not_deny_the_source_sink_contract() -> None:
+    """It said "There is **no base class** — Source/Sink is a duck-typed structural contract"."""
+    page = (_DOCS / "packages" / "storage.md").read_text(encoding="utf-8")
+    assert "no base class" not in page, "`storage.protocol` now states the contract, and the S3 pair shares one"
+    assert "storage.protocol" in (_DOCS / "reference" / "storage.md").read_text(encoding="utf-8"), "a public module absent from the generated API reference"
+
+
+def test_the_narrative_doc_does_not_advertise_a_module_that_moved_out() -> None:
+    """`iiif.py` left for `runners/htr` on 2026-08-17; the page still tabled it as storage's."""
+    page = (_DOCS / "packages" / "storage.md").read_text(encoding="utf-8")
+    assert not (_SRC / "iiif.py").exists()
+    assert "`iiif.py`" not in page, "the page still lists a module this package does not have"

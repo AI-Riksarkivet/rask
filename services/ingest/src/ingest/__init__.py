@@ -11,7 +11,6 @@ import asyncio
 import importlib
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -22,7 +21,7 @@ from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.ns_errors import PROBLEM_JSON, install_problem_handlers
 
 
 if TYPE_CHECKING:
@@ -60,10 +59,12 @@ def create_app() -> FastAPI:
     # exists for no reason. Root-mounted by `mount_incremental_cron`: the sidecar delivers an input
     # binding to POST /<component name> at the pod root, so the component name, the env var and the
     # served path are one string.
+    from ingest.config import settings
     from ingest.cron import mount_incremental_cron
 
-    if mount_incremental_cron(app, os.environ.get("RASK_INGEST_CRON_BINDING_NAME")):
-        logger.info("ingest incremental cron mounted at /%s", os.environ["RASK_INGEST_CRON_BINDING_NAME"])
+    binding = settings().cron_binding_name
+    if mount_incremental_cron(app, binding):
+        logger.info("ingest incremental cron mounted at /%s", binding)
     # FAIL-CLOSED DEFAULTS, so the attributes exist before the lifespan runs: `authorize_ingest`
     # reads them directly and 503s on a missing client, which is the correct answer in the window
     # before startup completes. The BUILD itself is in the lifespan (`attach_auth`) because resolving
@@ -78,7 +79,51 @@ def create_app() -> FastAPI:
     # working. The same handler every governed service installs; the estate's rule is that endpoints
     # raise typed errors and ONE translator maps all 22 codes.
     install_problem_handlers(app, logger)
+    _install_http_exception_handler(app)
     return app
+
+
+def _install_http_exception_handler(app: FastAPI) -> None:
+    """Render the control API's own refusals in problem+json too — ONE envelope for one router.
+
+    The two translators above cover the estate's typed errors (`DomainError`, `LanceNamespaceError`),
+    and neither knows `fastapi.HTTPException`. But the ingest control API's refusals ARE
+    HTTPExceptions — an unknown source kind, a refused sizing, an idempotency conflict, a busy
+    workflow engine, an unknown run — and starlette's default handler served every one of them as
+    `application/json` `{"detail": …}`. So a client of a single router had to parse two unrelated
+    shapes and could not tell in advance which it would get.
+
+    Four keys and `about:blank#`, matching `service_kit.exceptions`' own `DomainError` body rather
+    than the six-key Lance one: a run is not a Lance-Namespace object, and claiming a numeric spec
+    code for it would tell a generated client this response belongs to a contract it does not.
+    That is the same line `services/gateway` draws for its proxy refusals.
+
+    `exc.headers` is forwarded because the 503 is only actionable WITH its `Retry-After` — a handler
+    that builds its own response drops them silently otherwise, which is the defect
+    `service_kit.exceptions` had to fix in its own handler.
+    """
+    from http import HTTPStatus
+
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _problem_json(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        code = int(exc.status_code)
+        phrase = HTTPStatus(code).phrase if code in tuple(HTTPStatus) else "Error"
+        slug = HTTPStatus(code).name.lower() if code in tuple(HTTPStatus) else "error"
+        return JSONResponse(
+            status_code=code,
+            media_type=PROBLEM_JSON,
+            content={
+                "type": f"about:blank#{slug}",
+                "title": phrase,
+                "status": code,
+                "detail": exc.detail if isinstance(exc.detail, str) else phrase,
+            },
+            headers=exc.headers,
+        )
 
 
 def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanFactory shape

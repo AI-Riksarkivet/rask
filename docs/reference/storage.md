@@ -7,6 +7,14 @@ overview see [Packages → Storage](../packages/storage.md).
 
 ::: storage.client
 
+## The Source/Sink contract
+
+::: storage.protocol
+
+## Errors
+
+::: storage.errors
+
 ## Filesystem
 
 ::: storage.fs

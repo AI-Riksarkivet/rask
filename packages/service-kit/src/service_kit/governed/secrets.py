@@ -13,6 +13,8 @@ source of truth and the plaintext secret no longer lives in the environment.
 from __future__ import annotations
 
 import logging
+import os
+from typing import Final
 
 import httpx
 from tenacity import (
@@ -25,6 +27,29 @@ from tenacity import (
 
 
 log = logging.getLogger(__name__)
+
+#: Dapr's own default sidecar HTTP port, used only when daprd has not injected `DAPR_HTTP_PORT`.
+_DEFAULT_DAPR_HTTP_PORT: Final = 3500
+
+
+def _sidecar_http_port() -> int:
+    """The local sidecar's HTTP port — `DAPR_HTTP_PORT` when daprd injected it (SKG-10).
+
+    3500 was hard-coded as this module's only answer, which is wrong for any pod whose sidecar is not
+    on the default port: the fetch then retries a closed port for the whole boot budget and reports an
+    unreadable store. daprd injects `DAPR_HTTP_PORT` into every annotated pod, and
+    `governed/actor_state_store.py` already reads it — this puts the two on the same source.
+    """
+    raw = os.environ.get("DAPR_HTTP_PORT")
+    if not raw:
+        return _DEFAULT_DAPR_HTTP_PORT
+    try:
+        return int(raw)
+    except ValueError:
+        # A malformed value is a misconfiguration, not a reason to fail the boot in a module whose
+        # whole contract is "report, let the caller decide": say so and use the documented default.
+        log.error("dapr_http_port_malformed", extra={"value": raw, "using": _DEFAULT_DAPR_HTTP_PORT})
+        return _DEFAULT_DAPR_HTTP_PORT
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -40,21 +65,24 @@ def fetch_dapr_secret(
     store: str,
     key: str,
     *,
-    dapr_http_port: int = 3500,
+    dapr_http_port: int | None = None,  # None → `DAPR_HTTP_PORT`, else Dapr's default; see `_sidecar_http_port`
     timeout: float = 5.0,
     retries: int = 10,
     backoff: float = 3.0,
 ) -> dict[str, str]:
     """Fetch a secret bundle ``{name: value}`` from the local Dapr secret store, retrying so a service
-    that boots before the sidecar/store/seed are ready still gets it. Returns ``{}`` (and logs) only after
-    exhausting retries — the caller decides whether that is fatal (fail-closed) or a fallback.
+    that boots before the sidecar/store/seed are ready still gets it. Returns ``{}`` (and logs at ERROR,
+    because this blocks a boot) only after exhausting retries against a store that would not answer —
+    the caller decides whether that is fatal (fail-closed) or a fallback. A fault that is NOT the store
+    failing to answer is raised, never laundered into an empty bundle that reads as "it holds nothing".
 
     Retries via tenacity with exponential backoff + jitter (initial=``backoff``, capped at 15s — the
     project resilience default), and ONLY for transient failures: a 4xx from the sidecar is
     misconfiguration and fails immediately rather than looping the boot budget away. Deliberately SYNC
     (blocking httpx — worst case ≈2 min at the defaults): async lifespans must call it via
     ``run_in_threadpool`` so a slow-seeding store never blocks the event loop."""
-    url = f"http://localhost:{dapr_http_port}/v1.0/secrets/{store}/{key}"
+    port = dapr_http_port if dapr_http_port is not None else _sidecar_http_port()
+    url = f"http://localhost:{port}/v1.0/secrets/{store}/{key}"
     try:
         for attempt in Retrying(
             retry=retry_if_exception(_is_transient),
@@ -71,8 +99,16 @@ def fetch_dapr_secret(
                     return {k: str(v) for k, v in data.items()}
                 log.warning("dapr_secret_unexpected_shape", extra={"store": store, "key": key})
                 return {}
-    except Exception as exc:
-        log.warning("dapr_secret_fetch_failed", extra={"store": store, "key": key, "error": str(exc)})
+    except (httpx.HTTPError, ValueError) as exc:
+        # NARROW, AND AN ERROR (SKG-15). `except Exception` here caught programming faults too — a bad
+        # URL build, a broken monkeypatch, an AttributeError inside this function — and reported every
+        # one of them as an empty bundle, which is indistinguishable from a store that legitimately
+        # holds nothing. On a boot path that means a service comes up unconfigured and says so at
+        # WARNING, below the level anything pages on. Only the failures the retry loop is ABOUT may be
+        # reported as "the store did not answer": transport errors and non-2xx statuses (both
+        # `httpx.HTTPError`) plus a malformed body (`ValueError`, which `Response.json` raises).
+        # Anything else is a defect and propagates.
+        log.error("dapr_secret_fetch_failed", extra={"store": store, "key": key, "error": str(exc)})
         return {}
     return {}  # unreachable; keeps the type-checker's every-path-returns view honest
 

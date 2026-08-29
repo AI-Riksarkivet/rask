@@ -26,6 +26,8 @@ import lance
 from service_kit.exceptions import ConflictError
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from service_kit.lancekit.catalog_client import catalog_api_client
+from service_kit.lancekit.catalog_client import request_headers as _request_headers
 from service_kit.lancekit.reader import translate_catalog_errors
 
 
@@ -170,17 +172,19 @@ class RestCatalogWriteTransport:
         retries: int = 3,
         timeout: float = 30.0,
     ) -> None:
-        from lance_namespace_urllib3_client import ApiClient, Configuration  # optional dep
         from lance_namespace_urllib3_client.api.data_api import DataApi
 
-        config = Configuration(host=base_url, retries=retries)
-        client = ApiClient(config)
-        if token:
-            client.set_default_header("Authorization", f"Bearer {token}")
-        self._api = DataApi(client)
+        # ONE client (and so one connection pool) per catalog, shared with every other transport
+        # aimed at it — this ctor runs per `open_writer` call, i.e. per request.
+        self._api = DataApi(catalog_api_client(base_url, retries=retries))
+        self._token = token
         self._id_str = delimiter.join(table_id)
         self._delimiter = delimiter
         self._timeout = timeout
+
+    def request_headers(self) -> dict[str, str]:
+        """THIS caller's bearer, per request — never a default header on the shared client."""
+        return _request_headers(self._token)
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None:
         # merge flags are direct params; `body` is the Arrow-IPC STREAM delta.
@@ -193,6 +197,7 @@ class RestCatalogWriteTransport:
                 when_matched_update_all=True,
                 when_not_matched_insert_all=True,
                 _request_timeout=self._timeout,
+                _headers=self.request_headers(),
             )
 
     def merge_insert_only(self, delta: pa.Table, on: str) -> None:
@@ -205,6 +210,7 @@ class RestCatalogWriteTransport:
                 when_matched_update_all=False,
                 when_not_matched_insert_all=True,
                 _request_timeout=self._timeout,
+                _headers=self.request_headers(),
             )
 
     def delete(self, predicate: str) -> None:
@@ -216,6 +222,7 @@ class RestCatalogWriteTransport:
                 DeleteFromTableRequest(predicate=predicate),
                 delimiter=self._delimiter,
                 _request_timeout=self._timeout,
+                _headers=self.request_headers(),
             )
 
 

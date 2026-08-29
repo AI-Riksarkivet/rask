@@ -34,7 +34,7 @@ from typing import Any, Self
 
 from pydantic import Field
 
-from lineage_kit.schemas import Dataset, JobRef, RunEvent, _Model
+from lineage_kit.schemas import Dataset, JobRef, RunEvent, WireModel
 
 
 #: The document's own version tag — bump when the shape changes incompatibly, so a consumer holding an
@@ -49,7 +49,7 @@ AUTHOR_RUN_FACET = "author"
 LANCE_RUN_FACET = "lance"
 
 
-class DatasetRef(_Model):
+class DatasetRef(WireModel):
     """A dataset a consumer can go and open: catalog identity plus, when known, physical coordinates."""
 
     namespace: str
@@ -73,7 +73,7 @@ class DatasetRef(_Model):
         )
 
 
-class LineageEdge(_Model):
+class LineageEdge(WireModel):
     """One ``DERIVED_FROM`` hop: ``downstream`` was produced FROM ``upstream`` by the named run.
 
     Self-contained on purpose — a consumer walking ``derived_from`` gets the who/when/what of every
@@ -89,7 +89,7 @@ class LineageEdge(_Model):
     event_time: str
 
 
-class LineageDoc(_Model):
+class LineageDoc(WireModel):
     """The provenance document written into a governed dataset's ``lineage`` JSONB column.
 
     Describes the run that produced THIS dataset version and the derivation chain behind it. It

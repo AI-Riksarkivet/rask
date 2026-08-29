@@ -39,31 +39,29 @@ first on anything image-shaped. Rows are the ceiling for small records; bytes fo
 
 from __future__ import annotations
 
-import os
-
 from pydantic import BaseModel, Field
 
-
-def _env(name: str, default: int) -> int:
-    return int(os.getenv(name, str(default)))
+from ingest.config import settings
 
 
 #: The DEPLOYMENT defaults — what a request that says nothing gets. Read at call time, not import
-#: time, so a test (and `kubectl set env`) can move them without reimporting the module.
+#: time, so a test (and `kubectl set env`) can move them without reimporting the module. The values
+#: and their variable names are declared once, on `IngestSettings`; these four are the plane's names
+#: for them.
 def default_fragment_rows() -> int:
-    return _env("RASK_INGEST_FRAGMENT_ROWS", 1024)
+    return settings().fragment_rows
 
 
 def default_fragment_bytes() -> int:
-    return _env("RASK_INGEST_FRAGMENT_BYTES", 256 * 1024 * 1024)
+    return settings().fragment_bytes
 
 
 def default_fetch_batch() -> int:
-    return _env("RASK_INGEST_FETCH_BATCH", 16)
+    return settings().fetch_batch
 
 
 def default_fetch_concurrency() -> int:
-    return _env("RASK_INGEST_FETCH_CONCURRENCY", 8)
+    return settings().fetch_concurrency
 
 
 class IngestSizing(BaseModel):
@@ -109,16 +107,17 @@ def resolve(requested: IngestSizing | None = None) -> ResolvedSizing:
     would make the request look honoured. `POST /v1/ingests` therefore turns this into a 400 with the
     ceiling named, which is a fix the caller can act on.
     """
-    from ingest.queue import MAX_ACK_PENDING
+    from ingest.queue import max_ack_pending
 
     req = requested or IngestSizing()
     rows = req.fragment_rows if req.fragment_rows is not None else default_fragment_rows()
 
-    if rows >= MAX_ACK_PENDING:
+    ceiling = max_ack_pending()
+    if rows >= ceiling:
         raise SizingRefused(
-            f"fragment_rows={rows} is at or above the queue's max_ack_pending ({MAX_ACK_PENDING}). "
+            f"fragment_rows={rows} is at or above the queue's max_ack_pending ({ceiling}). "
             f"A batch is held unacked while it fills, so the drain would stop being delivered units and hang. "
-            f"Use at most {MAX_ACK_PENDING - 1}, and let services/maintenance compact toward Lance's larger target."
+            f"Use at most {ceiling - 1}, and let services/maintenance compact toward Lance's larger target."
         )
 
     return ResolvedSizing(

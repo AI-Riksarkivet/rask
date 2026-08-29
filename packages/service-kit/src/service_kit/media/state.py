@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from service_kit.media.config import Settings, get_settings
+from service_kit.media.config import MediaSettings
 
 
 if TYPE_CHECKING:
-    from service_kit.lancekit.registry import DatasetRegistry
+    from service_kit.lancekit.registry import DatasetHandle, DatasetRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,7 @@ class AppState(BaseModel):
     The Lance/lancedb handles aren't Pydantic-validatable, hence
     ``arbitrary_types_allowed``. ``embedder``/``reranker`` are mutable slots that
     :mod:`search.services.clients` fills on first use and reuses thereafter. ``settings``
-    carries the typed app config (vLLM URLs, host/port, CORS); it defaults via
-    ``get_settings()`` so bare constructions in tests still work.
+    carries the typed app config (vLLM URLs, host/port, CORS), read fresh per state.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -42,7 +41,14 @@ class AppState(BaseModel):
     db_path: Path | None = None
     names: list[str] = Field(default_factory=list)
     chunks: Any = None
-    settings: Settings = Field(default_factory=get_settings)
+    # PER-STATE, not the process-global. This defaulted to `get_settings()`, which is `@lru_cache`d,
+    # so EVERY `AppState` in a process shared ONE mutable settings object: two apps in one process —
+    # the ordinary shape of a test suite, and of any host running more than one of the trio — could
+    # not be configured differently, and a mutation through one silently reconfigured the other. It
+    # also contradicted the request-scoped `service_kit.dependencies.get_settings` this same library
+    # exposes under the same name. A service that WANTS the singleton asks for it explicitly with
+    # `get_media_settings()` and passes it in.
+    settings: MediaSettings = Field(default_factory=MediaSettings)
     embedder: Any | None = None  # search.services.encoders.embedding.VLLMEmbeddingClient
     reranker: Any | None = None  # search.services.encoders.reranker.VLLMReranker
     # Lazy in-process voice encoder for the upload voice search (CPU by design;
@@ -105,12 +111,17 @@ def ensure_registry(state: AppState) -> DatasetRegistry:
     return registry
 
 
-def dataset_handle(state: AppState, dataset_id: str | None = None):
+def dataset_handle(state: AppState, dataset_id: str | None = None) -> DatasetHandle:
     """Resolve a dataset by id through the registry (``None`` → the default).
 
     The one resolution path both router groups share; raises
     ``service_kit.exceptions.NotFoundError`` for unknown ids so the RFC 9457
     handler renders a clean 404.
+
+    The return type is DECLARED, and it is the reason this annotation matters more than most: every
+    media and annotator route funnels through here, and an unannotated entry point makes each of
+    them `Any` from its first line — so `handle.dbb` type-checks, and a renamed attribute on
+    `DatasetHandle` reddens nothing anywhere in the fleet.
     """
     from service_kit.exceptions import NotFoundError
     from service_kit.lancekit.registry import UnknownDatasetError

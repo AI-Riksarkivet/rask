@@ -2,36 +2,27 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
-
-
-class AtlasSpace(StrEnum):
-    """The precomputed projection spaces the Atlas map can render.
-
-    A ``StrEnum`` so FastAPI validates ``?space=`` at the route boundary (422 on
-    an unknown value) and the member compares/hashes equal to its string value —
-    so it indexes ``SPACES`` (whose keys are the same literals) directly, and
-    the ``warmup`` loop that iterates the dict's string keys is unaffected (the
-    ``(space, version)`` cache key stays the same hashable tuple either way).
-    """
-
-    text = "text"
-    visual = "visual"
-    caption = "caption"
 
 
 class AtlasStatusResponse(BaseModel):
     """Which projection spaces are built + the requested space's projected rows.
 
-    ``spaces`` always reports every space's presence (so the UI can gate its
-    Text/Visual/Caption toggle); ``projected``/``rows`` reflect ``space``.
+    ``spaces`` always reports every DECLARED space's built-ness (so the UI can gate its toggle);
+    ``projected``/``rows`` reflect the requested ``space``.
+
+    ``space`` is a plain string — the descriptor names its own projection spaces, so a fixed enum
+    here could not describe a corpus that declares any others. This model previously WAS such an
+    enum (``text``/``visual``/``caption``), unused by any route and unable to describe half the
+    corpora the route serves; that is why the route's answer went out as a bare mapping instead
+    (VS-18).
     """
 
     projected: bool
     rows: int
-    space: AtlasSpace
+    space: str
     spaces: dict[str, bool]
 
 
@@ -64,3 +55,18 @@ class ChunkKeys(BaseModel):
     """
 
     keys: list[RowKey] = Field(default_factory=list)
+
+
+class ChunkHits(BaseModel):
+    """Rows addressed by key, plus the identity fields that address them.
+
+    ``rows`` are corpus rows: their columns are DERIVED FROM THE DESCRIPTOR (`_hit_columns`), so
+    the envelope is the part that can be declared and the row shape stays an explicit
+    ``dict[str, Any]`` — the finding's own recommendation for a dataset-dependent body.
+
+    ``key_fields`` rides beside them because the rows come back UNORDERED and possibly short, so a
+    caller re-associates by reading each row's own key — which means knowing which columns form it.
+    """
+
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    key_fields: list[str] = Field(default_factory=list)

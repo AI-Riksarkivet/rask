@@ -481,9 +481,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   step, while root-scoped work (`optimize_indices`, `cleanup_old_versions`) still runs. So flag 16 is
   NOT refused outright: such a dataset is maintained, minus the rewrite, because root-scoped
   operations are safe on a shallow clone while compacting one silently materialises the base into it.
-  The ORPHAN scan and the catalog's on-demand doors keep the narrow flags-only
-  `describe_unsupported_flags`/`SUPPORTED` mask for everything, where the refusal is genuinely
-  required. The cost of the old blanket refusal was measured: 17 of the estate's datasets were refused
+  The ORPHAN scan keeps the narrow flags-only `describe_unsupported_flags`/`SUPPORTED` mask, where the
+  refusal is genuinely required. **The catalog's on-demand doors ask the SAME TWO GATES the sweep
+  asks, per verb** — `require_compactable` (the evidence gate) in front of `POST
+  /v1/table/{id}/maintenance/compact`, `require_reclaimable` (the root-scoped gate) in front of
+  `…/maintenance/run`, plus the `base_refs` guard in front of both. They kept the flags-only mask
+  until row 13 of `open_estate-verification.md`, which made the BUTTON stricter than the CRON — it
+  refused every `initial_bases` table (i.e. every ingest bronze table and every medallion tier) while
+  telling the operator "the sweep refuses it for the same reason", and the sweep was compacting them
+  on the next tick. Strictness there protected nothing: the cron performs these same operations
+  unattended on the same datasets, so the button only withheld the operator's remedy. The cost of the old blanket refusal was measured: 17 of the estate's datasets were refused
   on flag 16, exactly the ones with fragments and version history, so the 120s sweep did no work at
   all.
   **The COMPACTION gate asks about the BASES, not about the flag — it is the one gate here that is not

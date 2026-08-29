@@ -40,7 +40,7 @@ from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.api.v1.endpoints.media import FRAME_INDEX_COLUMN
 from viewer.api.v1.endpoints.system import DURATION_COLUMN
-from viewer.schemas.atlas import ChunkKeys, ChunkRowIds
+from viewer.schemas.atlas import AtlasStatusResponse, ChunkHits, ChunkKeys, ChunkRowIds
 from viewer.services.points import build_points
 
 
@@ -80,7 +80,7 @@ def _built_rows(ds: lance.LanceDataset, space: AtlasSpace) -> int:
 
 
 @router.get("/status", dependencies=[REQUIRE_CORPUS_METADATA])
-def atlas_status(state: StateDep, space: SpaceParam = None, dataset: DatasetParam = None) -> dict[str, Any]:
+def atlas_status(state: StateDep, space: SpaceParam = None, dataset: DatasetParam = None) -> AtlasStatusResponse:
     """Which projection spaces are built, plus the requested space's row count.
 
     ``spaces`` always reports every declared space's built-ness (so the UI can
@@ -97,12 +97,12 @@ def atlas_status(state: StateDep, space: SpaceParam = None, dataset: DatasetPara
             datasets[s.table] = table_dataset(handle, s.table)
         rows_by_space[s.name] = _built_rows(datasets[s.table], s)
     rows = rows_by_space[requested.name]
-    return {
-        "projected": rows > 0,
-        "rows": rows,
-        "space": requested.name,
-        "spaces": {name: n > 0 for name, n in rows_by_space.items()},
-    }
+    return AtlasStatusResponse(
+        projected=rows > 0,
+        rows=rows,
+        space=requested.name,
+        spaces={name: n > 0 for name, n in rows_by_space.items()},
+    )
 
 
 @router.get("/points", dependencies=[REQUIRE_CORPUS_DATA])
@@ -250,7 +250,7 @@ def atlas_chunk(
 
 
 @router.post("/chunks/by-key", dependencies=[REQUIRE_CORPUS_DATA])
-def atlas_chunks_by_key(state: StateDep, body: ChunkKeys, dataset: DatasetParam = None) -> dict[str, Any]:
+def atlas_chunks_by_key(state: StateDep, body: ChunkKeys, dataset: DatasetParam = None) -> ChunkHits:
     """Full hits for rows addressed BY KEY — the join a labelling queue needs (#60).
 
     ``POST /chunks`` beside this is cheaper and stays the right door for anything that came from
@@ -282,14 +282,14 @@ def atlas_chunks_by_key(state: StateDep, body: ChunkKeys, dataset: DatasetParam 
     key_fields = list(declared.identity.key_fields)
     wanted = body.keys[:1000]
     if not wanted:
-        return {"rows": [], "key_fields": key_fields}
+        return ChunkHits(key_fields=key_fields)
     ds = table_dataset(handle, declared.search.row_table)
     columns = _hit_columns(declared, set(ds.schema.names))
     # `validate_doc_key` per key, not once: the doc key is the only free-text part of the address,
     # and it is what `chunk_key_filter` escapes into the predicate.
     where = or_(*(chunk_key_filter(declared, validate_doc_key(declared, k.doc_id), k.keys) for k in wanted))
     rows = ds.to_table(columns=columns, filter=where).to_pylist()
-    return {"rows": _finalize_hits(handle, rows), "key_fields": key_fields}
+    return ChunkHits(rows=_finalize_hits(handle, rows), key_fields=key_fields)
 
 
 @router.post("/chunks", dependencies=[REQUIRE_CORPUS_DATA])

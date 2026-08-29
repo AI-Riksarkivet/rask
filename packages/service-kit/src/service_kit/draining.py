@@ -40,6 +40,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from service_kit.exceptions import ServiceUnavailableError
+from service_kit.lifecycle import is_draining, mark_draining
 
 
 if TYPE_CHECKING:
@@ -62,12 +63,13 @@ RETRY: Final[dict[str, str]] = {"status": "RETRY"}
 def draining(request: Request) -> bool:
     """Is THIS process shutting down?
 
-    Defaults to False for an app that never set the flag. Three services (ingest, compute, flows) set
-    no lifecycle flags at all today, and defaulting an unset flag to "draining" would take them
-    permanently out of service the moment this dependency was applied — a gate that fails closed on
-    absence would be a worse outage than the one it prevents.
+    Defaults to False for an app that never declared it. `make_service_app` now declares both
+    lifecycle flags for every app it builds (SK-09), but a service composing its own `FastAPI` still
+    owns them, and defaulting an undeclared flag to "draining" would take such a service permanently
+    out of service the moment this dependency was applied — a gate that fails closed on absence
+    would be a worse outage than the one it prevents.
     """
-    return bool(getattr(request.app.state, "shutting_down", False))
+    return is_draining(request.app)
 
 
 def refuse_when_draining(request: Request) -> None:
@@ -152,7 +154,7 @@ def arm_drain_on_sigterm(app: FastAPI) -> Callable[[], None]:
     def _flip() -> None:
         # Idempotent, and it must be: a second SIGTERM (an impatient operator, or a runtime that
         # re-sends) must not reset anything or raise out of a signal handler.
-        app.state.shutting_down = True
+        mark_draining(app)
         log.info("drain_armed_by_sigterm")
 
     try:

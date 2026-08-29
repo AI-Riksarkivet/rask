@@ -24,7 +24,8 @@ from typing import Any
 
 import pytest
 from lineage.services import repository as repo_mod
-from lineage.services.repository import MAX_COLUMN_DEPTH, LineageRepository
+from lineage.services.cypher import MAX_COLUMN_DEPTH
+from lineage.services.repository import LineageRepository
 
 
 def _edge(o_ds: str, o_fld: str, i_ds: str, i_fld: str) -> list[Any]:

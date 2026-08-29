@@ -14,10 +14,9 @@
 	import { Progress } from '@rask/ui/progress';
 	import { Select } from '@rask/ui/select';
 	import * as Tabs from '@rask/ui/tabs';
-	import { projectFromHost } from '@rask/ui/shell';
 	import { FolderPlus, RefreshCw } from '@lucide/svelte';
 
-	import { fetchMeViaBff } from '$lib/http';
+	import { activeTenant } from './active-project.js';
 	import { createProject, listProjects } from './remote/projects.remote';
 	import type { Project } from './types.js';
 	import { projectStateVariant, taskProgress } from './presentation.js';
@@ -33,9 +32,18 @@
 		parseTaskYaml,
 	} from './task-yaml.js';
 
-	let tenant = $state('');
+	// The active project rides the LAYOUT data (`data.activeProject`), which is the shared shell's
+	// own source — the host-wide `rask_active_project` cookie (#103) that `zoneLayoutLoad` reads for
+	// every zone. Passed in rather than read off `page.data` so a caller cannot forget it.
+	let { activeProject }: { activeProject: string } = $props();
+
+	// THE TENANT THIS PAGE ACTS ON. `$derived`, resolved by the shell's own rule — see
+	// `active-project.ts` for why there is deliberately no fallback. Empty means no project is
+	// active, and this page then SAYS so instead of listing somebody's first one.
+	const tenant = $derived(activeTenant(page.url.host, activeProject));
+
 	let projects = $state<Project[]>([]);
-	let status = $state<'loading' | 'ready' | 'forbidden' | 'offline'>('loading');
+	let status = $state<'loading' | 'no-project' | 'ready' | 'forbidden' | 'offline'>('loading');
 	let detail = $state('');
 
 	let createOpen = $state(false);
@@ -200,11 +208,6 @@
 		};
 	});
 
-	async function resolveTenant(): Promise<string> {
-		const me = await fetchMeViaBff();
-		return me?.projects[0]?.project ?? projectFromHost(page.url.hostname) ?? 'default';
-	}
-
 	async function load(): Promise<void> {
 		// `refresh()`, not a bare call: a query instance is cached by its argument, so re-awaiting it
 		// for the Refresh button (or after a create) would hand back the list it already holds.
@@ -237,19 +240,23 @@
 		}
 	}
 
-	// One-shot init (identity → tenant → list): onMount, not $effect — nothing here should re-run
-	// on state changes, and the load-inside-effect shape reads as a reactivity smell it isn't.
+	// One-shot init: onMount, not $effect — the active project is fixed for the life of this
+	// document (entering another one is a navigation that reloads the zone), so nothing here should
+	// re-run on state changes, and the load-inside-effect shape reads as a reactivity smell it isn't.
 	onMount(() => {
-		void (async () => {
-			tenant = await resolveTenant();
-			await load();
-		})();
+		// NO GUESS. Listing "the caller's first project" is how this page came to act on a tenant
+		// that the chrome above it was simultaneously reporting as unset.
+		if (!tenant) {
+			status = 'no-project';
+			return;
+		}
+		void load();
 	});
 
 	async function create(): Promise<void> {
 		// Unparseable YAML blocks create: the draft holds the LAST VALID state, and sending it
 		// while the screen shows something newer would be a silent divergence.
-		if (!slug.trim() || creating || yamlErrors.length > 0) return;
+		if (!tenant || !slug.trim() || creating || yamlErrors.length > 0) return;
 		creating = true;
 		createError = '';
 		const result = await createProject({
@@ -279,18 +286,37 @@
 	<div class="flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-lg font-semibold">Labeling tasks</h1>
-			<p class="text-muted-foreground text-sm">
-				Tenant <span class="font-mono">{tenant || '…'}</span> — send items from
-				<a class="underline underline-offset-2" href="{base}/browse">the corpus browser</a> or search, then
-				claim, annotate, review and publish. (A labeling task is the campaign; the items sent into it are
-				what gets labelled.)
-			</p>
+			{#if tenant}
+				<p class="text-muted-foreground text-sm">
+					Project <span class="font-mono" data-testid="landing-project">{tenant}</span> — send items
+					from <a class="underline underline-offset-2" href="{base}/browse">the corpus browser</a> or
+					search, then claim, annotate, review and publish. (A labeling task is the campaign; the items
+					sent into it are what gets labelled.)
+				</p>
+			{:else}
+				<p class="text-muted-foreground text-sm">
+					No project is active — a labeling task belongs to one, so there is nothing to list.
+				</p>
+			{/if}
 		</div>
+		<!-- Both doors stay VISIBLE and go DISABLED with their reason when no project is active (the
+		     estate's show-disabled ruling): hiding them would read as "this zone has no such action". -->
 		<div class="flex items-center gap-2">
-			<Button variant="outline" size="sm" onclick={() => void load()}>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={!tenant}
+				title={tenant ? undefined : 'no active project to refresh'}
+				onclick={() => void load()}
+			>
 				<RefreshCw class="size-3.5" /> Refresh
 			</Button>
-			<Button size="sm" onclick={() => (createOpen = true)}>
+			<Button
+				size="sm"
+				disabled={!tenant}
+				title={tenant ? undefined : 'enter a project first — a labeling task is created inside one'}
+				onclick={() => (createOpen = true)}
+			>
 				<FolderPlus class="size-3.5" /> New labeling task
 			</Button>
 		</div>
@@ -302,6 +328,15 @@
 
 	{#if status === 'loading'}
 		<p class="text-muted-foreground text-sm">Loading labeling tasks…</p>
+	{:else if status === 'no-project'}
+		<Card class="flex flex-col items-start gap-2 px-4 py-8 text-sm" data-testid="no-active-project">
+			<p class="font-medium">No project is active.</p>
+			<p class="text-muted-foreground">
+				Labeling tasks live inside a project. Open one from
+				<a class="underline underline-offset-2" href="/projects" data-sveltekit-reload>Projects</a>
+				and come back — this page then lists that project's tasks, and creates new ones in it.
+			</p>
+		</Card>
 	{:else if status === 'forbidden'}
 		<Card class="px-4 py-6 text-sm">
 			<p class="font-medium">You can't list this tenant's labeling tasks.</p>

@@ -10,7 +10,6 @@ alignments column is the ``alignments`` capability's column part. Sync handlers
 """
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter
 
@@ -23,6 +22,7 @@ from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA
+from viewer.schemas.chunks import ChunkAlignments, DocChunks
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def alignments_binding(declared: Declared) -> tuple[str, str] | None:
 
 
 @router.get("/doc-chunks/{doc_id}", dependencies=[REQUIRE_CORPUS_DATA])
-def doc_chunks(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> dict[str, Any]:
+def doc_chunks(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> DocChunks:
     """A document's chunks, ordered by declared start time. One lazy
     fetch drives both a clickable chunk timeline and (flattened) the player's
     karaoke track. Chunks with no timing keep ``alignments == []`` (media still
@@ -75,7 +75,7 @@ def doc_chunks(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> di
     rows.sort(key=lambda r: tuple(r[c] for c in sort_cols))
     for r in rows:
         r["alignments"] = parse_alignments_json(r.pop(align_col, None) if align_col else None)
-    return {"doc_id": doc_id, "chunks": rows}
+    return DocChunks(doc_id=doc_id, chunks=rows)
 
 
 @router.get("/chunk-alignments/{doc_id}/{group_id}/{chunk_id}", dependencies=[REQUIRE_CORPUS_DATA])
@@ -85,7 +85,7 @@ def chunk_alignments(
     chunk_id: int,
     state: StateDep,
     dataset: DatasetParam = None,
-) -> dict[str, Any]:
+) -> ChunkAlignments:
     """Per-token alignments for one chunk — lazy-fetched by the player when a hit is
     opened. Search results omit the multi-KB alignments blob (it was ~93% of the
     payload and only the selected hit renders it), so the player fetches the real
@@ -97,10 +97,10 @@ def chunk_alignments(
     doc_id = validate_doc_key(declared, doc_id)
     binding = alignments_binding(declared)
     if binding is None:
-        return {"alignments": []}
+        return ChunkAlignments()
     table, column = binding
     info = handle.descriptor.tables.get(table)
     if info is None or info.column(column) is None:
-        return {"alignments": []}
+        return ChunkAlignments()
     rows = table_dataset(handle, table).to_table(columns=[column], filter=chunk_key_filter(declared, doc_id, (group_id, chunk_id))).to_pylist()
-    return {"alignments": parse_alignments_json(rows[0][column]) if rows else []}
+    return ChunkAlignments(alignments=parse_alignments_json(rows[0][column]) if rows else [])

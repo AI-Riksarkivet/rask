@@ -112,3 +112,28 @@ def use_context(ctx: LineageContext) -> Iterator[LineageContext]:
         yield ctx
     finally:
         _current.reset(token)
+
+
+def child_job_name(parent: LineageContext | None, name: str) -> str:
+    """``parent.job_name.name``, or bare ``name`` when there is no resolvable parent.
+
+    Job names compose hierarchically — a stage under job ``ingest`` is ``ingest.layout`` — and a
+    parentless run is still a valid root, not an error.
+    """
+    return f"{parent.job_name}.{name}" if parent else name
+
+
+def resolve_namespace(namespace: str | None, parent: LineageContext | None) -> str:
+    """The namespace ladder: explicit argument → the parent's → the configured default.
+
+    ONE implementation, because there were three and they had drifted: ``job_run`` skipped the parent
+    branch, so a run opened as the child of a run in ``htr`` emitted into ``rask`` — the run and its
+    own parent in different namespaces, which is precisely what a lineage graph cannot express.
+    """
+    if namespace is not None:
+        return namespace
+    if parent is not None:
+        return parent.namespace
+    from lineage_kit.config import lineage_settings  # local: only to default the namespace
+
+    return lineage_settings().namespace

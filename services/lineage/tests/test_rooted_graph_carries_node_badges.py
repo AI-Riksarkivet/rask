@@ -1,7 +1,7 @@
 """A rooted subgraph must carry the same node facts the estate graph does.
 
 WHY. The graph UI reads ONE node shape: each card renders the dataset's written versions and whether
-any producing run failed. `estate_graph()` populates those (`_ESTATE_WRITES` folded by `_fold_writes`);
+any producing run failed. `estate_graph()` populates those (`cypher.ESTATE_WRITES` folded by `_fold_writes`);
 `graph()` — the rooted read — did not, because it predates them.
 
 That asymmetry is invisible until the UI switches source. Pointing the canvas at the rooted read to get
@@ -101,7 +101,7 @@ async def test_rooted_and_estate_agree_on_the_same_dataset(repo: LineageReposito
 async def test_the_rooted_rollup_is_scoped_to_the_neighbourhood(repo: LineageRepository, calls: list[tuple[str, dict[str, Any] | None]]) -> None:
     """The rooted read must ask about ITS datasets, not fold the estate's writes to answer.
 
-    Reusing `_ESTATE_WRITES` here would produce identical badges on this fixture and pass the two
+    Reusing `cypher.ESTATE_WRITES` here would produce identical badges on this fixture and pass the two
     tests above — while making a bounded neighbourhood read scale with the whole estate, which is the
     exact cost P2 #12 exists to remove. So this asserts the query, not the output.
     """

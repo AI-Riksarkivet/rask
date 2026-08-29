@@ -1359,7 +1359,6 @@
         "description": "Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).\n\n``dangling_blob_columns`` (\u00a79 P1 lifecycle, 2026-07-12) is the POINTER-health axis the version\ncomparison can't see: a blob-v2 column whose payloads no longer dereference (external object\ndeleted, bucket wiped) leaves the version untouched \u2014 a dataset can be ``in_sync`` and still\nunreadable. Non-empty = those columns failed a real 1-byte probe read.",
         "properties": {
           "dangling_blob_columns": {
-            "default": [],
             "items": {
               "type": "string"
             },
@@ -1386,7 +1385,6 @@
             "type": "boolean"
           },
           "missing_declared_columns": {
-            "default": [],
             "items": {
               "type": "string"
             },
@@ -2325,7 +2323,7 @@
     },
     "/datasets/{name}/columns": {
       "get": {
-        "description": "The column-level lineage subgraph around ``name`` (#24) \u2014 the field-to-field analogue of\n``/graph``, for a DAG view of how each column was produced.\n\nNodes/edges touching a dataset the caller can't see are dropped (an edge needs BOTH endpoints'\ndatasets visible); ``name``'s own columns are always shown (the route gate authorized it).",
+        "description": "The column-level lineage subgraph around ``name`` (#24) \u2014 the field-to-field analogue of\n``/graph``, for a DAG view of how each column was produced.\n\n``depth`` counts DATASET hops outward; 1 is the single-hop answer this returned before the\nparameter existed, so every existing caller is unaffected. The bound is FastAPI's here AND the\nrepository's \u2014 governance below runs over whatever the walk returned, so a depth the service did\nnot agree to would enlarge the set being filtered, not the set being disclosed.\n\nNodes/edges touching a dataset the caller can't see are dropped (an edge needs BOTH endpoints'\ndatasets visible); ``name``'s own columns are always shown (the route gate authorized it).",
         "operationId": "get_dataset_columns_datasets__name__columns_get",
         "parameters": [
           {
@@ -2335,6 +2333,18 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
             }
           },
           {
@@ -3025,7 +3035,7 @@
     },
     "/datasets/{name}/graph": {
       "get": {
-        "description": "The connected lineage subgraph around ``name`` (nodes + edges) for a DAG view.\n\nNodes the caller may not see (and edges touching them) are dropped; the requested ``name``\nis already authorized by the route gate.",
+        "description": "The connected lineage subgraph around ``name`` (nodes + edges) for a DAG view.\n\n``depth`` bounds the walk to that many hops in each direction, making this a ROOTED\nNEIGHBOURHOOD rather than a whole connected component \u2014 the shape Marquez serves at\n``/lineage?nodeId=&depth=N``. Omitted, the walk is unbounded, which is the previous behaviour and\nstill what an un-rooted caller wants.\n\nBounding here rather than in the client is the point: a UI depth control that filters an\nalready-fetched window cannot reach anything the window excluded, however small the depth.\n\n`ge=1, le=MAX_WALK_DEPTH` is the FIRST of two guards and the one that answers the caller: a bad\ndepth is a 422 here rather than a 500 from the repository. The repository re-checks anyway,\nbecause the hop range is interpolated into Cypher and that check must not depend on every caller\nhaving gone through this route.\n\nNodes the caller may not see (and edges touching them) are dropped; the requested ``name``\nis already authorized by the route gate.",
         "operationId": "get_graph_datasets__name__graph_get",
         "parameters": [
           {
@@ -3035,6 +3045,24 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 20,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
             }
           },
           {
@@ -3837,7 +3865,7 @@
     },
     "/demo/datasets": {
       "get": {
-        "description": "The medallion datasets as they currently exist on S3 \u2014 schema per Lance version + rows.\n\nGOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3\nwith the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every\nother lineage read gates on ``can_get_metadata``; this now does the same \u2014 authenticate (401 unauth /\n503 if FGA unwired, via ``require_metadata_access``) and filter to the datasets the caller may read.\nFGA off \u2192 pass-through (the dev demo).",
+        "description": "The medallion datasets as they currently exist on S3 \u2014 schema per Lance version + rows.\n\nGOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3\nwith the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every\nother lineage read gates on ``can_get_metadata``; this does the same via the shared batch filter \u2014\nONE ``batch_check`` over the layout, not a per-dataset round-trip loop (F-LIN-13). The ladder is\nunchanged: 401 unauthenticated / 503 FGA unwired propagate; a denied dataset is dropped, not fatal.\nFGA off \u2192 pass-through (the dev demo).",
         "operationId": "demo_datasets_demo_datasets_get",
         "parameters": [
           {

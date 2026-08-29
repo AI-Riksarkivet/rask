@@ -334,15 +334,18 @@ def unsupported_features(ds: ManifestCarrier) -> str | None:
 def describe_unsupported_flags(reader: int, writer: int) -> str | None:
     """The refusal reason for an already-read flag pair, or ``None`` when both are understood.
 
-    THE FLAGS-ONLY gate, and the strictest of the three: it refuses ``base_paths`` in every form. That
-    is what the ORPHAN SCAN needs — a shallow clone's files resolve through another dataset's root, so
-    "list the prefix, subtract what is referenced" would report live data as garbage — and it is what
-    the catalog's on-demand doors gate on (one check in front of all three verbs, so it inherits the
-    strictest of them).
+    THE FLAGS-ONLY gate, and the strictest of the three: it refuses ``base_paths`` in every form. THE
+    ORPHAN SCAN is what needs it, and is now its only caller — a shallow clone's files resolve through
+    another dataset's root, so "list the prefix, subtract what is referenced" would report live data
+    as garbage.
 
-    **Compaction does NOT ask this one.** It asks :func:`describe_compaction_unsupported_flags`, which
-    weighs evidence about the bases themselves; version reclamation and index maintenance ask
-    :func:`describe_gc_unsupported_flags`, which tolerates ``base_paths`` outright.
+    **Neither maintenance door asks this one, in the sweep or in the catalog.** Compaction asks
+    :func:`describe_compaction_unsupported_flags`, which weighs evidence about the bases themselves;
+    version reclamation and index maintenance ask :func:`describe_gc_unsupported_flags`, which
+    tolerates ``base_paths`` outright. This docstring used to say the catalog's on-demand doors gated
+    here — they did, one check in front of every verb, which made the BUTTON stricter than the CRON
+    while its refusal told the operator the two agreed. They now ask the same two gates the sweep
+    asks, per verb (``catalog/services/maintenance.py::require_compactable`` / ``require_reclaimable``).
     """
     unknown = (reader | writer) & ~SUPPORTED
     if not unknown:

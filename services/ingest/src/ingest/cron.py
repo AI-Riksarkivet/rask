@@ -26,12 +26,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, Request
 
+from ingest.auth import get_auth_settings
+from ingest.config import settings
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -46,11 +47,12 @@ def cron_request() -> dict[str, Any] | None:
     authorizes as the service and that door is pinned to ``RASK_INGEST_SERVICE_PROJECT``, so taking a
     project here would let config name one the door then refuses.
     """
-    kind = os.getenv("RASK_INGEST_CRON_KIND", "").strip()
-    dataset = os.getenv("RASK_INGEST_CRON_DATASET", "").strip()
+    config = settings()
+    kind = config.cron_kind.strip()
+    dataset = config.cron_dataset.strip()
     if not kind or not dataset:
         return None
-    raw = os.getenv("RASK_INGEST_CRON_OPTIONS", "").strip()
+    raw = config.cron_options.strip()
     try:
         options = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
@@ -60,7 +62,10 @@ def cron_request() -> dict[str, Any] | None:
         return None
     return {
         "kind": kind,
-        "project": os.getenv("RASK_INGEST_SERVICE_PROJECT", "demo"),
+        # From the DOOR's own settings, not a second read of the same variable: the tick
+        # authorizes as the service, and a project resolved differently here would be one the door
+        # then refuses.
+        "project": get_auth_settings().service_project,
         "dataset": dataset,
         "options": options if isinstance(options, dict) else {},
     }

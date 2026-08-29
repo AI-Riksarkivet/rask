@@ -33,11 +33,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from ingest.config import settings
+from ingest.naming import delimiter
 
 
 if TYPE_CHECKING:
@@ -47,18 +47,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: The catalog composes a table identifier from its parts with this separator (`bronze$pages`).
-#: Matches the estate's `catalog_delimiter`; a mismatch addresses a different table rather than
-#: failing, which is why it is read from env rather than assumed.
-DELIMITER = os.getenv("RASK_CATALOG_DELIMITER", CATALOG_DELIMITER)
-
 #: Generous, because a create can provision storage. Still bounded: an unbounded call here would
 #: hang a workflow activity rather than letting Dapr retry it.
 TIMEOUT_SECONDS = 30.0
 
 
 def catalog_base_url() -> str:
-    return os.getenv("RASK_CATALOG_URL", "http://rask-catalog:2333").rstrip("/")
+    return settings().catalog_url.rstrip("/")
 
 
 def catalog_enabled() -> bool:
@@ -68,15 +63,7 @@ def catalog_enabled() -> bool:
     run loudly, not silently fall back to writing locally. A silent fallback is how an estate ends up
     with governed data that no catalog knows about.
     """
-    return os.getenv("RASK_INGEST_USE_CATALOG", "").lower() in ("1", "true", "yes")
-
-
-#: The Dapr secret store and key holding the catalog bearer, and the field inside the bundle. Same
-#: store the rest of the governed fleet reads (`lance-secrets` -> OpenBao), so there is one place a
-#: credential lives and one place it rotates.
-SECRET_STORE = os.getenv("RASK_SECRET_STORE", "lance-secrets")
-SECRET_KEY = os.getenv("RASK_SECRET_KEY", "lance")
-CATALOG_TOKEN_FIELD = os.getenv("RASK_CATALOG_TOKEN_FIELD", "catalog-token")
+    return settings().use_catalog
 
 
 @lru_cache(maxsize=1)
@@ -109,12 +96,13 @@ def catalog_token() -> str | None:
     # This fail-closed fetch was written before the catalog had an identity door, and it turned a
     # missing-and-unneeded `catalog-token` into a failed run at the first activity. A service that
     # can authenticate as itself has nothing to look up.
-    if os.getenv("RASK_CATALOG_SERVICE_IDENTITY") and (os.getenv("RASK_CATALOG_APP_TOKEN") or os.getenv("APP_API_TOKEN")):
+    config = settings()
+    if config.catalog_service_identity and config.catalog_app_token:
         return None
     from service_kit.governed.secrets import fetch_required_secrets
 
-    bundle = fetch_required_secrets(SECRET_STORE, SECRET_KEY, require=CATALOG_TOKEN_FIELD)
-    return bundle[CATALOG_TOKEN_FIELD]
+    bundle = fetch_required_secrets(config.secret_store, config.secret_key, require=config.catalog_token_field)
+    return bundle[config.catalog_token_field]
 
 
 class CatalogError(RuntimeError):
@@ -144,7 +132,7 @@ class CatalogServiceClient:
         which is `RunSpec.namespace`. Doing it here would mean two places qualify, and a caller that
         already holds a namespace would get it qualified twice (`bronze-bronze$pages`, measured).
         """
-        return f"{namespace}{DELIMITER}{dataset}"
+        return f"{namespace}{delimiter()}{dataset}"
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         """The credential this plane presents to the catalog.
@@ -164,8 +152,8 @@ class CatalogServiceClient:
         request refused for a reason invisible from this side.
         """
         headers = dict(extra or {})
-        token = os.getenv("RASK_CATALOG_APP_TOKEN") or os.getenv("APP_API_TOKEN")
-        identity = os.getenv("RASK_CATALOG_SERVICE_IDENTITY")
+        config = settings()
+        token, identity = config.catalog_app_token, config.catalog_service_identity
         if token and identity:
             headers["dapr-api-token"] = token
             headers["x-lance-service-identity"] = identity
@@ -231,7 +219,7 @@ class CatalogServiceClient:
 
     def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
         """Fold client-written fragments into ONE new version. Returns (version, row_count)."""
-        import httpx
+        from ingest.http import shared_client
 
         payload = {
             # json.loads because the plane transports fragments as STRINGS (they cross a Dapr
@@ -249,7 +237,7 @@ class CatalogServiceClient:
         }
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/commit"
         try:
-            response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for commit: {exc}") from exc
 
@@ -286,7 +274,7 @@ class CatalogServiceClient:
         the failed assertions, the pointer stays where it was, and the run reports what happened. A
         run whose data the gate rejected has still run correctly — it is the DATA that was refused.
         """
-        import httpx
+        from ingest.http import shared_client
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/publish"
         # `required_columns` adds one `column_declared` assertion each — the breaking-change detector,
@@ -295,7 +283,7 @@ class CatalogServiceClient:
         # medallion's local gate runs five on the same data.
         payload: dict[str, object] = {"version": version, "key_column": key_column, "required_columns": list(required_columns)}
         try:
-            response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for publish: {exc}") from exc
 
@@ -306,11 +294,11 @@ class CatalogServiceClient:
     # ── internals ─────────────────────────────────────────────────────────────────────
 
     def _describe(self, namespace: str, dataset: str) -> str | None:
-        import httpx
+        from ingest.http import shared_client
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/describe"
         try:
-            response = httpx.post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for describe: {exc}") from exc
 
@@ -350,11 +338,11 @@ class CatalogServiceClient:
         `exists` answers the question actually being asked, and it is the only form that behaves the
         same whether or not warehouses are enabled.
         """
-        import httpx
+        from ingest.http import shared_client
 
         probe = f"{self._base}/v1/namespace/{namespace}/exists"
         try:
-            found = httpx.post(probe, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            found = shared_client().post(probe, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for namespace probe: {exc}") from exc
         if found.status_code < 400:
@@ -362,7 +350,7 @@ class CatalogServiceClient:
 
         url = f"{self._base}/v1/namespace/{namespace}/create"
         try:
-            response = httpx.post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for namespace create: {exc}") from exc
 
@@ -400,8 +388,7 @@ class CatalogServiceClient:
         table (measured 2026-08-06), so asking them first and believing the answer is what made a new
         bronze table impossible to create at all.
         """
-        import httpx
-
+        from ingest.http import shared_client
         from service_kit.lakehouse import blobs
         from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
@@ -414,7 +401,7 @@ class CatalogServiceClient:
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/create"
         try:
-            response = httpx.post(
+            response = shared_client().post(
                 url,
                 content=body,
                 headers=self._headers({"Content-Type": ARROW_STREAM_MEDIA_TYPE}),
@@ -444,12 +431,12 @@ class CatalogServiceClient:
         column could not be added to would fail its append after the whole fetch, which is the
         expensive place to learn it.
         """
-        import httpx
+        from ingest.http import shared_client
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/add_columns"
         payload = {"new_columns": [{"name": "etag", "expression": "cast(NULL as string)"}]}
         try:
-            response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for schema evolution: {exc}") from exc
         if response.status_code < 400:
@@ -462,11 +449,11 @@ class CatalogServiceClient:
 
     def describe_version(self, namespace: str, dataset: str) -> int:
         """The table's current version — the `read_version` a client-direct commit is built against."""
-        import httpx
+        from ingest.http import shared_client
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/describe"
         try:
-            response = httpx.post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
             response.raise_for_status()
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for version: {exc}") from exc

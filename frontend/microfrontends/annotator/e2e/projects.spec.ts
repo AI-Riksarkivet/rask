@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { MOCK_ANNOTATOR } from './ports';
+import { E2E, MOCK_ANNOTATOR } from './ports';
 
 // Hermetic coverage for the annotation task-management surfaces (OPEN-WORK.md § Design — annotation
 // projects; the A1–A4 surfaces). The backend's OWN contracts (FGA doors, machine tables, saga
@@ -158,8 +158,18 @@ const snapshot = (
 		'GET /projects/p1/tasks?include=details': tasks,
 	});
 
+/** Enter a project the way the estate does — `/projects/<slug>` in the home zone stamps the
+ *  host-wide `rask_active_project` cookie (#103), and every zone's layout load reads it back as
+ *  `data.activeProject`. Playwright cannot visit another zone, so the cookie is set directly. */
+const enterProject = (page: Page, slug: string): Promise<void> =>
+	page.context().addCookies([{ name: 'rask_active_project', value: slug, url: E2E }]);
+
 test.beforeEach(async ({ page }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
+	// Every spec below drives these surfaces from INSIDE a project, which is the only state in
+	// which they have anything to show: the fixtures' tenant is `default`, so that is the project
+	// entered. Specs that need the estate level clear it themselves.
+	await enterProject(page, 'default');
 	// Identity stays a BFF pass-through (keep-flow), so it is still mocked at the browser boundary.
 	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	// The media plane still rides `+server.ts` bytes routes; nothing on these pages should reach one.
@@ -181,6 +191,66 @@ test('A1: the landing lists the tenant’s projects with state and progress', as
 	await expect(card).toBeVisible();
 	await expect(card.getByText('labeling')).toBeVisible();
 	await expect(card.getByText('1/3 items terminal')).toBeVisible();
+});
+
+test('A1: the landing follows the ACTIVE PROJECT, not the caller’s first project by position', async ({
+	page,
+}) => {
+	// The tenant used to be `me.projects[0].project` — the caller's first membership BY ARRAY
+	// POSITION. Here the person is inside `acme` while their first membership is `zulu`, so a page
+	// that reads position instead of the active project lists, and creates into, a project nobody
+	// chose — while the shell's own chrome, reading the cookie, names `acme`.
+	await enterProject(page, 'acme');
+	await page.unroute('**/annotator/capi/v1/me');
+	await page.route('**/annotator/capi/v1/me', (route) =>
+		json(route, {
+			sub: 'gina',
+			name: 'Gina',
+			email: null,
+			estate_admin: false,
+			projects: [
+				{ project: 'zulu', role: 'member' },
+				{ project: 'acme', role: 'admin' },
+			],
+		}),
+	);
+	await seed(page, {
+		'GET /projects?tenant=acme': {
+			projects: [project('labeling', { title: 'Acme portraits' })],
+			total: 1,
+		},
+		'GET /projects?tenant=zulu': {
+			projects: [project('labeling', { project_id: 'p9', title: 'Zulu portraits' })],
+			total: 1,
+		},
+	});
+
+	await page.goto('/annotator/');
+
+	await expect(page.getByRole('link', { name: /Acme portraits/ })).toBeVisible();
+	await expect(page.getByRole('link', { name: /Zulu portraits/ })).toHaveCount(0);
+	// And it SAYS which project it is acting on, in the same words the chrome uses.
+	await expect(page.getByTestId('landing-project')).toHaveText('acme');
+});
+
+test('A1: with NO active project the landing says so rather than inventing a tenant', async ({
+	page,
+}) => {
+	// Nothing entered — exactly the state the shell renders as "No active project". The seed is
+	// keyed PATH-ONLY, so it answers any `?tenant=`: if the page guesses a tenant at all (the old
+	// `… ?? 'default'` tail did), these projects render and the page contradicts its own chrome.
+	await page.context().clearCookies();
+	await seed(page, { 'GET /projects': { projects: [project('labeling')], total: 1 } });
+
+	await page.goto('/annotator/');
+
+	await expect(page.getByRole('heading', { name: 'Labeling tasks' })).toBeVisible();
+	await expect(page.getByTestId('no-active-project')).toBeVisible();
+	await expect(page.getByRole('link', { name: /Vasa portraits/ })).toHaveCount(0);
+	await expect(page.getByText('No labeling tasks yet.')).not.toBeVisible();
+	// Creating one would have to pick a tenant too, so the door is shown DISABLED with its reason
+	// rather than hidden (the estate's show-disabled ruling).
+	await expect(page.getByRole('button', { name: 'New labeling task' })).toBeDisabled();
 });
 
 test('A1: a refused list is a REFUSAL, not an empty state', async ({ page }) => {

@@ -15,13 +15,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
 from lance import blob_field
+
+from ingest.config import settings
 
 
 #: Blob-v2 placement thresholds, PINNED at the values pylance 10.0.0 applies by default rather than
@@ -183,14 +184,14 @@ _log = logging.getLogger(__name__)
 
 
 def nats_url() -> str:
-    return os.getenv("RASK_NATS_URL", "nats://rask-nats:4222")
+    return settings().nats_url
 
 
 def warehouse_root() -> str:
     # The env var is the real answer in every deployment; the temp fallback exists so a local run
     # or a test needs no configuration. gettempdir() rather than a literal /tmp so it stays correct
     # off Linux and under a sandbox that relocates TMPDIR.
-    return os.getenv("RASK_INGEST_WAREHOUSE") or str(Path(tempfile.gettempdir()) / "rask-ingest")
+    return settings().warehouse or str(Path(tempfile.gettempdir()) / "rask-ingest")
 
 
 def external_blob_base_allowlist() -> list[str]:
@@ -206,8 +207,7 @@ def external_blob_base_allowlist() -> list[str]:
     Deliberately shares the catalog's variable name: in-cluster the same operator decision has to
     hold at both doors, and two names for one approval list is how they drift apart.
     """
-    raw = os.getenv("LANCE_EXTERNAL_BLOB_BASES", "")
-    return [b.strip() for b in raw.split(",") if b.strip()]
+    return [b.strip() for b in settings().external_blob_bases.split(",") if b.strip()]
 
 
 def approved_external_base(candidate: str | None) -> str | None:
@@ -533,6 +533,133 @@ def _prior_commit_for_run(catalog: object, spec: RunSpec) -> tuple[int, int] | N
     return (int(version), int(rows))
 
 
+def _fragments_to_commit(uri: str, spec: RunSpec, carried: list[str], *, fallback_dropped: bool) -> list[str]:
+    """WHICH fragments this run commits — storage truth first, the carried list only as a fallback.
+
+    STORAGE TRUTH IS THE ONLY TRUTH. Fragments staged by a drain attempt that died before returning
+    are still on the store and still uncommitted — invisible to `carried`, which holds only what the
+    surviving attempts handed back. Reading the staging prefix is what turns a mid-run pod death from
+    silent row loss into a slower run (A3).
+
+    `discover_staged` does not merely LIST: it searches for an EXACT COVER of the run's units and
+    deliberately DESELECTS a fragment whose rows another fragment already covers. This used to be
+    unioned with the workflow's carried list — `[*staged, *carried]`, deduplicated by string — and
+    that silently overruled the selection. Every carried fragment was staged first (`worker.py`:
+    `stage_fragments(...)` is the line immediately before `outcome.fragments.extend`), so the carried
+    list can contribute exactly one thing the selection does not already account for: a fragment the
+    selection SUPERSEDED. Adding it back commits both, which is the "four units in, six rows out"
+    duplication `tests/test_partial_ack_duplication.py` closed — reintroduced one layer above the
+    layer that closed it.
+
+    Lifted out of `finalize_run` (ingest-flow-10): the commit itself is a different decision from
+    working out what to commit, and the two together made one function nobody could read at a sitting.
+    """
+    from ingest.staging import discover_staged
+
+    staged = discover_staged(uri, spec.run_id)
+    if not staged and carried:
+        # Staging returned nothing while the workflow is holding fragments. That is not the ordinary
+        # empty case (no work), it means the staging prefix was unreadable or its manifests were all
+        # truncated — the run's own record of what it wrote is gone. Committing the carried list is
+        # the loss-avoiding choice, but it is NOT the exact cover, so say so loudly rather than let a
+        # silent fallback look like the normal path.
+        _log.warning(
+            "ingest_staging_unreadable_using_carried_fragments",
+            extra={"run_id": spec.run_id, "dataset_uri": uri, "carried": len(carried)},
+        )
+        seen: set[str] = set()
+        return [f for f in carried if not (f in seen or seen.add(f))]
+
+    if not staged and fallback_dropped:
+        # THE TWO EMPTIES ARE NOT THE SAME FACT. An empty `carried` normally means "this run wrote
+        # nothing", and `_finalize_without_fragments` is right for it. But the fan-in also empties the
+        # list when the merged fallback exceeded the gRPC budget, and reaching HERE in that state
+        # means staging was unreadable too — so the run did write rows and neither source can name
+        # them. That is the exact silent loss the bound was allowed to introduce, and it must not read
+        # as an empty run.
+        _log.error(
+            "ingest_staging_unreadable_and_fallback_dropped",
+            extra={"run_id": spec.run_id, "dataset_uri": uri},
+        )
+    return staged
+
+
+def _finalize_without_fragments(catalog: Any, uri: str, spec: RunSpec, errors: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 — the catalog seam
+    """The run committed nothing. Report that HONESTLY, and purge what it staged.
+
+    A whole alternative terminal path, lifted out of `finalize_run` (ingest-flow-10) rather than
+    inlined in an `if` at its head: it returns a full result dict of its own, and the two paths agree
+    on nothing except the shape of that dict.
+
+    THREE ordinary causes reach here and they are not the same fact — a source that enumerated zero
+    units, a run whose every unit failed validation, and a RETRY of a run that already committed and
+    whose staged manifests it then purged. Only the catalog can tell the third from the first two,
+    which is what `_prior_commit_for_run` asks.
+    """
+    from ingest.lander import Lander
+    from ingest.staging import purge_staged
+
+    # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this path exists because the
+    # catalog branch in `finalize_run` skipped the one `Lander.commit_fragments` has always had
+    # (`lander.py:95-100`: "a run whose every unit failed should leave no version behind to
+    # explain"). It POSTed `{"fragments": []}`, which the catalog refuses with 400 "no fragments
+    # to commit" (`catalog/services/dataplane.py:598`).
+    #
+    # DEPLOYED, that 400 is a crash, not a message: `RASK_INGEST_USE_CATALOG: "true"`
+    # (chart/values.yaml), so the 400 raises out of the `finalize` ACTIVITY, burns its four
+    # ACTIVITY_RETRY attempts against a permanently-failing input, and kills the workflow BEFORE
+    # `emit_terminal` (workflow.py) — so the run's own FAIL never reaches the lineage graph and
+    # the START emitted at accept is orphaned forever. The run reports FAILED with an empty
+    # `errors` dict and no operator-readable reason.
+    #
+    # STRUCTURALLY INVISIBLE TO THE SUITE: the failure it prevents happens only when the catalog has
+    # `commit`, and `LocalCatalog` — the default with `RASK_INGEST_USE_CATALOG` unset, which is what
+    # every test uses — does not. No local test could take that branch. That is the argument for the
+    # guard living out here rather than inside either catalog implementation.
+    result = Lander(catalog).commit_fragments(uri, [], run_id=spec.run_id)
+    # ASK BEFORE ASSERTING NOTHING LANDED. Reaching here with an empty list has two very different
+    # causes, and only the catalog can tell them apart: a run that genuinely wrote nothing, and a
+    # RETRY of a run that already committed — the commit path purges the staged manifests right
+    # after committing, so a replay finds staging empty and its carried fallback empty too.
+    #
+    # The catalog answers by the run marker, and answering is all it does: an empty commit that
+    # carries a known run_id returns that run's own `(version, rows)` and writes nothing, while an
+    # unknown one is still refused. Without this the return below reported `committed_version:
+    # None, rows: 0` for a run whose rows had landed — false lineage for work that succeeded, and
+    # unrecoverable, because the evidence it would need was the staging it had already purged.
+    #
+    # LocalCatalog has no `commit` and no marker (`lander.py` short-circuits an empty list to the
+    # dataset's CURRENT version), so the dev path keeps reporting None. That is honest: it has no
+    # way to recognise its own earlier commit either.
+    prior = _prior_commit_for_run(catalog, spec)
+    # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
+    # arrives here with an empty list and would strand its staged bytes with nothing left to
+    # collect them.
+    purge_staged(uri, spec.run_id)
+    return {
+        # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
+        # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
+        # it did not produce" half of this defect. `prior` is a different fact entirely: the
+        # version THIS run committed, recognised by its own marker, or None if it never did.
+        "committed_version": prior[0] if prior else None,
+        "rows": prior[1] if prior else 0,
+        "dataset_rows": result.rows,
+        "errors": errors,
+        # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
+        # `finalize_run(spec, [], {...})` and pins COMPLETE_WITH_ERRORS under "a run that
+        # delivered 9,997 of 10,000 pages did not FAIL". Refusing a genuinely EMPTY SOURCE is a
+        # different decision at a different seam (enumeration), not this one.
+        "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
+        # No publication: there is no version to gate, and `_publish` would move `published`
+        # onto a version this run did not write.
+        "published": None,
+        "from_version": None,
+        "to_version": None,
+        "publish_reason": "already committed by this run" if prior else "nothing to commit",
+        "publish_error": None,
+    }
+
+
 def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *, read_version: int = 0, fallback_dropped: bool = False) -> dict[str, Any]:
     """Commit the run's fragments as ONE version, through the lander.
 
@@ -551,112 +678,14 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
     reads the dataset's current version itself. The workflow always passes the carried one.
     """
     from ingest.lander import CommitResult, Lander
-    from ingest.staging import discover_staged, purge_staged
+    from ingest.staging import purge_staged
 
     catalog = _catalog()
     uri = catalog.ensure(spec.namespace, spec.dataset)
-    # STORAGE TRUTH, and it is the ONLY truth. Fragments staged by a drain attempt that died before
-    # returning are still on the store and still uncommitted — invisible to `fragments`, which holds
-    # only what the surviving attempts handed back. Reading the staging prefix is what turns a mid-run
-    # pod death from silent row loss into a slower run (A3).
-    #
-    # `discover_staged` does not merely LIST: it searches for an EXACT COVER of the run's units and
-    # deliberately DESELECTS a fragment whose rows another fragment already covers. This used to be
-    # unioned with the workflow's carried list — `[*staged, *fragments]`, deduplicated by string —
-    # and that silently overruled the selection. Every carried fragment was staged first
-    # (`worker.py`: `stage_fragments(...)` is the line immediately before `outcome.fragments.extend`),
-    # so the carried list can contribute exactly one thing the selection does not already account
-    # for: a fragment the selection SUPERSEDED. Adding it back commits both, which is the "four units
-    # in, six rows out" duplication `tests/test_partial_ack_duplication.py` closed — reintroduced one
-    # layer above the layer that closed it.
-    all_fragments = discover_staged(uri, spec.run_id)
-    if not all_fragments and fragments:
-        # Staging returned nothing while the workflow is holding fragments. That is not the ordinary
-        # empty case (no work), it means the staging prefix was unreadable or its manifests were all
-        # truncated — the run's own record of what it wrote is gone. Committing the carried list is
-        # the loss-avoiding choice, but it is NOT the exact cover, so say so loudly rather than let a
-        # silent fallback look like the normal path.
-        _log.warning(
-            "ingest_staging_unreadable_using_carried_fragments",
-            extra={"run_id": spec.run_id, "dataset_uri": uri, "carried": len(fragments)},
-        )
-        seen: set[str] = set()
-        all_fragments = [f for f in fragments if not (f in seen or seen.add(f))]
-
-    if not all_fragments and fallback_dropped:
-        # THE TWO EMPTIES ARE NOT THE SAME FACT. An empty `fragments` normally means "this run wrote
-        # nothing", and the no-op below is right for it. But the fan-in also empties the list when the
-        # merged fallback exceeded the gRPC budget, and reaching HERE in that state means staging was
-        # unreadable too — so the run did write rows and neither source can name them. That is the
-        # exact silent loss the bound was allowed to introduce, and it must not read as an empty run.
-        _log.error(
-            "ingest_staging_unreadable_and_fallback_dropped",
-            extra={"run_id": spec.run_id, "dataset_uri": uri},
-        )
+    all_fragments = _fragments_to_commit(uri, spec, fragments, fallback_dropped=fallback_dropped)
 
     if not all_fragments:
-        # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this guard exists because the
-        # catalog branch below skipped the one `Lander.commit_fragments` has always had
-        # (`lander.py:95-100`: "a run whose every unit failed should leave no version behind to
-        # explain"). It POSTed `{"fragments": []}`, which the catalog refuses with 400 "no fragments
-        # to commit" (`catalog/services/dataplane.py:598`).
-        #
-        # DEPLOYED, that 400 is a crash, not a message: `RASK_INGEST_USE_CATALOG: "true"`
-        # (chart/values.yaml), so the 400 raises out of the `finalize` ACTIVITY, burns its four
-        # ACTIVITY_RETRY attempts against a permanently-failing input, and kills the workflow BEFORE
-        # `emit_terminal` (workflow.py) — so the run's own FAIL never reaches the lineage graph and
-        # the START emitted at accept is orphaned forever. The run reports FAILED with an empty
-        # `errors` dict and no operator-readable reason.
-        #
-        # STRUCTURALLY INVISIBLE TO THE SUITE: this branch runs only when the catalog has `commit`,
-        # and `LocalCatalog` — the default with `RASK_INGEST_USE_CATALOG` unset, which is what every
-        # test uses — does not. No local test could take it. That is the argument for the guard
-        # sitting here rather than inside either catalog implementation.
-        #
-        # TWO ordinary paths reach it: a source that enumerated zero units, and a run whose every
-        # unit failed validation.
-        result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
-        # ASK BEFORE ASSERTING NOTHING LANDED. Reaching here with an empty list has two very different
-        # causes, and only the catalog can tell them apart: a run that genuinely wrote nothing, and a
-        # RETRY of a run that already committed — `finalize_run` purges the staged manifests right
-        # after the commit, so a replay finds staging empty and its carried fallback empty too.
-        #
-        # The catalog answers by the run marker, and answering is all it does: an empty commit that
-        # carries a known run_id returns that run's own `(version, rows)` and writes nothing, while an
-        # unknown one is still refused. Without this the branch below reported `committed_version:
-        # None, rows: 0` for a run whose rows had landed — false lineage for work that succeeded, and
-        # unrecoverable, because the evidence it would need was the staging it had already purged.
-        #
-        # LocalCatalog has no `commit` and no marker (`lander.py` short-circuits an empty list to the
-        # dataset's CURRENT version), so the dev path keeps reporting None. That is honest: it has no
-        # way to recognise its own earlier commit either.
-        prior = _prior_commit_for_run(catalog, spec)
-        # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
-        # arrives here with an empty list and would strand its staged bytes with nothing left to
-        # collect them.
-        purge_staged(uri, spec.run_id)
-        return {
-            # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
-            # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
-            # it did not produce" half of this defect. `prior` is a different fact entirely: the
-            # version THIS run committed, recognised by its own marker, or None if it never did.
-            "committed_version": prior[0] if prior else None,
-            "rows": prior[1] if prior else 0,
-            "dataset_rows": result.rows,
-            "errors": errors,
-            # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
-            # `finalize_run(spec, [], {...})` and pins COMPLETE_WITH_ERRORS under "a run that
-            # delivered 9,997 of 10,000 pages did not FAIL". Refusing a genuinely EMPTY SOURCE is a
-            # different decision at a different seam (enumeration), not this one.
-            "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
-            # No publication: there is no version to gate, and `_publish` would move `published`
-            # onto a version this run did not write.
-            "published": None,
-            "from_version": None,
-            "to_version": None,
-            "publish_reason": "already committed by this run" if prior else "nothing to commit",
-            "publish_error": None,
-        }
+        return _finalize_without_fragments(catalog, uri, spec, errors)
 
     if hasattr(catalog, "commit"):
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot

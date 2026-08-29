@@ -24,9 +24,13 @@
 	// what you can see — so the shape is stated rather than exercised.
 
 	// MEMBERSHIPS COME FROM `me`, NOT FROM THE CONTROLPLANE. This page used to call `getProjects()`,
-	// the `/capi/v1/projects` estate pass-through, which needs the controlplane to reach the Kubernetes
-	// API — and that answers 503 on every estate where the `platform.rask.io` CRD is not installed
-	// (verified live). The `Promise.all` then rejected, `watches` stayed `null`, and the page blamed
+	// which fetched `/api/projects/` — the gateway row for the CONTROLPLANE, which reads
+	// `platform.rask.io` Project CRs from the Kubernetes API. (NOT `/capi/v1/projects`, as this
+	// comment said until 2026-08-29: that path proxies to the CATALOG and never touched the
+	// controlplane.) It fails on every estate where the CRD is not installed — verified live, and
+	// since 2026-08-29 it says so in those words, `501 project operator not installed`, rather than
+	// the `503 cannot reach kubernetes api` it answered here.
+	// The `Promise.all` then rejected, `watches` stayed `null`, and the page blamed
 	// the NOTIFICATION service for an outage in a service it never needed: the whole surface for
 	// enrolling in watches was unreachable, estate-wide, for a reason it did not name.
 	//

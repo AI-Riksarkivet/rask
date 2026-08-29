@@ -61,8 +61,13 @@ Ports **:8101/:8102/:8103**, public under `/api/explorer/*` through the gateway.
 The **viewer** additionally serves the **S3 object browser** ported from the
 retired volumes-api (`/api/explorer/objects`, `/api/explorer/object`,
 `/api/explorer/object/download` → viewer `/api/object*`) — the lakehouse zone's
-storage browser backend. It reads the two fixed rask buckets via
-`storage.s3_client` (env: `RASK_S3_ENDPOINT_URL` + `AWS_*`).
+storage browser backend. It reads any bucket registered in the catalog's storage
+registry — not a fixed pair — through `storage.s3_client`, each store with its own
+endpoint and credentials (a store that declares a `secret` gets them from the Dapr
+secret store named by `RASK_SECRET_STORE`, fail-closed; one that does not uses the
+deployment's env: `RASK_S3_ENDPOINT_URL` + `AWS_*`). The download **streams**: the
+registry's stores include the warehouse and observability buckets, so the object it is
+asked for may be multi-GB.
 
 Retired capabilities and where they re-land (R6):
 

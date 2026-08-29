@@ -260,10 +260,10 @@ def test_the_ack_ceiling_exceeds_the_fragment_batch() -> None:
     here instead of in a cluster at 3am. Since sizing became per-run this covers the DEFAULT; the
     caller-supplied path is refused at accept (`test_fragment_batching.py`).
     """
-    from ingest.queue import MAX_ACK_PENDING
+    from ingest.queue import max_ack_pending
     from ingest.sizing import resolve
 
-    rows = resolve().fragment_rows
-    assert rows < MAX_ACK_PENDING, (
-        f"max_ack_pending={MAX_ACK_PENDING} <= fragment batch {rows}: the drain will deadlock once a batch fills, because the held messages are never acked"
+    rows, ceiling = resolve().fragment_rows, max_ack_pending()
+    assert rows < ceiling, (
+        f"max_ack_pending={ceiling} <= fragment batch {rows}: the drain will deadlock once a batch fills, because the held messages are never acked"
     )

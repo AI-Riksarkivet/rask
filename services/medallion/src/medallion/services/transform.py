@@ -1006,9 +1006,13 @@ async def handle_stage(
                 service_identity=settings.catalog_service_identity,
                 dedicated_token=dedicated_token_for(settings),
                 timeout_seconds=settings.publish_timeout_seconds,
-                # Carried so the NEXT tier inherits it: the catalog echoes this onto
-                # `table_published`, which is what wakes the next mover.
+                # Carried so the NEXT tier inherits them: the catalog echoes both onto
+                # `table_published`, which is what wakes the next mover. This publish is the ONLY hop
+                # where either would be lost — the mover authenticates as itself, so without the
+                # originator here the next tier's failures address a mover, not the person whose
+                # batch it is.
                 cascade_id=trigger.cascade_id or "",
+                originator=trigger.originator or "",
                 client=catalog_http,
             )
             if not outcome.published:

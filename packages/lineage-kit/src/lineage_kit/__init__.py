@@ -23,6 +23,7 @@ Transport is env-driven (``RASK_LINEAGE_ENDPOINT`` → HTTP; unset → logged no
 never crashes compute). See ``config.LineageSettings``.
 """
 
+from lineage_kit import metrics as metrics
 from lineage_kit.actor import LineageActorMixin
 from lineage_kit.config import LineageSettings
 from lineage_kit.consume import (
@@ -72,6 +73,7 @@ from lineage_kit.schemas import (
     RunState,
     SchemaDatasetFacet,
     SchemaField,
+    WireModel,
     custom_facet,
 )
 from lineage_kit.stage import stage
@@ -116,6 +118,7 @@ __all__ = [
     "RunState",
     "SchemaDatasetFacet",
     "SchemaField",
+    "WireModel",
     "ambient_emitter",
     "as_json_rows",
     "build_emitter",

@@ -11,6 +11,10 @@ dependencies = [
     "openlineage-python>=1.52.0",
     "pydantic>=2.13",
     "pydantic-settings>=2.14",
+    # The metrics API ONLY (never the SDK): a dropped lineage event has to leave a series behind, and
+    # an API-only dependency is a no-op until the host process installs a MeterProvider — the same
+    # bargain `ray-kit` takes for the trace propagator. No ray/lance/fastapi rides along with it.
+    "opentelemetry-api>=1.27",
 ]
 
 [build-system]

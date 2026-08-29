@@ -123,4 +123,11 @@ async def queue_health() -> QueueHealth:
     except TimeoutError:
         return QueueHealth(reachable=False, detail=f"the queue did not answer within {PROBE_TIMEOUT_SECONDS}s")
     except Exception as exc:
-        return QueueHealth(reachable=False, detail=f"{type(exc).__name__}: {exc}")
+        # THE CLASS, NOT THE MESSAGE. This route is always-200 and reachable by anyone who can reach
+        # the port, and a broker client's exception text carries the things it was configured with —
+        # for a nats failure, the server URL verbatim ("no servers available for connection to
+        # nats://<host>:4222"), and for a TLS or DNS failure whatever the library chose to include.
+        # The operator's diagnosis is not lost: it is logged here with the traceback, which is where
+        # an internal detail belongs (the same split `install_problem_handlers` makes for every 5xx).
+        logger.warning("queue_probe_failed", exc_info=True)
+        return QueueHealth(reachable=False, detail=f"the queue probe failed with {type(exc).__name__} — see this pod's logs")

@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from lineage_kit.context import LineageContext, use_context
+from lineage_kit.context import LineageContext, resolve_namespace, use_context
 from lineage_kit.emitter import ambient_emitter, default_emitter, use_emitter
 from lineage_kit.schemas import (
     Dataset,
@@ -242,11 +242,9 @@ def job_run(
     mixin actors launched from it link themselves as children. A run the body already
     terminated (``run.abort()`` / ``run.complete()``) is left alone on exit.
     """
-    from lineage_kit.config import LineageSettings  # local: only needed to default the namespace
-
     run = LineageRun(
         job_name=job_name,
-        namespace=namespace or LineageSettings().namespace,
+        namespace=resolve_namespace(namespace, parent),
         run_id=run_id,
         parent=parent,
         emitter=emitter,

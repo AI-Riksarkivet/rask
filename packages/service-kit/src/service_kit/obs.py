@@ -21,8 +21,9 @@ import logging
 
 #: The top-level app packages whose module loggers (``logging.getLogger(__name__)``) must emit INFO. Their
 #: effective level inherits from these package loggers, so raising the package raises the whole tree.
-#: ``viewer``/``search``/``annotator`` are the folded lance-media services; ``ratch`` covers its
-#: pipeline runs that log through the same process (e.g. ``ratch serve``).
+#: ``viewer``/``search``/``annotator`` are the folded lance-media services. A sealed runner is NOT
+#: listed and must not be: it runs in its own image with its own environment, configures its own
+#: logging, and naming one here would put a workload's name in a shared seam.
 _APP_LOGGERS = (
     "catalog",
     "lineage",
@@ -34,14 +35,10 @@ _APP_LOGGERS = (
     # test_invariants.py::test_every_service_that_raises_its_loggers_is_ON_the_allowlist.
     "maintenance",
     # The shared platform library's own loggers (fga provisioning, outbox, warehouse registry …).
-    # "common" stays until packages/common is deleted at the end of gate 3 (R19); the ported
-    # copies log under "service_kit".
-    "common",
     "service_kit",
     "viewer",
     "search",
     "annotator",
-    "ratch",
 )
 
 

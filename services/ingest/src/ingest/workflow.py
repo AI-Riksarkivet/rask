@@ -49,7 +49,6 @@ ack across a job's runtime, which is the specific thing A13 outlaws.
 from __future__ import annotations
 
 import json
-import os
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -58,6 +57,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
+from ingest.config import settings
 from ingest.metrics import record_run, record_units
 from ingest.sizing import ResolvedSizing
 
@@ -174,12 +174,14 @@ class RunLimits(BaseModel):
 
         An empty value is unbounded rather than a crash: `kubectl set env FOO=` leaves an empty
         string and `float("")` raises, which would take the ceiling's own activity down for a config
-        typo.
+        typo. `IngestSettings` drops blank values before validation for exactly that reason, so the
+        guarantee now lives with the declaration instead of being re-implemented at each read.
         """
+        config = settings()
         return cls(
-            max_run_hours=float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0),
-            max_units=int(os.getenv("RASK_INGEST_MAX_UNITS", "0") or 0),
-            incremental_max_rows=int(os.getenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "0") or 0),
+            max_run_hours=config.max_run_hours,
+            max_units=config.max_units,
+            incremental_max_rows=config.incremental_max_rows,
         )
 
 

@@ -9,6 +9,7 @@ The endpoint that exposes it (gated on ``can_get_metadata``) wires these to the 
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Protocol
@@ -200,15 +201,23 @@ async def reconcile_all(
     """
     results: list[ReconcileStatus] = []
     for summary in await repository.list_datasets():
-        uri = await repository.source_uri(summary.name)
+        # Issued TOGETHER, not one after another: three independent point lookups on the same graph,
+        # none of which needs another's answer. Sequenced, they made every dataset three round-trips
+        # deep, so a sweep over an estate of N datasets paid 3N serial round-trips. A dataset that
+        # turns out to have no dataSource URI (or a drop stamp) now pays two key reads it would have
+        # skipped — the cheapest possible lookups, against a depth cut from 3N to N.
+        uri, dropped, graph_version = await asyncio.gather(
+            repository.source_uri(summary.name),
+            repository.dropped_at(summary.name),
+            repository.latest_write_version(summary.name),
+        )
         if uri is None:
             continue
-        if await repository.dropped_at(summary.name):
+        if dropped:
             # Deliberately drop_table'd (terminal lifecycle stamp, 2026-07-11): absence on storage
             # is the EXPECTED state — sweeping it would WARN missing_on_storage forever on every
             # tick. A recreate clears the stamp on ingest and re-enters the sweep automatically.
             continue
-        graph_version = await repository.latest_write_version(summary.name)
         # A dataset this reader cannot OPEN is classified UNREADABLE and skips every downstream axis
         # below: with no storage version there is nothing to compare, no blob pointer to probe, no
         # schema to read, and nothing to back-fill. Reporting it as loss is what sent an operator

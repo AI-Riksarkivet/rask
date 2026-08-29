@@ -392,10 +392,17 @@ async def media_clip(
     # build_clip always emits an MP4 container (libx264 + mp3), so the response
     # mime is video/mp4 regardless of the source doc's stored mime.
     mime = "video/mp4"
-    # ffmpeg pulls the source through the SAME origin this request arrived on, so
-    # the loopback works on every launch path (direct :8101, dev proxy, prod
-    # gateway) without a bind-port write-back — the split dropped the monolith's.
-    source = f"{str(request.base_url).rstrip('/')}/api/explorer/{doc_id}"
+    # THE ORIGIN IS CONFIGURATION, NOT THE REQUEST (VS-09). This used to be
+    # `request.base_url` — i.e. the caller's `Host` / `X-Forwarded-Host` header — so
+    # `Host: internal-metadata.local` made this pod's own ffmpeg fetch that host over the pod
+    # network and hand the caller a transcode of whatever answered: a read primitive against
+    # everything the pod can reach, with a 120 s ffmpeg timeout per attempt.
+    #
+    # The path changed with it, because the old one resolved nowhere: this service serves media
+    # bytes at `/api/media/{doc_id}` and has no `/api/explorer/{doc_id}` route, while the gateway
+    # row ("/api/explorer", "/api", *viewer) rewrites the external form to `/api/{doc_id}`, which it
+    # has no route for either. The header-derived host was buying nothing but the SSRF.
+    source = f"{settings.clip_source_origin.rstrip('/')}/api/media/{doc_id}"
     if dataset:
         source += f"?dataset={quote(dataset, safe='')}"
 
@@ -415,8 +422,21 @@ async def media_clip(
     # requests exhausted the pool while `/livez` stayed green, because liveness does not know the pool
     # is gone. It is `async def` now for the authz above, so the blocking build must go to a thread
     # explicitly; `build_clip` takes a bounded slot and raises `ClipBusyError` instead of waiting.
+    #
+    # THE CALLER'S OWN CREDENTIAL RIDES WITH THE FETCH. `/api/media/{doc_id}` is
+    # `REQUIRE_MEDIA_BYTES`-gated, so a bare loopback would transcode a 403 body once FGA is on.
+    # Forwarding the incoming bearer escalates nothing: the door it opens is the same
+    # `can_read_data` grant on the same corpus object this route just checked, for this same
+    # subject. (Header, not query param — a token in a URL lands in access logs.)
     try:
-        path = await asyncio.to_thread(build_clip, source, f"{handle.id}--{doc_id}", lo, hi)
+        path = await asyncio.to_thread(
+            build_clip,
+            source,
+            f"{handle.id}--{doc_id}",
+            lo,
+            hi,
+            authorization=request.headers.get("authorization"),
+        )
     except ClipBusyError as exc:
         # 503 + Retry-After: a fact the caller can act on. Queueing would have told them nothing and
         # cost a thread to say it.

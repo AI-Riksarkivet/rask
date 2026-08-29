@@ -47,9 +47,6 @@ log = logging.getLogger(__name__)
 TERMINAL_OK = "SUCCEEDED"
 TERMINAL_BAD = ("FAILED", "STOPPED")
 
-#: Consecutive poll failures tolerated before giving up. A poll is a dashboard round-trip, and a brief
-#: dashboard blip must not fail a job that is running fine.
-
 
 class RayJobError(RuntimeError):
     """A submitted Ray job failed, was stopped, or did not finish within the timeout."""

@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -250,12 +251,12 @@ def _log_retry(retry_state: RetryCallState) -> None:
     )
 
 
-def _retrying(
+def _retrying[T](
     attempts: int,
     backoff: float,
     max_backoff: float,
     overall_budget: float = DEFAULT_RETRY_OVERALL_BUDGET_SECONDS,
-):
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Build a tenacity ``@retry`` decorator over transient OpenFGA failures.
 
     Retries both OpenFGA ``ApiException`` 429/5xx and raw transport errors (a down
@@ -263,13 +264,48 @@ def _retrying(
     so a flapping OpenFGA cannot pin a worker. tenacity is the single retry layer — the
     SDK's own retries are disabled in :func:`make_client`.
     """
-    return retry(
+    decorator = retry(
         retry=retry_if_exception(_is_transient),
         stop=stop_after_attempt(max(1, attempts)) | stop_after_delay(overall_budget),
         wait=wait_exponential_jitter(initial=backoff, max=max_backoff),
         before_sleep=_log_retry,
         reraise=True,
     )
+    # `cast` rather than a looser annotation: tenacity's `retry` is typed to return its own
+    # `WrappedFn`-preserving decorator, which does not unify with the plain callable shape every call
+    # site here uses (a zero- or one-argument async closure). The cast asserts exactly what tenacity
+    # documents — the wrapper has the wrapped function's signature and awaits to the same value.
+    return cast("Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]", decorator)
+
+
+async def _guarded[T](
+    operation: Callable[[], Awaitable[T]],
+    *,
+    event: str,
+    extra: dict[str, object] | None = None,
+    attempts: int,
+    backoff: float,
+    max_backoff: float,
+) -> T:
+    """Run one OpenFGA operation under the module's SINGLE resilience posture: retry, then fail closed.
+
+    Nine call sites carried a byte-identical copy of this — the ``@_retrying(...)`` decoration, the
+    ``except _FAIL_CLOSED``, the ``log.error(..., exc_info=True)`` and the same
+    ``ServiceUnavailableError("authorization service unavailable")`` (SKG-06). Duplication is the wrong
+    shape for THIS in particular: the posture is a security property, so the failure mode of the copies
+    is that one of them quietly stops matching — a path that logs at the wrong level, retries a
+    definitive deny, or worst, lets a transport error escape as a 500 and a caller reads an outage as a
+    server bug rather than a refusal. One body makes that impossible by construction.
+
+    ``event`` and ``extra`` are all that ever differed: the log line's name and the fields identifying
+    what was being asked. The message is deliberately CONSTANT — a caller must not be able to tell
+    which authorization call failed, and every one of them means the same thing to a client.
+    """
+    try:
+        return await _retrying(attempts, backoff, max_backoff)(operation)()
+    except _FAIL_CLOSED as exc:
+        log.error(event, extra=extra, exc_info=True)
+        raise ServiceUnavailableError("authorization service unavailable") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -447,7 +483,6 @@ async def check(
     """
     subject = f"user:{user}" if qualify else user
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_check() -> bool:
         response = await client.check(
             ClientCheckRequest(
@@ -460,11 +495,14 @@ async def check(
         )
         return bool(response.allowed)
 
-    try:
-        return await _do_check()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_check_unavailable", extra={"relation": relation, "object": obj}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_check,
+        event="openfga_check_unavailable",
+        extra={"relation": relation, "object": obj},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 async def batch_check(
@@ -490,16 +528,18 @@ async def batch_check(
     """
     items = [ClientBatchCheckItem(user=f"user:{user}", relation=relation, object=o, context=condition_context(context)) for o in objects]
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_batch_check() -> dict[str, bool]:
         response = await client.batch_check(ClientBatchCheckRequest(checks=items))
         return {r.request.object: bool(r.allowed) for r in response.result}
 
-    try:
-        return await _do_batch_check()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_batch_check_unavailable", extra={"relation": relation}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_batch_check,
+        event="openfga_batch_check_unavailable",
+        extra={"relation": relation},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 class ObjectListing(NamedTuple):
@@ -573,7 +613,6 @@ async def list_objects(
     """
     subject = f"user:{user}" if qualify else user
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_list_objects() -> ObjectListing:
         response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)))
         objects = list(response.objects)
@@ -594,15 +633,14 @@ async def list_objects(
             )
         return ObjectListing(objects=objects, truncated=truncated)
 
-    try:
-        return await _do_list_objects()
-    except _FAIL_CLOSED as exc:
-        log.error(
-            "openfga_list_objects_unavailable",
-            extra={"relation": relation, "object_type": object_type},
-            exc_info=True,
-        )
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_list_objects,
+        event="openfga_list_objects_unavailable",
+        extra={"relation": relation, "object_type": object_type},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 #: OpenFGA's default ``listUsersMaxResults`` — ListUsers has no pagination, so a result this large
@@ -658,7 +696,6 @@ async def list_users(
     """
     obj_type, _, obj_id = obj.partition(":")
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_list_users() -> list[str]:
         response = await client.list_users(
             ClientListUsersRequest(
@@ -686,11 +723,14 @@ async def list_users(
             )
         return sorted(subjects)
 
-    try:
-        return await _do_list_users()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_list_users_unavailable", extra={"relation": relation, "object": obj}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_list_users,
+        event="openfga_list_users_unavailable",
+        extra={"relation": relation, "object": obj},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 #: Depth ceiling for the Expand tree walk. OpenFGA expands ONE relation's rewrite expression (it does
@@ -774,18 +814,20 @@ async def expand(
     (outage → ``ServiceUnavailableError`` → 503, never an empty tree that reads as "derived from nothing").
     """
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_expand() -> dict[str, Any]:
         response = await client.expand(ClientExpandRequest(relation=relation, object=obj))
         tree = getattr(response, "tree", None)
         root = getattr(tree, "root", None) if tree is not None else None
         return _expand_node(root) if root is not None else {}
 
-    try:
-        return await _do_expand()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_expand_unavailable", extra={"relation": relation, "object": obj}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_expand,
+        event="openfga_expand_unavailable",
+        extra={"relation": relation, "object": obj},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 #: How many hops :func:`expand_tree` will follow. The model's deepest real chain is
@@ -847,8 +889,11 @@ async def expand_tree(
     * ``leaf.continues`` — the budget ran out AT this leaf. Decided BEFORE any round trip, so a depth-1
       call costs exactly one Expand while still telling a UI where "expand further" is offerable. This
       is the only way the walk stops on budget; there is deliberately no half-taken hop.
-    * ``cycle`` — this ``object#relation`` was already visited. ``namespace`` self-nests under
-      ``namespace``, so a loop is reachable through misconfigured tuples, not only through a bug.
+    * ``cycle`` — this ``object#relation`` is already ON THE PATH to itself. ``namespace`` self-nests
+      under ``namespace``, so a loop is reachable through misconfigured tuples, not only through a bug.
+      Scoped to the path and not to the whole walk on purpose: a concentric model reaches the same rung
+      down several branches all the time (``can_read`` via ``writer`` and via ``reader`` both land on
+      ``owner``), and a walk-global set called that a loop and threw the second branch away.
 
     (``truncated`` may still appear, from :func:`_expand_node` — that is the *normaliser's* structural
     depth cap on one malformed response, a different failure from this walk's hop budget.)
@@ -857,13 +902,21 @@ async def expand_tree(
     :func:`expand` and :func:`read_object_tuples`, so a partial tree is never returned in place of a 503.
     """
     depth_budget = max(1, min(max_depth, MAX_EXPAND_TREE_DEPTH))
-    seen: set[str] = set()
 
-    async def _walk(rel: str, target: str, depth: int) -> dict[str, Any]:
+    async def _walk(rel: str, target: str, depth: int, path: frozenset[str]) -> dict[str, Any]:
         key = f"{target}#{rel}"
-        if key in seen:
+        # PATH-scoped, never walk-global (SKG-03). A cycle is an `object#relation` that appears on the
+        # way to ITSELF; an `object#relation` reached twice down two different branches is a DIAMOND,
+        # which a concentric model produces constantly (`can_read` → `writer` → `owner` and
+        # `can_read` → `reader` → `owner`). A single visited set for the whole walk cannot tell them
+        # apart, so it stamped the second arm `cycle: True` and dropped its subtree — the one branch a
+        # reader opened `expand_tree` to see. An IMMUTABLE path handed down, rather than a shared set
+        # marked on entry and un-marked on exit: the un-mark is the half that gets forgotten on an
+        # early return, and this walk has several. Cost is bounded by the hop budget (max 6) — the same
+        # rung may now be expanded once per branch that reaches it, which is what makes each branch
+        # answerable.
+        if key in path:
             return {"name": key, "cycle": True}
-        seen.add(key)
         node = await expand(
             client,
             relation=rel,
@@ -872,18 +925,18 @@ async def expand_tree(
             retry_backoff_seconds=retry_backoff_seconds,
             retry_max_backoff_seconds=retry_max_backoff_seconds,
         )
-        await _resolve(node, target, depth)
+        await _resolve(node, target, depth, path | {key})
         return node
 
-    async def _resolve(node: dict[str, Any], target: str, depth: int) -> None:
+    async def _resolve(node: dict[str, Any], target: str, depth: int, path: frozenset[str]) -> None:
         """Walk the normalised tree in place, expanding every leaf that continues somewhere."""
         for branch in ("union", "intersection"):
             for child in node.get(branch) or []:
-                await _resolve(child, target, depth)
+                await _resolve(child, target, depth, path)
         if (difference := node.get("difference")) is not None:
             for side in ("base", "subtract"):
                 if (child := difference.get(side)) is not None:
-                    await _resolve(child, target, depth)
+                    await _resolve(child, target, depth, path)
 
         leaf = node.get("leaf")
         if not leaf:
@@ -902,7 +955,7 @@ async def expand_tree(
             # so the symptom was "the derivation is unavailable" on every relation that resolves
             # through a rung, i.e. all of the interesting ones. Verified against the live store:
             # expand(can_read_data, table:bronze$pages) → {"computed":{"userset":"table:bronze$pages#reader"}}.
-            leaf["expanded"] = [await _walk(_relation_of(computed), _object_of(computed, target), depth + 1)]
+            leaf["expanded"] = [await _walk(_relation_of(computed), _object_of(computed, target), depth + 1, path)]
             return
         if (ttu := leaf.get("tuple_to_userset")) is not None:
             # `tupleset` arrives as "<object>#<relation>"; the relation half is the edge to follow, and
@@ -922,10 +975,10 @@ async def expand_tree(
             for parent in parents:
                 for computed_relation in ttu.get("computed") or []:
                     # Same normalisation as the `computed` leaf above: these arrive qualified too.
-                    expanded.append(await _walk(_relation_of(computed_relation), parent, depth + 1))
+                    expanded.append(await _walk(_relation_of(computed_relation), parent, depth + 1, path))
             leaf["expanded"] = expanded
 
-    return await _walk(relation, obj, 1)
+    return await _walk(relation, obj, 1, frozenset())
 
 
 async def read_changes(
@@ -968,7 +1021,6 @@ async def read_changes(
     an outage is a 503, never an empty history that reads as "nothing ever happened here".
     """
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_read_changes() -> tuple[list[dict[str, Any]], str | None]:
         # Built INSIDE the retry closure for the same reason read_tuples does it: the SDK pops
         # pagination out of the options dict it is handed, so a shared dict loses it on attempt two.
@@ -1002,11 +1054,14 @@ async def read_changes(
         # discard a cursor a caller may legitimately persist to resume later.
         return changes, response.continuation_token
 
-    try:
-        return await _do_read_changes()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_read_changes_unavailable", extra={"object_type": object_type}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_read_changes,
+        event="openfga_read_changes_unavailable",
+        extra={"object_type": object_type},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 async def read_object_tuples(
@@ -1017,14 +1072,20 @@ async def read_object_tuples(
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> list[ClientTuple]:
-    """Return EVERY tuple whose object is ``obj`` (e.g. all grants on ``table:db1$t``).
+    """Return EVERY tuple whose object is ``obj`` (e.g. all grants on ``table:db1$t``), or raise.
 
     Paginated under the hood so the COMPLETE set comes back, not just the first page — the
     revoke-on-delete caller must see every stale grant to remove it. Read-only/idempotent, so it
     gets the same bounded retry + fail-closed treatment as :func:`check` (outage → 503).
+
+    A read that reaches the page ceiling with a continuation token still outstanding is NOT returned
+    (SKG-04): the answer would be a short list indistinguishable from a complete one, and its only
+    caller that mutates — :func:`revoke_object_tuples` — deletes exactly what it is handed, so a
+    silently-shortened read is a revoke that leaves live grants behind and reports success. The return
+    type therefore means "all of them" and nothing else; incompleteness leaves as the same
+    ``ServiceUnavailableError`` every other unanswerable read raises.
     """
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_read() -> list[ClientTuple]:
         collected: list[ClientTuple] = []
         token: str | None = None
@@ -1038,16 +1099,22 @@ async def read_object_tuples(
             if not token:
                 break
         else:
-            # Hit the page ceiling with a token still outstanding → a PARTIAL set. Surface it (a partial
-            # revoke must not look complete); for one object this ceiling is unreachable in practice.
-            log.warning("openfga_read_truncated", extra={"object": obj, "max_pages": _MAX_REVOKE_PAGES})
+            # Hit the page ceiling with a token still outstanding → a PARTIAL set, which this function
+            # may not return. Raised rather than logged: for one object the ceiling is unreachable in
+            # practice, so reaching it means either a pathological store or a continuation-token bug,
+            # and both are states in which handing back "the grants on this object" is a lie.
+            log.error("openfga_read_truncated", extra={"object": obj, "max_pages": _MAX_REVOKE_PAGES})
+            raise ServiceUnavailableError(f"tuple listing for {obj} exceeded {_MAX_REVOKE_PAGES} pages — refusing to answer with a partial set")
         return collected
 
-    try:
-        return await _do_read()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_read_unavailable", extra={"object": obj}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_read,
+        event="openfga_read_unavailable",
+        extra={"object": obj},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 async def read_tuples(
@@ -1073,7 +1140,6 @@ async def read_tuples(
     """
     tuple_key = ReadRequestTupleKey(user=user, object=obj)  # the SDK omits it when every field is None
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_read_page() -> tuple[list[ClientTuple], str | None]:
         # Built INSIDE the retry closure: the SDK pops page_size/continuation_token out of the options
         # dict it is handed, so a shared dict would silently lose the pagination on the second attempt.
@@ -1097,11 +1163,14 @@ async def read_tuples(
         ]
         return page, response.continuation_token or None
 
-    try:
-        return await _do_read_page()
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_read_unavailable", extra={"object": obj, "user": user}, exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    return await _guarded(
+        _do_read_page,
+        event="openfga_read_unavailable",
+        extra={"object": obj, "user": user},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1181,20 +1250,21 @@ async def write_tuples(
     does not believe a grant succeeded when it did not.
     """
 
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
-    async def _do_write(batch: list[ClientTuple]) -> None:
+    async def _do_write() -> None:
         # The cast papers over the SDK's own annotation, not our types: `write`'s `options` is
         # declared `dict[str, int | str | dict[...]]` while its body reads `options["conflict"]` as
         # a ConflictOptions via `options_to_conflict_info` (client.py:538) — the runtime contract
         # admits what the annotation forgot. Narrowing is impossible (the value IS a ConflictOptions).
         conflict = {"conflict": ConflictOptions(on_duplicate_writes=ClientWriteRequestOnDuplicateWrites.IGNORE)}
-        await client.write(ClientWriteRequest(writes=batch), options=cast("dict[str, Any]", conflict))
+        await client.write(ClientWriteRequest(writes=tuples), options=cast("dict[str, Any]", conflict))
 
-    try:
-        await _do_write(tuples)
-    except _FAIL_CLOSED as exc:
-        log.error("openfga_write_unavailable", exc_info=True)
-        raise ServiceUnavailableError("authorization service unavailable") from exc
+    await _guarded(
+        _do_write,
+        event="openfga_write_unavailable",
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
     # A duplicate IS the post-condition holding, so it is audited like any other success —
     # otherwise re-running a seed silently erases the provenance of tuples that are present.
     _audit_tuples("access_tuple_write", tuples, actor, origin)
@@ -1292,34 +1362,49 @@ async def delete_tuples(
     tuple can't block the rest, and an absent tuple is idempotent success (the post-condition — gone —
     already holds). Transient failures are retried; on outage we fail closed with ``ServiceUnavailableError``
     so the caller does not believe a revoke succeeded when it did not (stale grants would silently linger).
+
+    A PARTIAL revoke still audits what it removed. The 503 says the call did not finish; it does not say
+    nothing happened, and every tuple already deleted is gone whatever the caller does next.
     """
     if not tuples:
         return
 
+    # The ONE path that does not go through `_guarded`, and the reason is the `except` block below:
+    # this is the only caller that must READ the failure before failing closed, because a
+    # server-reported "already absent" is idempotent SUCCESS here and an outage is not. Folding it in
+    # would mean teaching the shared helper a per-caller classifier, which is how the copies started.
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _delete_one(t: ClientTuple) -> None:
         await client.write(ClientWriteRequest(deletes=[t]))
 
     removed: list[ClientTuple] = []
     absent: list[ClientTuple] = []
-    for t in tuples:
-        try:
-            await _delete_one(t)
-            removed.append(t)
-        except _FAIL_CLOSED as exc:
-            if isinstance(exc, ApiException) and _delete_reported_absent(exc):
-                log.debug("openfga_delete_absent_skipped")
-                absent.append(t)
-                continue
-            log.error("openfga_delete_unavailable", exc_info=True)
-            raise ServiceUnavailableError("authorization service unavailable") from exc
-    # AUDIT WHAT THE SERVER CONFIRMED (SKG-01). One blanket row per input tuple used to claim a
-    # revoke for tuples the server said were never there — so a mis-spelled relation left the REAL
-    # grant standing while the trail said it was gone. The absent row keeps the attempt visible
-    # (an auditor must be able to tell "never attempted" from "attempted, already gone") without
-    # asserting a removal that did not happen.
-    _audit_tuples("access_tuple_delete", removed, actor, origin)
-    _audit_tuples("access_tuple_delete", absent, actor, origin, reason="tuple_absent")
+    try:
+        for t in tuples:
+            try:
+                await _delete_one(t)
+                removed.append(t)
+            except _FAIL_CLOSED as exc:
+                if isinstance(exc, ApiException) and _delete_reported_absent(exc):
+                    log.debug("openfga_delete_absent_skipped")
+                    absent.append(t)
+                    continue
+                log.error("openfga_delete_unavailable", exc_info=True)
+                raise ServiceUnavailableError("authorization service unavailable") from exc
+    finally:
+        # `finally`, NOT after the loop (SKG-02). The loop deletes one tuple per write and raises from
+        # INSIDE itself on an outage, so the tuples already removed were gone from OpenFGA the moment
+        # the 503 was raised — and auditing only on the success path erased every one of them. The
+        # estate then reads a trail saying a revoked grant is still live, which is the more dangerous
+        # direction of the two: an operator re-runs nothing because nothing looks undone.
+        #
+        # AUDIT WHAT THE SERVER CONFIRMED (SKG-01). One blanket row per input tuple used to claim a
+        # revoke for tuples the server said were never there — so a mis-spelled relation left the REAL
+        # grant standing while the trail said it was gone. The absent row keeps the attempt visible
+        # (an auditor must be able to tell "never attempted" from "attempted, already gone") without
+        # asserting a removal that did not happen.
+        _audit_tuples("access_tuple_delete", removed, actor, origin)
+        _audit_tuples("access_tuple_delete", absent, actor, origin, reason="tuple_absent")
 
 
 async def revoke_object_tuples(

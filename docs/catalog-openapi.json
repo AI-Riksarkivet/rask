@@ -5835,8 +5835,13 @@
         "type": "object"
       },
       "EstateBindingsResponse": {
-        "description": "Every namespace\u2192warehouse binding the caller can see, in ONE read (#86).\n\nThe per-warehouse sibling below answers for one id; a page listing the estate's namespaces was\ncalling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the\nestate before filtering in Python \u2014 O(warehouses \u00d7 bindings) for a union the underlying\n``list_bindings`` already produces in a single pass.",
+        "description": "Every namespace\u2192warehouse binding the caller can see, in ONE read (#86).\n\nThe per-warehouse sibling answers for one id; a page listing the estate's namespaces was\ncalling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the\nestate before filtering in Python \u2014 O(warehouses \u00d7 bindings) for a union the underlying\n``list_bindings`` already produces in a single pass.",
         "properties": {
+          "authorization_truncated": {
+            "default": false,
+            "title": "Authorization Truncated",
+            "type": "boolean"
+          },
           "bindings": {
             "additionalProperties": {
               "type": "string"
@@ -7773,12 +7778,28 @@
       },
       "ModelsListResponse": {
         "properties": {
+          "authorization_truncated": {
+            "default": false,
+            "title": "Authorization Truncated",
+            "type": "boolean"
+          },
           "models": {
             "items": {
               "$ref": "#/components/schemas/ModelSummary"
             },
             "title": "Models",
             "type": "array"
+          },
+          "page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Token"
           }
         },
         "required": [
@@ -8353,6 +8374,12 @@
             "title": "Accept Assertions",
             "type": "array"
           },
+          "cascade_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Cascade Id",
+            "type": "string"
+          },
           "gate_only": {
             "default": false,
             "title": "Gate Only",
@@ -8362,6 +8389,12 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Key Column",
+            "type": "string"
+          },
+          "originator": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Originator",
             "type": "string"
           },
           "required_columns": {
@@ -12653,6 +12686,24 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Continue after this model name (the previous page's `page_token`).",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Continue after this model name (the previous page's `page_token`).",
+              "title": "Page Token"
             }
           },
           {
@@ -17090,7 +17141,7 @@
     },
     "/v1/stores": {
       "get": {
-        "description": "The whole registry in one response \u2014 it is estate config, and the tier view needs all of it.",
+        "description": "The whole registry in one response \u2014 it is estate config, and the tier view needs all of it.\n\nESTATE-ADMIN GATED, on the same relation and object ``attach_store`` uses. Its docstring already\nstates the reason and it applies to the read at least as strongly: a store record names a host\nand a bucket the whole estate would then see, which is estate-wide disclosure \u2014 and reading the\nlist IS the disclosure, where attaching is only the cause of it. Ungated, any authenticated\nprincipal (any project member) enumerated every bucket the estate knows, including the\n``endpoint`` hosts of third-party buckets someone attached.\n\nThe router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under\n``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right\nfor a listing the endpoint then FILTERS (``/v1/warehouses``, ``/v1/model``) and wrong for one it\ndoes not. This registry is estate-wide config with no per-item FGA object to filter on, so the\nhonest gate is the estate rung rather than a per-store one.",
         "operationId": "list_stores_v1_stores_get",
         "parameters": [
           {
@@ -17273,7 +17324,7 @@
     },
     "/v1/stores/tiers": {
       "get": {
-        "description": "The tier -> store view, DERIVED from the registry rather than transcribed.\n\nEvery governed tier appears even when empty: a bronze row with nothing in it says \"no store\nbacks bronze here\", which is a fact worth showing. Roles outside the medallion (raw, derived,\nobservability) are grouped under their own names \u2014 raw is deliberately not a tier (R23).",
+        "description": "The tier -> store view, DERIVED from the registry rather than transcribed.\n\nGated identically to ``list_stores`` \u2014 it is the same disclosure in a different shape, and gating\nonly the flat view would leave the grouped one as the way around it.\n\nEvery governed tier appears even when empty: a bronze row with nothing in it says \"no store\nbacks bronze here\", which is a fact worth showing. Roles outside the medallion (raw, derived,\nobservability) are grouped under their own names \u2014 raw is deliberately not a tier (R23).",
         "operationId": "stores_by_tier_v1_stores_tiers_get",
         "parameters": [
           {
@@ -17393,6 +17444,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 1000,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 {
@@ -19192,6 +19245,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 1000,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 {
@@ -21286,6 +21341,8 @@
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 200,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -21411,6 +21468,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 1000,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 {
@@ -25319,6 +25378,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 1000,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 {

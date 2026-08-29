@@ -16,13 +16,14 @@ default (documented); set it in any deployment that must be trusted.
 from __future__ import annotations
 
 import functools
-import os
 import secrets
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Final
 
 from fastapi import FastAPI, Header, Request
 from lance_namespace import PermissionDeniedError
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.responses import Response
 
 
@@ -39,14 +40,42 @@ from starlette.responses import Response
 _DEFAULT_PUBLIC_CALLERS = "gateway"
 
 
-def public_callers() -> frozenset[str]:
-    """The configured public front-door app-ids, lower-cased — ONE list for the whole estate.
+class DaprDoorSettings(BaseSettings):
+    """Everything this module reads from the environment, in ONE declared place (SKG-10).
 
-    A per-service setting would let one deployment forget an edge the others know about, and the set
-    is a property of the topology rather than of any single service.
+    It was four bare ``os.environ.get`` calls — three of them naming ``APP_API_TOKEN`` in three
+    functions — so the variables this door depends on were discoverable only by grep, and a typo in
+    any one of them degraded silently to the open dev default rather than failing. A settings class
+    makes the set enumerable and each read one lookup against a declared field.
+
+    Constructed PER READ, never cached. The process environment is the source of truth for both
+    values and it is what the estate's tests and an operator manipulate; a module-level instance would
+    freeze whatever was set at import time, which for a token this door authenticates against is the
+    difference between "the guard is configured" and "the guard was configured when this module first
+    loaded". The cost is one small model construction on a sidecar-delivered request.
     """
-    raw = os.environ.get("RASK_PUBLIC_CALLERS", _DEFAULT_PUBLIC_CALLERS)
-    return frozenset(caller.strip().lower() for caller in raw.split(",") if caller.strip())
+
+    # NO `populate_by_name`, deliberately. It would teach the env source a SECOND lookup name per
+    # field — the bare one — so `public_callers` would answer to `$PUBLIC_CALLERS` as well as the
+    # `RASK_PUBLIC_CALLERS` it declares, which is precisely what
+    # `tests/unit/test_settings_env_namespace.py` exists to refuse. Nothing constructs this by field
+    # name, so the convenience it buys is unused here.
+    model_config = SettingsConfigDict(extra="ignore")
+
+    #: DAPR'S OWN NAME, and it is deliberately unprefixed. daprd injects it from
+    #: ``dapr.io/app-token-secret``; renaming it to ``RASK_*`` would simply mean the sidecar sets a
+    #: variable nothing reads and this door authenticates against nothing.
+    app_api_token: str | None = Field(default=None, alias="APP_API_TOKEN")
+
+    #: The public front-door app-ids (comma-separated). ONE list for the whole estate — a per-service
+    #: setting would let one deployment forget an edge the others know about, and the set is a
+    #: property of the topology rather than of any single service.
+    public_callers: str = Field(default=_DEFAULT_PUBLIC_CALLERS, alias="RASK_PUBLIC_CALLERS")
+
+
+def public_callers() -> frozenset[str]:
+    """The configured public front-door app-ids, lower-cased — ONE list for the whole estate."""
+    return frozenset(caller.strip().lower() for caller in DaprDoorSettings().public_callers.split(",") if caller.strip())
 
 
 def is_public_caller(caller: str | None) -> bool:
@@ -102,7 +131,7 @@ def require_dapr_token(
     # directly, the fleet apps since `make_service_app` began installing the same translator.
     if is_public_caller(dapr_caller_app_id):
         raise PermissionDeniedError(f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller")
-    expected = os.environ.get("APP_API_TOKEN")
+    expected = DaprDoorSettings().app_api_token
     # compare_digest: the token is the only guard on these routes, so no timing side-channel; bytes
     # (not str) so a non-ASCII header value is a clean 403, never a TypeError.
     if expected and not secrets.compare_digest((dapr_api_token or "").encode(), expected.encode()):
@@ -114,7 +143,7 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
     authenticated, so an unset/blank ``APP_API_TOKEN`` is a misconfiguration — not the dev default — and
     the pod must refuse to start rather than silently expose an unauthenticated ingest path (the security
     audit's 'blanked token silently reopens the route' residual). No-op when Dapr ingest is off."""
-    if dapr_enabled and not os.environ.get("APP_API_TOKEN"):
+    if dapr_enabled and not DaprDoorSettings().app_api_token:
         raise RuntimeError(
             "APP_API_TOKEN must be set when Dapr ingest is enabled — the delivery route would otherwise be "
             "unauthenticated. Wire dapr.io/app-token-secret + the APP_API_TOKEN env, or disable Dapr ingest."
@@ -278,7 +307,7 @@ def service_principal(
     stays keyword-defaulted only so a deployment with an empty `privileged_subjects` need not build
     a resolver it will never call.
     """
-    expected = os.environ.get("APP_API_TOKEN")
+    expected = DaprDoorSettings().app_api_token
     if not expected:
         raise ServiceDoorClosed("the service door is not configured here: APP_API_TOKEN is unset")
 

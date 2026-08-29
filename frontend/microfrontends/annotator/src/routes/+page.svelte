@@ -23,7 +23,10 @@
 	// re-derive it from whether a session exists: a 404 on `capi/v1/me` means BOTH "auth is off" and
 	// "the identity lookup failed", and collapsing those two is what made the first cut of the label
 	// stream permanently empty on an ungoverned stack.
-	let { data }: { data: { authEnabled: boolean } } = $props();
+	// `activeProject` rides the same layout data (`zoneLayoutLoad`, #103) the shared shell reads, and
+	// is handed to the landing below: the page and the chrome above it must name ONE project, and an
+	// empty string means none is active — which the landing states rather than guessing a tenant.
+	let { data }: { data: { authEnabled: boolean; activeProject: string } } = $props();
 
 	function openFromParams(params: URLSearchParams): void {
 		const keys = params.get('keys');
@@ -148,5 +151,5 @@
 		<AnnotatorShell {unit} onexit={exit} {stream} />
 	{/key}
 {:else}
-	<ProjectsLanding />
+	<ProjectsLanding activeProject={data.activeProject} />
 {/if}

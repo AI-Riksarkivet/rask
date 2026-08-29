@@ -23,23 +23,26 @@ that existed, which is why the run's 403 named a table nobody had granted anythi
 
 from __future__ import annotations
 
-import os
-
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from ingest.config import settings
 
 
 def delimiter() -> str:
-    """The catalog's table-id separator. From env so it cannot drift from the catalog's own."""
-    return os.getenv("RASK_CATALOG_DELIMITER", CATALOG_DELIMITER)
+    """The catalog's table-id separator. From config so it cannot drift from the catalog's own.
+
+    THE ONE READER. `RASK_CATALOG_DELIMITER` was read here, in a dead `lineage._delimiter`, and in an
+    import-frozen `catalog_service.DELIMITER` — so moving the variable moved two of the three, and a
+    delimiter the writers disagree about addresses a DIFFERENT table rather than failing (ING-07).
+    """
+    return settings().catalog_delimiter
 
 
 def bronze_namespace() -> str:
-    """The bronze TIER's namespace name, read from the same env the medallion reads.
+    """The bronze TIER's namespace name, read from the same chart value the medallion reads.
 
     Not a constant: `MEDALLION_BRONZE_NAMESPACE` is a chart value, and a tier the writer and the
     cascade head disagree about is a write nothing downstream ever sees.
     """
-    return os.getenv("MEDALLION_BRONZE_NAMESPACE", "bronze")
+    return settings().bronze_namespace
 
 
 def tenant(project: str) -> str:

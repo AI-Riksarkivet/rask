@@ -11,7 +11,7 @@ fan-out so the clients only shape requests + parse replies.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from pydantic import BaseModel
@@ -21,10 +21,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
 DEFAULT_TIMEOUT_S = 120.0
-
-_Resp = TypeVar("_Resp", bound=BaseModel)
-_In = TypeVar("_In")
-_Out = TypeVar("_Out")
 
 
 class VLLMTransport:
@@ -41,7 +37,7 @@ class VLLMTransport:
         """Release the pooled HTTP connections."""
         self._http.close()
 
-    def post(self, path: str, body: dict[str, Any], *, into: type[_Resp]) -> _Resp:
+    def post[Resp: BaseModel](self, path: str, body: dict[str, Any], *, into: type[Resp]) -> Resp:
         """POST ``body`` to ``{base_url}{path}`` and validate the JSON reply into ``into``.
 
         Parsing the reply at the transport boundary into a Pydantic model means
@@ -51,7 +47,7 @@ class VLLMTransport:
         r.raise_for_status()
         return into.model_validate(r.json())
 
-    def map(self, fn: Callable[[_In], _Out], items: Iterable[_In], *, concurrency: int) -> list[_Out]:
+    def map[In, Out](self, fn: Callable[[In], Out], items: Iterable[In], *, concurrency: int) -> list[Out]:
         """Run ``fn`` over ``items`` across a thread pool, preserving input order."""
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             return list(pool.map(fn, items))

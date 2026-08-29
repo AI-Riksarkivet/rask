@@ -31,7 +31,10 @@ def test_annotator_deps_are_the_shared_closures() -> None:
     # The re-exported dependencies must be the closures make_auth_deps built — same identity is what
     # makes the routes' Depends() and the tests' dependency_overrides line up. make_auth_deps defines
     # them inside itself, so they carry its qualname; a hand-written local copy would not.
-    assert "make_auth_deps" in security.authenticate.__qualname__
-    assert "make_auth_deps" in security.current_subject.__qualname__
-    assert "make_auth_deps" in security.get_checker.__qualname__
-    assert "make_auth_deps" in security.get_fga_client.__qualname__
+    #
+    # `getattr` with an empty default, not attribute access: `AuthDeps` now declares these as
+    # `Callable[..., X]` rather than `Any`, and a Callable is not necessarily a function, so a plain
+    # `.__qualname__` is an unresolved-attribute error to `ty`. The assertion is unchanged in force —
+    # an object carrying no qualname at all fails it too.
+    for name in ("authenticate", "current_subject", "get_checker", "get_fga_client"):
+        assert "make_auth_deps" in getattr(getattr(security, name), "__qualname__", ""), f"{name} is not the shared closure"

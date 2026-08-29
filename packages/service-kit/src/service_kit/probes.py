@@ -25,6 +25,7 @@ from http import HTTPStatus
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from service_kit.lifecycle import is_draining, is_started
 from service_kit.schemas.health import Liveness, Readiness, ReadinessStatus
 
 
@@ -51,11 +52,15 @@ def make_probes_router(ready_check: ReadyCheck | None = None) -> APIRouter:
     @probes.get("/readyz", response_model=Readiness)
     async def readyz(request: Request) -> JSONResponse:
         state = request.app.state
-        # Drain first: once the lifespan flips shutting_down, that is the answer regardless of
+        # Drain first: once the lifespan flips the drain flag, that is the answer regardless of
         # anything else, and the check must never touch a dependency that is already closing.
-        if getattr(state, "shutting_down", False):
+        #
+        # Both reads go through `service_kit.lifecycle`, which is also what sets them — the flag
+        # names were an untyped convention between this handler and eleven hand-rolled lifespans,
+        # and five apps never held up their end (SK-09).
+        if is_draining(state):
             return _serve(Readiness(status=ReadinessStatus.shutting_down))
-        if not getattr(state, "startup_complete", False):
+        if not is_started(state):
             return _serve(Readiness(status=ReadinessStatus.starting))
         if ready_check is None:
             return _serve(Readiness(status=ReadinessStatus.ready))

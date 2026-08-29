@@ -33,12 +33,12 @@ seeding store can heal, so the unit is redelivered and only then parked).
 from __future__ import annotations
 
 import logging
-import os
 from functools import lru_cache
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ingest.config import settings
 from service_kit.governed.secrets import fetch_dapr_secret
 from service_kit.schemas.storage import Store, normalise_endpoint, store_for_endpoint
 from storage import configured_endpoint
@@ -46,8 +46,11 @@ from storage import configured_endpoint
 
 log = logging.getLogger(__name__)
 
-#: The Dapr secret store every governed service reads, same default as `catalog_service.SECRET_STORE`.
-SECRET_STORE = os.getenv("RASK_SECRET_STORE", "lance-secrets")
+
+#: The Dapr secret store every governed service reads. Declared once on `IngestSettings`; read here
+#: through a function so it is resolved when a secret is fetched rather than frozen at import.
+def secret_store() -> str:
+    return settings().secret_store
 
 
 class UnregisteredSourceEndpointError(ValueError):
@@ -83,7 +86,7 @@ class SourceConnection(BaseModel):
     insecure: bool = False
     #: Matches `storage.s3_client`'s own default, so the pyarrow filesystem and the boto3 client
     #: cannot sign against different regions for one bucket.
-    region: str = Field(default_factory=lambda: os.getenv("AWS_REGION", "us-east-1"))
+    region: str = Field(default_factory=lambda: settings().aws_region)
 
     @property
     def is_estate_default(self) -> bool:
@@ -141,12 +144,13 @@ def _store_credentials(secret: str) -> tuple[str, str]:
     redelivery is the retry, and burning `fetch_dapr_secret`'s two-minute boot budget under an ack
     would expire `ack_wait` and have the unit redelivered underneath us.
     """
-    bundle = fetch_dapr_secret(SECRET_STORE, secret, retries=1)
+    store = secret_store()
+    bundle = fetch_dapr_secret(store, secret, retries=1)
     access_key, secret_key = bundle.get("access_key"), bundle.get("secret_key")
     if not (access_key and secret_key):
-        log.warning("source_store_secret_unavailable", extra={"secret": secret, "store": SECRET_STORE})
+        log.warning("source_store_secret_unavailable", extra={"secret": secret, "store": store})
         raise SourceCredentialsUnavailableError(
-            f"credentials for this source could not be read: secret {secret!r} from the {SECRET_STORE!r} secret store "
+            f"credentials for this source could not be read: secret {secret!r} from the {store!r} secret store "
             f"yielded no access_key/secret_key pair — the store may be unreachable, the secret missing, or seeded "
             f"without the pair. Refusing rather than retrying an external endpoint with the deployment's own keys."
         )

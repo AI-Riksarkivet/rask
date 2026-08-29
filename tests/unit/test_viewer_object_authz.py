@@ -36,6 +36,19 @@ STORE = "lance-catalog"
 ROOT = "warehouse:lance_catalog"
 
 
+class _Body:
+    """A botocore StreamingBody's read surface, as the download route consumes it."""
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def iter_chunks(self, chunk_size: int = 1024) -> Any:
+        return iter([self._payload[i : i + chunk_size] for i in range(0, len(self._payload), chunk_size)])
+
+    def close(self) -> None:
+        return None
+
+
 class _S3:
     """The boto surface these three routes touch, and nothing else."""
 
@@ -54,7 +67,10 @@ class _S3:
 
     def get_object(self, **_kw: Any) -> dict[str, Any]:
         self._calls.append("get")
-        return {"ContentType": "image/tiff", "Body": type("B", (), {"read": lambda _s: b"TIFFBYTES"})()}
+        # `iter_chunks` + `close`, not `read`: the download STREAMS now (VS-15) — the route used to
+        # materialise the whole object before sending a byte, which a multi-GB object in a registered
+        # store turns into an OOM. The bytes this double serves are unchanged.
+        return {"ContentType": "image/tiff", "ContentLength": len(b"TIFFBYTES"), "Body": _Body(b"TIFFBYTES")}
 
 
 def _app(*, allow: Any, seen: list[dict[str, Any]] | None = None) -> FastAPI:

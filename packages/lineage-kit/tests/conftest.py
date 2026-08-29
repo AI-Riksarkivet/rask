@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from lineage_kit import RecordingEmitter, set_default_emitter
+from lineage_kit.config import lineage_settings
 from lineage_kit.context import CONTEXT_ENV_VAR
 
 
@@ -34,8 +35,12 @@ _LINEAGE_ENV_VARS = (
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     for var in _LINEAGE_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    # The namespace default is read once per PROCESS (`config.lineage_settings`), so a test that set
+    # RASK_LINEAGE_NAMESPACE would otherwise decide the default for every test after it.
+    lineage_settings.cache_clear()
     set_default_emitter(None)
     yield
+    lineage_settings.cache_clear()
     set_default_emitter(None)
 
 

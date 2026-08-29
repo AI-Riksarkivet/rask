@@ -17,6 +17,16 @@
  * identity rides `capi/v1/me`, a BFF pass-through intercepted there rather than seeded. A human's browser
  * has no such interception, so identity-dependent chrome still renders its unauthenticated state under
  * `dev-zone`. Only the SERVER-side reads below are seedable.
+ *
+ * NOR THE ACTIVE PROJECT, for the same reason. The landing lists the tasks of the project you are IN,
+ * read from the host-wide `rask_active_project` cookie (#103) that opening `/projects/<slug>` in the
+ * HOME zone stamps — a browser cookie, not an upstream read, so no seed here can supply it and a
+ * one-zone `dev-zone` stack has no home zone to stamp it. The landing therefore renders its honest
+ * "No project is active" card until you set that cookie by hand (devtools:
+ * `document.cookie = 'rask_active_project=default;path=/'`, matching `PROJECT.tenant` below); every
+ * other surface — `/tasks/p1`, `/browse`, the queue — is seeded and renders rows as before. That card
+ * is the fix for a page that used to pick the caller's FIRST project by array position and act on it
+ * while the chrome above it said none was active.
  */
 
 /** The cursor probe's contract, exactly as `LineageProbeSchema` parses it: `{events:[{seq:number}]}`. */

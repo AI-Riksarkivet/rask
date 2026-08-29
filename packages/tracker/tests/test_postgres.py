@@ -254,3 +254,39 @@ def test_postgres_via_factory_end_to_end(_pg_server, postgresql_conn):
     tracker.commit()
     assert tracker.done_keys() == {"x.jpg"}
     tracker.close()
+
+
+# ── PS-10: the additive migration reaches THIS backend too ─────────────────────────────────
+
+
+_LEGACY_PG_SCHEMA = (
+    "CREATE TABLE transfer (key VARCHAR NOT NULL PRIMARY KEY, size INTEGER NOT NULL, status VARCHAR NOT NULL, error VARCHAR, updated_at TIMESTAMP NOT NULL)"
+)
+
+
+def test_a_legacy_postgres_database_is_migrated_on_open(_pg_server, postgresql_conn):
+    """The backend the migration never reached.
+
+    `_migrate` lived on `SqliteTracker` and was written in SQLite dialect (`PRAGMA table_info` plus a
+    hand-spelled `INTEGER DEFAULT 0`), so a PostgreSQL database created before
+    `etag`/`validated`/`verified` existed never gained them — on the one backend that exists so
+    tracker state can outlive a host. `hasattr(PostgresTracker, "_migrate")` was False.
+    """
+    from sqlalchemy import create_engine, inspect
+
+    info = postgresql_conn.info
+    password = f":{info.password}" if info.password else ""
+    dsn = f"postgresql://{info.user}{password}@{info.host}:{info.port}/{info.dbname}"
+
+    engine = create_engine(dsn.replace("postgresql://", "postgresql+psycopg://"))
+    with engine.connect() as conn:
+        conn.exec_driver_sql(_LEGACY_PG_SCHEMA)
+        conn.exec_driver_sql("INSERT INTO transfer (key, size, status, updated_at) VALUES ('old.jpg', 7, 'done', now())")
+        conn.commit()
+
+    with PostgresTracker(dsn) as tracker:
+        assert tracker.unverified_keys() == [("old.jpg", 7, None)], "a pre-existing row is unreadable through the new columns"
+        tracker.mark("new.jpg", 1, TransferStatus.done, etag='"e"', verified=True)
+
+    assert {"etag", "validated", "verified"} <= {c["name"] for c in inspect(engine).get_columns("transfer")}
+    engine.dispose()

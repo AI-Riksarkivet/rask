@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from lineage.api.dependencies import RepositoryDep
 from lineage.api.fga_deps import FilterDep, audit_read, require_metadata_access, require_write_access
 from lineage.schemas import Creator, DatasetSchema, LineageGraph, Neighbors, Producers, Readers
-from lineage.services.repository import MAX_WALK_DEPTH
+from lineage.services.cypher import MAX_WALK_DEPTH
 
 
 # require_metadata_access gates the read (must run first); audit_read then logs the now-authorized

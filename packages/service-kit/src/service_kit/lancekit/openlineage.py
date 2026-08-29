@@ -1,19 +1,17 @@
 """OpenLineage facet primitives — the spec-2-0-2 RunEvent contract, kernel-owned.
 
-The shared half of lineage emission: the pieces BOTH the annotation write path
-(``service_kit.lancekit.lineage_emit``) and the batch derivers (``ratch.lineage``)
-build — ``WriteResult``, the schema/columnLineage facets, and the standalone
-``build_run_event`` mirror. The spec constants (``SCHEMA_URL``, the facet
-``_schemaURL``s, ``run_id_for``) are IMPORTED from ``service_kit.openlineage``, not
-re-declared — a pre-merge event and a merged event describe the same run
-identically because they share one definition, not because two copies agree.
+The shared half of lineage emission, used by the annotation write path
+(``service_kit.lancekit.lineage_emit``): ``WriteResult``, the schema/columnLineage facets,
+and the standalone ``build_run_event`` mirror. The spec constants (``SCHEMA_URL``, the facet
+``_schemaURL``s, ``run_id_for``) and the columnLineage BUILDER are IMPORTED from
+``service_kit.openlineage``, not re-declared — one definition, so two emitters cannot describe
+the same run differently.
 
-Kernel layer: pure over a pyarrow schema + measured stats, no ``Stage`` and no
-pipeline import. The ``Stage``-aware measurement (``column_map``, ``measure_stage``,
-``emit_stage_lineage``) lives up in ``ratch.lineage``, which imports from here.
+Kernel layer: pure over a pyarrow schema + measured stats, no pipeline import. The batch
+derivers that once sat above this (a ``Stage``-aware ``measure_stage`` / ``emit_stage_lineage``
+pair in the dissolved pipeline package) are gone; a workload that needs stage-level lineage
+emits it from its own sealed runner.
 """
-# TRANSITIONAL: ported verbatim from common.lancekit.openlineage for gate 3 (R19).
-# Gate 5 (R21) swaps emitters onto packages/lineage-kit; no emission-shape changes here.
 
 from __future__ import annotations
 
@@ -24,11 +22,12 @@ from pydantic import BaseModel, Field
 
 from service_kit.lancekit.blobs import blob_field_names
 from service_kit.openlineage import (
-    COLUMN_LINEAGE_FACET_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     SCHEMA_FACET_SCHEMA_URL,
+    ColumnEdge,
+    column_lineage_facet,
 )
 from service_kit.openlineage import run_id_for as _run_id_for
 
@@ -40,22 +39,27 @@ from service_kit.openlineage import run_id_for as _run_id_for
 # both carry. One import, one spec version, one place to bump.
 SCHEMA_URL = RUN_EVENT_SCHEMA_URL
 _SCHEMA_FACET_URL = SCHEMA_FACET_SCHEMA_URL
-_COLUMN_LINEAGE_FACET_URL = COLUMN_LINEAGE_FACET_SCHEMA_URL
 _DATASOURCE_FACET_URL = DATASOURCE_FACET_SCHEMA_URL
 _ERROR_MESSAGE_FACET_URL = ERROR_MESSAGE_FACET_SCHEMA_URL
 #: ``OutputStatisticsOutputDatasetFacet`` has no ``service_kit.openlineage`` constant yet — the lance-ns
 #: emitters build it inline in ``medallion/schemas/events.py``. Pinned to the same published version.
 _OUTPUT_STATS_FACET_URL = "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet"
-# The URI identifying the EMITTING CODE in every event (spec: `producer`). It named
-# `lance-audio/.../packages/ratch` — the repo this kernel was merged FROM and a package dissolved
-# 2026-08-28 — so every event pointed provenance-readers at code that no longer exists anywhere.
+# The URI identifying the EMITTING CODE in every event (spec: `producer`). It named a path in the
+# repo this kernel was merged FROM, inside a package that has since been dissolved — so every event
+# pointed provenance-readers at code that no longer exists anywhere.
 # Nothing dispatches on the string (verified: no matcher in lineage/notifications; `run_id_for`
 # does not include it), so correcting it changes no behaviour, only where a reader lands.
 PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/packages/service-kit"
 
-#: One field→field edge: (output_field, input_field, transformation_subtype).
+#: One field→field edge as a WRITE measures it: (output_field, input_field, transformation_subtype).
 #: Carried columns are "IDENTITY"; derived artifacts are "TRANSFORMATION".
-ColumnEdge = tuple[str, str, str]
+#:
+#: NAMED APART from ``service_kit.openlineage.ColumnEdge``, which is the SEVEN-tuple the wire builder
+#: consumes. Both were called ``ColumnEdge`` in one distribution, so which shape a `list[ColumnEdge]`
+#: held depended on which module the reader had open — and the two are structurally compatible enough
+#: that mixing them fails at runtime, not at the import. This one is the narrow measurement shape; it
+#: is WIDENED onto the wire shape at emit (see :func:`_widen`).
+ColumnMapEdge = tuple[str, str, str]
 
 
 class WriteResult(BaseModel):
@@ -69,7 +73,7 @@ class WriteResult(BaseModel):
     row_count: int
     size_bytes: int
     fields: list[dict[str, str]] = Field(default_factory=list)
-    column_map: list[ColumnEdge] = Field(default_factory=list)
+    column_map: list[ColumnMapEdge] = Field(default_factory=list)
 
 
 #: Extension names a JSON column can carry — ``pa.json_()`` (the chunk schema's ``alignments_json``,
@@ -136,7 +140,11 @@ def build_run_event(
         },
     }
     if result.column_map:
-        output_facets["columnLineage"] = _column_lineage_facet(result.column_map, inputs)
+        # `column_lineage_facet` returns {} when no edge is well-formed, and an EMPTY facet must not
+        # be attached: the consumer would materialise a junk `(:Column {field:""})` from it.
+        column_lineage = column_lineage_facet(PRODUCER, _widen(result.column_map, inputs))
+        if column_lineage:
+            output_facets["columnLineage"] = column_lineage
     if source_uri is not None:
         output_facets["dataSource"] = {
             "_producer": PRODUCER,
@@ -164,29 +172,21 @@ def build_run_event(
     }
 
 
-def _column_lineage_facet(edges: list[ColumnEdge], inputs: list[tuple[str, str]]) -> dict[str, Any]:
-    """A ``ColumnLineageDatasetFacet``: per output field, its input field(s) + subtype.
+def _widen(edges: list[ColumnMapEdge], inputs: list[tuple[str, str]]) -> list[ColumnEdge]:
+    """Widen the write's narrow edges onto the wire shape the SHARED builder consumes.
 
-    The kind rides ``inputFields[].transformations[]`` — the shape ColumnLineageDatasetFacet 1-2-0
-    defines and the one every consumer reads (lance-ns's ``lineage.models.Dataset.column_edges``
-    included). The first cut put ``transformationType`` / ``transformationSubtype`` on the *InputField*:
-    the facet still validated (``InputField`` allows additional properties) but those keys only exist,
-    deprecated, at the enclosing *Fields* level — so the ingest read no transformations at all and every
-    edge landed with an empty type and subtype. Silent information loss, not a schema error.
+    THERE IS ONE columnLineage BUILDER, and this module no longer carries a second. Its private copy
+    grouped the same edges into the same ``fields[out].inputFields[].transformations[]`` shape as
+    ``service_kit.openlineage.column_lineage_facet`` — with two differences that were both bugs, not
+    choices: it emitted a facet for edges with an empty output or input field (a junk
+    ``(:Column {field:""})`` on the consumer, which the shared builder exists to refuse), and it
+    pinned ``_schemaURL`` from its own alias, so a spec bump applied to one emitter and not the other.
+
+    A write measures ``(out_field, in_field, subtype)``; the wire wants
+    ``(out_field, in_namespace, in_name, in_field, type, subtype, masking)``. The input dataset is the
+    run's FIRST input — a write has exactly one — and the transformation type is ``DIRECT`` because
+    every edge a write measures is a field read straight from that input; the subtype carries whether
+    it was carried (``IDENTITY``) or derived.
     """
     in_ns, in_name = inputs[0] if inputs else ("", "")
-    by_output: dict[str, list[dict[str, Any]]] = {}
-    for out_field, in_field, subtype in edges:
-        by_output.setdefault(out_field, []).append(
-            {
-                "namespace": in_ns,
-                "name": in_name,
-                "field": in_field,
-                "transformations": [{"type": "DIRECT", "subtype": subtype, "masking": False}],
-            }
-        )
-    return {
-        "_producer": PRODUCER,
-        "_schemaURL": _COLUMN_LINEAGE_FACET_URL,
-        "fields": {out: {"inputFields": ins} for out, ins in by_output.items()},
-    }
+    return [(out_field, in_ns, in_name, in_field, "DIRECT", subtype, False) for out_field, in_field, subtype in edges]

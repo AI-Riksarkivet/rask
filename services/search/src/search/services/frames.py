@@ -4,8 +4,9 @@ Ported from ``backend.search.frames``, keyed on the descriptor's identity
 fields: ranks the frame table (by an image/caption vector, or BM25 over the
 caption text), dedups to one best frame per row key, then fetches the matching
 row-table payload rows and re-orders them to the frame ranking. Backs visual /
-scene / scene_fts search and the frame legs of ``all``. A join failure raises a
-domain :class:`ValidationError` (real error logged, never interpolated), and a ranker that cannot run
+scene / scene_fts search and the frame legs of ``all``. A join that fails on the CALLER'S predicate
+raises a domain :class:`ValidationError` (real error logged, never interpolated) while an estate fault
+propagates as a 500 (:mod:`search.services.query_errors`), and a ranker that cannot run
 raises :class:`ServiceUnavailableError` rather than degrading to ``[]`` — see
 :func:`_ranked_or_fallback`. Genuine ABSENCE (no frames extracted, no caption column) is answered
 ``[]`` by each function's own guard, before any ranking is attempted.
@@ -24,6 +25,7 @@ from search.services.constants import (
     VECTOR_REFINE_FACTOR,
 )
 from search.services.postprocess import RowKey, row_key
+from search.services.query_errors import is_caller_input_error
 from service_kit.exceptions import ServiceUnavailableError, ValidationError
 from service_kit.lancekit.predicate import eq
 
@@ -191,6 +193,8 @@ def frames_to_row_hits(target: SearchTarget, ranked: list[dict[str, Any]], where
     try:
         rows = target.row_ds.to_table(columns=target.payload_columns, filter=full_filter).to_pylist()
     except Exception as e:
+        if not is_caller_input_error(e):
+            raise
         logger.warning("frame search join failed", exc_info=True)
         raise ValidationError("frame search join failed") from e
     by_key = {row_key(r, target.key_fields): r for r in rows}

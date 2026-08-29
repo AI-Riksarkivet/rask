@@ -15,6 +15,7 @@ discovered by someone reading another user's tasks.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -28,12 +29,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.exceptions import register_handlers
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 def _app(settings: AnnotatorSettings, **state: Any) -> FastAPI:
-    """A one-route app wired exactly like the real service, with `app.state` under test control."""
+    """A one-route app wired exactly like the real service, with `app.state` under test control.
+
+    BOTH handler installers, because `annotator/main.py` calls both (lines 186 + 196) and the second
+    one is the reason the auth refusals render at all: the governed kernel raises the `lance_namespace`
+    taxonomy, which `register_handlers` does not map. Installing only the fleet half made this fixture
+    claim a wiring the service does not have, and a refusal that reaches a real user through
+    `install_problem_handlers` was being asserted here against starlette's fallback instead.
+    """
     app = FastAPI()
     register_handlers(app)
+    install_problem_handlers(app, logging.getLogger(__name__))
     for k, v in state.items():
         setattr(app.state, k, v)
 

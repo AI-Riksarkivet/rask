@@ -46,10 +46,20 @@ class _Settings:
 
 
 def _token_of(reader: Any) -> str | None:
-    """The bearer the constructed transport would actually send."""
+    """The bearer the constructed transport would actually send.
+
+    READ OFF THE PER-REQUEST HEADERS, not the client's defaults, and the change is load-bearing
+    rather than cosmetic (SK-03). The transport used to build its own `ApiClient` per call and pin
+    the caller's bearer as a DEFAULT header on it. That client is now shared across every transport
+    aimed at the same catalog — one connection pool instead of one per request — so a bearer left in
+    `default_headers` would be sent for the NEXT caller too. The assertion below therefore also pins
+    that the shared client carries no `Authorization` of its own.
+    """
     transport = reader._transport  # noqa: SLF001 - asserting the wire is the point of this test
-    client = transport._api.api_client  # noqa: SLF001
-    header = client.default_headers.get("Authorization")
+    assert "Authorization" not in transport._api.api_client.default_headers, (  # noqa: SLF001
+        "a caller's bearer is pinned on the SHARED client, so the next caller would send it"
+    )
+    header = transport.request_headers().get("Authorization")
     return header.removeprefix("Bearer ") if header else None
 
 

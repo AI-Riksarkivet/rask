@@ -1,9 +1,12 @@
 """Single-column cosine vector search over the row table.
 
 Ported from ``backend.search.vector``; the hit projection now arrives from the
-descriptor-derived target instead of a module constant. A failed search raises
-a domain :class:`ValidationError` (HTTP 400, stable message) with the real
-Lance error logged, never interpolated.
+descriptor-derived target instead of a module constant. A search that fails on
+the CALLER'S query raises a domain :class:`ValidationError` (HTTP 400, stable
+message) with the real Lance error logged, never interpolated; anything else —
+an unreachable store, an expired credential, a corrupt manifest — propagates
+untouched, so an outage is answered as a 500 rather than as the caller's fault
+(:mod:`search.services.query_errors`).
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from search.services.constants import (
     VECTOR_NPROBES,
     VECTOR_REFINE_FACTOR,
 )
+from search.services.query_errors import is_caller_input_error
 from service_kit.exceptions import ValidationError
 
 
@@ -55,5 +59,9 @@ def vector_search(
             qb = qb.where(where, prefilter=prefilter)
         return qb.to_list()
     except Exception as e:
+        if not is_caller_input_error(e):
+            # An outage, an expired credential, a corrupt manifest: NOT the caller's doing, so it
+            # must reach the global handler as the 500 it is (VS-06).
+            raise
         logger.warning("vector search failed", exc_info=True)
         raise ValidationError("vector search failed") from e

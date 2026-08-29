@@ -84,24 +84,28 @@ def _source_namespace(object_id: str, delimiter: str, project: str) -> str | Non
     return namespace or None
 
 
-#: Principals that name no PERSON. A wildcard is a statement about everyone and therefore about no
-#: one; a userset addresses a group; a bare prefix addresses nothing at all. Carrying any of them
-#: writes into an inbox actor literally named `*` — worse than silence, because it looks delivered.
-_NOT_A_PERSON = frozenset({"", "*", "user:*"})
+def _originator(extra: dict[str, Any]) -> str:
+    """The PERSON this publication is for — ``extra.originator``, or ``""`` when it is for nobody.
 
+    READ, NEVER DERIVED, and this used to derive it from the event's ``actor``. That was wrong for the
+    only path that matters: under one door a mover does not publish the next stage's trigger, it
+    publishes its output to the catalog — authenticating AS ITSELF — so the actor of a cascade
+    publication is ``user:service-<mover>``. The head carried that verbatim, and a gold stage that
+    failed an hour later addressed an inbox actor named after a mover: role-shaped, unread by anyone,
+    and indistinguishable from a delivery.
 
-def _publisher(event: dict[str, Any]) -> str:
-    """The verified sub of the person who published, or ``""``.
+    The catalog resolves it instead (`publication_originator`), because it is the only component that
+    knows whether its caller was a person or a service, and resolving it once at the choke point is
+    what stops two consumers deriving it differently. It arrives already checked for the shapes that
+    name nobody, so this is a read: the value is a bare sub or the key is absent.
 
-    This head is the last place that identity exists — by the time a later stage fails the request is
-    gone and the mover authors as a chart role literal. Only a ``user:`` principal is an address; a
-    userset or wildcard is refused rather than carried.
+    A head deployed ahead of the catalog that fills the field reads nothing and carries nothing — the
+    cascade reaches its author and no originator, which is the pre-fix behaviour minus the service
+    name. Degrading to NO audience rather than the WRONG one is the same direction trap 3's project
+    resolution takes, and for the same reason: a miss is a miss, a wrong address looks delivered.
     """
-    actor = event.get("actor")
-    if not isinstance(actor, str) or actor in _NOT_A_PERSON or not actor.startswith("user:"):
-        return ""
-    sub = actor[len("user:") :].strip()
-    return "" if sub in _NOT_A_PERSON or "#" in sub else sub
+    originator = extra.get("originator")
+    return originator.strip() if isinstance(originator, str) else ""
 
 
 async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) -> dict[str, str]:  # noqa: ANN401 — the Dapr client + settings seams
@@ -161,10 +165,12 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     cascade_id = str(extra.get("cascade_id") or "")
     if cascade_id:
         trigger["cascade_id"] = cascade_id
-    # Omitted rather than blank: `""` would be carried to an inbox actor named "".
-    publisher = _publisher(data)
-    if publisher:
-        trigger["originator"] = publisher
+    # THE HUMAN, carried across the tier boundary beside the batch identity — the two fields that a
+    # publication-driven cascade would otherwise lose at exactly the same hop. Omitted rather than
+    # blank: `""` would be carried to an inbox actor named "".
+    originator = _originator(extra)
+    if originator:
+        trigger["originator"] = originator
 
     try:
         await dapr_publish.publish_event(

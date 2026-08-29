@@ -17,7 +17,7 @@ import functools
 import inspect
 from typing import TYPE_CHECKING, cast
 
-from lineage_kit.context import resolve_context, use_context
+from lineage_kit.context import child_job_name, resolve_context, resolve_namespace, use_context
 from lineage_kit.emitter import use_emitter
 from lineage_kit.runs import LineageRun
 
@@ -45,16 +45,12 @@ def stage[**P, R](
 
         def open_run() -> LineageRun:
             parent: LineageContext | None = resolve_context()
-            job_name = f"{parent.job_name}.{stage_name}" if parent else stage_name
-            if namespace is not None:
-                ns = namespace
-            elif parent is not None:
-                ns = parent.namespace
-            else:
-                from lineage_kit.config import LineageSettings  # local: only to default the namespace
-
-                ns = LineageSettings().namespace
-            run = LineageRun(job_name=job_name, namespace=ns, parent=parent, emitter=emitter)
+            run = LineageRun(
+                job_name=child_job_name(parent, stage_name),
+                namespace=resolve_namespace(namespace, parent),
+                parent=parent,
+                emitter=emitter,
+            )
             run.start(inputs=inputs)
             return run
 

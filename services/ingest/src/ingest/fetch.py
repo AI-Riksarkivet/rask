@@ -37,17 +37,11 @@ as an unexplained throughput cliff.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from urllib.parse import unquote, urlparse
 
+from ingest.config import settings
 
-#: Retry budget for a transient HTTP failure. Three tries with exponential backoff turns a server
-#: hiccup into a slowdown rather than a lost unit — the behaviour measured against a real
-#: rate-limited endpoint, which hands out RST under load at ~64 concurrent reads.
-HTTP_ATTEMPTS = int(os.getenv("RASK_INGEST_HTTP_ATTEMPTS", "3"))
-HTTP_BASE_DELAY = float(os.getenv("RASK_INGEST_HTTP_BASE_DELAY", "1.0"))
-HTTP_TIMEOUT = float(os.getenv("RASK_INGEST_HTTP_TIMEOUT", "60"))
 
 #: 429 is deliberately EXCLUDED — it is the one 4xx that means "try again". Everything else in this
 #: range is a verdict no retry improves, and retrying it spends requests against a source that has
@@ -78,11 +72,16 @@ class UriFetcher:
 def _fetch_http(url: str) -> bytes:
     """GET one object over HTTP, with a generic transient-failure retry.
 
-    Owns its client. The version this replaces called `storage.iiif.fetch_image(url)` — whose
-    `client` is a REQUIRED keyword-only argument — so every HTTP fetch raised
-    `TypeError: fetch_image() missing 1 required keyword-only argument: 'client'` before it reached
-    the network. The path had never been exercised: only `file://` and `s3://` were ever run, so a
-    IIIF ingest would have failed on its first unit.
+    Uses the plane's own generic policy, never a source's. The version this replaces called
+    `storage.iiif.fetch_image(url)` — whose `client` is a REQUIRED keyword-only argument — so every
+    HTTP fetch raised `TypeError: fetch_image() missing 1 required keyword-only argument: 'client'`
+    before it reached the network. The path had never been exercised: only `file://` and `s3://` were
+    ever run, so a IIIF ingest would have failed on its first unit.
+
+    ON THE SHARED POOL, not a client of its own. This is called once per UNIT, so building one here
+    meant a TCP (and, for `https://`, a TLS) handshake per object fetched — the exact cost
+    `fetch_concurrency` exists to amortise (ING-08). The deadline still belongs to this call site,
+    which is why `timeout` is passed per request rather than baked into the pool.
 
     Retries transport errors and 5xx; 4xx other than 408/425/429 raise immediately, which is what
     lets the worker park a dead page on the first attempt instead of spending its whole redelivery
@@ -90,27 +89,35 @@ def _fetch_http(url: str) -> bytes:
     """
     import httpx
 
+    from ingest.http import shared_client
+
+    # Read HERE, not at import. These were module-level `int(os.getenv(...))` constants, so the retry
+    # budget of a running pod was whatever the environment said when the module was first imported —
+    # fixed per pod, invisible to `kubectl set env`, and unmovable by a test (ING-07).
+    config = settings()
+    attempts, base_delay = config.http_attempts, config.http_base_delay_seconds
+    client = shared_client()
     last: Exception | None = None
-    with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True) as client:
-        for attempt in range(HTTP_ATTEMPTS):
-            try:
-                response = client.get(url)
-                response.raise_for_status()
-                return response.content
-            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-                if isinstance(exc, httpx.HTTPStatusError):
-                    code = exc.response.status_code
-                    if 400 <= code < 500 and code not in _RETRYABLE_4XX:
-                        raise
-                last = exc
-                # POLL REASON: BACKOFF, not a poll — this waits between BOUNDED retry attempts of one
-                # request (`attempt < HTTP_ATTEMPTS - 1`) and asks for no state on a schedule. It ends
-                # by exhausting attempts, never by an answer arriving, which is what makes it
-                # categorically different from the loop A13 forbids. Exponential so a rate-limited
-                # endpoint gets increasing room instead of a fixed drumbeat.
-                if attempt < HTTP_ATTEMPTS - 1:
-                    time.sleep(HTTP_BASE_DELAY * (2**attempt))
-    assert last is not None
+    for attempt in range(attempts):
+        try:
+            response = client.get(url, timeout=config.http_timeout_seconds, follow_redirects=True)
+            response.raise_for_status()
+            return response.content
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                code = exc.response.status_code
+                if 400 <= code < 500 and code not in _RETRYABLE_4XX:
+                    raise
+            last = exc
+            # POLL REASON: BACKOFF, not a poll — this waits between BOUNDED retry attempts of one
+            # request (`attempt < attempts - 1`) and asks for no state on a schedule. It ends
+            # by exhausting attempts, never by an answer arriving, which is what makes it
+            # categorically different from the loop A13 forbids. Exponential so a rate-limited
+            # endpoint gets increasing room instead of a fixed drumbeat.
+            if attempt < attempts - 1:
+                time.sleep(base_delay * (2**attempt))
+    if last is None:  # unreachable: `http_attempts` is declared `gt=0`, so the loop returns or binds `last`
+        raise RuntimeError(f"no attempt was made to fetch {url!r}")
     raise last
 
 

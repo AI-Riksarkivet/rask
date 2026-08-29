@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, audit_read, governed, require_metadata_access
 from lineage.schemas import ColumnGraph, ColumnNeighbors
-from lineage.services.repository import MAX_COLUMN_DEPTH
+from lineage.services.cypher import MAX_COLUMN_DEPTH
 
 
 # Gate first (require_metadata_access), then log the authorized column-level read (#6); router-level

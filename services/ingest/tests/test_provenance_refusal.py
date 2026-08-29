@@ -30,10 +30,10 @@ from ingest.provenance import LineageProvenanceReader, ProvenanceRefused, _servi
 def test_a_REFUSED_read_raises_rather_than_looking_like_an_outage(monkeypatch: pytest.MonkeyPatch, status_code: int) -> None:
     """The heart of it. 401 and 403 both mean "reachable, and refusing" — never "unreachable"."""
 
-    def _refuse(url: str, **kwargs: object) -> httpx.Response:
+    def _refuse(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
         return httpx.Response(status_code, json={"detail": "Missing bearer token"}, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("httpx.get", _refuse)
+    monkeypatch.setattr("httpx.Client.get", _refuse)
 
     with pytest.raises(ProvenanceRefused):
         LineageProvenanceReader().has_run("some-run")
@@ -44,10 +44,10 @@ def test_an_UNREACHABLE_graph_still_returns_None(monkeypatch: pytest.MonkeyPatch
     the endpoint reports no defect for it. Claiming a defect from ignorance is how the check loses its
     meaning — that reasoning was never wrong, it just did not cover refusal."""
 
-    def _explode(url: str, **kwargs: object) -> httpx.Response:
+    def _explode(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
         raise httpx.ConnectError("no route to host")
 
-    monkeypatch.setattr("httpx.get", _explode)
+    monkeypatch.setattr("httpx.Client.get", _explode)
 
     assert LineageProvenanceReader().has_run("some-run") is None
 
@@ -56,10 +56,10 @@ def test_a_5xx_is_an_outage_NOT_a_refusal(monkeypatch: pytest.MonkeyPatch) -> No
     """The boundary. A 500 from the graph is the graph being broken, which is exactly the case the
     None branch is for — only the AUTHORIZATION statuses change meaning."""
 
-    def _boom(url: str, **kwargs: object) -> httpx.Response:
+    def _boom(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
         return httpx.Response(500, text="kaboom", request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("httpx.get", _boom)
+    monkeypatch.setattr("httpx.Client.get", _boom)
 
     assert LineageProvenanceReader().has_run("some-run") is None
 
@@ -71,10 +71,10 @@ def test_a_present_run_is_still_found(monkeypatch: pytest.MonkeyPatch) -> None:
 
     target = lineage_run_id("run-42")
 
-    def _ok(url: str, **kwargs: object) -> httpx.Response:
+    def _ok(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
         return httpx.Response(200, json={"runs": [{"run_id": target}]}, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("httpx.get", _ok)
+    monkeypatch.setattr("httpx.Client.get", _ok)
 
     assert LineageProvenanceReader().has_run("run-42") is True
 
@@ -83,10 +83,10 @@ def test_an_ABSENT_run_is_False_not_None(monkeypatch: pytest.MonkeyPatch) -> Non
     """ "The graph answered and does not contain it" is the REAL defect A8 exists to catch, and it must
     stay distinguishable from every flavour of "we could not tell"."""
 
-    def _empty(url: str, **kwargs: object) -> httpx.Response:
+    def _empty(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
         return httpx.Response(200, json={"runs": []}, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("httpx.get", _empty)
+    monkeypatch.setattr("httpx.Client.get", _empty)
 
     assert LineageProvenanceReader().has_run("run-42") is False
 

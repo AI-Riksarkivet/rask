@@ -56,10 +56,10 @@ def test_the_fragment_batch_stays_under_the_queues_ack_ceiling() -> None:
     """A batch larger than `max_ack_pending` deadlocks: the worker holds the batch UNACKED while it
     fills, JetStream stops delivering at the ceiling, and the drain waits for units it will never be
     sent. Asserted as a relation so raising one without the other fails here."""
-    from ingest.queue import MAX_ACK_PENDING
+    from ingest.queue import max_ack_pending
     from ingest.sizing import resolve
 
-    assert resolve().fragment_rows < MAX_ACK_PENDING
+    assert resolve().fragment_rows < max_ack_pending()
 
 
 def test_a_REQUESTED_row_target_over_the_ack_ceiling_is_REFUSED() -> None:
@@ -72,16 +72,16 @@ def test_a_REQUESTED_row_target_over_the_ack_ceiling_is_REFUSED() -> None:
 
     So the refusal happens at ACCEPT with the ceiling named, not silently at 3am mid-harvest.
     """
-    from ingest.queue import MAX_ACK_PENDING
+    from ingest.queue import max_ack_pending
     from ingest.sizing import IngestSizing, SizingRefused, resolve
 
-    with pytest.raises(SizingRefused, match=str(MAX_ACK_PENDING)):
+    with pytest.raises(SizingRefused, match=str(max_ack_pending())):
         resolve(IngestSizing(fragment_rows=1_000_000))
 
     # …and the boundary is exactly the ceiling, not "somewhere near it".
     with pytest.raises(SizingRefused):
-        resolve(IngestSizing(fragment_rows=MAX_ACK_PENDING))
-    assert resolve(IngestSizing(fragment_rows=MAX_ACK_PENDING - 1)).fragment_rows == MAX_ACK_PENDING - 1
+        resolve(IngestSizing(fragment_rows=max_ack_pending()))
+    assert resolve(IngestSizing(fragment_rows=max_ack_pending() - 1)).fragment_rows == max_ack_pending() - 1
 
 
 def test_an_unset_sizing_field_falls_back_to_the_DEPLOYMENT_default() -> None:

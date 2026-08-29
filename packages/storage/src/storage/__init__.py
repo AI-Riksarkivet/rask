@@ -18,6 +18,8 @@ from storage.errors import StorageError as StorageError
 from storage.errors import s3_errors as s3_errors
 from storage.fs import FSSink as FSSink
 from storage.fs import FSSource as FSSource
+from storage.protocol import Sink as Sink
+from storage.protocol import Source as Source
 from storage.s3 import S3Sink as S3Sink
 from storage.s3 import S3Source as S3Source
 from storage.s3 import iter_keys as iter_keys

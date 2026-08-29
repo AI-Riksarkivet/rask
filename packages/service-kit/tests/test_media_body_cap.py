@@ -7,7 +7,7 @@ open_fastapi-audit. Three separate things, all the same shape — a cap in the w
    `service_kit.media.middleware.register_middleware`, which registered CORS and nothing else. The
    apps that actually accept multipart uploads were the ones without a cap.
 
-2. **The existing cap is in the handler, not at the door.** `await file.read(_MAX_UPLOAD_BYTES + 1)`
+2. **The existing cap is in the handler, not at the door.** `await file.read(MAX_UPLOAD_BYTES + 1)`
    caps what the ENDPOINT holds. It cannot cap what starlette already did: a multipart file part is
    spooled to `SpooledTemporaryFile` in full BEFORE the handler is entered. So the read-cap protects
    memory — which is real — and nothing else.
@@ -57,13 +57,13 @@ def test_the_media_ceiling_is_declared_and_TIGHTER_than_the_catalogs() -> None:
 def test_the_ceiling_is_above_the_handlers_own_upload_cap() -> None:
     """The two bounds must not invert.
 
-    If the door were tighter than `_MAX_UPLOAD_BYTES`, the handler's own 400 — which names the upload
+    If the door were tighter than `MAX_UPLOAD_BYTES`, the handler's own 400 — which names the upload
     limit in the caller's terms — would be unreachable, and every oversize snippet would get a bare
     413 instead. Defence in depth means the outer bound is the looser one.
     """
     from viewer.services import voice_service
 
-    assert MediaSettings().max_body_bytes > voice_service._MAX_UPLOAD_BYTES
+    assert MediaSettings().max_body_bytes > voice_service.MAX_UPLOAD_BYTES
 
 
 def test_the_voice_docstring_no_longer_claims_it_avoids_buffering() -> None:

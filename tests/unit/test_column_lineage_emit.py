@@ -54,10 +54,10 @@ def test_column_lineage_facet_groups_by_output_and_roundtrips() -> None:
 
     # The ACTUAL consumer parser recovers the flattened edges — masking preserved, source (name, field).
     parsed = Dataset(namespace="bronze", name="events", facets={"columnLineage": facet}).column_edges
-    hash_edges = {(e["field"], e["masking"]) for e in parsed if e["out_field"] == "hash"}
+    hash_edges = {(e.field, e.masking) for e in parsed if e.out_field == "hash"}
     assert hash_edges == {("name", True), ("salt", True)}
-    id_edge = next(e for e in parsed if e["out_field"] == "id")
-    assert (id_edge["name"], id_edge["field"], id_edge["subtype"]) == ("events", "id", "IDENTITY")
+    id_edge = next(e for e in parsed if e.out_field == "id")
+    assert (id_edge.name, id_edge.field, id_edge.subtype) == ("events", "id", "IDENTITY")
 
 
 def test_column_lineage_facet_drops_malformed_and_empty() -> None:
@@ -148,7 +148,7 @@ def test_build_run_event_attaches_columnlineage_on_output() -> None:
         token="t1",
     )
     output = Dataset.model_validate(event["outputs"][0])
-    edges = {(e["out_field"], e["name"], e["field"], e["subtype"]) for e in output.column_edges}
+    edges = {(e.out_field, e.name, e.field, e.subtype) for e in output.column_edges}
     assert edges == {
         ("id", "bronze$events", "id", "IDENTITY"),
         ("hash", "bronze$events", "payload", "TRANSFORMATION"),
@@ -228,7 +228,7 @@ def test_handle_stage_emits_identity_column_edges(tmp_path: Any) -> None:
 
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     output = Dataset.model_validate(lineage["data"]["outputs"][0])
-    edges = {(e["out_field"], e["name"], e["field"], e["subtype"]) for e in output.column_edges}
+    edges = {(e.out_field, e.name, e.field, e.subtype) for e in output.column_edges}
     # The LIVE cascade (not seed.py) produced field-to-field identity edges pointing at the bronze input —
     # including source_rowid, minted at the first derive from the bronze row's reserved _rowid metacolumn
     # (root provenance: the silver row names the exact bronze row it descends from — R23 re-root).
@@ -340,7 +340,7 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
 
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     output = Dataset.model_validate(lineage["data"]["outputs"][0])
-    edges = {(e["out_field"], e["name"], e["field"], e["subtype"]) for e in output.column_edges}
+    edges = {(e.out_field, e.name, e.field, e.subtype) for e in output.column_edges}
     assert edges == {
         ("id", "bronze$events", "id", "IDENTITY"),
         ("payload", "bronze$events", "payload", "IDENTITY"),

@@ -76,7 +76,22 @@ class LocalCatalog:
                 import lance
 
                 lance.dataset(uri)
-            except Exception:
+            except Exception as exc:
+                # ONLY "absent" MAY REACH `create_empty`, and a bare `except Exception` did not say
+                # that. Absent is one of the reasons this read raises; a credential that has not
+                # landed yet, a store that is briefly unreachable, a 403 on the bucket and a
+                # malformed URI are the others — and every one of them was answered by CREATING AN
+                # EMPTY DATASET, which is the single operation that must never run over a table that
+                # does exist. Nothing would report it: the create succeeds and the run appends to a
+                # dataset whose history it just discarded.
+                #
+                # Matched on the MESSAGE because pylance raises a bare `ValueError` for a missing
+                # dataset and exports no typed error to catch (verified against the pinned version:
+                # `ValueError('Dataset at <uri> was not found: ...')`). Narrow enough to be safe —
+                # anything whose own text does not say "not found" is re-raised, so an unreadable
+                # dataset now fails the run loudly instead of being overwritten quietly.
+                if not _reads_as_absent(exc):
+                    raise
                 create_empty(uri, self._schema, external_base)
             assert_creation_contract(uri)
             return uri
@@ -94,6 +109,17 @@ class LocalCatalog:
     def register_version(self, dataset_uri: str, version: int, run_id: str) -> None:
         """Record the committed version with the run id — the reconciliation anchor."""
         self.registered.append((dataset_uri, version, run_id))
+
+
+def _reads_as_absent(exc: BaseException) -> bool:
+    """Does this failure mean the dataset IS NOT THERE, as opposed to "we could not look"?
+
+    `FileNotFoundError` is unambiguous. Otherwise pylance's own wording is the only signal it gives:
+    it raises `ValueError("Dataset at <uri> was not found: Not found: <uri>/_versions, ...")` and
+    exports no typed error. Anything else — permission, credentials, transport, a bad URI — is an
+    unanswered question, and the caller must not act on it.
+    """
+    return isinstance(exc, FileNotFoundError) or "not found" in str(exc).lower()
 
 
 class CreationContractError(ValueError):

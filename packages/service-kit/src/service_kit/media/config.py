@@ -11,6 +11,7 @@ list or a bare comma-separated string (``MEDIA_CORS_ORIGINS=https://a,https://b`
 
 from __future__ import annotations
 
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
@@ -18,6 +19,35 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
+
+class TableBackend(StrEnum):
+    """Which path a table read/write takes.
+
+    A TYPE, not a `field_validator` over a set literal. The allowed values used to live inside a
+    validator body, so the schema said "string", `ty` could not tell `read_backend == "catalouge"`
+    from a real comparison, and every consumer re-spelled the literals. A `StrEnum` states the set
+    once: pydantic rejects anything else at load with the members in the message, the members
+    compare equal to their own strings so existing comparisons keep working, and the OpenAPI schema
+    finally names the options.
+    """
+
+    direct = "direct"
+    catalog = "catalog"
+
+
+class LineageSink(StrEnum):
+    """Where the annotation write path emits its OpenLineage RunEvent.
+
+    ``stdout`` WAS a third member and is deliberately gone. `setup_logging()` already sends the root
+    logger to stdout, so the option only distinguished itself by writing past the logging system —
+    losing the request-id correlation filter, the level gate and the OTLP copy for the one record
+    that describes a governed write. Nothing in the estate selected it (no chart value, no env in
+    any manifest or script), and a value that must not be chosen is better removed than documented.
+    """
+
+    log = "log"
+    none = "none"
 
 
 class AssistBackend(BaseModel):
@@ -40,7 +70,17 @@ class AssistBackend(BaseModel):
         return {"url": value} if isinstance(value, str) else value
 
 
-class Settings(BaseSettings):
+class MediaSettings(BaseSettings):
+    """The MEDIA plane's settings (``MEDIA_*``) — the viewer/search/annotator trio's config.
+
+    NAMED `MediaSettings`, and it used to be a second class called `Settings`. One distribution held
+    two of them: this one on `MEDIA_*` aliases, and `service_kit.config.Settings` on `RASK_*` with an
+    `env_prefix`. They are not related by inheritance and share almost no field, so which one a
+    `settings: Settings` annotation, a `SettingsDep` or a stack frame referred to depended entirely on
+    which module the reader had open. `Settings` survives below as a back-compat alias for the
+    services that still import it by that name.
+    """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -121,8 +161,8 @@ class Settings(BaseSettings):
     # MEDIA_CATALOG_URI is set it hits that live REST catalog, else an in-process
     # native-namespace transport. Host-agnostic + retry-friendly so the catalog path
     # drops into a Dapr service-invocation / Ray-Serve-fronted catalog unchanged.
-    read_backend: str = Field(default="direct", alias="MEDIA_READ_BACKEND")
-    write_backend: str = Field(default="direct", alias="MEDIA_WRITE_BACKEND")
+    read_backend: TableBackend = Field(default=TableBackend.direct, alias="MEDIA_READ_BACKEND")
+    write_backend: TableBackend = Field(default=TableBackend.direct, alias="MEDIA_WRITE_BACKEND")
     catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
     catalog_delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDIA_CATALOG_DELIMITER")
     # The publish saga's own OIDC identity (the catalog accepts only IdP bearers, and the saga
@@ -143,7 +183,7 @@ class Settings(BaseSettings):
 
     # OpenLineage emission on annotation writes (pre-merge; lance-ns's mover emits at
     # merge). "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
-    lineage_sink: str = Field(default="log", alias="MEDIA_LINEAGE_SINK")
+    lineage_sink: LineageSink = Field(default=LineageSink.log, alias="MEDIA_LINEAGE_SINK")
 
     # Interactive AI-assist model endpoint — a Ray Serve deployment (GroundingDINO/SAM),
     # per the merge runtime stack (models = Ray Serve). Unset ⇒ a deterministic mock so
@@ -185,20 +225,6 @@ class Settings(BaseSettings):
     # in lance-ns (medallion-producer + the catalog mover), never in this process.
     jobs_url: str | None = Field(default=None, alias="MEDIA_JOBS_URL")
 
-    @field_validator("read_backend", "write_backend")
-    @classmethod
-    def _check_backend(cls, v: str) -> str:
-        if v not in {"direct", "catalog"}:
-            raise ValueError(f"read/write backend must be 'direct' or 'catalog', got {v!r}")
-        return v
-
-    @field_validator("lineage_sink")
-    @classmethod
-    def _check_lineage_sink(cls, v: str) -> str:
-        if v not in {"stdout", "log", "none"}:
-            raise ValueError(f"MEDIA_LINEAGE_SINK must be stdout|log|none, got {v!r}")
-        return v
-
     def catalog_table_id(self, dataset_id: str, table: str) -> list[str]:
         """The catalog identifier for a dataset's table — settings-derived, never
         hardcoded: ``MEDIA_CATALOG_NAMESPACE`` when set, else the dataset id.
@@ -220,17 +246,17 @@ class Settings(BaseSettings):
         both backends flipped AND a URI set. Mixed configurations keep the local
         table in the loop (pre-merge safety), so paths gate on this, not on the
         individual flags."""
-        return bool(self.catalog_uri) and self.read_backend == "catalog" and self.write_backend == "catalog"
+        return bool(self.catalog_uri) and self.read_backend is TableBackend.catalog and self.write_backend is TableBackend.catalog
 
     @property
-    def effective_lineage_sink(self) -> str:
+    def effective_lineage_sink(self) -> LineageSink:
         """The sink the annotator's own emit uses: forced to ``none`` only when a
         LIVE catalog sits behind the writes (``catalog_uri`` set) — that catalog
         inline-emits a RunEvent for the same merge, so emitting here too would
         double-count the run. The in-process catalog fallback emits nothing, so
         our own sink stays active there."""
-        if self.write_backend == "catalog" and self.catalog_uri:
-            return "none"
+        if self.write_backend is TableBackend.catalog and self.catalog_uri:
+            return LineageSink.none
         return self.lineage_sink
 
     @property
@@ -306,5 +332,22 @@ def _store_secret(store: str, key: str, field: str) -> str | None:
 
 
 @lru_cache
-def get_settings() -> Settings:
-    return Settings()
+def get_media_settings() -> MediaSettings:
+    """The PROCESS-WIDE media settings, read once — for a service `main` that wants one object for
+    the app's whole life.
+
+    NAMED APART from `service_kit.dependencies.get_settings`, and the two are not interchangeable:
+    that one takes a `Request` and returns whatever the app's own lifespan bound, this one takes
+    nothing and returns an lru_cached singleton. Two functions with one name and incompatible
+    signatures is how `AppState` came to default every instance in the process to a single shared
+    object — see `service_kit.media.state.AppState.settings`, which no longer does.
+    """
+    return MediaSettings()
+
+
+#: BACK-COMPAT ALIASES. `services/viewer`, `services/search` and `services/annotator` import these
+#: names (and subclass `Settings` in their own `core/config.py`), so renaming the definitions without
+#: them would be a contract change across three services. They are aliases, not second definitions:
+#: `Settings is MediaSettings` and `get_settings is get_media_settings`.
+Settings = MediaSettings
+get_settings = get_media_settings

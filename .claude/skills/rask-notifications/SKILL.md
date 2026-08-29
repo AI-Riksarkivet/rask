@@ -184,6 +184,21 @@ so it must read as a reason a person would accept; and `notification-center.stor
    human there anyway (trap 2). The literal is *correct* as the author; what makes the cascade
    reachable is the ORIGINATOR riding beside it, which is why every trigger payload in the chain
    re-carries it.
+   **The hop that lost it was the TIER BOUNDARY, and the lesson generalises past this cascade.**
+   `/produce` → `/bronze-arrival` → the mover's four FAIL emits all carried the human; the mover then
+   publishes its output to the CATALOG (the tag move is what wakes the next tier), and that call
+   carried `cascade_id` and dropped the person. The publication head filled the gap by deriving an
+   originator from the control event's `actor` — but a mover authenticates to the catalog AS ITSELF,
+   so the silver→gold trigger named `service-bronze-to-silver` and every gold failure wrote into an
+   inbox actor named after a mover. **A service subject in the originator is the same defect as a role
+   literal in the author, and it is worse than silence because it looks delivered.** Closed by the
+   `cascade_id` shape: the mover puts the human on the publish body
+   (`catalog_register.publish_stage_output`), the catalog RESOLVES it once
+   (`publication.publication_originator` — a service caller's carried claim, else a human caller's own
+   verified sub, else nothing) and echoes it onto `table_published`, and the head reads `extra`
+   instead of guessing. The catalog owns that decision because `IDToken.service` — set by its own
+   service door — is the only place the estate records "this caller was a service".
+   Pinned end-to-end on delivered rows by `tests/unit/test_cascade_originator.py`.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
    `enforce_author` (`lineage/api/fga_deps.py:96-103`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's

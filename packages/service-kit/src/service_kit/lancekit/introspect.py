@@ -18,16 +18,10 @@ from pydantic import BaseModel
 
 from service_kit.lancekit import store
 from service_kit.lancekit.blobs import is_blob_field
+from service_kit.lancekit.errors import is_not_found
 
 
 logger = logging.getLogger(__name__)
-
-#: Markers of a `*.lance` stem the listing saw but Lance cannot open as a dataset — no manifest yet
-#: (half-written) or a reserved artefact. pylance raises a bare ``ValueError`` ("Dataset at path ...
-#: was not found") with no typed error to catch, so the message is the only signal, mirroring
-#: writer.py's ``_COMMIT_CONFLICT_MARKERS``. A transient read (OSError: connection reset, timeout)
-#: matches none of these and so is NOT genuine absence.
-_MISSING_DATASET_MARKERS = ("not found", "does not exist")
 
 
 class ColumnInfo(BaseModel):
@@ -106,7 +100,13 @@ def discover_tables(db_path: str | Path, storage_options: dict[str, str] | None 
             # missing table by name. A transient read failure (S3 reset/timeout) is not absence: it
             # must propagate so registry.get() fails loudly and retriably, rather than laundering a
             # flaky read into a permanent "row_table does not exist" for the whole dataset.
-            if not any(m in str(exc).lower() for m in _MISSING_DATASET_MARKERS):
+            #
+            # Classified by the SHARED `is_not_found`, not by a private marker tuple. This module
+            # carried a third verbatim copy of ("not found", "does not exist") — the same two markers
+            # the registry and the reader had already been de-duplicated onto — so a marker added for
+            # one store's wording would have been honoured on two paths out of three, and the same
+            # condition would be a 404 in one place and a hard failure here.
+            if not is_not_found(exc):
                 raise
             logger.warning("skipping %s: listed but not a readable Lance dataset: %s", uri, exc)
     return out

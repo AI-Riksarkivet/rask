@@ -49,6 +49,16 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 
+#: Wall-clock ceiling on EVERY outbound fetch this module makes — discovery AND JWKS.
+#:
+#: One constant because the two were asymmetric, and the unstated half was the one that matters more
+#: (SKG-12). Discovery is fetched once per issuer per `cache_ttl`; the JWKS client refetches whenever a
+#: token presents an unknown `kid` — on the REQUEST path, at exactly the moment an IdP is mid-rotation
+#: and least healthy. `PyJWKClient` is not unbounded (PyJWT defaults it to 30s), but it was left to a
+#: library default twice this module's own budget and free to drift on an upgrade, so a hung IdP held a
+#: request worker for twice as long as the deployment ever decided it should.
+HTTP_FETCH_TIMEOUT_SECONDS = 15.0
+
 #: Asymmetric signing algorithms we are willing to accept. Symmetric (``HS*``) and
 #: ``none`` are deliberately excluded — accepting them with a public verification key
 #: enables the classic alg-confusion forgery. Callers may further narrow this set,
@@ -197,7 +207,7 @@ class OIDCVerifier:
             label="issuer" if override is None else "discovery override",
             allow_insecure=self._allow_insecure,
         )
-        with httpx.Client(timeout=15.0) as client:
+        with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
             response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
             response.raise_for_status()
             spec = _Discovery.model_validate(response.json())
@@ -218,7 +228,7 @@ class OIDCVerifier:
         if not algorithms:
             raise UnauthenticatedError("No mutually-supported OIDC signing algorithm")
 
-        jwk_client = jwt.PyJWKClient(jwks_uri, cache_jwk_set=True, max_cached_keys=16)
+        jwk_client = jwt.PyJWKClient(jwks_uri, cache_jwk_set=True, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
         provider = _Provider(spec=spec, jwk_client=jwk_client, algorithms=algorithms)
         self._cache[configured_issuer] = (now, provider)
         return provider
@@ -278,8 +288,8 @@ async def verify_off_loop(verifier: OIDCVerifier, token: str) -> IDToken:
     """``verify`` for ``async def`` callers — the ONE place that knows verification blocks.
 
     :meth:`OIDCVerifier.verify` is synchronous, and on a cold cache or a key rotation it performs OIDC
-    discovery and a JWKS fetch over the network (``httpx.Client(timeout=15.0)`` at :meth:`_resolve`,
-    then PyJWKClient's own fetch). Awaited inline from a coroutine it stalls the entire worker: every
+    discovery and a JWKS fetch over the network (both bounded by :data:`HTTP_FETCH_TIMEOUT_SECONDS`
+    at :meth:`_resolve`). Awaited inline from a coroutine it stalls the entire worker: every
     in-flight request in the pod, and any liveness probe mounted on the same app.
 
     A plain ``def`` route calling ``verify`` directly is CORRECT — FastAPI runs it in a threadpool —

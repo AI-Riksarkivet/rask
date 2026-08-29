@@ -214,7 +214,7 @@ def test_discovery_lists_against_age(dsn: str) -> None:
     assert all("layer=silver" in d.tags for d in tagged)
     # /jobs — a job's WROTE edges are folded into its output set; some job wrote silver$features.
     assert jobs and any("silver$features" in j.outputs for j in jobs)
-    # /runs — pin the _LIST_RUNS RETURN column ORDER against real AGE (§7a): the unit fold test mirrors
+    # /runs — pin the `cypher.LIST_RUNS` RETURN column ORDER against real AGE (§7a): the unit fold test mirrors
     # a hand-built row, so a reordered RETURN would pass unit and silently scramble every field in prod.
     # Typed field-by-field assertions on known sample runs catch any transposition.
     by_id = {r.run_id: r for r in runs}

@@ -1,9 +1,8 @@
 """Word-alignment JSON decoding — vendored into the backend (P2.8 standalone).
 
-Vendored copy of ``parse_alignments_json`` in ``packages/ratch/retrieval/search.py``:
-the backend must not depend on the pipeline package, and this tiny decoder is
-the only piece of it the serving layer needs. Keep the two in sync by hand if
-the stored shape ever changes (it is frozen by the corpus tables in practice).
+Vendored from the pipeline package that has since been dissolved, so this is now the ONE
+implementation rather than a copy to keep in sync: the serving layer needed exactly this
+decoder and none of the rest. The stored shape is frozen by the tables in practice.
 """
 
 from __future__ import annotations

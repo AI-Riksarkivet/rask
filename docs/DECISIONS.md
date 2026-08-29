@@ -921,9 +921,13 @@ the separate `rask-operator` repo, and landing the CRD here alone would be a reg
 fix.
 
 **What was broken, and it was worse than "no list".** The page loaded projects with
-`getProjects()` → `/capi/v1/projects` → controlplane → the Kubernetes API. Verified live: `kubectl get
-crd` returns 71 CRDs and none is `projects.platform.rask.io`, so an in-cluster
-`GET /api/projects/` answers `503 {"detail":"cannot reach kubernetes api"}`. `onMount` awaited
+`getProjects()` → `/api/projects/` → controlplane → the Kubernetes API. (This paragraph named
+`/capi/v1/projects` until 2026-08-29; that path proxies to the CATALOG and was never the one at
+fault — `@rask/api`'s deleted `projects.ts` fetched `/api/projects/`, the gateway's controlplane
+row.) Verified live: `kubectl get crd` returns 71 CRDs and none is `projects.platform.rask.io`, so
+an in-cluster `GET /api/projects/` answered `503 {"detail":"cannot reach kubernetes api"}` — since
+2026-08-29 it answers `501` naming the unregistered type instead, which is the same refusal told
+truthfully. `onMount` awaited
 `Promise.all([readWatches(), getProjects()])`, so that 503 rejected the pair, `watches` stayed `null`,
 and the page rendered *"Watching is unavailable on this stack… the notification service is not
 reachable"*. An outage in the CONTROLPLANE, reported as an outage in NOTIFICATIONS, on the one surface

@@ -1232,9 +1232,15 @@ def _resume_publish(
     service_identity: str,
     token: str | None,
     timeout_seconds: float,
+    originator: str = "",
     dedicated_token: Callable[[str], str | None] | None = None,
 ) -> None:
-    """The tag move an approval resumes with. A seam so the activity is testable without a catalog."""
+    """The tag move an approval resumes with. A seam so the activity is testable without a catalog.
+
+    ``originator`` is the person whose batch this is, not the approver: this publish advances the tag,
+    which wakes the NEXT tier through ``table_published``, and the producer authenticates as itself —
+    so without it every failure below this promotion addresses a service.
+    """
     from medallion.services.catalog_register import publish_stage_output
 
     publish_stage_output(
@@ -1248,6 +1254,7 @@ def _resume_publish(
         dedicated_token=dedicated_token,
         token=token,
         timeout_seconds=timeout_seconds,
+        originator=originator,
     )
 
 
@@ -1286,6 +1293,7 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
             dedicated_token=_dedicated(settings),
             token=settings.catalog_token,
             timeout_seconds=settings.publish_timeout_seconds,
+            originator=spec.originator,
         )
         log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "version": spec.version, "accepted": spec.reasons})
         return

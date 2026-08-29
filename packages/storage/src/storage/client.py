@@ -20,6 +20,12 @@ type S3Client = Any
 # Env names for the S3 endpoint/insecure/CA, canonical-first. `HCP_*` are legacy
 # aliases kept while HCP is the current backend (the chart + dev `.env` still set
 # HCP_ENDPOINT/HCP_INSECURE); drop them once everything uses RASK_S3_*.
+#
+# RESOLVED BY HAND, not by pydantic-settings' `AliasChoices`, and that is a constraint rather than an
+# oversight: `boto3` is this package's ONLY runtime dependency, and `runners/htr` + `runners/dummy`
+# take it as a path dep with their own locks — adding pydantic + pydantic-settings would pull both
+# into two sealed model environments and force a relock of each. Note the semantics also differ:
+# `_env_first` skips an EMPTY value, where `AliasChoices` stops at the first name that is SET.
 _ENDPOINT_ENVS = ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT")
 _INSECURE_ENVS = ("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE")
 _CA_BUNDLE_ENVS = ("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE")

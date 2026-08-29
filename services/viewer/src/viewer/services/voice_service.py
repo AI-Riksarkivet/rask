@@ -64,7 +64,9 @@ logger = logging.getLogger(__name__)
 MAX_N = 100
 
 #: Hard cap on an uploaded snippet's size — decode + embed run in-process.
-_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+#: Public for the same reason as `MAX_N` above: the ROUTE bounds its read with it, and a private name
+#: imported from another module is a contract nothing declares (VS-24).
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 #: Embed at most the first this-many seconds of an upload — the encoder was
 #: trained on 5 s chunks, so longer audio adds CPU cost, not signal.
@@ -280,23 +282,28 @@ def _search_turns(
     n: int,
     exclude_doc_id: str | None,
 ) -> list[dict[str, Any]]:
-    """Cosine kNN over per-turn voiceprints (explicit ``vector_column_name``)."""
-    try:
-        qb = (
-            emb_tbl.search(vec, vector_column_name=embedding_column)
-            .distance_type("cosine")
-            .minimum_nprobes(_VECTOR_NPROBES)
-            .maximum_nprobes(_VECTORMAX_NPROBES)
-            .refine_factor(_VECTOR_REFINE_FACTOR)
-            .select([*_TURN_HIT_COLUMNS, "_distance"])
-            .limit(n)
-        )
-        if exclude_doc_id is not None:
-            qb = qb.where(ne(_TURN_DOC, exclude_doc_id), prefilter=True)
-        return qb.to_list()
-    except Exception as e:
-        logger.warning("voice search failed", exc_info=True)
-        raise ValidationError("voice search failed") from e
+    """Cosine kNN over per-turn voiceprints (explicit ``vector_column_name``).
+
+    UNGUARDED, deliberately (VS-06). This used to catch bare ``Exception`` and answer
+    ``ValidationError("voice search failed")`` — HTTP 400 — which said the caller's request was
+    malformed. Nothing reaching here can be: ``doc_id`` is whitelisted against the descriptor's
+    identity pattern before it is inlined, ``n`` is bounded at the route, and the column comes from
+    the descriptor. So every failure left is the estate's — an unreachable store, an expired
+    credential, a corrupt manifest — and it must arrive at the problem+json handler as the 500 that
+    puts it in a 5xx SLO instead of hiding it in the client-error bucket.
+    """
+    qb = (
+        emb_tbl.search(vec, vector_column_name=embedding_column)
+        .distance_type("cosine")
+        .minimum_nprobes(_VECTOR_NPROBES)
+        .maximum_nprobes(_VECTORMAX_NPROBES)
+        .refine_factor(_VECTOR_REFINE_FACTOR)
+        .select([*_TURN_HIT_COLUMNS, "_distance"])
+        .limit(n)
+    )
+    if exclude_doc_id is not None:
+        qb = qb.where(ne(_TURN_DOC, exclude_doc_id), prefilter=True)
+    return qb.to_list()
 
 
 def _chunk_for_turn(row_ds: Any, bindings: VoiceBindings, doc_id: str, turn_start: float, turn_end: float) -> dict[str, Any] | None:
@@ -570,7 +577,7 @@ def similar_voices_for_upload(
     duration guards pass, so a bad upload never loads the model.
     """
     bindings = _require_bindings(handle)
-    if len(file_bytes) > _MAX_UPLOAD_BYTES:
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
         raise ValidationError("upload too large (max 25 MB)")
 
     wav = _decode_upload_wav(file_bytes)

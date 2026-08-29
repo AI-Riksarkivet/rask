@@ -21,6 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from search.services.query_errors import is_caller_input_error
 from service_kit.exceptions import NotFoundError, ValidationError
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.keys import chunk_key_filter
@@ -120,6 +121,8 @@ def seed_vector(table: Any, *, where: str, column: str) -> list[float]:
     try:
         rows = table.search().where(where).select([column]).limit(1).to_list()
     except Exception as e:
+        if not is_caller_input_error(e):
+            raise
         logger.warning("seed lookup failed", exc_info=True)
         raise ValidationError("seed lookup failed") from e
 

@@ -66,13 +66,18 @@ class RunState(StrEnum):
 TERMINAL_STATES = frozenset({RunState.COMPLETE, RunState.ABORT, RunState.FAIL})
 
 
-class _Model(BaseModel):
-    """Base: alias-tolerant (wire keys OR pythonic names), ignores unknown wire keys."""
+class WireModel(BaseModel):
+    """Base: alias-tolerant (wire keys OR pythonic names), ignores unknown wire keys.
+
+    PUBLIC, because it is inherited across a module boundary: :mod:`lineage_kit.consume`'s exported
+    models are built on it, and an adopter authoring its own consume-side shape needs the same wire
+    tolerance. It was ``WireModel``, whose underscore promised a privacy the package did not keep.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 
-class Facet(_Model):
+class Facet(WireModel):
     """Base facet — every facet, standard or custom, carries ``_producer`` + ``_schemaURL``."""
 
     producer: str = Field(default=PRODUCER, alias="_producer")
@@ -84,20 +89,20 @@ def custom_facet(**fields: Any) -> dict[str, Any]:  # noqa: ANN401 — facet pay
     return {"_producer": PRODUCER, "_schemaURL": BASE_FACET_SCHEMA_URL, **fields}
 
 
-class RunRef(_Model):
+class RunRef(WireModel):
     """A reference to a run by id (the parent facet's ``run`` / ``root.run``)."""
 
     run_id: str = Field(alias="runId")
 
 
-class JobRef(_Model):
+class JobRef(WireModel):
     """A reference to a job by namespace + name."""
 
     namespace: str
     name: str
 
 
-class RootRef(_Model):
+class RootRef(WireModel):
     """The topmost run of a hierarchy (``ParentRunFacet.root``)."""
 
     run: RunRef
@@ -146,7 +151,7 @@ class ErrorMessageRunFacet(Facet):
         )
 
 
-class SchemaField(_Model):
+class SchemaField(WireModel):
     """One column of a ``SchemaDatasetFacet`` (name + concise type label)."""
 
     name: str
@@ -202,7 +207,7 @@ class DatasetVersionFacet(Facet):
         return dataset_version_dataset.DatasetVersionDatasetFacet(datasetVersion=self.dataset_version, producer=self.producer)  # ty: ignore[unknown-argument]
 
 
-class RunFacets(_Model):
+class RunFacets(WireModel):
     """The run facet bag. Unknown keys are kept and passed through to the wire verbatim
     (author them with :func:`custom_facet` so they stay spec-legal)."""
 
@@ -221,7 +226,7 @@ class RunFacets(_Model):
         return facets
 
 
-class DatasetFacets(_Model):
+class DatasetFacets(WireModel):
     """The dataset facet bag (inputs and outputs); unknown keys pass through."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -242,7 +247,7 @@ class DatasetFacets(_Model):
         return facets
 
 
-class OutputDatasetFacets(_Model):
+class OutputDatasetFacets(WireModel):
     """The output-only facet bag (``outputFacets``); unknown keys pass through."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -257,7 +262,7 @@ class OutputDatasetFacets(_Model):
         return facets
 
 
-class Dataset(_Model):
+class Dataset(WireModel):
     """An input dataset (``{namespace, name, facets}``)."""
 
     namespace: str
@@ -282,14 +287,14 @@ class OutputDataset(Dataset):
         )
 
 
-class Run(_Model):
+class Run(WireModel):
     """The event's run — a spec-valid UUID ``runId`` plus facets."""
 
     run_id: str = Field(alias="runId")
     facets: RunFacets = Field(default_factory=RunFacets)
 
 
-class Job(_Model):
+class Job(WireModel):
     """The event's job — ``namespace`` + dotted hierarchical ``name`` (``job.stage.actor``).
 
     ``facets`` is a raw pass-through bag (``sourceCodeLocation``, ``ownership``, …) — the
@@ -301,7 +306,7 @@ class Job(_Model):
     facets: dict[str, Any] = Field(default_factory=dict)
 
 
-class RunEvent(_Model):
+class RunEvent(WireModel):
     """The standard emission shape: one OpenLineage ``RunEvent``, authored in pydantic.
 
     ``to_openlineage()`` yields the official client's ``event_v2.RunEvent`` (what the

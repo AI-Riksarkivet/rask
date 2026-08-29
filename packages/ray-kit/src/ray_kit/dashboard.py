@@ -18,6 +18,7 @@ import time
 from http import HTTPStatus
 from urllib.parse import urlencode
 
+import anyio
 import httpx
 import ray
 import requests
@@ -80,6 +81,22 @@ RAY_TRANSIENT_ERRORS = (RuntimeError, ConnectionError, requests.exceptions.Reque
 
 _BATCH_RE = re.compile(r"--batch[\s=]+(\S+)")
 _ERROR_MSG_MAX_LEN = 400  # truncate exception strings so they fit in one log/UI line
+
+
+def _error_text(exc: BaseException) -> str:
+    """The ONE error string every `ok=False` payload in this module carries.
+
+    The expression was copy-pasted nine times, and the ninth copy — `proxy` — quietly dropped the
+    truncation and handed the raw exception straight to a browser. A single formatter is what makes
+    "bounded" a property of the module rather than of each author's memory.
+    """
+    return f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN]
+
+
+def _status_error(resp: httpx.Response) -> str:
+    """The error string for a log read Ray REFUSED — the status plus what it said, bounded."""
+    return f"HTTP {resp.status_code}: {resp.text.strip()}"[:_ERROR_MSG_MAX_LEN] if resp.text.strip() else f"HTTP {resp.status_code}"
+
 
 # Ray Dashboard JSON keys we read from /api/cluster_status and /nodes responses.
 # Grouped here so a Ray-side rename is a one-spot edit.
@@ -195,7 +212,7 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
         await to_thread.run_sync(client.get_version)
     except RAY_TRANSIENT_ERRORS as exc:
         record_probe("health", classify_ray_error(exc), duration_seconds=time.perf_counter() - started)
-        return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+        return RayHealth(ok=False, dashboard_url=dashboard_url, error=_error_text(exc))
     record_probe("health", RayOutcome.OK, duration_seconds=time.perf_counter() - started)
     # get_version() is called purely as a liveness probe (its return is the
     # Jobs-API version, not the cluster Ray version — see RayHealth).
@@ -225,7 +242,7 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, m
         details = await to_thread.run_sync(client.list_jobs)
     except RAY_TRANSIENT_ERRORS as exc:
         record_probe("list_jobs", classify_ray_error(exc), duration_seconds=time.perf_counter() - started)
-        return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+        return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=_error_text(exc))
     # The call this timing exists for: `GET /api/jobs/` accepts NO parameters, so it always returns
     # every job Ray has ever seen. Measured at 81,155 jobs / 164.7 MB, which OOM-killed the pod. The
     # cap below fixed the crash and made the GROWTH invisible; `ray.control.jobs_known` is the series
@@ -342,59 +359,109 @@ def _assign_physical_gpus(nodes: list[RayNode]) -> None:
         n.gpus = kept
 
 
-async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClusterPayload:
+def _usage_totals(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
+    """`(used, total)` cluster resources from an `/api/cluster_status` body.
+
+    `.get(key, {})` returns the *actual* value when the key exists — and non-autoscaling clusters
+    (e.g. the dev KubeRay) report `clusterStatus: null`, which then crashed the `.get` below. `or {}`
+    coerces null -> {}.
+    """
     total = {"CPU": 0.0, "GPU": 0.0, "memory": 0.0}
     used = {"CPU": 0.0, "GPU": 0.0, "memory": 0.0}
+    cs = (payload.get(_RAY_KEY_DATA) or {}).get(_RAY_KEY_CLUSTER_STATUS) or {}
+    usage = (cs.get(_RAY_KEY_LOAD_METRICS) or {}).get(_RAY_KEY_USAGE) or {}
+    for k in total:
+        pair = usage.get(k)
+        if isinstance(pair, list) and len(pair) == 2:
+            used[k] = float(pair[0] or 0)
+            total[k] = float(pair[1] or 0)
+    return used, total
+
+
+def _node_rows(payload: dict) -> list[RayNode]:
+    """The per-node rows of a `/nodes?view=summary` body. A row with no node id is not a node."""
+    data = payload.get(_RAY_KEY_DATA) or {}
+    summary = data.get(_RAY_KEY_SUMMARY) or []
+    logical = data.get(_RAY_KEY_NODE_LOGICAL_RESOURCES) or {}
     nodes: list[RayNode] = []
+    for n in summary:
+        raylet = n.get(_RAY_KEY_RAYLET) or {}
+        node_id = raylet.get(_RAY_KEY_NODE_ID)
+        if not node_id:
+            continue
+        parsed_used = _parse_logical(logical.get(node_id, ""))
+        rtotal = raylet.get(_RAY_KEY_RESOURCES_TOTAL) or {}
+        mem = n.get(_RAY_KEY_MEM) or []  # [total, available, percent, used]
+        nodes.append(
+            RayNode(
+                node_id=node_id,
+                node_ip=raylet.get(_RAY_KEY_NODE_MANAGER_ADDRESS) or n.get(_RAY_KEY_IP),
+                hostname=n.get(_RAY_KEY_HOSTNAME),
+                node_type=raylet.get(_RAY_KEY_NODE_TYPE_NAME),
+                is_head=bool(raylet.get(_RAY_KEY_IS_HEAD)),
+                alive=raylet.get(_RAY_KEY_RAYLET_STATE) == _RAYLET_STATE_ALIVE,
+                resources_total={k: float(rtotal.get(k, 0) or 0) for k in ("CPU", "GPU", "memory")},
+                resources_used={k: parsed_used.get(k, 0.0) for k in ("CPU", "GPU", "memory")},
+                host_cpu_percent=n.get(_RAY_KEY_CPU),
+                host_mem_total=float(mem[0]) if len(mem) >= 1 else None,
+                host_mem_used=float(mem[3]) if len(mem) >= 4 else None,
+                gpus=[_parse_gpu(g) for g in (n.get(_RAY_KEY_GPUS) or [])],
+            )
+        )
+    return nodes
+
+
+async def _get_all(http: httpx.AsyncClient, *urls: str) -> list[httpx.Response | httpx.HTTPError]:
+    """GET every url CONCURRENTLY, one result per url, in order.
+
+    These reads are independent — the second never reads anything out of the first — but they were
+    awaited one after the other, so a page paid both round trips end to end on a 5 s poll.
+
+    A failure is RETURNED, not raised: the callers disagree about which read is fatal (an aggregate
+    the page is *about*) and which is best-effort (per-node detail, the cluster event feed), and a
+    task group that let one failure cancel the other would collapse that distinction.
+    """
+    results: list[httpx.Response | httpx.HTTPError | None] = [None] * len(urls)
+
+    async def _one(index: int, url: str) -> None:
+        try:
+            resp = await http.get(url)
+            resp.raise_for_status()
+            results[index] = resp
+        except httpx.HTTPError as exc:
+            results[index] = exc
 
     try:
-        cs_resp = await http.get(f"{dashboard_url}/api/cluster_status")
-        cs_resp.raise_for_status()
-        # `.get(key, {})` returns the *actual* value when the key exists — and
-        # non-autoscaling clusters (e.g. the dev KubeRay) report clusterStatus:
-        # null, which then crashed `.get` below. `or {}` coerces null -> {}.
-        cs = (cs_resp.json().get(_RAY_KEY_DATA) or {}).get(_RAY_KEY_CLUSTER_STATUS) or {}
-        usage = (cs.get(_RAY_KEY_LOAD_METRICS) or {}).get(_RAY_KEY_USAGE) or {}
-        for k in total:
-            pair = usage.get(k)
-            if isinstance(pair, list) and len(pair) == 2:
-                used[k] = float(pair[0] or 0)
-                total[k] = float(pair[1] or 0)
+        async with anyio.create_task_group() as tg:
+            for index, url in enumerate(urls):
+                tg.start_soon(_one, index, url)
+    except ExceptionGroup as group:
+        # A task group wraps whatever escapes it. Anything that is not an `httpx.HTTPError` here is
+        # OUR bug (a malformed URL, a closed client), and a caller must meet it as itself rather than
+        # as a group — the same reason `job_logs` no longer catches bare `Exception`.
+        if len(group.exceptions) == 1:
+            raise group.exceptions[0] from group
+        raise
+    return [r for r in results if r is not None]
 
-        try:
-            ns_resp = await http.get(f"{dashboard_url}/nodes?{_NODES_VIEW_PARAM}")
-            ns_resp.raise_for_status()
-            data = ns_resp.json().get(_RAY_KEY_DATA) or {}
-            summary = data.get(_RAY_KEY_SUMMARY) or []
-            logical = data.get(_RAY_KEY_NODE_LOGICAL_RESOURCES) or {}
-            for n in summary:
-                raylet = n.get(_RAY_KEY_RAYLET) or {}
-                node_id = raylet.get(_RAY_KEY_NODE_ID)
-                if not node_id:
-                    continue
-                parsed_used = _parse_logical(logical.get(node_id, ""))
-                rtotal = raylet.get(_RAY_KEY_RESOURCES_TOTAL) or {}
-                mem = n.get(_RAY_KEY_MEM) or []  # [total, available, percent, used]
-                nodes.append(
-                    RayNode(
-                        node_id=node_id,
-                        node_ip=raylet.get(_RAY_KEY_NODE_MANAGER_ADDRESS) or n.get(_RAY_KEY_IP),
-                        hostname=n.get(_RAY_KEY_HOSTNAME),
-                        node_type=raylet.get(_RAY_KEY_NODE_TYPE_NAME),
-                        is_head=bool(raylet.get(_RAY_KEY_IS_HEAD)),
-                        alive=raylet.get(_RAY_KEY_RAYLET_STATE) == _RAYLET_STATE_ALIVE,
-                        resources_total={k: float(rtotal.get(k, 0) or 0) for k in total},
-                        resources_used={k: parsed_used.get(k, 0.0) for k in total},
-                        host_cpu_percent=n.get(_RAY_KEY_CPU),
-                        host_mem_total=float(mem[0]) if len(mem) >= 1 else None,
-                        host_mem_used=float(mem[3]) if len(mem) >= 4 else None,
-                        gpus=[_parse_gpu(g) for g in (n.get(_RAY_KEY_GPUS) or [])],
-                    )
-                )
-        except httpx.HTTPError:
-            log.debug("per-node detail unavailable; aggregates still returned", exc_info=True)
-    except httpx.HTTPError as exc:
-        return RayClusterPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+
+async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClusterPayload:
+    """Cluster-wide resource usage plus per-node detail, from two concurrent dashboard reads.
+
+    `/api/cluster_status` is the aggregate this payload is about, so its failure is the payload's
+    failure. `/nodes` is detail: when it is unavailable the aggregates still answer, which is why the
+    two results are handled separately rather than in one try.
+    """
+    aggregate, per_node = await _get_all(http, f"{dashboard_url}/api/cluster_status", f"{dashboard_url}/nodes?{_NODES_VIEW_PARAM}")
+    if isinstance(aggregate, httpx.HTTPError):
+        return RayClusterPayload(ok=False, dashboard_url=dashboard_url, error=_error_text(aggregate))
+    used, total = _usage_totals(aggregate.json())
+
+    if isinstance(per_node, httpx.HTTPError):
+        log.debug("per-node detail unavailable; aggregates still returned", exc_info=per_node)
+        nodes: list[RayNode] = []
+    else:
+        nodes = _node_rows(per_node.json())
 
     # The autoscaler's loadMetricsReport is empty on non-autoscaling clusters
     # (e.g. the dev KubeRay) -> cluster totals stay 0. The per-node /nodes data
@@ -488,7 +555,7 @@ async def list_actors(http: httpx.AsyncClient, dashboard_url: str) -> RayActorsP
         st_resp.raise_for_status()
         state_rows = (((st_resp.json().get("data") or {}).get("result") or {}).get("result")) or []
     except httpx.HTTPError as exc:
-        return RayActorsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+        return RayActorsPayload(ok=False, dashboard_url=dashboard_url, error=_error_text(exc))
 
     logical: dict[str, dict] = {}
     # Enrich ONLY the actors the state page returned: /logical/actors without `ids` dumps EVERY
@@ -526,7 +593,7 @@ async def list_tasks(http: httpx.AsyncClient, dashboard_url: str, job_id: str | 
         resp.raise_for_status()
         rows = _state_rows(resp.json())
     except httpx.HTTPError as exc:
-        return RayTasksPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+        return RayTasksPayload(ok=False, dashboard_url=dashboard_url, error=_error_text(exc))
 
     tasks = [
         RayTask(
@@ -553,20 +620,20 @@ async def list_tasks(http: httpx.AsyncClient, dashboard_url: str, job_id: str | 
 
 
 async def overview(http: httpx.AsyncClient, dashboard_url: str) -> RayOverviewPayload:
-    """Cluster version/session + recent events feed (newest first)."""
-    version: dict = {}
-    try:
-        v_resp = await http.get(f"{dashboard_url}/api/version")
-        v_resp.raise_for_status()
-        version = v_resp.json() or {}
-    except httpx.HTTPError as exc:
-        return RayOverviewPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    """Cluster version/session + recent events feed (newest first), read concurrently.
+
+    The version identifies the cluster and is what this payload is FOR, so its failure is the
+    payload's; the event feed is decoration and stays best-effort.
+    """
+    v_result, e_result = await _get_all(http, f"{dashboard_url}/api/version", f"{dashboard_url}/api/v0/cluster_events")
+    if isinstance(v_result, httpx.HTTPError):
+        return RayOverviewPayload(ok=False, dashboard_url=dashboard_url, error=_error_text(v_result))
+    version: dict = v_result.json() or {}
 
     events: list[RayEvent] = []
-    try:
-        e_resp = await http.get(f"{dashboard_url}/api/v0/cluster_events")
-        e_resp.raise_for_status()
-        rows = _state_rows(e_resp.json())
+    if isinstance(e_result, httpx.HTTPError):
+        log.debug("cluster events unavailable", exc_info=e_result)
+    else:
         events = [
             RayEvent(
                 event_id=e.get("event_id"),
@@ -575,11 +642,9 @@ async def overview(http: httpx.AsyncClient, dashboard_url: str) -> RayOverviewPa
                 time=e.get("time"),
                 source_type=e.get("source_type"),
             )
-            for e in rows
+            for e in _state_rows(e_result.json())
         ]
         events.sort(key=lambda e: e.time or "", reverse=True)
-    except httpx.HTTPError:
-        log.debug("cluster events unavailable", exc_info=True)
 
     return RayOverviewPayload(
         ok=True,
@@ -610,8 +675,11 @@ async def job_logs(
         return RayJobLogsPayload(ok=False, submission_id=submission_id, error="Ray dashboard unreachable")
     try:
         info = await to_thread.run_sync(client.get_job_info, submission_id)
-    except Exception as exc:  # SDK raises plain RuntimeError on unknown ids
-        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    except RAY_TRANSIENT_ERRORS as exc:
+        # The SDK raises a plain `RuntimeError` for an id it does not know, which is already in the
+        # transient family — so the bare `except Exception` this replaces bought nothing except the
+        # ability to report OUR OWN bugs (a TypeError, an AttributeError) as "Ray is unreachable".
+        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=_error_text(exc))
     node_id = getattr(info, "driver_node_id", None)
     if not node_id:
         # PENDING jobs have no driver yet; an honest empty beats a whole-log fallback that would
@@ -621,9 +689,15 @@ async def job_logs(
     try:
         resp = await http.get(f"{dashboard_url}/api/v0/logs/file?{qs}")
     except httpx.HTTPError as exc:
-        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
-    if resp.status_code >= HTTPStatus.BAD_REQUEST:
-        # Ray's log endpoint 500s on empty files — same note logs() uses.
+        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=_error_text(exc))
+    if HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+        # A 4xx is about US — a rejected token, an unknown node, a filename that is not there — and
+        # reporting it as an empty driver log is how a 401 renders as a blank pane (same note logs()
+        # uses, same reasoning).
+        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=_status_error(resp))
+    if resp.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        # Ray's log endpoint 500s on empty files and offers no other way to tell that from a server
+        # fault, so a 5xx keeps the clean note rather than a stack-trace-y error.
         return RayJobLogsPayload(ok=True, submission_id=submission_id, logs="(empty or unavailable)")
     return RayJobLogsPayload(ok=True, submission_id=submission_id, logs=resp.text.lstrip("\x00\x01"))
 
@@ -640,9 +714,15 @@ async def logs(
         if filename:
             qs = urlencode({"node_id": node_id, "filename": filename, "lines": lines})
             resp = await http.get(f"{dashboard_url}/api/v0/logs/file?{qs}")
-            # Ray's log endpoint 500s on empty files — surface that as a clean note
-            # rather than a stack-trace-y error.
-            if resp.status_code >= HTTPStatus.BAD_REQUEST:
+            # A 4xx is a statement about the REQUEST — a rejected credential on a token-authed
+            # dashboard, an unknown node id, a filename that does not exist. Reporting those as
+            # `ok=True, "(empty or unavailable)"` rendered a 401 as an empty log pane, with nothing
+            # anywhere naming the credential as the cause.
+            if HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+                return RayLogsPayload(ok=False, node_id=node_id, filename=filename, error=_status_error(resp))
+            # A 5xx keeps the note: Ray's log endpoint 500s on an EMPTY file and gives no other way
+            # to tell that from a server fault, so a normal empty log must not read as an outage.
+            if resp.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
                 return RayLogsPayload(ok=True, node_id=node_id, filename=filename, text="(empty or unavailable)")
             # Ray streams logs with a 1-byte success framing prefix on each chunk;
             # strip a leading non-printable so the viewer shows clean text.
@@ -656,7 +736,7 @@ async def logs(
         files = {k: v for k, v in files.items() if v}
         return RayLogsPayload(ok=True, node_id=node_id, files=files)
     except httpx.HTTPError as exc:
-        return RayLogsPayload(ok=False, node_id=node_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+        return RayLogsPayload(ok=False, node_id=node_id, error=_error_text(exc))
 
 
 async def proxy(
@@ -686,8 +766,13 @@ async def proxy(
     try:
         resp = await http.request(method, url, params=qs, headers=fwd, content=body or None)
     except httpx.HTTPError as exc:
+        # THE BODY GOES TO A BROWSER. Every other error return in this module is a JSON payload an
+        # operator reads through the UI; this one is raw bytes rendered in an iframe, so the
+        # exception text — which names the in-cluster dashboard address and is unbounded — belongs
+        # in the log, where it is indexed and stays server-side.
+        log.warning("ray_proxy_unreachable", extra={"dashboard_url": dashboard_url, "path": path, "error": _error_text(exc)})
         return ProxyResponse(
-            content=f"ray dashboard unreachable: {exc}".encode(),
+            content=b"ray dashboard unreachable",
             status_code=HTTPStatus.BAD_GATEWAY,
             headers={"content-type": "text/plain"},
         )

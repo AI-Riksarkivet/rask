@@ -214,9 +214,7 @@ async def enforce_output_authz(event: RunEvent, request: Request, settings: Line
     # "my column came from yours" is a claim to have READ your column, which is exactly what
     # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
     # has no `table:` object, and (since `vertex_name`) cannot collide with a governed vertex either.
-    column_upstreams = {
-        edge["name"] for out in event.outputs for edge in out.column_edges if edge.get("name") and not is_external_source(str(edge.get("namespace", "")))
-    }
+    column_upstreams = {edge.name for out in event.outputs for edge in out.column_edges if edge.name and not is_external_source(edge.namespace)}
     inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace)} | column_upstreams)
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]

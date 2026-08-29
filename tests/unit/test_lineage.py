@@ -14,7 +14,7 @@ from typing import Any, cast
 import psycopg
 import pytest
 from lineage.core.age import _parse, _sql
-from lineage.models import RunEvent
+from lineage.models import OutputStatistics, RunEvent
 from psycopg import sql
 
 
@@ -72,7 +72,7 @@ def _output_with_stats(facets: dict[str, Any]) -> Any:
 def test_statistics_parses_output_statistics_facet() -> None:
     """The runtime-measured (row_count, size_bytes) is read from the standard outputStatistics facet."""
     ds = _output_with_stats({"outputStatistics": {"rowCount": 8, "size": 132}})
-    assert ds.statistics == (8, 132)
+    assert ds.statistics == OutputStatistics(row_count=8, size_bytes=132)
 
 
 def test_statistics_absent_when_no_facet() -> None:
@@ -83,8 +83,8 @@ def test_statistics_absent_when_no_facet() -> None:
 def test_statistics_partial_facet_reports_none_for_the_absent_half() -> None:
     # Both fields are spec-optional; a facet with only one records what was measured and reports None for
     # the other — never a fabricated -1 that producers() would serve as a real measurement.
-    assert _output_with_stats({"outputStatistics": {"rowCount": 5}}).statistics == (5, None)
-    assert _output_with_stats({"outputStatistics": {"size": 64}}).statistics == (None, 64)
+    assert _output_with_stats({"outputStatistics": {"rowCount": 5}}).statistics == OutputStatistics(row_count=5)
+    assert _output_with_stats({"outputStatistics": {"size": 64}}).statistics == OutputStatistics(size_bytes=64)
 
 
 def test_quality_assertions_parses_facet() -> None:
@@ -193,7 +193,7 @@ def test_dataset_exposes_schema_fields_from_standard_facet() -> None:
     from lineage.seed import events_as_dicts
 
     out = RunEvent.model_validate(events_as_dicts()[3]).outputs[0]  # silver v2: 4 columns
-    by_name = {f["name"]: f["type"] for f in out.fields}
+    by_name = {f.name: f.type for f in out.fields}
     assert by_name == {
         "id": "int",
         "payload_src": "string",
@@ -207,12 +207,12 @@ def test_dataset_exposes_column_edges_from_columnlineage_facet() -> None:
     from lineage.seed import events_as_dicts
 
     out = RunEvent.model_validate(events_as_dicts()[2]).outputs[0]  # embed success: silver <- bronze
-    by_out = {e["out_field"]: (e["name"], e["field"], e["type"], e["subtype"]) for e in out.column_edges}
+    by_out = {e.out_field: (e.name, e.field, e.type, e.subtype) for e in out.column_edges}
     assert by_out["embedding"] == ("bronze$events", "payload", "DIRECT", "TRANSFORMATION")  # real change
     assert by_out["id"] == ("bronze$events", "id", "DIRECT", "IDENTITY")  # pass-through
     # event 3 = caption: a SAME-dataset column edge (caption <- embedding), the in-place-refinement flow.
     cap = RunEvent.model_validate(events_as_dicts()[3]).outputs[0]
-    assert any(e["out_field"] == "caption" and e["name"] == "silver$features" and e["field"] == "embedding" for e in cap.column_edges)
+    assert any(e.out_field == "caption" and e.name == "silver$features" and e.field == "embedding" for e in cap.column_edges)
 
 
 def test_author_falls_back_to_standard_ownership_facet() -> None:
@@ -517,9 +517,9 @@ def _masked_event() -> dict[str, Any]:
 def test_column_edges_masking_uses_any_across_transformations() -> None:
     """#24 audit: masking is true if ANY transformation masks (not just the first); kind from the first."""
     out = RunEvent.model_validate(_masked_event()).outputs[0]
-    edge = next(e for e in out.column_edges if e["out_field"] == "ssn_hash")
-    assert edge["masking"] is True  # the masking bit on the non-first transformation is preserved
-    assert (edge["type"], edge["subtype"]) == ("DIRECT", "TRANSFORMATION")  # kind still from transforms[0]
+    edge = next(e for e in out.column_edges if e.out_field == "ssn_hash")
+    assert edge.masking is True  # the masking bit on the non-first transformation is preserved
+    assert (edge.type, edge.subtype) == ("DIRECT", "TRANSFORMATION")  # kind still from transforms[0]
 
 
 def test_column_edges_deprecated_fields_level_fallback() -> None:
@@ -543,7 +543,7 @@ def test_column_edges_deprecated_fields_level_fallback() -> None:
         },
     )
     edge = ds.column_edges[0]
-    assert edge["type"] == "MASKED" and edge["description"] == "redacted" and edge["masking"] is True
+    assert edge.type == "MASKED" and edge.description == "redacted" and edge.masking is True
 
 
 def test_ingest_persists_masking_bit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -621,15 +621,16 @@ def test_prune_runs_noop_when_nothing_old(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_prune_batch_size_is_single_sourced(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One constant (_PRUNE_BATCH_SIZE) drives BOTH the loop count and the per-batch delete size.
+    """One constant (``cypher.PRUNE_BATCH_SIZE``) drives BOTH the loop count and the per-batch delete size.
 
     Regression guard (F-LIN-06): the delete LIMIT was baked as a separate 500 literal in the Cypher
-    string, so lowering _PRUNE_BATCH_SIZE shrank the loop count while every delete still cut 500 —
+    string, so lowering the batch size shrank the loop count while every delete still cut 500 —
     under-pruning silently. With the size single-sourced, a batch of 2 over 5 old runs is ceil(5/2)=3
     transactions, each delete bounded at LIMIT 2."""
+    import lineage.services.cypher as cypher_mod
     import lineage.services.repository as repo_mod
 
-    monkeypatch.setattr(repo_mod, "_PRUNE_BATCH_SIZE", 2)
+    monkeypatch.setattr(cypher_mod, "PRUNE_BATCH_SIZE", 2)
     calls: list[str] = []
 
     async def _fake(_conn: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int = 1) -> list[list[object]]:
@@ -703,7 +704,7 @@ def test_ingest_sets_run_progress_only_when_the_facet_rides(monkeypatch: pytest.
 
 
 def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The 14-column _LIST_RUNS row folds into RunStatus with progress as ints (positions 4/5).
+    """The 14-column `cypher.LIST_RUNS` row folds into RunStatus with progress as ints (positions 4/5).
 
     The column count is asserted, not incidental: `fetch(..., columns=N)` is POSITIONAL, so an
     off-by-one silently shifts every field on the run board rather than failing — a wrong author
@@ -1022,9 +1023,9 @@ def test_the_promotion_verdict_is_sticky_across_a_runs_events() -> None:
     event for the same graph run carries no lance facet, and clobbering the verdict to null would
     turn a recorded hold back into an ordinary failure on the next tick.
     """
-    import lineage.services.repository as repo_mod
+    import lineage.services.cypher as cypher_mod
 
-    assert "r.promotion_status=(CASE WHEN $ps = '' THEN r.promotion_status ELSE $ps END)" in repo_mod._MERGE_RUN
+    assert "r.promotion_status=(CASE WHEN $ps = '' THEN r.promotion_status ELSE $ps END)" in cypher_mod.MERGE_RUN
 
 
 def test_the_run_event_reads_its_verdict_off_the_lance_facet() -> None:

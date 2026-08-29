@@ -245,7 +245,9 @@ Layered like the catalog (`api/` · `core/` · `services/` + a thin entrypoint),
 - `services/lineage/models.py` — Pydantic `RunEvent` (the OpenLineage wire subset we ingest; camelCase aliases).
 - `services/lineage/schemas.py` — typed response models (`Neighbors`, `Producers`, `LineageGraph`).
 - `services/lineage/core/age.py` — thin Apache AGE client over `psycopg`; safe SQL via `psycopg.sql` composition.
-- `services/lineage/services/repository.py` — `LineageRepository` (the only place Cypher lives) returning the schemas above.
+- `services/lineage/services/repository.py` — `LineageRepository`, the class that RUNS the queries, returning the schemas above.
+- `services/lineage/services/cypher.py` — the openCypher dialect (every graph statement + the graph's shape) and `bounded_walk`.
+- `services/lineage/services/postgres.py` — the second dialect: plain SQL to the same Postgres (the durable `lineage_events` feed, the read-audit log, the vertex-index DDL, the advisory lock).
 - `services/lineage/api/v1/endpoints/{datasets,columns,runs,reconcile,ingest,governance,demo}.py` — the ~20 routes, thin (call the repository; every route has a typed `response_model`); auth/filter deps live in `services/lineage/api/{security,fga_deps}.py`. `governance.py` (#49) adds the human-curation writes: `GET /datasets/{name}/governance`, `PUT/DELETE /datasets/{name}/tags/{tag}`, `PUT /datasets/{name}/description` — reads on the reader rung, writes on `can_write_data`, attribution (who/when) persisted on the node.
 - `services/lineage/main.py` — FastAPI app; lifespan builds the pool + repository onto `app.state`, injected via an `Annotated` dep, and includes the `api/v1` router.
 - `services/lineage/seed.py` — **producer-side** OpenLineage emitter (see below); the service never imports it.

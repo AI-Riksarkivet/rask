@@ -5,10 +5,10 @@ the descriptor's ``graph`` capability (its value IS the entities table name);
 the three sibling tables are derived by replacing its ``entities`` suffix with
 ``chunks`` / ``mentions`` / ``relationships`` (the KG adapter's naming
 contract). A single :class:`lance_graph.CypherEngine` is built over pyarrow
-snapshots of the four tables and cached module-globally, keyed by
+snapshots of the four tables and cached PER APP (see :class:`_GraphCache`), keyed by
 ``(db path, entities-table version)`` — so a KG rebuild is picked up without a
 server restart (the cache key changes), while repeat requests reuse the
-engine. Every endpoint returns ``built: false`` when the capability is
+engine and a cold build for one dataset never blocks a read of another. Every endpoint returns ``built: false`` when the capability is
 undeclared or any table is absent.
 
 ``/cypher`` runs arbitrary read Cypher (the explorer's REPL); invalid queries
@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import weakref
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Annotated, Any
 
 import lance
@@ -30,8 +32,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lancekit import store
-from service_kit.media.deps import StateDep
-from service_kit.media.state import dataset_handle
+from service_kit.media.deps import DatasetParam, StateDep
+from service_kit.media.state import AppState, dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.schemas.graph import (
     CypherResponse,
@@ -50,6 +52,8 @@ from viewer.schemas.graph import (
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from service_kit.lancekit.descriptor import Declared
     from service_kit.lancekit.registry import DatasetHandle
 
@@ -187,13 +191,99 @@ class _GraphResources(BaseModel):
     clip_title_column: str | None
 
 
-# version-keyed cache: (db path, entities-table version) -> resources. The
-# version bump on a rebuild changes the key, so a stale engine is never served.
-_CACHE: dict[tuple[str, int], _GraphResources] = {}
-_CACHE_LOCK = threading.Lock()
 #: Bound the KG engine cache — each built engine is ~hundreds of MB, so a
 #: superseded version must not linger. Small: KGs rebuild rarely.
 _CACHE_MAX = 2
+
+#: Cache key: (db path, entities-table version). The version bump on a rebuild changes the key, so
+#: a stale engine is never served.
+type _CacheKey = tuple[str, int]
+
+
+class _GraphCache:
+    """One app's KG engines, bounded, with SINGLE-FLIGHT PER KEY (VS-08).
+
+    Two things were wrong with the module-global dict this replaces.
+
+    *It was shared by every app in the process.* ``create_viewer_app`` can build several apps over
+    different ``AppState``s — the composition seam the codebase deliberately has — and they all
+    contended for one ``_CACHE_MAX`` budget while nothing released the ~370 MB engines when an app
+    was torn down. A cache is per-app state, so it lives beside the app, not beside the module.
+
+    *Its lock wrapped the BUILD.* One global lock around a ~20 s ``_build_resources`` meant that a
+    cold build for dataset A blocked every ``/api/graph/*`` request for dataset B — including the
+    cheap ``GET /status`` — for that whole window, each waiter holding a threadpool thread. With 40
+    workers, a handful of cold graph requests starve every sync route in the process.
+
+    So: a short guard around the dict operations ONLY, plus one lock per cache key. Concurrent first
+    requests for the SAME key still collapse into one build (the thundering-herd guarantee the old
+    lock did provide, and the reason a plain ``setdefault`` is not enough); a build for another key
+    runs in parallel.
+    """
+
+    def __init__(self, max_entries: int = _CACHE_MAX) -> None:
+        self._entries: OrderedDict[_CacheKey, _GraphResources] = OrderedDict()
+        self._locks: dict[_CacheKey, threading.Lock] = {}
+        # Held only for dict reads/writes — NEVER across a build. That is the whole fix.
+        self._guard = threading.Lock()
+        self._max = max_entries
+
+    def get_or_build(self, key: _CacheKey, build: Callable[[], _GraphResources]) -> _GraphResources:
+        with self._guard:
+            cached = self._entries.get(key)
+            if cached is not None:
+                self._entries.move_to_end(key)
+                return cached
+            lock = self._locks.setdefault(key, threading.Lock())
+        with lock:
+            with self._guard:
+                # The winner of the race built it while we waited on ITS key's lock.
+                cached = self._entries.get(key)
+                if cached is not None:
+                    return cached
+            try:
+                built = build()
+            except BaseException:
+                # Drop the key lock on failure too, so a transient error does not leave `_locks`
+                # holding an entry for a key that has no engine.
+                with self._guard:
+                    self._locks.pop(key, None)
+                raise
+            with self._guard:
+                # Publish and retire the key lock UNDER ONE GUARD. Retiring it first would open a
+                # window in which a newly arriving thread finds neither the entry nor the lock,
+                # mints a second lock, and runs a second ~20 s build.
+                self._entries[key] = built
+                while len(self._entries) > self._max:
+                    self._entries.popitem(last=False)
+                self._locks.pop(key, None)
+            return built
+
+
+#: Per-app caches, keyed by ``id(state)`` with a finalizer that drops the entry when the app's
+#: ``AppState`` is collected — which is what makes an engine die with the app that built it.
+#: ``id()`` rather than a ``WeakKeyDictionary`` because ``AppState`` is a Pydantic model and
+#: therefore unhashable; the finalizer gives the same lifetime guarantee. It is deliberately NOT a
+#: field on ``AppState``: that model lives in ``service_kit`` and is shared with the search service
+#: and the annotator, and the knowledge graph is a viewer-only concern.
+_CACHES: dict[int, _GraphCache] = {}
+_CACHES_GUARD = threading.Lock()
+
+
+def _cache_for(state: AppState) -> _GraphCache:
+    """This app's engine cache, created on first use and released with the app."""
+    with _CACHES_GUARD:
+        cache = _CACHES.get(id(state))
+        if cache is None:
+            cache = _GraphCache()
+            _CACHES[id(state)] = cache
+            weakref.finalize(state, _drop_cache, id(state))
+        return cache
+
+
+def _drop_cache(state_id: int) -> None:
+    with _CACHES_GUARD:
+        _CACHES.pop(state_id, None)
 
 
 def _clip_title_column(declared: Declared) -> str | None:
@@ -253,12 +343,15 @@ def _build_resources(handle: DatasetHandle, names: _KgTables) -> _GraphResources
     )
 
 
-def _resources(handle: DatasetHandle) -> _GraphResources | None:
-    """The cached graph engine + lookups, or ``None`` if the graph isn't built.
+def _resources(state: AppState, handle: DatasetHandle) -> _GraphResources | None:
+    """This APP's cached graph engine + lookups, or ``None`` if the graph isn't built.
 
     Existence is probed on disk per request (not via the descriptor's startup
     table snapshot) so a KG built after the app started is served without a
     restart.
+
+    ``state`` is what the cache hangs from: the engines are one app's resources, released when that
+    app is (see :class:`_GraphCache`), and a build for one dataset never blocks a read of another.
     """
     names = _kg_tables(handle.descriptor.declared)
     if names is None:
@@ -267,17 +360,9 @@ def _resources(handle: DatasetHandle) -> _GraphResources | None:
     if not all(store.exists(handle.table_uri(n), handle.storage_options) for n in all_names):
         return None
     version = lance.dataset(handle.table_uri(names.entities), storage_options=handle.storage_options).version
-    key = (handle.uri, version)
     # Single-flight + bounded: the ~20s/~370MB build must not run N times under a
     # cold-start thundering herd, and superseded versions must not accumulate.
-    with _CACHE_LOCK:
-        cached = _CACHE.get(key)
-        if cached is None:
-            cached = _build_resources(handle, names)
-            while len(_CACHE) >= _CACHE_MAX:
-                _CACHE.pop(next(iter(_CACHE)))
-            _CACHE[key] = cached
-        return cached
+    return _cache_for(state).get_or_build((handle.uri, version), lambda: _build_resources(handle, names))
 
 
 def _node(res: _GraphResources, entity_id: str) -> GraphNode | None:
@@ -304,9 +389,9 @@ def _run_rows(res: _GraphResources, cypher: str) -> list[dict[str, Any]]:
 
 
 @router.get("/status", dependencies=[REQUIRE_CORPUS_METADATA])
-def get_status(state: StateDep, dataset: str | None = None) -> GraphStatusResponse:
+def get_status(state: StateDep, dataset: DatasetParam = None) -> GraphStatusResponse:
     """Row counts for the explorer header, or ``built: false`` if the KG is absent."""
-    res = _resources(dataset_handle(state, dataset))
+    res = _resources(state, dataset_handle(state, dataset))
     if res is None:
         return GraphStatusResponse(built=False)
     return GraphStatusResponse(
@@ -326,9 +411,9 @@ class CypherRequest(BaseModel):
 
 
 @router.post("/cypher", dependencies=[REQUIRE_CORPUS_DATA])
-def run_cypher(body: CypherRequest, state: StateDep, dataset: str | None = None) -> CypherResponse:
+def run_cypher(body: CypherRequest, state: StateDep, dataset: DatasetParam = None) -> CypherResponse:
     """Run arbitrary read Cypher; invalid queries return ``error`` (HTTP 200)."""
-    res = _resources(dataset_handle(state, dataset))
+    res = _resources(state, dataset_handle(state, dataset))
     if res is None:
         return CypherResponse(built=False)
     raw = body.query.strip()
@@ -352,9 +437,9 @@ def run_cypher(body: CypherRequest, state: StateDep, dataset: str | None = None)
 
 
 @router.get("/search", dependencies=[REQUIRE_CORPUS_DATA])
-def search_entities(q: str, state: StateDep, dataset: str | None = None) -> GraphSearchResponse:
+def search_entities(q: str, state: StateDep, dataset: DatasetParam = None) -> GraphSearchResponse:
     """Entity-name substring matches (top 10 by mention count). ``q`` never hits Cypher."""
-    res = _resources(dataset_handle(state, dataset))
+    res = _resources(state, dataset_handle(state, dataset))
     if res is None:
         return GraphSearchResponse(built=False)
     needle = q.strip().lower()
@@ -394,7 +479,7 @@ def _clip(row: dict[str, Any], title_column: str | None) -> EntityClip:
 
 
 @router.get("/entity/{entity_id}", dependencies=[REQUIRE_CORPUS_DATA])
-def get_entity(entity_id: str, state: StateDep, dataset: str | None = None) -> GraphEntityResponse:
+def get_entity(entity_id: str, state: StateDep, dataset: DatasetParam = None) -> GraphEntityResponse:
     """An entity's properties + clips + relationship neighbours + co-occurrences.
 
     Clips, neighbours and co-occurrences are answered through the live
@@ -403,7 +488,7 @@ def get_entity(entity_id: str, state: StateDep, dataset: str | None = None) -> G
     content pending descriptor-ization (they name the KG writer contract's
     columns, no corpus schema).
     """
-    res = _resources(dataset_handle(state, dataset))
+    res = _resources(state, dataset_handle(state, dataset))
     if res is None:
         return GraphEntityResponse(built=False)
     if not _ENTITY_ID.match(entity_id):
@@ -467,7 +552,7 @@ def get_subgraph(
     # DECLARED, not clamped: `max(1, min(limit, _MAX_LIMIT))` below is the real bound and the
     # schema never said so.
     limit: Annotated[int, Query(ge=1, le=_MAX_LIMIT)] = 150,
-    dataset: str | None = None,
+    dataset: DatasetParam = None,
 ) -> SubgraphResponse:
     """Nodes + edges for the force-layout view.
 
@@ -475,7 +560,7 @@ def get_subgraph(
     relationship among them). With one → that entity plus its 1-hop relationship
     neighbourhood.
     """
-    res = _resources(dataset_handle(state, dataset))
+    res = _resources(state, dataset_handle(state, dataset))
     if res is None:
         return SubgraphResponse(built=False)
     limit = max(1, min(limit, _MAX_LIMIT))

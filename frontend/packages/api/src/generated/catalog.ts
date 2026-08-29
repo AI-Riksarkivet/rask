@@ -1341,6 +1341,19 @@ export interface paths {
         /**
          * Every registered object store
          * @description The whole registry in one response — it is estate config, and the tier view needs all of it.
+         *
+         *     ESTATE-ADMIN GATED, on the same relation and object ``attach_store`` uses. Its docstring already
+         *     states the reason and it applies to the read at least as strongly: a store record names a host
+         *     and a bucket the whole estate would then see, which is estate-wide disclosure — and reading the
+         *     list IS the disclosure, where attaching is only the cause of it. Ungated, any authenticated
+         *     principal (any project member) enumerated every bucket the estate knows, including the
+         *     ``endpoint`` hosts of third-party buckets someone attached.
+         *
+         *     The router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under
+         *     ``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right
+         *     for a listing the endpoint then FILTERS (``/v1/warehouses``, ``/v1/model``) and wrong for one it
+         *     does not. This registry is estate-wide config with no per-item FGA object to filter on, so the
+         *     honest gate is the estate rung rather than a per-store one.
          */
         get: operations["list_stores_v1_stores_get"];
         put?: never;
@@ -1377,6 +1390,9 @@ export interface paths {
         /**
          * Stores grouped by medallion tier
          * @description The tier -> store view, DERIVED from the registry rather than transcribed.
+         *
+         *     Gated identically to ``list_stores`` — it is the same disclosure in a different shape, and gating
+         *     only the flat view would leave the grouped one as the way around it.
          *
          *     Every governed tier appears even when empty: a bronze row with nothing in it says "no store
          *     backs bronze here", which is a fact worth showing. Roles outside the medallion (raw, derived,
@@ -5932,12 +5948,17 @@ export interface components {
          * EstateBindingsResponse
          * @description Every namespace→warehouse binding the caller can see, in ONE read (#86).
          *
-         *     The per-warehouse sibling below answers for one id; a page listing the estate's namespaces was
+         *     The per-warehouse sibling answers for one id; a page listing the estate's namespaces was
          *     calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
          *     estate before filtering in Python — O(warehouses × bindings) for a union the underlying
          *     ``list_bindings`` already produces in a single pass.
          */
         EstateBindingsResponse: {
+            /**
+             * Authorization Truncated
+             * @default false
+             */
+            authorization_truncated: boolean;
             /** Bindings */
             bindings: {
                 [key: string]: string;
@@ -6807,8 +6828,15 @@ export interface components {
         };
         /** ModelsListResponse */
         ModelsListResponse: {
+            /**
+             * Authorization Truncated
+             * @default false
+             */
+            authorization_truncated: boolean;
             /** Models */
             models: components["schemas"]["ModelSummary"][];
+            /** Page Token */
+            page_token?: string | null;
         };
         /**
          * MultiMatchQuery
@@ -7072,12 +7100,22 @@ export interface components {
             /** Accept Assertions */
             accept_assertions?: string[];
             /**
+             * Cascade Id
+             * @default
+             */
+            cascade_id: string;
+            /**
              * Gate Only
              * @default false
              */
             gate_only: boolean;
             /** Key Column */
             key_column: string;
+            /**
+             * Originator
+             * @default
+             */
+            originator: string;
             /** Required Columns */
             required_columns?: string[];
             /** Version */
@@ -8906,6 +8944,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Continue after this model name (the previous page's `page_token`). */
+                page_token?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;

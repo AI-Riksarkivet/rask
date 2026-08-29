@@ -1,13 +1,19 @@
 """Env-driven transport configuration — ``RASK_*`` first, official OpenLineage names accepted.
 
-Follows the repo convention (`RASK_*` env vars, ``AliasChoices`` so the official client's
-own variable names keep working — the same pattern as ``RASK_S3_ENDPOINT_URL`` in
-``packages/storage``). No endpoint configured is a VALID configuration: the emitter
-degrades to a logged no-op and the pipeline runs unlineaged rather than crashing.
+Follows the repo convention: `RASK_*` env vars, with ``AliasChoices`` so the official client's own
+variable names (``OPENLINEAGE_URL`` and friends) keep working. This used to cite
+``packages/storage``'s ``RASK_S3_ENDPOINT_URL`` as the exemplar of that pattern; it is not one —
+storage resolves the same kind of canonical-first precedence BY HAND (``_env_first`` over three name
+tuples) and imports no pydantic-settings, deliberately, because two sealed runners take it as a path
+dependency and neither carries pydantic. The convention is the env NAMES; the mechanism differs.
+
+No endpoint configured is a VALID configuration: the emitter degrades to a logged no-op and the
+pipeline runs unlineaged rather than crashing.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Literal
 
 from pydantic import AliasChoices, Field
@@ -52,3 +58,21 @@ class LineageSettings(BaseSettings):
     #: ``auto`` = http when an endpoint is configured, else no-op. ``console`` logs events
     #: through the official ConsoleTransport (debugging); ``noop`` forces lineage off.
     transport: Literal["auto", "http", "console", "noop"] = Field(default="auto", validation_alias=AliasChoices("RASK_LINEAGE_TRANSPORT"))
+
+
+@lru_cache(maxsize=1)
+def lineage_settings() -> LineageSettings:
+    """The process's transport configuration, read from the environment ONCE.
+
+    Every run open used to construct `LineageSettings()` afresh — a full pydantic-settings
+    environment read and validation of nine fields — and a ``@stage`` callable is invoked per batch
+    inside a Ray Data pipeline, so that was per unit of work for a value that cannot change within a
+    process.
+
+    Cached, therefore, and deliberately not used by :func:`~lineage_kit.emitter.build_emitter`: that
+    runs once at wiring time and takes an explicit ``settings`` argument, and freezing it would make
+    a process that reconfigures its environment (every test that monkeypatches ``RASK_LINEAGE_*``)
+    silently build the wrong transport. Call ``lineage_settings.cache_clear()`` when the environment
+    legitimately changes under a live process.
+    """
+    return LineageSettings()

@@ -17,6 +17,7 @@ from openlineage.client.transport.console import ConsoleConfig, ConsoleTransport
 from openlineage.client.transport.http import HttpConfig, HttpTransport, create_token_provider
 
 from lineage_kit.config import LineageSettings
+from lineage_kit.metrics import DropReason, record_drop
 
 
 if TYPE_CHECKING:
@@ -51,16 +52,31 @@ class RecordingEmitter:
 
 
 class ClientEmitter:
-    """Emits through an ``openlineage-python`` client; transport errors are logged, never raised."""
+    """Emits through an ``openlineage-python`` client; failures are counted and logged, never raised.
+
+    TWO failures, not one. Authoring (turning our model into the client's) and transport (getting it
+    to the endpoint) sat inside a single ``try``, so a producer that built an unserialisable facet was
+    reported with the same message as a lineage service that was down — and the log line was the only
+    evidence either had happened. Both are still swallowed, because emission must never crash compute;
+    both now leave a countable series (:mod:`lineage_kit.metrics`) and their own log event.
+    """
 
     def __init__(self, client: OpenLineageClient) -> None:
         self._client = client
 
     def emit(self, event: RunEvent) -> None:
+        state = event.event_type.value
         try:
-            self._client.emit(event.to_openlineage())
+            payload = event.to_openlineage()
         except Exception:
-            log.warning("lineage_emit_failed", exc_info=True, extra={"job": event.job.name, "state": event.event_type.value})
+            log.warning("lineage_author_failed", exc_info=True, extra={"job": event.job.name, "state": state})
+            record_drop(DropReason.AUTHOR, state)
+            return
+        try:
+            self._client.emit(payload)
+        except Exception:
+            log.warning("lineage_emit_failed", exc_info=True, extra={"job": event.job.name, "state": state})
+            record_drop(DropReason.TRANSPORT, state)
 
 
 def build_emitter(settings: LineageSettings | None = None) -> Emitter:

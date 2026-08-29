@@ -295,6 +295,89 @@ def _delivery_count(msg: Any) -> int:  # noqa: ANN401 — a nats Msg, typed only
         return 1
 
 
+class _OpenBatch:
+    """The units fetched, HELD UNACKED, and not yet written as one Lance fragment.
+
+    This was five parallel lists, an int, and a dict, mutated by two closures that shared them through
+    `nonlocal` — and the parallelism between the lists (element *i* of each describes one unit) was
+    stated only in a comment. Nothing enforced it, and the one time it slipped the batch committed its
+    units twice (`test_partial_ack_duplication.py`). An object makes `hold` the single place where all
+    five grow together, which is the invariant itself rather than a note about it.
+
+    A PLAIN CLASS, not a pydantic model: the members are nats `Msg` objects the plane deliberately
+    types as `Any` (they are `QueueMessage` structurally and unhashable in fact), and there is nothing
+    here to validate — this is a per-drain accumulator, not a model of anything on a wire.
+
+    `held` is NEVER REASSIGNED, and that is load-bearing. The heartbeat closes over this mapping; if
+    a flush swapped it for a fresh one, the heartbeat would go on renewing the previous batch while
+    the current one's `ack_wait` expired and JetStream redelivered work a live worker was holding.
+    Keyed by `id(msg)` and not a set, because a nats-py `Msg` is unhashable — `held.add(msg)` raised
+    `TypeError: unhashable type: 'Msg'` inside the drain activity and left the run COMPLETE with
+    `units_done: 0`.
+    """
+
+    def __init__(self, *, dataset_uri: str, run_id: str, external_base: str | None, outcome: ChunkOutcome) -> None:
+        self._dataset_uri = dataset_uri
+        self._run_id = run_id
+        self._external_base = external_base
+        self.outcome = outcome
+        self.held: dict[int, Any] = {}
+        self._reset()
+
+    def _reset(self) -> None:
+        #: Positionally parallel, one entry per held unit. `parts` and `tokens` are the ADAPTER's
+        #: grouping label and identity token, taken off the task rather than derived here — the worker
+        #: resolves units by URI scheme and does not know what a volume or a folder is.
+        self._units: list[tuple[str, bytes]] = []
+        self._parts: list[str | None] = []
+        self._tokens: list[str | None] = []
+        self._msgs: list[Any] = []
+        self._nbytes = 0
+
+    def __len__(self) -> int:
+        """Units currently held. The drain's loop condition counts them as not-yet-done work."""
+        return len(self._units)
+
+    def hold(self, key: str, payload: bytes, task: UnitTask, msg: Any) -> None:  # noqa: ANN401 — a nats Msg, typed only under TYPE_CHECKING
+        """Take one fetched unit into the open batch. The message stays UNACKED until `flush`."""
+        self._units.append((key, payload))
+        self._parts.append(task.partition_key)
+        self._tokens.append(task.token)
+        self._msgs.append(msg)
+        self.held[id(msg)] = msg
+        self._nbytes += len(payload)
+
+    def is_full(self, sizing: ResolvedSizing) -> bool:
+        """Whether this batch is worth a fragment. Rows are the ceiling for small records, bytes for
+        large ones — 1024 twenty-megabyte pages is a 20 GB fragment, so the byte ceiling is the one
+        that actually fires on media."""
+        return len(self._units) >= sizing.fragment_rows or self._nbytes >= sizing.fragment_bytes
+
+    async def flush(self) -> None:
+        """One fragment for everything accumulated, then ack the whole batch.
+
+        The batch is emptied BEFORE the write, so a concurrent `hold` accumulates into the next one
+        rather than into a list this call is midway through committing.
+        """
+        if not self._units:
+            return
+        units, msgs_to_ack, parts, toks = self._units, self._msgs, self._parts, self._tokens
+        self._reset()
+
+        written = write_unit_fragments(self._dataset_uri, units_to_table(units, parts, toks, self._external_base))
+        # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
+        # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
+        # partially-acked batch committed its units TWICE
+        # (`tests/test_partial_ack_duplication.py`). Still one manifest — it is keyed on the set.
+        stage_fragments(self._dataset_uri, self._run_id, [key for key, _ in units], written)
+        self.outcome.fragments.extend(written)
+        self.outcome.units_done += len(units)
+        for msg in msgs_to_ack:
+            await msg.ack()
+            self.held.pop(id(msg), None)
+        logger.info("fragment: %d units, %d bytes -> %d fragment(s)", len(units), sum(len(p) for _, p in units), len(written))
+
+
 class Worker:
     """Consumes one run's units until the chunk drains."""
 
@@ -372,7 +455,8 @@ class Worker:
         **THE ACK IS PER BATCH, not per unit**, and that is the whole shape of this method. A fetched
         unit is held — fetched, validated, and NOT acked — until enough of them accumulate to be
         worth one Lance fragment. Then: one `write_fragments`, one staged manifest, and only then an
-        ack for every message in the batch.
+        ack for every message in the batch. `_OpenBatch` owns that state and the invariants over it;
+        this method owns the LOOP and nothing else.
 
         The previous version acked per unit, which forced one fragment per image: a 10k-page volume
         produced 10k fragments in a single commit. Lance's guidance is ~1M rows per fragment, and its
@@ -389,91 +473,16 @@ class Worker:
         outcome = ChunkOutcome(chunk_id=chunk_id)
         sizing = self._sizing
         sem = asyncio.Semaphore(sizing.fetch_concurrency)
+        batch = _OpenBatch(dataset_uri=dataset_uri, run_id=run_id, external_base=external_base, outcome=outcome)
 
-        # The open batch: fetched units and the messages still owed an ack for them.
-        pending: list[tuple[str, bytes]] = []
-        # Positional-parallel to `pending`: the ADAPTER's grouping label for each held unit, taken
-        # off the task rather than derived here — the worker resolves units by URI scheme and does
-        # not know what a volume or a folder is.
-        pending_parts: list[str | None] = []
-        pending_tokens: list[str | None] = []
-        pending_msgs: list[Any] = []
-        pending_bytes = 0
-
-        # EVERY message currently held unacked, in a container that is never REASSIGNED — `flush`
-        # rebinds `pending_msgs` to a fresh list, so a heartbeat closing over that name would keep
-        # renewing the previous batch while the current one expires.
-        #
-        # A DICT KEYED BY `id`, not a set: a nats-py `Msg` is unhashable.
-        held: dict[int, Any] = {}
-
-        async def flush() -> None:
-            """One fragment for everything accumulated, then ack the whole batch."""
-            nonlocal pending, pending_msgs, pending_bytes, pending_parts, pending_tokens
-            if not pending:
-                return
-            units, msgs_to_ack, parts, toks = pending, pending_msgs, pending_parts, pending_tokens
-            pending, pending_msgs, pending_bytes, pending_parts, pending_tokens = [], [], 0, [], []
-
-            written = write_unit_fragments(dataset_uri, units_to_table(units, parts, toks, external_base))
-            # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
-            # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
-            # partially-acked batch committed its units TWICE
-            # (`tests/test_partial_ack_duplication.py`). Still one manifest — it is keyed on the set.
-            stage_fragments(dataset_uri, run_id, [key for key, _ in units], written)
-            outcome.fragments.extend(written)
-            outcome.units_done += len(units)
-            for msg in msgs_to_ack:
-                await msg.ack()
-                held.pop(id(msg), None)
-            logger.info("fragment: %d units, %d bytes -> %d fragment(s)", len(units), sum(len(p) for _, p in units), len(written))
-
-        beat = asyncio.create_task(_renew_held(held))
+        beat = asyncio.create_task(_renew_held(batch.held))
         try:
-            while outcome.units_done + len(pending) + len(outcome.errors) < expected:
+            while outcome.units_done + len(batch) + len(outcome.errors) < expected:
                 try:
                     msgs = await sub.fetch(min(sizing.fetch_batch, expected), timeout=30)
                 except TimeoutError:
                     # No units available right now. Not an error — another worker may hold them.
                     break
-
-                async def handle(msg: QueueMessage) -> None:
-                    nonlocal pending_bytes
-                    task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
-                    # Re-attach the producer's trace context so this unit's fetch/validate spans hang
-                    # off the run's trace rather than starting a fresh, orphaned root — the far end of
-                    # the propagation `publish_chunk_units` began. Detached in `finally` so the worker's
-                    # own loop context is restored between units.
-                    ctx_token = otel_context.attach(extract({"traceparent": task.traceparent})) if task.traceparent else None
-                    try:
-                        async with sem:
-                            try:
-                                # Kept as ONE value rather than unpacked: `_one` returns
-                                # `tuple[str, bytes] | tuple[None, str]`, and the two halves are
-                                # correlated. Unpacking first breaks that — the refusal branch's `str`
-                                # then rides along into the payload list, which is a `bytes` list.
-                                fetched = await self._one(task)
-                            except Exception as exc:
-                                await self._refuse(msg, task, exc, outcome)
-                                return
-                            if fetched[0] is None:
-                                # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
-                                reason = fetched[1]
-                                outcome.errors[task.key] = reason
-                                await self._q.park_poison(task, reason)
-                                await msg.ack()
-                                return
-                            # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
-                            key, payload = fetched
-                            pending.append((key, payload))
-                            pending_parts.append(task.partition_key)
-                            pending_tokens.append(task.token)
-                            pending_msgs.append(msg)
-                            held[id(msg)] = msg
-                            pending_bytes += len(payload)
-                    finally:
-                        if ctx_token is not None:
-                            otel_context.detach(ctx_token)
 
                 # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
                 # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
@@ -485,9 +494,9 @@ class Worker:
                 again = [m for m in msgs if _is_redelivery(m)]
 
                 if fresh:
-                    await asyncio.gather(*(handle(m) for m in fresh))
+                    await asyncio.gather(*(self._take(m, batch, sem) for m in fresh))
                 if again:
-                    await flush()  # close the fresh batch before the redelivered units join it
+                    await batch.flush()  # close the fresh batch before the redelivered units join it
                     # ONE FRAGMENT PER REDELIVERED UNIT — what makes the overlap state STRUCTURALLY
                     # unreachable rather than merely reported.
                     #
@@ -509,10 +518,10 @@ class Worker:
                     # The cost is one fragment per redelivered unit, paid only on recovery; the
                     # heartbeat above is what keeps that population small in the first place.
                     for msg in again:
-                        await handle(msg)
-                        await flush()
-                elif len(pending) >= sizing.fragment_rows or pending_bytes >= sizing.fragment_bytes:
-                    await flush()
+                        await self._take(msg, batch, sem)
+                        await batch.flush()
+                elif batch.is_full(sizing):
+                    await batch.flush()
 
         finally:
             # ALWAYS. A heartbeat that outlives its drain keeps renewing messages nobody is working,
@@ -523,7 +532,7 @@ class Worker:
 
         # The remainder. A chunk is almost never an exact multiple of the target, so without this the
         # tail of every run would be fetched, held, and then silently redelivered on ack_wait.
-        await flush()
+        await batch.flush()
 
         # RETURNING the outcome is the signal. There was a `signal_drained` publish here, left over
         # from the design where a chunk workflow suspended on an external NATS event — which nothing
@@ -531,3 +540,45 @@ class Worker:
         # return value and replays the activity if the pod dies, so a second, unacked notification on
         # a WORK_QUEUE stream bought nothing and accumulated forever.
         return outcome
+
+    async def _take(self, msg: QueueMessage, batch: _OpenBatch, sem: asyncio.Semaphore) -> None:
+        """Fetch and validate ONE unit, and either hold it in `batch` or dispose of it.
+
+        A METHOD, not a coroutine defined inside the fetch loop. As a closure it was rebuilt on every
+        iteration and shared five mutable names with `flush` by `nonlocal`, so the reader had to
+        reconstruct the batch's invariants from two functions and a comment (ingest-flow-10).
+
+        "Dispose of it" is three different outcomes and they are not interchangeable: a transient
+        failure is redelivered, a permanent one is parked, and bytes the validator refuses are parked
+        AND acked — redelivering a corrupt image cannot make it valid.
+        """
+        task = UnitTask.model_validate_json(msg.data)
+        # Re-attach the producer's trace context so this unit's fetch/validate spans hang off the
+        # run's trace rather than starting a fresh, orphaned root — the far end of the propagation
+        # `publish_chunk_units` began. Detached in `finally` so the worker's own loop context is
+        # restored between units.
+        ctx_token = otel_context.attach(extract({"traceparent": task.traceparent})) if task.traceparent else None
+        try:
+            async with sem:
+                try:
+                    # Kept as ONE value rather than unpacked: `_one` returns
+                    # `tuple[str, bytes] | tuple[None, str]`, and the two halves are correlated.
+                    # Unpacking first breaks that — the refusal branch's `str` then rides along into
+                    # the payload list, which is a `bytes` list.
+                    fetched = await self._one(task)
+                except Exception as exc:
+                    await self._refuse(msg, task, exc, batch.outcome)
+                    return
+                if fetched[0] is None:
+                    # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
+                    reason = fetched[1]
+                    batch.outcome.errors[task.key] = reason
+                    await self._q.park_poison(task, reason)
+                    await msg.ack()
+                    return
+                # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
+                key, payload = fetched
+                batch.hold(key, payload, task, msg)
+        finally:
+            if ctx_token is not None:
+                otel_context.detach(ctx_token)

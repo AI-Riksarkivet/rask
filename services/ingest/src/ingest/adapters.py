@@ -22,10 +22,10 @@ else, which is the drift this design exists to prevent.
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ingest.config import env_name, settings
 from ingest.sources import LineageInput, SourceOption, SourceSpec, register
 
 
@@ -44,12 +44,12 @@ if TYPE_CHECKING:
 #: Unset means the kind is REFUSED, not "read anything". A default of `/` or of the working directory
 #: would be the same hole with an extra step, and a source that cannot be pointed anywhere is a
 #: source nobody can abuse.
-LOCAL_ROOT_ENV = "RASK_INGEST_LOCAL_ROOT"
+LOCAL_ROOT_ENV = env_name("local_root")
 
 
 def local_root() -> Path | None:
     """The configured base, resolved, or None when `local-dir` is not enabled here."""
-    base = os.getenv(LOCAL_ROOT_ENV)
+    base = settings().local_root
     return Path(base).resolve() if base else None
 
 
@@ -100,11 +100,7 @@ def _local_dir_partition(spec: SourceSpec, key: str) -> str | None:
 #: Same reasoning, same shape: `options.uri` is caller-supplied and reaches a reader that will scan
 #: whatever it is pointed at. Unset means the kind is REFUSED rather than unconfined — a source that
 #: cannot be pointed anywhere is a source nobody can abuse.
-LANCE_ROOT_ENV = "RASK_INGEST_LANCE_ROOT"
-
-#: The catalog's own root. `lance-append` refuses anything under it (guard 1) even when the confinement
-#: root would otherwise allow it, because a copy between governed tiers is the CASCADE's operation.
-GOVERNED_ROOT_ENV = "LANCE_REST_ROOT"
+LANCE_ROOT_ENV = env_name("lance_root")
 
 
 def _has_scheme(uri: str) -> bool:
@@ -133,14 +129,15 @@ def confine_to_lance_root(candidate: str) -> str:
     tier through this door. Its message names the mover, because "denied" without a destination is how a
     caller ends up building the second, unlineaged copy path by hand.
     """
-    governed = os.getenv(GOVERNED_ROOT_ENV)
+    config = settings()
+    governed = config.governed_root
     if governed and _under(candidate, governed):
         raise ValueError(
             f"{candidate!r} is a catalog-governed dataset; ingest does not copy between governed tiers — "
             "that is the medallion mover's job (the bronze->silver->gold cascade). To land an EXISTING "
             "table under governance instead, use POST /v1/table/{id}/register."
         )
-    base = os.getenv(LANCE_ROOT_ENV)
+    base = config.lance_root
     if not base:
         raise ValueError(f"lance-append is not enabled here: set {LANCE_ROOT_ENV} to the dataset root it may read")
     if not _under(candidate, base):
@@ -391,7 +388,7 @@ def lance_append_unusable() -> str | None:
     doing so "gets a second, unlineaged copy path" into governed data. It wants its own ungoverned
     exports area, which is a deployment decision, not a default.
     """
-    return None if os.getenv(LANCE_ROOT_ENV, "").strip() else f"{LANCE_ROOT_ENV} is not set — this deployment has no ungoverned Lance root to read from"
+    return None if settings().lance_root.strip() else f"{LANCE_ROOT_ENV} is not set — this deployment has no ungoverned Lance root to read from"
 
 
 def register_builtin_sources() -> None:

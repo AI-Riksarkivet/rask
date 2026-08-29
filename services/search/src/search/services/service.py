@@ -39,6 +39,7 @@ from search.services.constants import (
 from search.services.filters import build_where_clause
 from search.services.frames import frame_fts_search, frame_search
 from search.services.postprocess import postprocess_hits, rrf_fuse
+from search.services.query_errors import is_caller_input_error
 from search.services.rerank import rerank_by_text
 from search.services.spec import SearchMode, SearchSpec
 from search.services.target import SearchTarget, resolve_target
@@ -169,6 +170,8 @@ def _search_fts(ctx: SearchContext) -> list[dict[str, Any]]:
             qb = qb.where(ctx.where, prefilter=spec.prefilter)
         raw = qb.to_list()
     except Exception as e:
+        if not is_caller_input_error(e):
+            raise
         logger.warning("fts search failed", exc_info=True)
         raise ValidationError("search failed") from e
     return _maybe_rerank(ctx, raw)
@@ -275,6 +278,8 @@ def _search_hybrid(ctx: SearchContext) -> list[dict[str, Any]]:
             qb = qb.where(ctx.where, prefilter=spec.prefilter)
         raw = qb.to_list()
     except Exception as e:
+        if not is_caller_input_error(e):
+            raise
         logger.warning("hybrid search failed", exc_info=True)
         raise ValidationError("hybrid search failed") from e
     return _maybe_rerank(ctx, raw)
@@ -389,6 +394,8 @@ def run_search(
         try:
             raw = target.row_ds.to_table(columns=target.payload_columns, filter=where, limit=spec.n).to_pylist()
         except Exception as e:
+            if not is_caller_input_error(e):
+                raise
             logger.warning("browse scan failed", exc_info=True)
             raise ValidationError("browse failed") from e
         return postprocess_hits(raw, target)

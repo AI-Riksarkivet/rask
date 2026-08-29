@@ -159,7 +159,14 @@ def registered_stores(raw: str | None = None) -> list[Store]:
         return list(DEFAULT_STORES)
     try:
         return [Store.model_validate(item) for item in json.loads(value)]
-    except Exception:
+    except (ValueError, TypeError):
+        # NARROW, and deliberately so. `except Exception` also caught faults in OUR code — a `Store`
+        # field renamed out from under this call site, an attribute error in a validator — and
+        # answered them with the defaults, so a broken registry looked exactly like an unset env var
+        # and the estate served the wrong stores with a log line nobody was looking for. The two
+        # types here are the whole failure surface of "the operator's JSON is wrong":
+        # `json.JSONDecodeError` and pydantic's `ValidationError` are both `ValueError`, and a
+        # non-iterable or non-mapping payload raises `TypeError`.
         logging.getLogger(__name__).exception("RASK_STORES is not a valid JSON array of stores; using defaults")
         return list(DEFAULT_STORES)
 

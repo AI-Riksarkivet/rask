@@ -28,13 +28,14 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypedDict, runtime_checkable
 
 import nats
 from nats.js import api as jsapi
 from nats.js import errors as jserrors
 from pydantic import BaseModel, Field
+
+from ingest.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -63,24 +64,37 @@ DLQ_STREAM = "DLQ"
 # the very endpoint we are trying not to hammer.
 ACK_WAIT_SECONDS = 300
 
-# Bounded in-flight work per worker — backpressure, not a performance knob.
-#
-# MUST exceed the run's `sizing.fragment_rows`. The worker holds a whole fragment's worth of messages
-# UNACKED while it accumulates them, so a ceiling below the batch size makes JetStream stop
-# delivering at the ceiling and the drain waits forever for units it will never be sent — a deadlock
-# that looks exactly like a slow source. At 32 (the old value) against a 1024-row batch it would have
-# hung on the 33rd unit of every run.
-MAX_ACK_PENDING = int(os.getenv("RASK_INGEST_MAX_ACK_PENDING", "2048"))
+
+def max_ack_pending() -> int:
+    """Bounded in-flight work per worker — backpressure, not a performance knob.
+
+    MUST exceed the run's `sizing.fragment_rows`. The worker holds a whole fragment's worth of
+    messages UNACKED while it accumulates them, so a ceiling below the batch size makes JetStream
+    stop delivering at the ceiling and the drain waits forever for units it will never be sent — a
+    deadlock that looks exactly like a slow source. At 32 (the old value) against a 1024-row batch it
+    would have hung on the 33rd unit of every run.
+
+    A FUNCTION, not a module constant. As a constant this was fixed at the moment the module was
+    first imported, so the ceiling a pod enforced — and the one `sizing.resolve` refuses against —
+    could not be moved by an operator or seen by a test (ING-07).
+    """
+    return settings().max_ack_pending
+
 
 # After this many deliveries a unit is poison: it parks on the DLQ subject and the run completes
 # WITH ERRORS rather than hanging. A run that never finishes is worse than one that reports what
 # refused to land.
 MAX_DELIVER = 3
 
-# In-flight publishes per chunk. A chunk is thousands of units, and one-at-a-time made publishing a
-# chunk that many sequential broker round-trips; this bounds the fan-out so a large chunk speeds up
-# without a single publish burst swamping the connection.
-PUBLISH_CONCURRENCY = int(os.getenv("RASK_INGEST_PUBLISH_CONCURRENCY", "64"))
+
+def publish_concurrency() -> int:
+    """In-flight publishes per chunk.
+
+    A chunk is thousands of units, and one-at-a-time made publishing a chunk that many sequential
+    broker round-trips; this bounds the fan-out so a large chunk speeds up without a single publish
+    burst swamping the connection. A function for the same reason `max_ack_pending` is one.
+    """
+    return settings().publish_concurrency
 
 
 class UnitTask(BaseModel):
@@ -351,13 +365,13 @@ class WorkQueue:
         it; this shrinks that surface rather than removing it.
 
         CONCURRENT, bounded. A chunk is thousands of units; awaiting one publish at a time made each
-        chunk that many sequential round-trips to the broker. `PUBLISH_CONCURRENCY` in-flight at once
+        chunk that many sequential round-trips to the broker. `publish_concurrency()` in-flight at once
         is the throughput without letting one chunk swamp the connection. The count returned is the
         number of NON-duplicate acks: `PubAck.duplicate` is how JetStream reports a message its dedupe
         window already holds, and a replay whose whole purpose is to be deduped must not be reported as
         freshly accepted.
         """
-        sem = asyncio.Semaphore(PUBLISH_CONCURRENCY)
+        sem = asyncio.Semaphore(publish_concurrency())
 
         async def _publish(task: UnitTask) -> bool:
             async with sem:
@@ -391,7 +405,7 @@ class WorkQueue:
             durable=f"ingest-{run_id}".replace(".", "-")[:64],
             config=jsapi.ConsumerConfig(
                 ack_wait=ACK_WAIT_SECONDS,
-                max_ack_pending=MAX_ACK_PENDING,
+                max_ack_pending=max_ack_pending(),
                 max_deliver=MAX_DELIVER,
             ),
         )

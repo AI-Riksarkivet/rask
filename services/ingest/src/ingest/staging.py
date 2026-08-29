@@ -47,12 +47,13 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
-import os
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+from ingest.config import settings
 
 
 if TYPE_CHECKING:
@@ -619,7 +620,7 @@ def _client() -> Any:  # noqa: ANN401 — boto3 client has no public stub; match
     (`get_paginator` carried one) or produced a diagnostic, so the annotation bought no safety and
     cost four — and a real typo in a boto3 kwarg would have arrived indistinguishable from them.
     """
-    return _client_for(os.getenv("RASK_S3_ENDPOINT_URL"))
+    return _client_for(settings().s3_endpoint_url)
 
 
 def _list_object_keys(bucket: str, prefix: str) -> list[str]:

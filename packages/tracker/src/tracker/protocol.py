@@ -11,9 +11,12 @@ from tracker.models import TransferStatus
 class TrackerProtocol(Protocol):
     """Interface for transfer state tracking.
 
-    Any object implementing these methods can be used as a tracker
-    in bulk transfer operations.  The default implementation is
-    :class:`~tracker.sqlite.SqliteTracker`.
+    Any object implementing these methods can be used as a tracker in bulk transfer operations. The
+    default implementation is :class:`~tracker.sqlite.SqliteTracker`.
+
+    It declares everything the backends' own documented usage calls — which once excluded ``flush()``
+    and the ``with`` block, so code written against the protocol could not call the method the
+    docstrings told it to use.
     """
 
     def done_keys(self) -> set[str]: ...
@@ -38,9 +41,17 @@ class TrackerProtocol(Protocol):
         verified: bool = False,
     ) -> None: ...
 
+    def flush(self) -> None:
+        """Write all buffered marks to the database."""
+        ...
+
     def commit(self) -> None: ...
 
     def close(self) -> None: ...
+
+    def __enter__(self) -> TrackerProtocol: ...
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
 
     def summary(self) -> dict[str, int]: ...
 

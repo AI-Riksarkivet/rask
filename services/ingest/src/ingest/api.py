@@ -25,10 +25,9 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
-from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, Field
 
-from ingest.auth import AuthSettingsDep, IngestAuthSettings, authorize_ingest
+from ingest.auth import AuthSettingsDep, IngestAuthSettings, authorize_ingest, authorize_ingest_projects
 from ingest.provenance import ProvenanceRefused
 from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
@@ -456,15 +455,19 @@ async def list_ingests(
     authorization: Annotated[str | None, Header()] = None,
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> RunListResponse:
-    """Recent runs, newest first. Authorized PER RUN, then filtered.
+    """Recent runs, newest first. Authorized for the whole PAGE in one round trip, then filtered.
 
-    There is no single project to authorize against before reading — the list spans tenants — so each
-    record is checked against its OWN project and the ones the caller may not see are dropped rather
+    There is no single project to authorize against before reading — the list spans tenants — so the
+    page is resolved to its DISTINCT projects and the ones the caller may not see are dropped rather
     than refused. A 403 for the whole call would leak that runs exist; an empty list leaks nothing.
 
-    **ONLY a refusal filters.** This used to swallow every exception, and the other two things
-    `authorize_ingest` raises are not refusals of a ROW — they are failures of the CALL, and both
-    rendered as an empty 200:
+    **ONE authentication and ONE OpenFGA call, not one per row.** This looped `authorize_ingest` over
+    the records, so a full page cost up to 200 JWT verifications and 200 sequential `check`s for a
+    single request (ING-05) — while `authz.md`'s rule is "prefer `batch_check` over many `check`s
+    when filtering". `authorize_ingest_projects` is the same door asked once about many projects.
+
+    **ONLY a refusal filters.** The two other things the door raises are not refusals of a ROW — they
+    are failures of the CALL, and both used to render as an empty 200:
 
       * `ServiceUnavailableError` — OpenFGA or the OIDC verifier is down. Every record then "filters",
         so a fail-closed authorization outage is indistinguishable from a caller who owns nothing.
@@ -473,23 +476,16 @@ async def list_ingests(
         one row and false of the next; answering 200 with `{"runs": []}` tells a caller their token
         works and they have no runs.
 
-    Both propagate now (503 / 401). `PermissionDeniedError` is the one that means "not this row".
+    Both propagate (503 / 401); only a per-project denial narrows the page.
     """
-    records = await store.recent(min(max(limit, 0), 200))
+    records = await store.recent(limit)
 
-    visible: list[RunStatusResponse] = []
-    for record in records:
-        try:
-            await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
-        except PermissionDeniedError:
-            # DEBUG, not warning: a caller seeing only their own runs is the endpoint WORKING.
-            # Logging it louder would make a correctly-filtered list look like a stream of
-            # authorization failures, which is how a real signal gets tuned out.
-            logger.debug("run %s filtered from the list for this caller", record.run_id, exc_info=True)
-            continue
-        visible.append(RunStatusResponse(**record.model_dump()))
-
-    return RunListResponse(runs=visible)
+    permitted = await authorize_ingest_projects(request, settings, (record.project for record in records), dapr_api_token, authorization, dapr_caller_app_id)
+    # DEBUG, not warning: a caller seeing only their own runs is the endpoint WORKING. Logging it
+    # louder would make a correctly-filtered list look like a stream of authorization failures,
+    # which is how a real signal gets tuned out.
+    logger.debug("%d of %d recent runs are visible to this caller", sum(r.project in permitted for r in records), len(records))
+    return RunListResponse(runs=[RunStatusResponse(**record.model_dump()) for record in records if record.project in permitted])
 
 
 @router.get("/ingests/{run_id}")

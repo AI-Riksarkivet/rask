@@ -1,14 +1,23 @@
 """HTTP middleware — cross-cutting request concerns.
 
-Order matters. FastAPI runs middleware in reverse of registration order on
-the way in, then re-reverses on the way out. The last `add_middleware(...)`
-call wraps everything else and runs first.
+ORDER MATTERS, AND IT IS INVERTED. Starlette inserts each `add_middleware(...)` at the FRONT of the
+stack, so the LAST call wraps everything else and is the first to see a request and the last to touch
+a response. Registration order is therefore innermost-first, which reads backwards and is exactly how
+CORS ended up in the wrong place.
 
-Registered order (per `fastapi/references/production-patterns.md` § Middleware):
+Outermost → innermost, i.e. the order a request meets them:
 
-  1. CORS         — only added when `settings.cors_origins` is non-empty
-  2. RequestID    — sets `request.state.request_id`, echoes `X-Request-ID`
-  3. Timing       — sets `X-Response-Time` header (perf debug)
+  1. CORS         — only installed when `settings.cors_origins` is non-empty
+  2. BodySizeLimit— rejects an over-cap body as the bytes arrive
+  3. Timing       — sets `X-Response-Time` (perf debug)
+  4. RequestID    — sets `request.state.request_id` + the context var, echoes `X-Request-ID`
+
+CORS IS OUTERMOST BECAUSE A REJECTION IS A RESPONSE TOO. It used to be registered first and so ran
+INNERMOST, under all four layers: any response produced above it — the body-limit 413 above all,
+which is the one a browser upload actually hits — went back to the browser with no
+`Access-Control-Allow-Origin`, so the caller saw an opaque network error instead of the 413 that
+would have told it what to do. Only responses the ROUTER produced were ever CORS-decorated.
+Registering it last puts every answer, handled or refused, inside it.
 
 Logging middleware deferred until structured logging / OTel lands — the
 `otel` skill auto-instruments stdlib `logging` records once we wire the
@@ -99,9 +108,18 @@ class TimingMiddleware(BaseHTTPMiddleware):
 def register_middleware(app: FastAPI, settings: Settings) -> None:
     """Register all HTTP middleware on the app.
 
-    Called once from `create_app()` after `register_handlers()`. Order is
-    significant — see module docstring.
+    Called once from `make_service_app` after `register_handlers()`. The call order here is
+    INNERMOST-FIRST — see the module docstring for the order a request actually meets.
     """
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(TimingMiddleware)
+    # THE BODY CEILING, for every service rather than the one it was written for. Pure-ASGI, so the
+    # cap applies as bytes ARRIVE — before the body is buffered and independent of how the endpoint
+    # reads it. Above RequestID and Timing so an over-cap request is refused before either does work
+    # on it; below CORS so its 413 is a response the browser is allowed to read.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
+    # LAST, therefore OUTERMOST — see the module docstring. Every response the stack can produce,
+    # including the 413 above and anything an inner layer raises, passes back out through here.
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -111,10 +129,3 @@ def register_middleware(app: FastAPI, settings: Settings) -> None:
             allow_headers=["*"],
             expose_headers=[_REQUEST_ID_HEADER, _RESPONSE_TIME_HEADER],
         )
-    app.add_middleware(RequestIDMiddleware)
-    app.add_middleware(TimingMiddleware)
-    # THE BODY CEILING, for every service rather than the one it was written for. Pure-ASGI, so the
-    # cap applies as bytes ARRIVE — before the body is buffered and independent of how the endpoint
-    # reads it. Added last so it sits OUTERMOST: an over-cap request is refused before RequestID or
-    # Timing do any work on it.
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)

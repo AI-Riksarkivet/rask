@@ -21,7 +21,7 @@ the property that matters (what SQL is produced for a given depth) is fully deci
 from __future__ import annotations
 
 import pytest
-from lineage.services.repository import bounded_walk
+from lineage.services.cypher import bounded_walk
 
 
 def test_a_depth_becomes_a_bounded_hop_range() -> None:

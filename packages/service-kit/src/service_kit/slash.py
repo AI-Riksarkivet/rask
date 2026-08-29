@@ -8,14 +8,14 @@ if the incoming path matches no route but the toggled variant does, rewrite the
 ASGI scope path and continue — no redirect, no leak.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
-from starlette.routing import Match
+from starlette.routing import BaseRoute, Match
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 class SlashToleranceMiddleware:
-    def __init__(self, app: ASGIApp, routes_provider: Callable[[], list]) -> None:
+    def __init__(self, app: ASGIApp, routes_provider: Callable[[], Sequence[BaseRoute]]) -> None:
         self.app = app
         self.routes_provider = routes_provider
 

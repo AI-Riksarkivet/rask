@@ -35,7 +35,10 @@ as such, and distinct from both "no provenance" and "could not ask".
 from __future__ import annotations
 
 import logging
-import os
+import threading
+from collections import OrderedDict
+
+from ingest.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -45,18 +48,25 @@ logger = logging.getLogger(__name__)
 #: inherit the latency of the system it is reporting on.
 TIMEOUT_SECONDS = 2.0
 
+#: Ceiling on the memo of runs already found in the graph. An ingest pod serves runs indefinitely, so
+#: an unmemoized answer is one full board download per poll and an UNBOUNDED memo is a leak for the
+#: lifetime of the pod — the same pair of failures `lineage.py`'s event ring buffer had to settle.
+#: Insertion-ordered with the oldest evicted: the runs being polled are the recent ones, and evicting
+#: a settled run costs one extra board read the next time somebody asks about it.
+MEMO_MAX_RUNS = 1024
+
 
 def lineage_base_url() -> str:
-    """Where the lineage service lives. Env-driven like every other upstream in the fleet."""
-    return os.getenv("RASK_LINEAGE_URL", "http://rask-lineage:8000").rstrip("/")
+    """Where the lineage service lives. Config-driven like every other upstream in the fleet."""
+    return settings().lineage_url.rstrip("/")
 
 
 #: The credentials the READ needs on a governed estate — the same pair the EMITTER uses, because
 #: reading the graph and writing to it are the same door. Sending neither is what made a refusal
 #: indistinguishable from an outage.
 def _service_headers() -> dict[str, str]:
-    token = os.getenv("RASK_LINEAGE_APP_TOKEN") or os.getenv("APP_API_TOKEN")
-    identity = os.getenv("RASK_LINEAGE_SERVICE_IDENTITY")
+    config = settings()
+    token, identity = config.lineage_app_token, config.lineage_service_identity
     if not token or not identity:
         # HALF-CONFIGURED is worth nothing: the lineage door needs BOTH, and sending one is a request
         # that will be refused for a reason nobody can see from here. The emitter warns about exactly
@@ -75,18 +85,44 @@ class ProvenanceRefused(Exception):
 
 
 class LineageProvenanceReader:
-    """Answers "is this ingest run in the graph?" against the lineage service's runs board."""
+    """Answers "is this ingest run in the graph?" against the lineage service's runs board.
+
+    **A PRESENT run is remembered.** The board is the estate's whole run list — the endpoint takes no
+    run-id filter and no page (`services/lineage/.../endpoints/runs.py`) — so answering this question
+    costs one download of every run the caller may see, plus a linear scan. `GET /ingests/{run_id}`
+    asks it on every read of a COMPLETE run, and the compute zone POLLS that endpoint, so a finished
+    run re-downloaded the whole board every couple of seconds for as long as anyone had its page open
+    (ING-14).
+
+    Only the TRUE answer is memoized, and that asymmetry is the point: a run present in the graph is
+    present permanently, while "absent" is a snapshot of a race — the ingest run reaches COMPLETE
+    before its terminal event has necessarily landed — and "could not ask" is not an answer at all.
+    Caching either of those would freeze a transient state into the defect A8 reports.
+    """
+
+    def __init__(self) -> None:
+        #: Lineage run ids already found in the graph, oldest first. Bounded, and read/written under
+        #: `_lock` because `has_run` is called through `asyncio.to_thread` from the status route.
+        self._present: OrderedDict[str, None] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def memoized(self) -> int:
+        """How many settled runs this reader is currently remembering. For the bound's own test."""
+        with self._lock:
+            return len(self._present)
 
     def has_run(self, run_id: str) -> bool | None:
         """True / False / None, where None means "the graph could not be asked".
 
         Raises `ProvenanceRefused` when the graph answers 401/403 — see the module docstring.
         """
-        import httpx
-
+        from ingest.http import shared_client
         from ingest.lineage import lineage_run_id
 
         target = lineage_run_id(run_id)
+        with self._lock:
+            if target in self._present:
+                return True
         try:
             # `/runs`, at the service ROOT. The lineage service mounts its v1 routers without a
             # version prefix — the gateway supplies `/api/lineage` and the pod serves `/runs`
@@ -94,7 +130,7 @@ class LineageProvenanceReader:
             # ingestion at `/api/v1/lineage`). Guessing `/v1/runs` from the module layout returns a
             # 404, which this method's except-branch would have reported as "graph unreachable" —
             # a wrong path and a down service would have been indistinguishable.
-            response = httpx.get(f"{lineage_base_url()}/runs", headers=_service_headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().get(f"{lineage_base_url()}/runs", headers=_service_headers(), timeout=TIMEOUT_SECONDS)
             # BEFORE raise_for_status, so a refusal never reaches the generic handler below. This is
             # the whole fix: a 401 used to fall into `except Exception` and be reported as an outage,
             # which the endpoint then rendered as "no defect".
@@ -112,4 +148,10 @@ class LineageProvenanceReader:
         except Exception:
             logger.debug("lineage graph unreachable while resolving run %s", run_id, exc_info=True)
             return None
-        return any(isinstance(run, dict) and run.get("run_id") == target for run in runs)
+        found = any(isinstance(run, dict) and run.get("run_id") == target for run in runs)
+        if found:
+            with self._lock:
+                self._present[target] = None
+                while len(self._present) > MEMO_MAX_RUNS:
+                    self._present.popitem(last=False)
+        return found

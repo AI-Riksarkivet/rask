@@ -1,9 +1,9 @@
 """Clip excerpts with MP3 audio — the codec workaround for webview hosts.
 
-Ported from the pre-split ``backend/media/clips.py`` unchanged in mechanics
-(ffmpeg loopback over the backend's own Range-streaming media endpoint, disk
-cache capped at 50 clips, one build at a time); only the cache key generalized
-so multiple datasets can't collide on a doc id.
+Ported from the pre-split ``backend/media/clips.py``: ffmpeg loopback over this service's own
+Range-streaming ``/api/media/{doc_id}`` endpoint, at the CONFIGURED origin (never a request header
+— VS-09), with the caller's bearer forwarded because that endpoint is gated; disk cache capped at
+50 clips; at most ``MAX_CONCURRENT_BUILDS`` transcodes at once, refusing rather than queueing.
 
 VS Code's webview Chromium ships without the AAC decoder (microsoft/vscode
 #167685), so archive H.264+AAC files play silently inside MCP apps. This module
@@ -129,12 +129,18 @@ def evict_old_clips(cache_dir: Path, keep: int = _MAX_CACHED) -> None:
         stale.unlink(missing_ok=True)
 
 
-def build_clip(source_url: str, cache_key: str, lo: float, hi: float) -> Path:
+def build_clip(source_url: str, cache_key: str, lo: float, hi: float, *, authorization: str | None = None) -> Path:
     """Return the cached clip for the window, transcoding it on first request.
 
     ``-ss`` before ``-i`` on an HTTP input seeks via Range requests; video is
     re-encoded (not copied) so the output starts frame-accurately at ``lo``
     and the viewer's ``media_offset_s`` mapping holds.
+
+    ``source_url`` is the CALLER'S business only in the sense that the caller named the document:
+    the origin comes from `ViewerSettings.clip_source_origin`, never from a request header (VS-09).
+    ``authorization`` is the requesting caller's own bearer, forwarded because the media door this
+    fetches from is authorization-gated; ``-protocol_whitelist`` then keeps a redirect or a crafted
+    playlist from turning the fetch into something other than an HTTP read.
     """
     out = clip_cache_path(cache_key, lo, hi)
     if out.exists():
@@ -149,6 +155,9 @@ def build_clip(source_url: str, cache_key: str, lo: float, hi: float) -> Path:
             "-nostdin",
             "-v",
             "error",
+            "-protocol_whitelist",
+            "http,https,tcp,tls",
+            *(("-headers", f"Authorization: {authorization}\r\n") if authorization else ()),
             "-ss",
             f"{lo:.3f}",
             "-i",

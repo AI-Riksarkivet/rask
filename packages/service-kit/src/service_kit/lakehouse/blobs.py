@@ -47,8 +47,8 @@ log = logging.getLogger(__name__)
 #: Arrow extension name Lance stamps on a blob-v2 column (lance_docs/guide.md — Version Compatibility).
 #:
 #: RE-EXPORTED from `lancekit.blobs`, which is the ONE implementation. The four-function detection
-#: seam existed three times in this repo — here, in `lancekit`, and in `ratch.core` — and three
-#: copies of "which Arrow extension name marks a blob column" is three places for the answer to
+#: seam existed three times in this repo — a third copy died with the pipeline package — and every
+#: copy of "which Arrow extension name marks a blob column" is another place for the answer to
 #: drift. `lancekit` is the canonical one because it is the standalone, dependency-light seam by
 #: contract; this module keeps only what it adds on top.
 

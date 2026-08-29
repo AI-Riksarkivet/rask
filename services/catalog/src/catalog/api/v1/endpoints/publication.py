@@ -36,11 +36,13 @@ from catalog.api.dependencies import (
 from catalog.api.fga_deps import require_relation
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier
+from catalog.core.lineage_emit import is_person_subject
 from catalog.core.namespace import open_dataset
 from catalog.schemas import PublishRequest, PublishResult
 from catalog.services import publication
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
 
 
 router = APIRouter(prefix="/v1/table", tags=["publication"])
@@ -57,6 +59,68 @@ class ProjectSource(Protocol):
 ProjectSourceDep = Annotated[ProjectSource, Depends(get_lineage_emitter)]
 
 
+#: NO LOCAL COPY OF "is this a person" LIVES HERE. `catalog.core.lineage_emit.is_person_subject` is the
+#: one definition, and its own docstring says why: "the two disagreeing is the whole failure mode".
+#: This module briefly declared a weakened set — `{"", "*", "user:*"}` — which omitted the ROLE
+#: LITERALS the canonical set carries (`ray`, `data_eng`, `analyst`, `anon`, `system`, `service`).
+#: Measured on that version, `publication_originator("data_eng", …)` returned `"data_eng"`, so a failed
+#: gold stage still wrote a row into an inbox actor named after a role — verbatim the symptom this
+#: door was added to eliminate (`.claude/skills/rask-notifications`, trap 1).
+
+
+def publication_originator(claimed: str, token: IDToken | None) -> str:
+    """The PERSON this publication is for, or `""` when it is for nobody.
+
+    THE CATALOG IS THE ONLY COMPONENT THAT CAN ANSWER THIS, which is why the decision lives here
+    rather than at the consumer. `table_published` is what wakes the next cascade hop, and the hop
+    needs to know whether the caller was a person or a service — a question only the door that
+    authenticated them can answer. `IDToken.service` is set by `catalog/api/security.py` when a caller
+    comes through the SERVICE door, and this is its first reader.
+
+    Precedence, and both halves are load-bearing:
+
+    * A SERVICE caller's `claimed` wins. A mover publishes as `service-<mover>`, so the actor is a
+      role, not an address; the human is only on the request body, carried there from the cascade head
+      by `catalog_register.publish_stage_output`.
+    * A PERSON's own sub wins over anything they claimed. Someone publishing by hand IS the
+      originator, and honouring a body field over a verified sub would let a caller redirect a
+      notification into somebody else's inbox.
+
+    Neither is trusted as authorization: the notifications plane re-derives every recipient's
+    visibility at delivery, so the worst a forged claim achieves is a row in the inbox of someone who
+    can already read the run's outputs.
+
+    `""` when nobody is named — a reconcile, a backfill or a cron sweep genuinely has no person behind
+    it, and the honest answer is silence. Per the skill, a state change naming nobody is
+    UNDELIVERABLE, not under-delivered, and an empty or role-shaped address is strictly worse than
+    none because it looks delivered.
+    """
+    if token is None:
+        # OIDC off: nobody was authenticated, so the only identity in the request is the claim.
+        return _addressable(claimed)
+    # `service` is an EXTRA claim (`IDToken` is `extra="allow"`), stamped only by the service door, so
+    # it is read by name rather than declared — a real IdP token carries no such field and a caller
+    # cannot add one, because this object is built from verified claims, never from the request body.
+    if not getattr(token, "service", False):
+        return _addressable(token.sub)
+    return _addressable(claimed)
+
+
+def _addressable(subject: str) -> str:
+    """`subject` if it names a person, else `""` — the `named_subject` rule the control lane applies.
+
+    The optional `user:` prefix is STRIPPED rather than refused, because both spellings reach this
+    field honestly: the medallion carries a bare sub (what `authorize_produce` returns) while an FGA
+    principal is written `user:<sub>`. Refusing one of them would drop a real person for a wire-shape
+    difference, silently and with a 200.
+    """
+    # STRIP BEFORE CHECKING. `is_person_subject` treats a `user:`-prefixed value as an FGA object id
+    # rather than a subject, so checking first would refuse `user:alice` — a real person, written in
+    # the spelling an FGA principal arrives in. Strip, then let the canonical check judge the bare sub.
+    candidate = subject.strip().removeprefix("user:").strip()
+    return "" if not is_person_subject(candidate) or "#" in candidate else candidate
+
+
 async def publication_extra(
     lineage: ProjectSource,
     segments: list[str],
@@ -66,6 +130,7 @@ async def publication_extra(
     location: str,
     accepted: list[str] | None = None,
     cascade_id: str = "",
+    originator: str = "",
 ) -> dict[str, Any]:
     """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
 
@@ -89,6 +154,12 @@ async def publication_extra(
     # `project` below: a consumer must be able to tell "no batch identity" from one named "".
     if cascade_id:
         extra["cascade_id"] = cascade_id
+    # THE PERSON, resolved by `publication_originator` before it gets here. Omitted when empty on the
+    # same rule as `cascade_id` and `project`: the publication head reads this field and puts it on the
+    # next tier's trigger, so a `""` would be threaded down to a failing stage and addressed to an
+    # inbox actor named "". A consumer must be able to tell "nobody" from somebody named nothing.
+    if originator:
+        extra["originator"] = originator
     project = await lineage.project_for(segments[0]) if segments else None
     if project:
         extra["project"] = project
@@ -192,6 +263,10 @@ async def publish_table(
                 location=result.table,
                 accepted=result.accepted,
                 cascade_id=body.cascade_id,
+                # WHO this publication is FOR, as opposed to `actor`, which is who performed it. They
+                # differ on exactly the path that matters: a cascade publish is performed by a mover
+                # and is for the person whose `/produce` started the batch.
+                originator=publication_originator(body.originator, token),
             ),
         )
 

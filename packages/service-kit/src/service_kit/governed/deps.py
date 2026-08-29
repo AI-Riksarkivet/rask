@@ -30,12 +30,32 @@ The three-outcome checker is the load-bearing part, and the middle case is why i
 # `CheckerDep.__metadata__[0].dependency`, which replaces the sub-dependency whose signature is the
 # broken one. Found 2026-08-04 while gating the object routes (#90), by building a bare app with no
 # overrides: `test_auth_deps_resolve.py` now does exactly that, on purpose.
+from collections.abc import Callable
 from typing import Annotated, Any, Protocol
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from service_kit.exceptions import ServiceUnavailableError, UnauthorizedError
+# TWO TAXONOMIES ON PURPOSE, AND THE SPLIT IS THE 4xx/5xx LINE (SKG-05).
+#
+# The 401 is `lance_namespace`'s, matching this package's other three modules (`fga.py` raises its
+# `ServiceUnavailableError`, `oidc.py` its `UnauthenticatedError`, `dapr_auth.py` its
+# `PermissionDeniedError`) and matching THIS function's own other outcome: a bad bearer already left
+# here as a lance `UnauthenticatedError` raised inside `verify`, so a MISSING bearer leaving as a
+# fleet `DomainError` meant one dependency answering two adjacent cases in two envelopes — only one
+# of which carries the numeric `code` a Lance-Namespace client parses.
+#
+# The 503 stays on the fleet taxonomy, and that is not drift left standing. `ns_errors.problem_detail`
+# REDACTS every 5xx detail except 501, so a lance `ServiceUnavailableError` here would answer
+# "Internal Server Error" and delete "Authentication is enabled but unavailable" — the one string that
+# tells an operator WHICH knob is unwired, and the thing
+# `services/notifications/tests/test_inbox_door_contract.py` asserts. That is a capability statement,
+# not a fault report, so the honest fix is to widen `_UNREDACTED_5XX`; until that is decided, keeping
+# the message beats matching the sibling module.
+from lance_namespace import UnauthenticatedError
+from openfga_sdk import OpenFgaClient
+
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.governed.oidc import IDToken, OIDCVerifier
@@ -60,10 +80,34 @@ class FgaChecker(Protocol):
     async def __call__(self, *, user: str, relation: str, obj: str) -> bool: ...
 
 
+#: The FastAPI dependency callables this factory hands back.
+#:
+#: `Callable[..., X]` rather than a per-dependency Protocol because the PARAMETERS are FastAPI's
+#: business — each closure declares whatever `Request` / settings / credentials it needs injected, and
+#: pinning those here would make the annotation a lie the moment one grows a parameter. What a caller
+#: actually depends on is the RESULT type, and that is what these name.
+type _Authenticate = Callable[..., IDToken | None]
+type _NamesSubject = Callable[..., str]
+type _ResolvesChecker = Callable[..., FgaChecker]
+type _ResolvesClient = Callable[..., OpenFgaClient | None]
+
+
 class AuthDeps:
     """The dependencies one service's routes annotate with."""
 
-    def __init__(self, authenticate: Any, current_subject: Any, get_checker: Any, get_fga_client: Any, optional_subject: Any = None) -> None:
+    def __init__(
+        self,
+        authenticate: _Authenticate,
+        current_subject: _NamesSubject,
+        get_checker: _ResolvesChecker,
+        get_fga_client: _ResolvesClient,
+        #: NOT `| None`. The name means the SUBJECT may be anonymous — the dependency itself always
+        #: exists, and `build_auth_deps` below is the only construction site and always passes it.
+        #: Declaring it optional propagated `None` into every consumer's type: a caller writing
+        #: `app.dependency_overrides[deps.optional_subject] = ...` failed the estate's
+        #: error-on-warning type gate because the key could be `None`.
+        optional_subject: _NamesSubject,
+    ) -> None:
         self.authenticate = authenticate
         self.current_subject = current_subject
         self.optional_subject = optional_subject
@@ -85,9 +129,19 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
     `settings_dep` is that service's `Annotated[TSettings, Depends(get_settings)]`. Everything below
     reads only `oidc_enabled` / `fga_enabled`, which come from the shared `GovernedAuthSettings`
     mixin, so any service carrying that mixin can use this unchanged.
+
+    `Any` is the honest annotation for that one parameter and stays: an `Annotated[...]` alias is a
+    TYPE FORM passed as a value, which no narrower annotation describes. Everything this factory
+    RETURNS is typed (see `AuthDeps`).
+
+    The inner dependencies annotate a parameter with `settings_dep`, a local NAME, which is not a type
+    expression. They used to carry `# type: ignore[valid-type]` for it — mypy's syntax, which this
+    estate does not run and `ty` does not honour, so the comments suppressed nothing and only asserted
+    a diagnostic that never existed. `ty` accepts these as written; the notes are gone rather than
+    translated.
     """
 
-    def authenticate(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> IDToken | None:  # type: ignore[valid-type]
+    def authenticate(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> IDToken | None:
         """Verify the bearer, returning the parsed token (or `None` when OIDC is off)."""
         if not settings.oidc_enabled:
             return None
@@ -97,7 +151,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             raise ServiceUnavailableError("Authentication is enabled but unavailable")
         if credentials is None or not credentials.credentials:
             audit("authn", FAILURE, reason="missing_token")
-            raise UnauthorizedError("Missing bearer token")
+            raise UnauthenticatedError("Missing bearer token")
         try:
             token = verifier.verify(credentials.credentials)
         except Exception:
@@ -115,7 +169,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         """
         return token.sub if token is not None else ANONYMOUS_SUBJECT
 
-    def optional_subject(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> str:  # type: ignore[valid-type]
+    def optional_subject(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> str:
         """The verified principal, or ``anon`` — soft ONLY on absence.
 
         For always-answering surfaces (a health badge that must stay 200) where `current_subject`'s
@@ -140,7 +194,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             raise
         return token.sub
 
-    def get_checker(request: Request, settings: settings_dep) -> FgaChecker:  # type: ignore[valid-type]
+    def get_checker(request: Request, settings: settings_dep) -> FgaChecker:
         """Resolve the FGA checker — see this module's docstring for the three outcomes."""
         if not settings.fga_enabled:
 
@@ -159,7 +213,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
 
         return _check
 
-    def get_fga_client(request: Request, settings: settings_dep) -> Any:
+    def get_fga_client(request: Request, settings: settings_dep) -> OpenFgaClient | None:
         """The raw client, with the SAME fail-closed posture as the checker.
 
         FGA off → `None`, matching `get_checker`'s permissive branch: a caller batching against a

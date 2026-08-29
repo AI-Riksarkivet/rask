@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 from catalog.core import lineage_emit as catalog_emit
 from jsonschema import Draft202012Validator, FormatChecker
-from lineage.models import Dataset, RunEvent
+from lineage.models import ColumnLineageEdge, Dataset, OutputStatistics, RunEvent
 from maintenance.core import lineage_emit as compaction_emit
 from medallion.schemas import events as medallion_events
 from openlineage.client import facet_v2
@@ -95,14 +95,37 @@ def test_facet_schema_url_matches_the_official_client(constant: str, official: A
         (lancekit_ol.SCHEMA_URL, ol.RUN_EVENT_SCHEMA_URL),
         (lancekit_ol._SCHEMA_FACET_URL, ol.SCHEMA_FACET_SCHEMA_URL),
         (lancekit_ol._DATASOURCE_FACET_URL, ol.DATASOURCE_FACET_SCHEMA_URL),
-        (lancekit_ol._COLUMN_LINEAGE_FACET_URL, ol.COLUMN_LINEAGE_FACET_SCHEMA_URL),
         (lancekit_ol._ERROR_MESSAGE_FACET_URL, ol.ERROR_MESSAGE_FACET_SCHEMA_URL),
     ],
 )
 def test_lancekit_mirror_shares_the_shared_constants(constant: str, official: str) -> None:
-    # ASSERTS the lance-media (ratch/annotation) emit path emits the SAME spec versions as the lance-ns
-    # emitters. It used to hand-copy them and had already drifted in both directions.
+    # ASSERTS the annotation emit path emits the SAME spec versions as the lance-ns emitters. It used
+    # to hand-copy them and had already drifted in both directions.
+    #
+    # `_COLUMN_LINEAGE_FACET_URL` is gone from this list because the alias itself is gone (SK-11):
+    # the annotation path no longer has its own columnLineage builder to stamp a URL with — it calls
+    # `service_kit.openlineage.column_lineage_facet`, so the version cannot diverge at all rather than
+    # being asserted equal. The row below pins that.
     assert constant == official
+
+
+def test_the_annotation_path_uses_the_SHARED_column_lineage_builder() -> None:
+    # ASSERTS there is no second builder to keep in step. A private mirror lived here, stamping its
+    # own `_schemaURL` alias and — unlike the shared one — emitting a facet for edges with an empty
+    # output or input field, which materialises a junk `(:Column {field:""})` on the consumer.
+    assert not hasattr(lancekit_ol, "_column_lineage_facet")
+    result = lancekit_ol.WriteResult(version=1, row_count=1, size_bytes=0, fields=[], column_map=[("out", "in", "IDENTITY")])
+    event = lancekit_ol.build_run_event(
+        operation="MERGE_INSERT",
+        job_namespace="media",
+        job_name="annotate.merge_insert",
+        inputs=[("media", "unit-1")],
+        output_namespace="media",
+        output_name="annotations",
+        event_time=_EVENT_TIME,
+        result=result,
+    )
+    assert event["outputs"][0]["facets"]["columnLineage"]["_schemaURL"] == ol.COLUMN_LINEAGE_FACET_SCHEMA_URL
 
 
 def test_catalog_write_event_conforms() -> None:
@@ -244,16 +267,16 @@ def test_lancekit_column_lineage_uses_the_modern_transformations_array() -> None
     )
     edges = Dataset.model_validate(event["outputs"][0]).column_edges
     assert edges == [
-        {
-            "out_field": "labels",
-            "namespace": "media",
-            "name": "unit-7",
-            "field": "raw_labels",
-            "type": "DIRECT",
-            "subtype": "TRANSFORMATION",
-            "description": "",
-            "masking": False,
-        }
+        ColumnLineageEdge(
+            out_field="labels",
+            namespace="media",
+            name="unit-7",
+            field="raw_labels",
+            type="DIRECT",
+            subtype="TRANSFORMATION",
+            description="",
+            masking=False,
+        )
     ]
 
 
@@ -324,7 +347,7 @@ def test_ingest_reads_facets_from_the_spec_typed_slots() -> None:
             },
         }
     )
-    assert output.statistics == (64, 4096)
+    assert output.statistics == OutputStatistics(row_count=64, size_bytes=4096)
     assert output.quality_assertions == [{"assertion": "row_count", "success": False}]
 
 

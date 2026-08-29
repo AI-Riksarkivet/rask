@@ -139,6 +139,7 @@ def publish_stage_output(
     timeout_seconds: float = 30.0,
     gate_only: bool = False,
     cascade_id: str = "",
+    originator: str = "",
     client: httpx.Client | None = None,
 ) -> PublishOutcome:
     """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
@@ -173,6 +174,13 @@ def publish_stage_output(
         # Echoed by the catalog onto `table_published`, which is the ONE hop where a batch identity
         # would otherwise be lost — the publication head mints the next token from the event id.
         "cascade_id": cascade_id,
+        # THE HUMAN THE BATCH IS FOR, across the same lost hop and for the same reason. A mover
+        # authenticates to this door AS ITSELF (`_credential` above), so the control event's actor is
+        # `service-<mover>` — an inbox actor named after a mover, which is worse than silence because
+        # it looks delivered. The person is only in this body, and the catalog decides what to do with
+        # the claim (`publication_originator`): it authorizes nothing here and the notifications plane
+        # re-derives every recipient's visibility at delivery.
+        "originator": originator,
     }
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:

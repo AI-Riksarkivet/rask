@@ -18,9 +18,10 @@ one function serve a driver that holds a `LanceDataset` and one that holds a Ray
 the IO shells, so it is separated.
 
 IT LIVES IN service-kit rather than in the medallion because the Ray job CANNOT import the service: it
-is baked into `.docker/ray-cluster.dockerfile`, which installs `--package ratch`, and ratch depends on
-`service-kit[lancekit]`. Both images therefore already carry this package. A shared module in the
-medallion would be unreachable from exactly one of its two callers.
+is baked into `.docker/ray-cluster.dockerfile`, which builds `--package ray-cluster-env` (the deps-only
+platform-environment member) from the root lock, and that environment carries `service-kit`. Both
+images therefore already have this package. A shared module in the medallion would be unreachable from
+exactly one of its two callers.
 """
 
 from __future__ import annotations

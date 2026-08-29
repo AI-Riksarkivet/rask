@@ -2,10 +2,10 @@
 
 import functools
 from pathlib import Path
-from typing import Any
 
 from storage.client import s3_client
 from storage.fs import FSSink, FSSource
+from storage.protocol import Sink, Source
 from storage.s3 import S3Sink, S3Source
 
 
@@ -31,7 +31,8 @@ def build_source(
     s3_endpoint: str | None = None,
     prefix: str = "",
     suffixes: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".tif", ".tiff"),
-) -> Any:  # noqa: ANN401
+) -> Source:
+    """An `s3://…` URI builds an :class:`~storage.s3.S3Source`, anything else a filesystem one."""
     if uri.startswith("s3://"):
         bucket, uri_prefix = split_s3_uri(uri)
         full_prefix = merge_prefix(uri_prefix, prefix)
@@ -41,7 +42,8 @@ def build_source(
     return FSSource(root=root, suffixes=suffixes)
 
 
-def build_sink(uri: str, *, s3_endpoint: str | None = None, prefix: str = "") -> Any:  # noqa: ANN401
+def build_sink(uri: str, *, s3_endpoint: str | None = None, prefix: str = "") -> Sink:
+    """An `s3://…` URI builds an :class:`~storage.s3.S3Sink`, anything else a filesystem one."""
     if uri.startswith("s3://"):
         bucket, uri_prefix = split_s3_uri(uri)
         full_prefix = merge_prefix(uri_prefix, prefix)
