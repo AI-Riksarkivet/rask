@@ -5765,3 +5765,39 @@ def test_the_producer_can_reach_the_catalog_regardless_of_the_quality_review_fla
             "not rendered. Its bronze writes would carry no table record, so no policy, protection or "
             "grant could ever name them — and the registration code skips silently when the URL is empty."
         )
+
+
+def test_the_media_head_can_register_the_bronze_it_lands() -> None:
+    """`/ingest-media` must be able to govern its own tier on every shipped configuration.
+
+    The catalog ADDRESS is the first half and the test above pins it — `/ingest-media` is served by the
+    same producer pod as `/produce`, so it inherits that fix. The second half is unique to this lane and
+    invisible from the template: `register_table` addresses only paths INSIDE the root the catalog is
+    connected to, so `MEDALLION_MEDIA_BRONZE_URI` must resolve under `MEDALLION_CATALOG_ROOT` or the
+    media head fails closed on every call. The two are rendered from DIFFERENT expressions —
+    `lance.stageBucket` honours the `medallion.buckets` zoning map for the media namespace, while the
+    catalog root is `rustfs.bucket` flat — so zoning `bronze-media` into its own bucket would make the
+    ingest door 503 with nothing in the chart looking wrong. `relative_location` is the exact seam the
+    producer uses, so this asserts registerability rather than a string resemblance.
+    """
+    import yaml
+    from medallion.services.catalog_register import RegisterError, relative_location
+
+    for review in ("false", "true"):
+        rendered = _helm_template(f"medallion.qualityReview={review}")
+        producer = next(
+            (doc for doc in yaml.safe_load_all(rendered) if doc and doc.get("kind") == "Deployment" and "medallion-producer" in doc["metadata"]["name"]),
+            None,
+        )
+        assert producer is not None, f"the medallion producer did not render at qualityReview={review}"
+        env = {item["name"]: item.get("value", "") for item in producer["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+        missing = {"MEDALLION_MEDIA_BRONZE_URI", "MEDALLION_CATALOG_ROOT", "MEDALLION_CATALOG_URL"} - set(env)
+        assert not missing, f"at medallion.qualityReview={review} the media head cannot register what it lands: {sorted(missing)} not rendered"
+        try:
+            location = relative_location(env["MEDALLION_MEDIA_BRONZE_URI"], env["MEDALLION_CATALOG_ROOT"])
+        except RegisterError as exc:  # noqa: PERF203 — one render per flag state, not a hot loop
+            pytest.fail(
+                f"at medallion.qualityReview={review} the shipped chart lands media bronze somewhere the catalog cannot name, "
+                f"so POST /ingest-media fails closed on every call: {exc}"
+            )
+        assert location, "the media bronze URI resolved to the catalog root itself — a tier must have its own location"

@@ -87,13 +87,23 @@ bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 | **medallion-producer** (media head) | `medallion-producer` | `medallion.producer:app` | `POST /ingest-media` | bronze-media write lineage + `medallion.media` |
 | **media→silver** (media lane) | `media-to-silver` | `medallion.mover:app` | `medallion.media` | — (terminal) + lineage |
 
+**Both ingest heads register before they write.** `/produce` and `/ingest-media` each attach their bronze
+tier through the catalog's `register_table` door BEFORE the first row, so the head tiers are governed
+`table:` objects exactly like the silver and gold the movers ask the catalog for — the maintenance
+policy, the protection record and every FGA grant key off that object. It is fail-closed and precedes
+every effect: a catalog refusal is a **503 + Retry-After** with nothing written, emitted or triggered,
+never a silent ungoverned write. Skipped only where there is no catalog to govern with (an empty
+`MEDALLION_CATALOG_URL`, the ungoverned dev shape) or, for `/produce`, where compute-off means no dataset
+is written at all.
+
 The 3 movers are the **same module**, differing only by `MEDALLION_*` env (from/to dataset, sub/pub
 topic, operation, author) — see `chart/values.yaml` `medallion.movers`. Triggers ride a dedicated
 `MEDALLION` JetStream stream (`medallion.>`); the OpenLineage events ride the existing `LINEAGE` stream.
 
 **The MEDIA lane (multimodal §9).** `POST /ingest-media` on medallion-producer (token-guarded like `/produce`;
-compute-on only — 409 otherwise) lands external media as a bronze **blob-v2** table at format 2.2
-(`bronze-media$objects`, one lineage input per source URI) and publishes `medallion.media`; the
+compute-on only — 409 otherwise) REGISTERS `bronze-media$objects` with the catalog, then lands external
+media as a bronze **blob-v2** table at format 2.2 (one lineage input per source URI) and publishes
+`medallion.media`; the
 `media-to-silver` mover — the SAME generic mover binary, zero media config — carries the blob forward
 and derives whatever the blob **content** supports (`medallion/services/derivers.py`: image →
 inline `thumbnail` + `embedding`; unrecognised media carries through untouched; tabular datasets are a

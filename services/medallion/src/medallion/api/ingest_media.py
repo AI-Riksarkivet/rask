@@ -36,12 +36,13 @@ async def ingest_media(
 ) -> dict[str, str] | JSONResponse:
     """Land external media as bronze blobs and trigger the media chain — the multimodal cascade head (§9).
 
-    Seeds/reads the configured external source prefix through the SourceAdapter seam, writes the bronze
-    blob-v2 table, emits the ``source → bronze`` lineage (blob schema facet), and publishes the
-    ``medallion.media`` trigger the bronze→silver media mover consumes (which then derives the inline
-    thumbnail + embedding schema-driven). 409 when the media head isn't configured (real media can't be
-    dummied — unlike ``/produce`` there is no compute-off emit); 503 when a publish fails (retryable —
-    the ingest is an idempotent overwrite). Dual-auth like ``/produce``: without a door any in-cluster
+    REGISTERS the bronze media table with the catalog, then seeds/reads the configured external source
+    prefix through the SourceAdapter seam, writes the bronze blob-v2 table, emits the ``source → bronze``
+    lineage (blob schema facet), and publishes the ``medallion.media`` trigger the bronze→silver media
+    mover consumes (which then derives the inline thumbnail + embedding schema-driven). 409 when the media
+    head isn't configured (real media can't be dummied — unlike ``/produce`` there is no compute-off
+    emit); 503 when the catalog registration or a publish fails (retryable — registration precedes every
+    effect, and the ingest is an idempotent overwrite). Dual-auth like ``/produce``: without a door any in-cluster
     pod could drive the media pipeline / fabricate provenance — and the door is also where the
     requester's identity is captured, so the runs it starts can reach the person who asked for them.
     """
@@ -68,7 +69,7 @@ async def ingest_media(
                 ),
             ),
         )
-    if result.get("status") == "publish_failed":
+    if result.get("status") in ("publish_failed", "register_failed"):
         return JSONResponse(
             status_code=503,
             media_type=_PROBLEM_JSON,
@@ -77,7 +78,12 @@ async def ingest_media(
                 ErrorCode.SERVICE_UNAVAILABLE,
                 status=503,
                 title="ServiceUnavailable",
-                detail="media ingest publish failed; retry",
+                # TWO WAYS TO REACH THIS, one contract — the same pairing `/produce`'s route makes.
+                # `register_failed` is the catalog refusing or being unreachable BEFORE any blob is
+                # written, so exactly like a failed publish nothing happened and the caller's retry
+                # (same Idempotency-Key) converges. The detail names which, because "retry" is the same
+                # advice but the thing to look at is not.
+                detail=f"media ingest {'catalog registration' if result.get('status') == 'register_failed' else 'publish'} failed; retry",
             ),
         )
     return result

@@ -354,6 +354,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pylance", extra = ["otel"] },
     { name = "service-kit", extra = ["governed", "lakehouse"] },
+    { name = "storage" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -372,6 +373,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pylance", extras = ["otel"], specifier = ">=10.0.0" },
     { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
+    { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

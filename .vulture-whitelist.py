@@ -13,7 +13,7 @@ The categories held here, all verified by reading the call site:
   · Dapr pub-sub + cron handlers (on_stage, on_bronze_arrival, on_train_trigger) — invoked by the sidecar.
   · pydantic `model_config` + `@model_validator` / `@field_validator` methods — invoked by pydantic.
   · pydantic MODEL FIELDS on response/claims schemas — "used" via serialization, not by name.
-  · Test hooks (e.g. _reset_peek_cache) and unittest.mock attributes (return_value / side_effect).
+  · Test hooks and unittest.mock attributes (return_value / side_effect).
 
 LANDMINE — do NOT "clean up" what vulture flags without reading it first. `Image.MAX_IMAGE_PIXELS` in
 services/medallion/services/media.py is reported as an "unused attribute" because it is an assignment to a

@@ -5,10 +5,16 @@
 blob-aware schema facet, then publishes the media-chain trigger — the deployed bronze→silver media mover
 consumes it and derives the inline artifacts (thumbnail + embedding) by CONTENT in the generic compute.
 
+The bronze media table it lands is REGISTERED with the catalog first, so the multimodal head's tier is a
+governed ``table:`` object exactly like the ``bronze$events`` the other head seeds and the silver-media
+the next mover derives. Until it was, the same lane was governed or not purely by which door produced it.
+
 Unlike ``/produce`` (a dummy emitter that works compute-off), media ingest is REAL data by definition, so
 it requires compute + the media settings — a disabled head returns an explicit contract the route maps to
 409 rather than silently emitting fake provenance. Best-effort on the emit; the TRIGGER publish is the
-cascade head, so its failure surfaces (503) exactly like ``/produce``.
+cascade head, so its failure surfaces (503) exactly like ``/produce``. A REGISTRATION failure is not
+best-effort either: it happens before any byte is written, so the call reports ``register_failed``, the
+route answers 503, and nothing half-ran.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from functools import partial
 
 import pyarrow.fs as pafs
 from dapr.aio.clients import DaprClient
@@ -24,8 +31,9 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from PIL import Image
 
-from medallion.core.config import MedallionSettings
+from medallion.core.config import MedallionSettings, dedicated_token_for
 from medallion.schemas.events import build_run_event
+from medallion.services import catalog_register
 from medallion.services.ingest import IngestResult, ingest_to_bronze
 from service_kit import dapr_publish
 from service_kit.lakehouse import outbox
@@ -96,11 +104,18 @@ def _split_source_uri(source_uri: str) -> tuple[str, str]:
 
 
 async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str, originator: str | None = None) -> dict[str, str]:
-    """Land external media as bronze blobs, emit its lineage, and trigger the media chain.
+    """Register, land external media as bronze blobs, emit its lineage, and trigger the media chain.
+
+    It REGISTERS ``bronze-media$objects`` with the catalog before writing a blob, so the tier this head
+    lands is a governed object: the maintenance policy, the protection record and every FGA grant key off
+    it. Skipped exactly when there is no catalog to govern with — no ``MEDALLION_CATALOG_URL`` (the
+    ungoverned dev shape); a head that gets past the enablement check always writes bytes worth governing.
 
     Returns ``{"status": "media_disabled"}`` when the head isn't configured (the route maps it to 409 —
-    real media can't be dummied), ``{"status": "publish_failed"}`` when the emit or the trigger publish
-    fails (→ 503, retryable: the ingest is an idempotent overwrite), else ``{"status": "ingested"}``.
+    real media can't be dummied), ``{"status": "register_failed"}`` when the catalog refuses or is
+    unreachable (→ 503, and nothing was written, emitted or triggered), ``{"status": "publish_failed"}``
+    when the emit or the trigger publish fails (→ 503, retryable: the ingest is an idempotent overwrite),
+    else ``{"status": "ingested"}``.
     """
     if not media_head_enabled(settings):
         return {"status": "media_disabled"}
@@ -110,6 +125,60 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
     # a span that had already ended. A media run whose chain never fired reported success under the
     # one name an operator would filter on.
     with tracer.start_as_current_span("medallion.ingest_media") as span:
+        # GOVERNANCE PRECEDES THE FIRST BLOB. This head wrote `bronze-media$objects` with no catalog
+        # call at all — the identical defect `/produce` carried: the dataset held no `table:` object,
+        # so `policy/set` answered 404 "table has no storage location to police", no `_protection/`
+        # record was reachable and no FGA grant could name it, while the silver-media derived from it
+        # one hop later was governed the whole time. Registering here closes that in the movers' own
+        # order (`test_no_rows_without_a_catalog_record`): ask first, write second, so no window exists
+        # in which media blobs sit on storage the catalog has no record of.
+        #
+        # IT TELLS RATHER THAN ASKS, exactly like the events head and for the same reason: this URI is a
+        # DEPLOYMENT CONTRACT. `chart/templates/medallion.yaml` renders `MEDALLION_MEDIA_BRONZE_URI` and
+        # the media mover's `fromNamespace`-derived `MEDALLION_FROM_URI` from one `$mediaBronzeNs`
+        # expression, and the `medallion.media` trigger carries no `from_uri` — so a vended location
+        # would leave that mover opening a path nothing writes to, the media lane's first leg dead with
+        # nothing red.
+        #
+        # A REFUSAL FAILS THE REQUEST, and it is deliberately NOT a new way to strand a media run: this
+        # happens before the seed, before the ingest, before the emit and before the trigger, so nothing
+        # has half-happened — the route answers 503 + Retry-After, the same contract a failed publish
+        # already has, and a retry carrying the same Idempotency-Key converges (the ingest is an
+        # idempotent overwrite). Best-effort was the alternative and it reinstates this very defect
+        # silently: an ungoverned tier nobody is told about.
+        #
+        # ONLY `catalog_url` GATES IT: `media_head_enabled` above already established compute and a
+        # bronze URI, so unlike `/produce` there is no pure-emit shape here to exclude — a media ingest
+        # that reaches this line always writes bytes worth governing. An empty catalog URL is the
+        # ungoverned dev/demo shape the movers keep the same escape hatch for.
+        #
+        # NO NEW CONTROL ACTION: this is the catalog's own register door, so the ownership seed, the
+        # `table_registered` control event and the REGISTER_TABLE lineage marker are the ones that door
+        # already emits. `_bronze_write_dataset` excludes `register_table` as byte-free, so the marker
+        # fires no cascade on either lane.
+        if settings.catalog_url:
+            try:
+                await run_in_threadpool(
+                    partial(
+                        catalog_register.register_written_dataset,
+                        catalog_url=settings.catalog_url,
+                        catalog_root=settings.catalog_root,
+                        table_id=settings.media_bronze_dataset,
+                        dataset_uri=settings.media_bronze_uri,
+                        delimiter=settings.delimiter,
+                        token=settings.catalog_token,
+                        app_token=settings.app_api_token,
+                        service_identity=settings.catalog_service_identity,
+                        dedicated_token=dedicated_token_for(settings),
+                    )
+                )
+            except catalog_register.RegisterError as exc:
+                span.set_status(Status(StatusCode.ERROR, "register_failed"))
+                log.warning(
+                    "medallion_media_register_failed",
+                    extra={"token": token, "dataset": settings.media_bronze_dataset, "error": str(exc)},
+                )
+                return {"status": "register_failed", "token": token}
         # Idempotency: reuse a caller-supplied key (its 503-retry contract) so a retry MERGEs on the same
         # deterministic run_ids instead of double-firing the media chain (bug hunt 2026-07-13).
         result = await run_in_threadpool(_seed_and_ingest, settings)
