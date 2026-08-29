@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 
 import pytest
 import requests
@@ -113,6 +114,12 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     # for the human whose tenancy is being asserted.
     if PROJECT and ADMIN_TOKEN:
         headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    # `Idempotency-Key` is REQUIRED by the route (`api/produce.py`'s header param carries no default),
+    # not optional as that handler's own docstring still claimed. Omitting it 422s BEFORE any auth or
+    # cascade work, so this suite asserted 202 against a door it could never reach — the cascade
+    # coverage read as green while proving nothing. One key per drive: the route pairs it with its own
+    # 503+Retry-After contract, so a retry of THIS drive must reuse it to converge rather than produce twice.
+    headers = {**headers, "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"}
     produced = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=8)
     assert produced.status_code == 202 and produced.json()["status"] == "produced", produced.text
     #: The cascade token, which is also the handle on any promotion this drive holds — the review

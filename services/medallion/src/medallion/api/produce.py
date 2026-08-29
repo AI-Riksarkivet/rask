@@ -78,7 +78,8 @@ async def produce(
     could reach ``medallion-producer:8000`` could drive the pipeline / fabricate medallion provenance. No-op in dev
     (unset token); enforced once APP_API_TOKEN is set. A NetworkPolicy (chart) is the network-isolation layer.
 
-    ``Idempotency-Key`` (optional) is the retry pairing this route's own 503+Retry-After contract demands:
+    ``Idempotency-Key`` (REQUIRED — the header param above carries no default, so a caller omitting it
+    is refused 422 before any auth or cascade work) is the retry pairing this route's own 503+Retry-After contract demands:
     a retry that REUSES the key converges onto the same cascade token (deterministic run_ids → the graph
     MERGEs the duplicate head) instead of double-firing two unrelated bronze→gold runs.
 

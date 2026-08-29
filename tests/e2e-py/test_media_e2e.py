@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 
 import pytest
 import requests
@@ -71,6 +72,11 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
     runs_before = len(before.json().get("runs", []))
 
     headers = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
+    # `Idempotency-Key` is REQUIRED by the route, exactly as on `/produce` — omitting it 422s before any
+    # auth or lane work, so this suite asserted 202 against a door it could never reach. Both cascade
+    # suites carried the same stale omission, which is why the medallion e2e coverage read green while
+    # proving nothing about the lane.
+    headers = {**headers, "Idempotency-Key": f"e2e-media-{uuid.uuid4().hex[:16]}"}
     resp = requests.post(f"{lance_ray}/ingest-media", headers=headers, timeout=60)
     if resp.status_code == 409:
         # The baseline demo stack runs the cascade compute-off (dummy lineage-only movers) — the media
