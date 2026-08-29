@@ -324,7 +324,3 @@ def create_empty(dataset_uri: str, schema: pa.Schema, external_base: str | None 
         **CREATION_FLAGS,
     )
     return ds.version
-
-
-def fragments_to_json(fragments: Sequence[object]) -> str:
-    return json.dumps([str(f) for f in fragments])

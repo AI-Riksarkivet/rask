@@ -82,14 +82,13 @@ class _Verifier:
 
 
 def _run_authorize_train(monkeypatch: pytest.MonkeyPatch, *, app_token: str, authz: str | None, dapr_token: str | None = None) -> str | None:
-    monkeypatch.setenv("APP_API_TOKEN", app_token)
-
     async def allow(_client: object, **_kw: object) -> bool:
         return True
 
     monkeypatch.setattr(produce_auth.fga, "check", allow)
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=_Verifier("alice")))))
-    settings = cast(MedallionSettings, SimpleNamespace(oidc_enabled=True, produce_admin_project="acme"))
+    # The token rides SETTINGS (MED-009): the door reads `settings.app_api_token`, never the raw env.
+    settings = cast(MedallionSettings, SimpleNamespace(oidc_enabled=True, produce_admin_project="acme", app_api_token=app_token))
     return asyncio.run(
         produce_auth.authorize_train(
             request,

@@ -27,6 +27,8 @@ import json
 import logging
 from typing import Any
 
+from pydantic import BaseModel
+
 from annotator.core.config import get_annotator_settings
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan
 from annotator.projects.saga import PublishOutcome, run_publish
@@ -111,10 +113,20 @@ def publish_token(settings: Any) -> str | None:
     response = httpx.post(settings.publish_token_url, data=data, auth=auth, timeout=15.0)
     if response.status_code >= 400:
         raise RuntimeError(f"the IdP refused the publish identity: HTTP {response.status_code} {response.text[:200]}")
-    token = response.json().get("id_token") or response.json().get("access_token")
+    payload = response.json()
+    token = payload.get("id_token") or payload.get("access_token")
     if not token:
         raise RuntimeError("the IdP's token response carries neither id_token nor access_token")
     return str(token)
+
+
+class CreateTableResult(BaseModel):
+    """What the catalog's create answers with, as far as the saga cares: the table version.
+
+    ``version`` mirrors the SDK response's attribute of the same name, so `CatalogPublisher` reads
+    an injected SDK-shaped fake and this model through one `getattr`."""
+
+    version: int | None = None
 
 
 class _HttpCreateApi:
@@ -136,7 +148,7 @@ class _HttpCreateApi:
         source_version: int | None = None,
         _headers: dict[str, str] | None = None,
         _request_timeout: float = 60.0,
-    ) -> Any:
+    ) -> CreateTableResult:
         from urllib.parse import quote  # noqa: PLC0415
 
         import httpx  # noqa: PLC0415 - publish path only
@@ -163,10 +175,7 @@ class _HttpCreateApi:
 
             raise ApiException(status=response.status_code, reason=response.text[:500])
 
-        class _Resp:
-            version = response.json().get("version")
-
-        return _Resp()
+        return CreateTableResult(version=response.json().get("version"))
 
 
 class CatalogPublisher:

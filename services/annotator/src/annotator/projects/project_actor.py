@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -469,8 +470,6 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
         the safe direction: the publish re-reads every task and refuses a pick that is no longer
         accepted, and `task_state_changed` voids a pick the moment its target leaves `accepted`.
         """
-        import re  # noqa: PLC0415 - only this method needs it
-
         from annotator.projects.machines import FROZEN_PROJECT_STATES  # noqa: PLC0415 - avoids widening the module import surface
 
         group = str(payload["group"])

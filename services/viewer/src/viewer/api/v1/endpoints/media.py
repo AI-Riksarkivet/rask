@@ -18,6 +18,7 @@ import logging
 import math
 import re
 from collections.abc import Iterator
+from enum import Enum
 from io import BytesIO
 from typing import Annotated
 from urllib.parse import quote
@@ -26,6 +27,7 @@ import lance
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from lance.blob import BlobFile
+from pydantic import BaseModel
 
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from service_kit.governed.audit import FAILURE, audit
@@ -152,29 +154,46 @@ def _stream_handle(blob: BlobFile | BytesIO, size: int) -> Iterator[bytes]:
             yield chunk
 
 
-#: A Range header the server does not honor as a single byte range: the
-#: caller should IGNORE it and serve the full 200 body (RFC 9110 §14.2 — an
-#: unrecognized unit or a form we don't support must not become a 416).
-IGNORE_RANGE = "ignore"
+class RangeVerdict(Enum):
+    """A Range header the server will not serve as a 206 — and WHY, since the two
+    answers differ: IGNORE means serve the full 200 body (RFC 9110 §14.2 — an
+    unrecognized unit or an unsupported form must not become a 416); UNSATISFIABLE
+    means a well-formed single ``bytes=`` range the body cannot satisfy (→ 416).
+
+    An enum plus :class:`ByteRange` rather than the old ``tuple | str-sentinel |
+    None`` (VS-20): three anonymous shapes forced the caller to decode the answer
+    by rebinding its header variable, and a string sentinel is one typo away from
+    a header value.
+    """
+
+    IGNORE = "ignore"
+    UNSATISFIABLE = "unsatisfiable"
 
 
-def parse_range(header: str, total: int) -> tuple[int, int] | str | None:
-    """Classify a Range header.
+class ByteRange(BaseModel):
+    """A satisfiable inclusive byte range — the 206 answer."""
 
-    Returns ``(start, end)`` for a satisfiable single ``bytes=`` range,
-    :data:`IGNORE_RANGE` for a header to ignore (unknown unit, malformed, or a
-    valid-but-unsupported multi-range → serve 200 per RFC 9110 §14.2), or
-    ``None`` only for a well-formed single ``bytes=`` range that is
-    *unsatisfiable* (→ 416).
+    start: int
+    end: int
+
+
+def parse_range(header: str, total: int) -> ByteRange | RangeVerdict:
+    """Classify a Range header into exactly one of the three RFC outcomes.
+
+    Returns a :class:`ByteRange` for a satisfiable single ``bytes=`` range,
+    :attr:`RangeVerdict.IGNORE` for a header to ignore (unknown unit, malformed,
+    or a valid-but-unsupported multi-range → serve 200 per RFC 9110 §14.2), or
+    :attr:`RangeVerdict.UNSATISFIABLE` only for a well-formed single ``bytes=``
+    range the body cannot satisfy (→ 416).
     """
     m = re.match(r"^\s*bytes=(\d*)-(\d*)\s*$", header)
     if not m:
         # Not a single bytes= range: unknown unit, junk, or multipart. The RFC
         # requires ignoring it (200), never answering 416.
-        return IGNORE_RANGE
+        return RangeVerdict.IGNORE
     s, e = m.group(1), m.group(2)
     if s == "" and e == "":
-        return IGNORE_RANGE
+        return RangeVerdict.IGNORE
     if s == "":
         length = int(e)
         start = max(0, total - length)
@@ -183,8 +202,8 @@ def parse_range(header: str, total: int) -> tuple[int, int] | str | None:
         start = int(s)
         end = int(e) if e else total - 1
     if start > end or start >= total:
-        return None  # well-formed but unsatisfiable → 416
-    return start, min(end, total - 1)
+        return RangeVerdict.UNSATISFIABLE
+    return ByteRange(start=start, end=min(end, total - 1))
 
 
 def payload_size(ds: lance.LanceDataset, column: str, rowid: int) -> int:
@@ -444,23 +463,21 @@ def media(doc_id: str, request: Request, state: StateDep, dataset: DatasetParam 
     range_hdr = request.headers.get("range")
     if range_hdr:
         rng = parse_range(range_hdr, total)
-        if rng is None:
+        if rng is RangeVerdict.UNSATISFIABLE:
             return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
-        if rng == IGNORE_RANGE:
-            range_hdr = None  # fall through to the full 200 body
-    if range_hdr and isinstance(rng, tuple):
-        start, end = rng
-        return StreamingResponse(
-            stream_blob_range(ds, binding.media_blob, rowid, start=start, end=end),
-            status_code=206,
-            media_type=mime,
-            headers={
-                "Content-Length": str(end - start + 1),
-                "Content-Range": f"bytes {start}-{end}/{total}",
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "no-store",
-            },
-        )
+        if isinstance(rng, ByteRange):
+            return StreamingResponse(
+                stream_blob_range(ds, binding.media_blob, rowid, start=rng.start, end=rng.end),
+                status_code=206,
+                media_type=mime,
+                headers={
+                    "Content-Length": str(rng.end - rng.start + 1),
+                    "Content-Range": f"bytes {rng.start}-{rng.end}/{total}",
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "no-store",
+                },
+            )
+        # RangeVerdict.IGNORE: fall through to the full 200 body.
 
     return StreamingResponse(
         stream_blob_range(ds, binding.media_blob, rowid, start=0, end=total - 1),

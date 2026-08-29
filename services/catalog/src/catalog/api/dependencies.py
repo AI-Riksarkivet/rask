@@ -24,11 +24,20 @@ from catalog.core.namespace import build_namespace_for_root
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import warehouses
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
+from service_kit.governed.user_state import UserStateStore
 
 
 log = logging.getLogger(__name__)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_user_state_store(request: Request) -> UserStateStore | None:
+    """The user-state store client built in the app lifespan, or ``None`` if it was never wired."""
+    return getattr(request.app.state, "user_state", None)
+
+
+UserStateStoreDep = Annotated[UserStateStore | None, Depends(get_user_state_store)]
 
 
 async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: str) -> str | None:
@@ -139,8 +148,12 @@ def _fresh_cached_binding(cache: dict[str, dict[str, str]], top_ns: str, ttl_sec
     return entry
 
 
-def _namespace_for_root(request: Request, settings: Settings, root_uri: str) -> LanceNamespace:
-    """The (cached) namespace connection rooted at ``root_uri`` — one per warehouse bucket."""
+def namespace_for_root(request: Request, settings: Settings, root_uri: str) -> LanceNamespace:
+    """The (cached) namespace connection rooted at ``root_uri`` — one per warehouse bucket.
+
+    PUBLIC on purpose — the warehouse/namespace lifecycle endpoints resolve bucket-rooted connections
+    through it — and every caller must pair it with a warehouse deactivation-status gate
+    (``test_no_warehouse_bucket_access_bypasses_the_deactivation_gate`` refuses one that does not)."""
     conns: dict[str, LanceNamespace] = request.app.state.warehouse_namespaces
     conn = conns.get(root_uri)
     if conn is None:
@@ -173,7 +186,7 @@ async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespa
     root = await _resolve_warehouse_root(request, settings, top_ns)
     if not root or root == settings.root:
         return default_ns
-    return _namespace_for_root(request, settings, root)
+    return namespace_for_root(request, settings, root)
 
 
 async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str) -> LanceNamespace:
@@ -192,7 +205,7 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
     root = await _resolve_warehouse_root(request, settings, top_ns)
     if not root or root == settings.root:
         return default_ns
-    return _namespace_for_root(request, settings, root)
+    return namespace_for_root(request, settings, root)
 
 
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]

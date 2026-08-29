@@ -20,7 +20,7 @@ from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
 from service_kit.media.authz import corpus_object
 from service_kit.media.deps import StateDep
-from service_kit.media.state import AppState, dataset_handle
+from service_kit.media.state import AppState, dataset_handle, ensure_registry
 from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, FgaClientDep, SettingsDep
 
 
@@ -50,16 +50,11 @@ class DatasetsResponse(BaseModel):
 
 
 def _registry(state: AppState) -> DatasetRegistry:
-    """The registry behind ``dataset_handle`` — same lazy-init, needed here
-    because enumeration has no dataset id to resolve through it."""
-    if state.registry is None:
-        state.registry = DatasetRegistry(
-            state.settings.registry_root,
-            state.settings.descriptor_dir,
-            state.settings.default_dataset_id,
-            storage_options=state.settings.storage_options(),
-        )
-    return state.registry
+    """The registry behind ``dataset_handle``, named here because enumeration
+    has no dataset id to resolve through it. Construction lives ONLY in
+    ``service_kit.media.state.ensure_registry`` — an unlocked copy of that
+    lazy-init used to sit here and raced the guarded one (SK-06)."""
+    return ensure_registry(state)
 
 
 @router.get("/datasets")

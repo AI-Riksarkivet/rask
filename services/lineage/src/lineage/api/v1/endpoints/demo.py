@@ -5,7 +5,7 @@ lineage.
 This is **demo instrumentation, not core lineage**. It is mounted only when
 ``LINEAGE_DEMO_DATA_ENABLED`` is set, reads object storage directly with pylance (the same library
 the catalog uses), and never touches the AGE graph. The handler is ``async def`` (it awaits the
-``require_metadata_access`` governance gate), so the blocking pylance/S3 reads are dispatched via
+batch ``DatasetFilter`` governance gate), so the blocking pylance/S3 reads are dispatched via
 ``run_in_threadpool`` — never run directly on the event loop.
 """
 
@@ -13,16 +13,15 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 import lance
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import PermissionDeniedError
+from pydantic import BaseModel, Field
 
 from lineage.api.dependencies import SettingsDep
-from lineage.api.fga_deps import require_metadata_access
-from lineage.api.security import CurrentToken
+from lineage.api.fga_deps import FilterDep
 from lineage.core.config import get_settings, storage_options
 from lineage.schemas import DemoDataset, DemoDatasets, DemoField, DemoVersion
 from service_kit.lakehouse import schema
@@ -68,25 +67,39 @@ def _read_lineage_jsonb(ds: Any) -> dict[str, Any] | None:
         return None
 
 
-# --- Version-keyed peek cache (§2 perf, 2026-07-11). The peek's cost grew LINEARLY with total
-# versions: one S3 dataset-open PER VERSION per dataset, polled every 2s. Lance versions are
-# IMMUTABLE, so a version's schema entry can never change once read → per-version entries cache
-# until they scroll out of the newest-K window. Incarnation identity (review 2026-07-11): a
-# delete-and-recreate at the same URI restarts version numbers, and the new incarnation can reach
-# ANY version count while nobody polls — so a bare version number is NOT a valid cache key. Every
-# entry is therefore validated against the live manifest TIMESTAMP from ``ds.versions()`` (already
-# fetched each tick — no extra opens): same (version, timestamp) = same immutable manifest; a
-# mismatch = a dead incarnation's entry, rebuilt. Steady-state tick cost: ONE dataset-open (the
-# probe) + the versions() listing, zero per-version opens. Benign races only (demo tier,
-# threadpool): a concurrent rebuild duplicates work, never corrupts.
-_PAYLOADS: dict[str, tuple[int, str | None, DemoDataset]] = {}  # uri -> (version, stamp, payload)
-_VERSION_FIELDS: dict[str, dict[int, DemoVersion]] = {}  # uri -> version -> entry (stamp inside)
+class PeekCache(BaseModel):
+    """Version-keyed peek cache (§2 perf, 2026-07-11) — ONE PER APP INSTANCE, on ``app.state``.
+
+    The peek's cost grew LINEARLY with total versions: one S3 dataset-open PER VERSION per dataset,
+    polled every 2s. Lance versions are IMMUTABLE, so a version's schema entry can never change once
+    read → per-version entries cache until they scroll out of the newest-K window. Incarnation
+    identity (review 2026-07-11): a delete-and-recreate at the same URI restarts version numbers, and
+    the new incarnation can reach ANY version count while nobody polls — so a bare version number is
+    NOT a valid cache key. Every entry is therefore validated against the live manifest TIMESTAMP from
+    ``ds.versions()`` (already fetched each tick — no extra opens): same (version, timestamp) = same
+    immutable manifest; a mismatch = a dead incarnation's entry, rebuilt. Steady-state tick cost: ONE
+    dataset-open (the probe) + the versions() listing, zero per-version opens. Benign races only (demo
+    tier, threadpool): a concurrent rebuild duplicates work, never corrupts.
+
+    App-scoped rather than module-global (F-LIN-15): module-level mutables bleed across app instances
+    and needed a test-only reset seam; a per-app object needs neither.
+    """
+
+    payloads: dict[str, tuple[int, str | None, DemoDataset]] = Field(default_factory=dict)  # uri -> (version, stamp, payload)
+    version_fields: dict[str, dict[int, DemoVersion]] = Field(default_factory=dict)  # uri -> version -> entry (stamp inside)
 
 
-def _reset_peek_cache() -> None:
-    """Test seam: drop both cache layers."""
-    _PAYLOADS.clear()
-    _VERSION_FIELDS.clear()
+def get_peek_cache(request: Request) -> PeekCache:
+    """The app's peek cache, created lazily on first use (the demo router mounts conditionally, so the
+    lifespan does not know about it). No await between the read and the write → no async race."""
+    cache = getattr(request.app.state, "demo_peek_cache", None)
+    if cache is None:
+        cache = PeekCache()
+        request.app.state.demo_peek_cache = cache
+    return cache
+
+
+PeekCacheDep = Annotated[PeekCache, Depends(get_peek_cache)]
 
 
 def _stamp(entry: dict[str, Any]) -> str | None:
@@ -94,7 +107,7 @@ def _stamp(entry: dict[str, Any]) -> str | None:
     return timestamp.isoformat() if hasattr(timestamp, "isoformat") else None
 
 
-def _read_dataset(name: str, uri: str, opts: dict[str, str], max_versions: int) -> DemoDataset:
+def _read_dataset(cache: PeekCache, name: str, uri: str, opts: dict[str, str], max_versions: int) -> DemoDataset:
     try:
         ds = lance.dataset(uri, storage_options=opts)  # the ONE per-tick open: the change probe
     except (OSError, ValueError, RuntimeError) as exc:
@@ -106,10 +119,10 @@ def _read_dataset(name: str, uri: str, opts: dict[str, str], max_versions: int) 
     current = int(ds.version)
     entries = list(ds.versions())[-max_versions:]  # newest K — bounds the cold tick too
     head_stamp = _stamp(entries[-1]) if entries else None
-    cached = _PAYLOADS.get(uri)
+    cached = cache.payloads.get(uri)
     if cached is not None and cached[0] == current and cached[1] == head_stamp:
         return cached[2]  # unchanged tick, same incarnation — zero further S3 work
-    known = _VERSION_FIELDS.setdefault(uri, {})
+    known = cache.version_fields.setdefault(uri, {})
     versions: list[DemoVersion] = []
     for entry in entries:
         number = int(entry["version"])
@@ -143,26 +156,27 @@ def _read_dataset(name: str, uri: str, opts: dict[str, str], max_versions: int) 
         versions=versions,
         lineage_jsonb=_read_lineage_jsonb(ds) if name == "gold$catalog" else None,
     )
-    _PAYLOADS[uri] = (current, head_stamp, payload)
+    cache.payloads[uri] = (current, head_stamp, payload)
     return payload
 
 
 @router.get("/datasets")
-async def demo_datasets(request: Request, settings: SettingsDep, token: CurrentToken) -> DemoDatasets:
+async def demo_datasets(settings: SettingsDep, datasets: FilterDep, cache: PeekCacheDep) -> DemoDatasets:
     """The medallion datasets as they currently exist on S3 — schema per Lance version + rows.
 
     GOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3
     with the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every
-    other lineage read gates on ``can_get_metadata``; this now does the same — authenticate (401 unauth /
-    503 if FGA unwired, via ``require_metadata_access``) and filter to the datasets the caller may read.
+    other lineage read gates on ``can_get_metadata``; this does the same via the shared batch filter —
+    ONE ``batch_check`` over the layout, not a per-dataset round-trip loop (F-LIN-13). The ladder is
+    unchanged: 401 unauthenticated / 503 FGA unwired propagate; a denied dataset is dropped, not fatal.
     FGA off → pass-through (the dev demo)."""
+    # Gate FIRST — 401/503 must fire before this handler touches any storage configuration or S3.
+    visible = await datasets.visible([name for name, _ in _LAYOUT])
     opts = _storage_options()
     bucket = settings.s3_bucket
     out: list[DemoDataset] = []
     for name, path in _LAYOUT:
-        try:
-            await require_metadata_access(name, request, settings, token)  # 401/503 propagate; 403 → skip
-        except PermissionDeniedError:
+        if name not in visible:
             continue
-        out.append(await run_in_threadpool(_read_dataset, name, f"s3://{bucket}/{path}", opts, settings.demo_max_versions))
+        out.append(await run_in_threadpool(_read_dataset, cache, name, f"s3://{bucket}/{path}", opts, settings.demo_max_versions))
     return DemoDatasets(datasets=out)

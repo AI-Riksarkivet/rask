@@ -38,7 +38,7 @@ class ReconcileStatus(BaseModel):
     storage_version: int | None = None
     in_sync: bool
     status: ReconcileState
-    dangling_blob_columns: list[str] = []
+    dangling_blob_columns: list[str] = Field(default_factory=list)
     # Why the dataset could not be opened, when ``status`` is UNREADABLE. Carried rather than logged
     # because an unexplained UNREADABLE is no more actionable than a wrong MISSING_ON_STORAGE — the
     # reason is what tells an operator whether to upgrade a reader or fix a credential.
@@ -49,7 +49,7 @@ class ReconcileStatus(BaseModel):
     # Declared-columns patrol (Batch 23): columns a consumer DECLARED (chart requiredColumns) that
     # the dataset's CURRENT storage schema no longer carries — the estate-wide re-check of the
     # gate's column_declared assertion (a write that bypassed the mover skips the gate; this doesn't).
-    missing_declared_columns: list[str] = []
+    missing_declared_columns: list[str] = Field(default_factory=list)
 
 
 class DatasetRef(BaseModel):

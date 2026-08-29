@@ -12,7 +12,7 @@ per-request dataset opens (one per listed model); truncation is deterministic (n
 What survives is the envelope: a slice that reports neither a total nor a continuation is truncation
 wearing pagination's clothes, and three siblings in this service already do better.
 
-FIXED WITH THE HELPER THAT ALREADY SHIPS HERE, per the Fix: `tables.py::_paginate` is a stateless
+FIXED WITH THE HELPER THAT ALREADY SHIPS HERE, per the Fix: `catalog.api.pagination.paginate` is a stateless
 keyset over a sorted name list — the cursor is the previous page's last name — which is exactly this
 listing's shape. Reusing it keeps ONE cursor implementation in the service rather than a second that
 can drift from it.
@@ -40,19 +40,19 @@ def test_the_response_hands_back_the_next_cursor() -> None:
 
 def test_a_complete_listing_reports_no_continuation() -> None:
     """`None` must mean "that was everything" — otherwise a client pages forever."""
-    page, token = models_ep._paginate(["a", "b", "c"], None, 10)
+    page, token = models_ep.paginate(["a", "b", "c"], None, 10)
     assert (page, token) == (["a", "b", "c"], None)
 
 
 def test_a_truncated_listing_hands_back_its_last_name() -> None:
-    page, token = models_ep._paginate(["a", "b", "c"], None, 2)
+    page, token = models_ep.paginate(["a", "b", "c"], None, 2)
     assert page == ["a", "b"]
     assert token == "b", "the cursor must be the last name served, or the next page overlaps or skips"
 
 
 def test_the_cursor_resumes_after_it() -> None:
     """Strictly after, not at — a cursor that re-serves its own row duplicates a model per page."""
-    page, token = models_ep._paginate(["a", "b", "c"], "b", 10)
+    page, token = models_ep.paginate(["a", "b", "c"], "b", 10)
     assert page == ["c"]
     assert token is None
 
@@ -64,4 +64,4 @@ def test_the_helper_is_the_one_the_table_listing_uses() -> None:
     """
     from catalog.api.v1.endpoints import tables as tables_ep
 
-    assert models_ep._paginate is tables_ep._paginate, "the models listing has its own cursor implementation"
+    assert models_ep.paginate is tables_ep.paginate, "the models listing has its own cursor implementation"

@@ -23,8 +23,8 @@ The rule is that a streaming generator must not raise once the headers are gone:
 handlers are out of reach and the status is already chosen. So the decision moves to the ROUTE,
 before any response object exists — which is also the only place that can answer with a status.
 
-The range branch was already fine and stays pinned: `parse_range(hdr, 0)` returns None because
-0 > -1, so it answers a clean 416.
+The range branch was already fine and stays pinned: `parse_range(hdr, 0)` answers
+`RangeVerdict.UNSATISFIABLE` because 0 > -1, so it answers a clean 416.
 """
 
 from __future__ import annotations
@@ -80,4 +80,4 @@ def test_a_present_payload_is_not_refused(tmp_path: Path) -> None:
 
 def test_the_range_branch_still_answers_416(tmp_path: Path) -> None:
     """The satisfiability answer for a zero-length body is 416, and it was already correct."""
-    assert media_ep.parse_range("bytes=0-10", 0) is None
+    assert media_ep.parse_range("bytes=0-10", 0) is media_ep.RangeVerdict.UNSATISFIABLE

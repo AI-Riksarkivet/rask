@@ -16,7 +16,7 @@ from typing import Any, cast
 import pytest
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from lance_namespace import ServiceUnavailableError, UnsupportedOperationError
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE, SUCCESS, configure_audit
 from service_kit.governed.oidc import IDToken
@@ -104,12 +104,13 @@ def test_userset_grantee_passes_through_verbatim(monkeypatch: pytest.MonkeyPatch
 
 
 def test_derived_can_relation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(UnsupportedOperationError):
+    # InvalidInput (400), not UnsupportedOperation (501): the rung NAME is client input — catalog-api-10.
+    with pytest.raises(InvalidInputError):
         _run(monkeypatch, user="bob", relation="can_read_data", grant=True)
 
 
 def test_structural_parent_edge_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(UnsupportedOperationError):
+    with pytest.raises(InvalidInputError):
         _run(monkeypatch, user="bob", relation="parent", grant=True)
 
 

@@ -28,16 +28,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal
 
 from fastapi import APIRouter
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
-from pydantic import BaseModel
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
+from catalog.schemas import MeProject, MeResponse
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 
@@ -51,23 +50,6 @@ router = APIRouter(prefix="/v1/me", tags=["me"])
 # ~8s, and the wrapper's default bounded-retry ladder alone can exceed it — so each call runs a single
 # attempt (retry_attempts=1) under the shared deadline and degrades on expiry.
 _LOOKUP_BUDGET_SECONDS = 2.0
-
-
-class MeProject(BaseModel):
-    """One tenant the caller belongs to, at their strongest role (``admin`` wins over ``member``)."""
-
-    project: str
-    role: Literal["admin", "member"]
-
-
-class MeResponse(BaseModel):
-    """The caller's self-describe: verified claims + effective (possibly degraded) FGA standing."""
-
-    sub: str
-    name: str | None
-    email: str | None
-    estate_admin: bool
-    projects: list[MeProject]
 
 
 def _claim(token: IDToken, name: str) -> str | None:

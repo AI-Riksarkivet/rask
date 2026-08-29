@@ -10,6 +10,7 @@ before (RASK_LANDING §4.2).
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import pyarrow.fs as pafs
@@ -25,7 +26,20 @@ def join(root: str | Path, name: str) -> str:
 
 
 def _s3fs(storage_options: dict[str, str]) -> tuple[pafs.S3FileSystem, str]:
-    """A pyarrow S3 filesystem from Lance ``storage_options`` + the scheme-stripped host."""
+    """A pyarrow S3 filesystem from Lance ``storage_options`` + the scheme-stripped host.
+
+    Memoized per distinct option set: ``list_lance_stems``/``exists`` run on every
+    dataset resolution, and building a fresh filesystem (and its connection pool)
+    each call was pure waste — the object is immutable and thread-safe, so one per
+    credential/endpoint set is safe to share. The small bound keeps rotated
+    credentials from accumulating dead entries.
+    """
+    return _s3fs_for(frozenset(storage_options.items()))
+
+
+@lru_cache(maxsize=8)
+def _s3fs_for(options: frozenset[tuple[str, str]]) -> tuple[pafs.S3FileSystem, str]:
+    storage_options = dict(options)
     endpoint = storage_options.get("endpoint", "")
     scheme = "http" if endpoint.startswith("http://") else "https"
     host = endpoint.split("://", 1)[-1]

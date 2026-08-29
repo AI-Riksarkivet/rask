@@ -24,28 +24,18 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.control_buffer import ControlEventBuffer
-from service_kit.control_events import CatalogControlEvent
+from catalog.schemas import EventsResponse
 from service_kit.governed.audit import SUCCESS, audit
 
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
-
-
-class EventsResponse(BaseModel):
-    """A poll response: control events strictly after the caller's cursor, the new head cursor, and a reset
-    flag (``True`` when the client's cursor fell off the bounded buffer → the console should re-read all)."""
-
-    events: list[CatalogControlEvent]
-    cursor: int
-    reset: bool
 
 
 @router.get("")

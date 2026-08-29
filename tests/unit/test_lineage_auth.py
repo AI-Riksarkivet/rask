@@ -225,17 +225,22 @@ def test_enforce_author_keeps_body_when_unauthenticated() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _api_routes(app: Any) -> list[APIRoute]:
+def _api_routes(app: Any) -> list[Any]:
     """Flatten the app's routes, resolving starlette 1.3's lazy ``_IncludedRouter`` wrappers — the lineage
-    routes now live under ``include_router``, not directly on ``app.routes`` as when main.py was flat."""
-    out: list[APIRoute] = []
+    routes now live under ``include_router``, not directly on ``app.routes`` as when main.py was flat.
+
+    Wrappers are resolved via ``effective_route_contexts()``, NOT by walking ``original_router.routes``:
+    only the effective view carries include-time prefixes (the ingest router mounts under ``/api/v1`` at
+    the COMPOSITION layer — F-LIN-14 — so the raw walk would report the unprefixed ``/lineage``). The
+    contexts duck-type what these tests read: ``.path``, ``.methods``, ``.dependant``."""
+    out: list[Any] = []
     stack = list(app.routes)
     while stack:
         route = stack.pop()
         if isinstance(route, APIRoute):
             out.append(route)
-        elif hasattr(route, "original_router"):
-            stack.extend(route.original_router.routes)
+        elif hasattr(route, "effective_route_contexts"):
+            out.extend(route.effective_route_contexts())
         elif hasattr(route, "routes"):
             stack.extend(route.routes)
     return out
@@ -1154,8 +1159,9 @@ def test_demo_datasets_requires_auth_when_fga_on(monkeypatch: pytest.MonkeyPatch
     from lineage.api.v1.endpoints import demo
 
     monkeypatch.setattr(demo, "_storage_options", lambda: {})  # isolate the gate from S3
+    unauthenticated = fga_deps.DatasetFilter(_request(fga=object()), _settings(**_FULL_AUTH), None)
     with pytest.raises(UnauthenticatedError):
-        asyncio.run(demo.demo_datasets(_request(fga=object()), _settings(**_FULL_AUTH), None))
+        asyncio.run(demo.demo_datasets(_settings(**_FULL_AUTH), unauthenticated, demo.PeekCache()))
 
 
 def test_events_governs_on_columnlineage_source_datasets() -> None:

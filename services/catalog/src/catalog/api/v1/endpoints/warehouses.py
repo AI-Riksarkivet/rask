@@ -46,14 +46,13 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
-from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
     SettingsDep,
-    _namespace_for_root,
+    namespace_for_root,
 )
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
@@ -61,6 +60,9 @@ from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
     CreateWarehouseRequest,
+    DeleteWarehouseResponse,
+    EstateBindingsResponse,
+    WarehouseNamespacesResponse,
     WarehouseResponse,
 )
 from catalog.services import native, warehouses
@@ -292,31 +294,6 @@ async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: Current
     return WarehouseResponse(**record)
 
 
-class WarehouseNamespacesResponse(BaseModel):
-    """The namespaces BOUND to one warehouse — the registry's answer, same shape as the spec's
-    ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged."""
-
-    namespaces: list[str]
-
-
-class EstateBindingsResponse(BaseModel):
-    """Every namespace→warehouse binding the caller can see, in ONE read (#86).
-
-    The per-warehouse sibling below answers for one id; a page listing the estate's namespaces was
-    calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
-    estate before filtering in Python — O(warehouses × bindings) for a union the underlying
-    ``list_bindings`` already produces in a single pass.
-    """
-
-    bindings: dict[str, str]
-    """``{namespace: warehouse_id}`` — a mapping rather than a list, because every caller so far
-    wants to know WHICH warehouse a namespace lives in, and a list would make them re-derive it."""
-
-    authorization_truncated: bool = False
-    """True when the caller's authorization listing hit OpenFGA's server cap, so these bindings were
-    filtered against an INCOMPLETE entitlement set and may be short. See `fga.ObjectListing`."""
-
-
 @router.get("/-/bindings", response_model_exclude_none=True)
 async def list_estate_bindings(
     settings: SettingsDep,
@@ -487,7 +464,7 @@ async def create_warehouse_namespace(
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     # Deactivation gate (audit #2/#6): this handler resolves the bucket connection DIRECTLY from
-    # record["root_uri"] via _namespace_for_root — it never routes through get_namespace, so the resolver's
+    # record["root_uri"] via namespace_for_root — it never routes through get_namespace, so the resolver's
     # deactivation quarantine does NOT cover it. Without this check a principal still holding
     # can_create_namespace could provision a namespace + seed fresh FGA grants inside a QUARANTINED bucket (a
     # persistence foothold that survives a naive offboarding). Mirror the resolver's gate here.
@@ -530,7 +507,7 @@ async def create_warehouse_namespace(
     # above and before the native create.
     await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
 
-    ns_conn = _namespace_for_root(request, settings, root_uri)
+    ns_conn = namespace_for_root(request, settings, root_uri)
     req = CreateNamespaceRequest(id=segments)
     adopted = False
     try:
@@ -603,26 +580,6 @@ async def create_warehouse_namespace(
 # --------------------------------------------------------------------------- #
 # Deletion (`open_hierarchy_lifecycle.md` Decision 3): bottom-up, and a container refuses while full.
 # --------------------------------------------------------------------------- #
-
-
-class DeleteWarehouseResponse(BaseModel):
-    """What the delete ACTUALLY did — reported step by step, never assumed.
-
-    A warehouse delete touches four independent stores (the native namespaces, OpenFGA, the registry, the
-    bucket) and only three of them run by default. Reporting each separately is what makes a partial
-    failure diagnosable instead of a lie: ``bucket_purged=false`` names bytes that are still there, and
-    ``tuples_revoked`` is a count OpenFGA really returned.
-    """
-
-    id: str
-    #: The bucket the warehouse owned — named even when it was NOT purged, so the operator knows what survived.
-    bucket: str
-    #: The namespaces a ``cascade`` actually dropped and unbound (empty on a non-cascade delete).
-    namespaces_dropped: list[str]
-    #: Tuples removed across the warehouse object AND every cascaded namespace. 0 when FGA is off.
-    tuples_revoked: int
-    bucket_purged: bool
-    objects_purged: int
 
 
 async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token: IDToken | None, obj: str) -> int:
@@ -769,7 +726,7 @@ async def delete_warehouse(
     revoked = 0
     try:
         if bound:
-            ns_conn = _namespace_for_root(request, settings, root_uri)
+            ns_conn = namespace_for_root(request, settings, root_uri)
             for top_ns in bound:
                 segments = parse_identifier(top_ns, settings.delimiter)
                 try:

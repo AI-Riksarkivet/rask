@@ -38,15 +38,19 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
 
     Kept in ONE place so provisioning and purging can never address different endpoints — creating a
     bucket on one backend and deleting it on another is a failure mode that reports success.
-    """
-    import boto3
 
-    return boto3.client(
-        "s3",
-        endpoint_url=storage_options.get("endpoint"),
-        aws_access_key_id=storage_options.get("access_key_id"),
-        aws_secret_access_key=storage_options.get("secret_access_key"),
-        region_name=storage_options.get("region") or "us-east-1",
+    Via ``storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
+    addressing, s3v4 signing, retries and timeouts live there once, and a hand-rolled client silently
+    forfeits all of them (against RustFS/MinIO, virtual-hosted addressing resolves a DNS name that does
+    not exist). The region rides on ``create_bucket``'s ``LocationConstraint`` where it matters — see
+    :func:`provision_bucket` — so it is not threaded through here.
+    """
+    from storage import s3_client
+
+    return s3_client(
+        storage_options.get("endpoint"),
+        access_key=storage_options.get("access_key_id"),
+        secret_key=storage_options.get("secret_access_key"),
     )
 
 

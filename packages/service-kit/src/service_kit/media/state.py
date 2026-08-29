@@ -12,12 +12,15 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from service_kit.media.config import Settings, get_settings
 
+
+if TYPE_CHECKING:
+    from service_kit.lancekit.registry import DatasetRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +69,40 @@ class AppState(BaseModel):
     search_cache: dict[tuple[str, str, str], tuple[list[Any], int]] = Field(default_factory=dict)
     # Multi-dataset registry (LANCE_MEDIA_MERGE §4.4) — the schema-agnostic
     # resolution path. The legacy per-table fields above stay during the
-    # media/search service port and are stripped at integration.
+    # media/search service port and are stripped at integration. Same first-build
+    # hazard as voice_encoder: sync handlers run in a threadpool, so two
+    # concurrent first requests would otherwise both construct the registry.
     registry: Any | None = None  # service_kit.lancekit.registry.DatasetRegistry
+    registry_lock: Any = Field(default_factory=threading.Lock)
+
+
+def ensure_registry(state: AppState) -> DatasetRegistry:
+    """The ONE lazy first-build of ``state.registry`` (SK-06).
+
+    Every path that needs the registry — id resolution via :func:`dataset_handle`,
+    the viewer's enumeration (which has no dataset id to resolve through) — goes
+    through here, so the guarded construction exists exactly once. An unlocked
+    copy of this block lived in the viewer and raced it; de-duplication, not a
+    second lock, is what keeps the two from drifting again.
+    """
+    # Imported per call, not at module top: service-kit's media plane stays
+    # importable without the Lance stack until a registry is actually needed.
+    from service_kit.lancekit.registry import DatasetRegistry
+
+    if state.registry is None:
+        # Double-checked so the steady state never takes the lock; without it two
+        # concurrent first requests both construct, and the loser's registry (with
+        # whatever it already opened) is silently discarded.
+        with state.registry_lock:
+            if state.registry is None:
+                state.registry = DatasetRegistry(
+                    state.settings.registry_root,
+                    state.settings.descriptor_dir,
+                    state.settings.default_dataset_id,
+                    storage_options=state.settings.storage_options(),
+                )
+    registry: DatasetRegistry = state.registry
+    return registry
 
 
 def dataset_handle(state: AppState, dataset_id: str | None = None):
@@ -78,16 +113,9 @@ def dataset_handle(state: AppState, dataset_id: str | None = None):
     handler renders a clean 404.
     """
     from service_kit.exceptions import NotFoundError
-    from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
+    from service_kit.lancekit.registry import UnknownDatasetError
 
-    if state.registry is None:
-        state.registry = DatasetRegistry(
-            state.settings.registry_root,
-            state.settings.descriptor_dir,
-            state.settings.default_dataset_id,
-            storage_options=state.settings.storage_options(),
-        )
-    registry: DatasetRegistry = state.registry
+    registry = ensure_registry(state)
     try:
         return registry.get(dataset_id) if dataset_id else registry.default()
     except UnknownDatasetError as exc:

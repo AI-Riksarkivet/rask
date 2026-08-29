@@ -99,7 +99,9 @@ def stage_fragments(dataset_uri: str, run_id: str, unit_keys: Sequence[str] | st
     Returns the manifest key, so a caller can assert the write happened rather than assume it.
     """
     keys = [unit_keys] if isinstance(unit_keys, str) else sorted(unit_keys)
-    payload = json.dumps({"unit": keys[0], "units": keys, "fragments": list(fragments_json)}).encode()
+    # No legacy `unit` key: that was the pre-batching spelling, and writing it on every new manifest
+    # kept it alive forever. `discover_staged` still READS it, for manifests already on a store.
+    payload = json.dumps({"units": keys, "fragments": list(fragments_json)}).encode()
     name = manifest_name(keys)
     root = staging_root(dataset_uri, run_id)
 

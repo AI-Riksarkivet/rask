@@ -25,15 +25,15 @@ looks.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import APIRouter, Path, Request, status
 from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
-from pydantic import BaseModel, Field
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
+from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -52,40 +52,11 @@ router = APIRouter(prefix="/v1/projects", tags=["members"])
 #: registry lookup on a name that could never have existed.
 ProjectId = Annotated[str, Path(min_length=3, max_length=63, pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]
 
-#: The rungs this API grants, most privileged first. ``team`` is absent on purpose: it is the edge
-#: that makes every member of a team a project ADMIN (``admin: … or member from team``), so exposing
-#: it here would let one request confer admin on a set of people the caller cannot enumerate. Attaching
-#: a team stays an estate operation.
-Rung = Literal["admin", "member"]
-GRANTABLE: tuple[str, ...] = ("admin", "member")
-
 #: Losing the last one strands the tenant: nobody inside it could grant, and ``can_administer`` also
 #: gates DELETE, so it could be neither administered nor retired without estate intervention. Refusing
 #: is what makes ``can_grant_admin: admin`` safe — it is the pairing Lakekeeper's model calls
 #: "lock-out protection" and states as ``project_admin``'s first purpose.
 ADMINISTRATIVE: frozenset[str] = frozenset({"admin"})
-
-
-class Member(BaseModel):
-    """One direct grant on this tenant."""
-
-    #: The FGA user string as stored (``user:gina``, ``role:x#assignee``, ``team:y#member``). Verbatim,
-    #: because it is what a revoke must send back and a prettified name that cannot round-trip is a trap.
-    user: str
-    relation: str
-
-
-class MemberList(BaseModel):
-    members: list[Member]
-    #: The rungs this API will grant, so a UI does not keep a second copy of the model's ladder.
-    grantable: list[str] = Field(default_factory=lambda: list(GRANTABLE))
-
-
-class GrantRequest(BaseModel):
-    #: A bare subject (``gina``) or a full FGA user string. Normalised below — asking a UI to know the
-    #: prefix is asking it to know the authorization model.
-    user: str = Field(min_length=1, max_length=256)
-    relation: Rung
 
 
 def _user_string(raw: str) -> str:

@@ -15,7 +15,6 @@ to the app that owns the door; here the workflow cannot move, so the door reache
 
 from __future__ import annotations
 
-import os
 from typing import Annotated, Any
 
 import httpx
@@ -26,14 +25,16 @@ from medallion.api.dependencies import SettingsDep
 from medallion.api.produce_auth import authorize_produce
 
 
-def _app_token_header() -> dict[str, str]:
+def _app_token_header(settings: Any) -> dict[str, str]:
     """The service credential the mover's routes verify.
 
     Built here rather than imported: `dapr_auth` exposes the VERIFIER (`require_dapr_token`) and no
-    sender-side helper, and the header name is the one Dapr itself injects. Absent in the open dev
-    default, where the mover's check is a no-op too — so the two stay consistent.
+    sender-side helper, and the header name is the one Dapr itself injects. Read off the typed
+    settings surface (`app_api_token`, alias APP_API_TOKEN) like every other medallion read of this
+    credential — never the raw environment. Absent in the open dev default, where the mover's check
+    is a no-op too — so the two stay consistent.
     """
-    token = os.environ.get("APP_API_TOKEN")
+    token = settings.app_api_token
     return {"dapr-api-token": token} if token else {}
 
 
@@ -66,7 +67,7 @@ async def _forward(request: Request, settings: Any, mover: str, path: str, *, me
         # the anti-pattern this estate has already paid for once.
         raise HTTPException(status_code=503, detail="the producer has no HTTP client")
     try:
-        response = await client.request(method, url, headers=_app_token_header())
+        response = await client.request(method, url, headers=_app_token_header(settings))
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"mover {mover!r} is unreachable: {exc}") from exc
     if response.status_code >= 400:

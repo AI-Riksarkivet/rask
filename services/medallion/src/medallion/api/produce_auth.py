@@ -17,7 +17,6 @@ allow/deny/outage AND the service-token acceptance — is audited on the ``lance
 
 from __future__ import annotations
 
-import os
 import secrets
 from typing import Annotated
 
@@ -80,7 +79,7 @@ async def authorize_produce(
     before. The service-token path stays project-BLIND: the shared token authenticates the service, not
     a tenant, so it may only produce into the configured project — a different requested project is
     refused (403); crossing tenants takes a user bearer, which gets the per-project FGA check."""
-    expected = os.environ.get("APP_API_TOKEN")
+    expected = settings.app_api_token
     # Dev: no service token configured → open, exactly as require_dapr_token was a no-op. No verified
     # subject exists on this path, so there is no originator to carry — `None`, never a guess.
     if not expected:

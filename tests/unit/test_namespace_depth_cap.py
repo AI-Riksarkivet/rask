@@ -123,7 +123,7 @@ _CONSUMERS = (
 def test_no_consumer_REDEFINES_the_depth_as_a_literal() -> None:
     """A source-level check, deliberately, because the obvious runtime one is vacuous.
 
-    `tables._MAX_NAMESPACE_DEPTH is MAX_NAMESPACE_DEPTH` looks like it proves single-sourcing and
+    `tables.MAX_NAMESPACE_DEPTH is MAX_NAMESPACE_DEPTH` looks like it proves single-sourcing and
     proves nothing: CPython interns small integers, so two independent `= 8` literals are the same
     object and the assertion passes on exactly the drift it exists to catch. What actually cannot be
     faked is that no consumer assigns the number at all.

@@ -61,11 +61,6 @@ def _run(
     caller_app_id: str | None = None,
     captured: dict[str, object] | None = None,
 ) -> str | None:
-    if app_token is None:
-        monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    else:
-        monkeypatch.setenv("APP_API_TOKEN", app_token)
-
     async def fake_check(_client: object, **kw: object) -> bool:  # user=/relation=/obj= arrive as kwargs
         if captured is not None:
             captured.update(kw)
@@ -74,7 +69,9 @@ def _run(
         return fga_result
 
     monkeypatch.setattr(produce_auth.fga, "check", fake_check)
-    ns = SimpleNamespace(oidc_enabled=oidc_enabled, produce_admin_project="acme")
+    # The token rides SETTINGS (MED-009): the door reads `settings.app_api_token`, never the raw env,
+    # so the fake carries the field — `None` maps to the field's unset default ("", the dev-open case).
+    ns = SimpleNamespace(oidc_enabled=oidc_enabled, produce_admin_project="acme", app_api_token=app_token or "")
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=verifier))))
     settings = cast(MedallionSettings, ns)
     return asyncio.run(
@@ -157,7 +154,7 @@ def test_the_produce_door_verifies_the_bearer_OFF_the_event_loop(monkeypatch: py
     assert verifier.thread != threading.get_ident(), "verify() ran on the event loop thread"
 
 
-def test_the_promotion_door_verifies_the_bearer_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_promotion_door_verifies_the_bearer_OFF_the_event_loop() -> None:
     """Same rule for ``authenticate_subject`` — the promotion review's door, and the second copy.
 
     It is a separate function with its own ``verifier.verify`` call, so fixing ``authorize_produce``
@@ -200,8 +197,7 @@ def test_wrong_service_token_and_oidc_off_is_403(monkeypatch: pytest.MonkeyPatch
 # ── route-wiring tests: authorize_produce is actually mounted on POST /produce ────────────────────
 
 
-def _client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+def _client() -> TestClient:
     app = FastAPI()
     # The synthetic app installs the SAME problem+json handlers the producer does, so the guard's
     # domain errors map to their HTTP statuses here exactly as in production (they are lance_namespace
@@ -211,34 +207,34 @@ def _client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # Fakes so only the guard is exercised — a rejected request never reaches the handler anyway. Settings
     # carries oidc_enabled=False (no verifier wired on app.state) so the human door stays shut in the test.
     app.dependency_overrides[get_dapr] = lambda: None
-    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(oidc_enabled=False, produce_admin_project="acme")
+    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(oidc_enabled=False, produce_admin_project="acme", app_api_token="s3cret")
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_route_rejects_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _client(monkeypatch).post("/produce").status_code == 403
+def test_route_rejects_missing_token() -> None:
+    assert _client().post("/produce").status_code == 403
 
 
-def test_route_rejects_wrong_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _client(monkeypatch).post("/produce", headers={"dapr-api-token": "nope"}).status_code == 403
+def test_route_rejects_wrong_token() -> None:
+    assert _client().post("/produce", headers={"dapr-api-token": "nope"}).status_code == 403
 
 
-def test_route_token_match_passes_the_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_token_match_passes_the_guard() -> None:
     # Correct token → the guard passes; the handler then runs against the fakes (may 5xx) but is NOT a 403.
-    response = _client(monkeypatch).post("/produce", headers={"dapr-api-token": "s3cret"})
+    response = _client().post("/produce", headers={"dapr-api-token": "s3cret"})
     assert response.status_code != 403
 
 
 # ── GET /authorize (#77 audit admin gate): the SAME door, side-effect-free ─────────────────────────
 
 
-def test_authorize_route_rejects_missing_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_authorize_route_rejects_missing_credential() -> None:
     # The web audit BFF relies on this: a non-admin (no credential) must be refused, never 200.
-    assert _client(monkeypatch).get("/authorize").status_code == 403
+    assert _client().get("/authorize").status_code == 403
 
 
-def test_authorize_route_allows_the_admin_door(monkeypatch: pytest.MonkeyPatch) -> None:
-    res = _client(monkeypatch).get("/authorize", headers={"dapr-api-token": "s3cret"})
+def test_authorize_route_allows_the_admin_door() -> None:
+    res = _client().get("/authorize", headers={"dapr-api-token": "s3cret"})
     assert res.status_code == 200 and res.json() == {"authorized": True}
 
 
@@ -289,9 +285,9 @@ def test_nonadmin_of_the_requested_project_is_403(monkeypatch: pytest.MonkeyPatc
     )
 
 
-def test_route_rejects_a_malformed_project_with_422(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_rejects_a_malformed_project_with_422() -> None:
     # The project becomes an S3 prefix + lineage qualifier — a path-shaped value is refused at the edge.
-    res = _client(monkeypatch).get("/authorize", params={"project": "../evil"}, headers={"dapr-api-token": "s3cret"})
+    res = _client().get("/authorize", params={"project": "../evil"}, headers={"dapr-api-token": "s3cret"})
     assert res.status_code == 422
 
 
@@ -320,7 +316,6 @@ def test_train_gate_declares_no_project_param() -> None:
 
 def test_train_gate_checks_the_configured_project(monkeypatch: pytest.MonkeyPatch) -> None:
     # The OIDC admin door through authorize_train always targets the CONFIGURED project.
-    monkeypatch.setenv("APP_API_TOKEN", "s3cr3t")
     captured: dict[str, object] = {}
 
     async def fake_check(_client: object, **kw: object) -> bool:
@@ -328,7 +323,7 @@ def test_train_gate_checks_the_configured_project(monkeypatch: pytest.MonkeyPatc
         return True
 
     monkeypatch.setattr(produce_auth.fga, "check", fake_check)
-    ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme")
+    ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme", app_api_token="s3cr3t")
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=_Verifier()))))
     asyncio.run(
         produce_auth.authorize_train(
@@ -342,8 +337,7 @@ def test_train_gate_checks_the_configured_project(monkeypatch: pytest.MonkeyPatc
     assert captured["obj"] == "project:acme"
 
 
-def _train_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+def _train_client() -> TestClient:
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(train_router)
@@ -352,7 +346,7 @@ def _train_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # ray_enabled=False → a request PASSING the guard hits the disabled-head 409 (a crisp "guard passed"
     # signal distinct from the guard's own 403); oidc off keeps the human door shut.
     app.dependency_overrides[get_settings] = lambda: SimpleNamespace(
-        oidc_enabled=False, produce_admin_project="acme", ray_enabled=False, s3_endpoint="", bronze_uri=""
+        oidc_enabled=False, produce_admin_project="acme", app_api_token="s3cret", ray_enabled=False, s3_endpoint="", bronze_uri=""
     )
     return TestClient(app, raise_server_exceptions=False)
 
@@ -360,19 +354,17 @@ def _train_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 _TRAIN_BODY = {"model": "m1", "features": [{"dataset": "silver$feats"}]}
 
 
-def test_train_route_ignores_a_caller_supplied_project(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_train_route_ignores_a_caller_supplied_project() -> None:
     # Service token + ?project=other on /train: the stray param is IGNORED — the guard passes (pinned to
     # the configured project) and the request proceeds to the handler (here the disabled-head 409).
-    res = _train_client(monkeypatch).post(
-        "/train", params={"project": "globex"}, json=_TRAIN_BODY, headers={"dapr-api-token": "s3cret", "Idempotency-Key": "idem-test"}
-    )
+    res = _train_client().post("/train", params={"project": "globex"}, json=_TRAIN_BODY, headers={"dapr-api-token": "s3cret", "Idempotency-Key": "idem-test"})
     assert res.status_code == 409, res.text
 
 
-def test_produce_route_keeps_the_per_project_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_produce_route_keeps_the_per_project_refusal() -> None:
     # …while the SAME credential + ?project=other on /produce keeps the per-project behavior: the shared
     # service token carries no tenant identity, so a cross-project produce stays 403.
-    res = _train_client(monkeypatch).post("/produce", params={"project": "globex"}, headers={"dapr-api-token": "s3cret"})
+    res = _train_client().post("/produce", params={"project": "globex"}, headers={"dapr-api-token": "s3cret"})
     assert res.status_code == 403, res.text
 
 
@@ -478,14 +470,13 @@ def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(monkeypatch: pyte
     _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="gateway")
 
 
-def test_the_TRAIN_door_inherits_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_TRAIN_door_inherits_the_refusal() -> None:
     """`authorize_train` delegates its whole decision to `authorize_produce`.
 
     An unforwarded caller id would leave `/train` — which spends GPU and writes the model registry —
     open while `/produce` looked fixed, and the delegation is precisely what makes that invisible.
     """
-    monkeypatch.setenv("APP_API_TOKEN", "s3cr3t")
-    ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme")
+    ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme", app_api_token="s3cr3t")
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=None))))
 
     with pytest.raises(LanceNamespaceError) as exc:

@@ -41,6 +41,30 @@ def test_ray_cluster_offline_is_ok_false(client: TestClient) -> None:
     assert resp.json()["ok"] is False
 
 
+def test_ray_logs_lines_beyond_the_ceiling_is_422(client: TestClient) -> None:
+    """`lines` is relayed to the Ray dashboard verbatim, so an unbounded value is a log-tail
+    amplification lever against the cluster; the declared ceiling must refuse it at the door."""
+    resp = client.get("/api/v1/ray/logs", params={"node_id": "x", "lines": 99_999_999})
+    assert resp.status_code == 422
+
+
+def test_ray_logs_non_positive_lines_is_422(client: TestClient) -> None:
+    """ray_kit slices `lines[-tail:]` — a 0 makes that `[-0:]`, the WHOLE file, so non-positive
+    values invert the cap they are meant to enforce and must be refused, not forwarded."""
+    resp = client.get("/api/v1/ray/logs", params={"node_id": "x", "lines": 0})
+    assert resp.status_code == 422
+
+
+def test_ray_job_logs_tail_beyond_the_ceiling_is_422(client: TestClient) -> None:
+    resp = client.get("/api/v1/ray/jobs/some-job/logs", params={"tail": 99_999_999})
+    assert resp.status_code == 422
+
+
+def test_ray_job_logs_non_positive_tail_is_422(client: TestClient) -> None:
+    resp = client.get("/api/v1/ray/jobs/some-job/logs", params={"tail": -1})
+    assert resp.status_code == 422
+
+
 def test_serve_proxy_unreachable_returns_502(client: TestClient) -> None:
     resp = client.get("/api/serve/applications/")
     assert resp.status_code == 502

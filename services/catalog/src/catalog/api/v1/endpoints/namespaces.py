@@ -33,16 +33,16 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, _namespace_for_root
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, namespace_for_root
+from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
-
-# `_MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
-# over the same tree disagreed about how deep it may go, and a second copy of the number would let
-# them drift apart again the moment one is tuned.
-from catalog.api.v1.endpoints.tables import _MAX_NAMESPACE_DEPTH, _paginate
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
-from catalog.core.identifiers import parse_identifier, reconcile_body_id, require_safe_segments
+
+# `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
+# over the same tree disagreed about how deep it may go, and a second copy of the number would let
+# them drift apart again the moment one is tuned.
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
@@ -67,14 +67,14 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
     hold an owner grant too). Blocking native list calls → the caller runs this in a threadpool.
 
     DEPTH-CAPPED at the same bound the listing walk uses (diff2 F10 item 10). This recursed without one
-    while `tables.py::_collect_tables` capped at ``_MAX_NAMESPACE_DEPTH``, so the identical pathological
+    while `tables.py::_collect_tables` capped at ``MAX_NAMESPACE_DEPTH``, so the identical pathological
     tree was a truncated listing in one walker and a Python stack overflow in the other — and this is the
     walker that runs on the DESTRUCTIVE path, where crashing mid-enumeration means the cascade proceeds
     against a partial descendant list. Hitting the cap is reported the same way page truncation already
     is, because it has the same consequence: an incomplete revoke leaves orphan grants.
     """
-    if len(segments) >= _MAX_NAMESPACE_DEPTH:
-        log.warning("namespace_depth_capped", extra={"namespace": segments, "cap": _MAX_NAMESPACE_DEPTH})
+    if len(segments) >= MAX_NAMESPACE_DEPTH:
+        log.warning("namespace_depth_capped", extra={"namespace": segments, "cap": MAX_NAMESPACE_DEPTH})
         return []
     found: list[tuple[str, list[str]]] = []
     token: str | None = None
@@ -490,7 +490,7 @@ async def undrop_namespace(
         warehouse_id = str(bound["warehouse_id"])
         # THE DEACTIVATION GATE, and it is not optional — `test_no_warehouse_bucket_access_bypasses_the
         # _deactivation_gate` refuses any module that reaches a warehouse bucket through
-        # `_namespace_for_root` without one, and it caught this exact bypass when the re-resolve first
+        # `namespace_for_root` without one, and it caught this exact bypass when the re-resolve first
         # landed. `get_namespace` gates every ordinary request this way; re-deriving the connection here
         # steps around that dependency, so the check has to come with it.
         #
@@ -515,7 +515,7 @@ async def undrop_namespace(
             warehouse_id,
             str(bound["root_uri"]),
         )
-        ns = _namespace_for_root(request, settings, str(bound["root_uri"]))
+        ns = namespace_for_root(request, settings, str(bound["root_uri"]))
     everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
     prefix = canonical + settings.delimiter
     subtree = [r for r in everything if str(r.get("id")) == canonical or str(r.get("id", "")).startswith(prefix)]
@@ -680,5 +680,5 @@ async def list_tables(
         # than as a new body field, which would have broken the spec conformance the catalog is built on.
         if authorization_truncated:
             response.context = {**(response.context or {}), "authorization_truncated": "true"}
-    response.tables, response.page_token = _paginate(names, page_token, limit)
+    response.tables, response.page_token = paginate(names, page_token, limit)
     return response

@@ -30,9 +30,8 @@ from lance_namespace import ConcurrentModificationError, InvalidInputError, Name
 from pydantic import TypeAdapter
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import FgaClientDep, SettingsDep, UserStateStoreDep
 from catalog.api.security import CurrentToken
-from catalog.api.v1.endpoints.user_state import UserStateStoreDep
 from service_kit.governed.user_state import ESTATE_SUBJECT, UserStateConflict, UserStateDocument, UserStateStore, UserStateUnreadable
 from service_kit.schemas.storage import (
     GOVERNED_TIERS,

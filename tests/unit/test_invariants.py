@@ -610,17 +610,17 @@ def test_every_helm_set_key_in_our_scripts_exists_in_values() -> None:
 
 def test_no_warehouse_bucket_access_bypasses_the_deactivation_gate() -> None:
     """SECURITY INVARIANT (audit #2/#6 + #35 class): reaching a warehouse's isolated bucket connection —
-    which happens only via ``_namespace_for_root`` — MUST consult the warehouse's lifecycle status, or a
+    which happens only via ``namespace_for_root`` — MUST consult the warehouse's lifecycle status, or a
     handler can provision/read inside a QUARANTINED (deactivated) bucket, bypassing tenant offboarding.
 
     Today two paths reach a bucket: ``get_namespace`` (through ``_resolve_warehouse_root``'s live status
     gate) and ``create_warehouse_namespace`` (which checks ``record["status"]`` inline). This test fails the
-    moment a NEW caller of ``_namespace_for_root`` appears in a module that does not also gate on status —
+    moment a NEW caller of ``namespace_for_root`` appears in a module that does not also gate on status —
     exactly the bug the audit found in the namespace-create path.
     """
-    # Match the cached wrapper `_namespace_for_root(` but NOT the raw builder `build_namespace_for_root(`
+    # Match the cached wrapper `namespace_for_root(` but NOT the raw builder `build_namespace_for_root(`
     # (the wrapper's substring lives inside the builder's name) — a word boundary before the underscore.
-    caller_re = re.compile(r"(?<![A-Za-z_])_namespace_for_root\(")
+    caller_re = re.compile(r"(?<![A-Za-z_])namespace_for_root\(")
     ungated: list[str] = []
     for path in SERVICES.rglob("*.py"):
         text = path.read_text()
@@ -632,7 +632,7 @@ def test_no_warehouse_bucket_access_bypasses_the_deactivation_gate() -> None:
         if not gated:
             ungated.append(str(path.relative_to(REPO)))
     assert not ungated, (
-        "these modules reach a warehouse bucket via _namespace_for_root WITHOUT a deactivation-status gate "
+        "these modules reach a warehouse bucket via namespace_for_root WITHOUT a deactivation-status gate "
         f"— a quarantined-warehouse bypass (audit #2/#6): {ungated}"
     )
 

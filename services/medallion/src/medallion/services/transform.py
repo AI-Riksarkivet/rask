@@ -35,7 +35,15 @@ from opentelemetry import trace
 
 from medallion.core.best_effort import best_effort
 from medallion.core.config import MedallionSettings, dedicated_token_for, project_namespace
-from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
+from medallion.core.metrics import (
+    record_denied,
+    record_media_underivable,
+    record_other_lane,
+    record_quality_blocked,
+    record_refused,
+    record_stage_completion,
+    record_transition,
+)
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, promotion_band, promotion_hold
 from medallion.services import gate as gate_svc
@@ -1008,10 +1016,12 @@ async def handle_stage(
         return _DROP
     except UnderivableMediaError as exc:
         # DETERMINISTIC bad media (a payload matched the content probe but cannot decode): redelivery
-        # cannot fix bytes, so mirror the quality-gate contract — record the FAIL run (the audit trail,
-        # idempotent on the token-derived run_id) and DROP instead of a pointless RETRY storm that would
-        # re-read every blob from S3 up to maxDeliver times.
-        record_quality_blocked(transition)
+        # cannot fix bytes, so mirror the quality-gate OUTCOME contract — record the FAIL run (the audit
+        # trail, idempotent on the token-derived run_id) and DROP instead of a pointless RETRY storm that
+        # would re-read every blob from S3 up to maxDeliver times. The METRIC is its own, though: no
+        # quality assertion ran here, and bumping the gate's counter made its series report blocks the
+        # gate never issued.
+        record_media_underivable(transition)
         log.warning(
             "medallion_media_underivable",
             extra={"transition": transition, "token": token, "error": str(exc)},

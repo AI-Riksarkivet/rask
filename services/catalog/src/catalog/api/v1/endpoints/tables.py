@@ -48,9 +48,8 @@ from catalog.api.dependencies import (
     VendorDep,
     namespace_for_top_ns,
 )
-from catalog.api.pagination import _paginate
+from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
-from catalog.api.v1.endpoints.credentials import _has_external_bases
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
@@ -62,6 +61,7 @@ from catalog.core.lineage_emit import (
     InputPin,
     emit_write_event,
 )
+from catalog.core.vending import has_external_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, warehouses
 from service_kit.control_emit import emit_control
@@ -79,12 +79,6 @@ log = logging.getLogger(__name__)
 _MAX_LIST_LIMIT = 1000
 
 router = APIRouter(prefix="/v1/table", tags=["table"])
-
-
-#: Re-exported, not redefined — the number lives in `catalog.core.identifiers` now that the CREATE
-#: guard depends on it too, and its ceiling is an OpenFGA resolution limit rather than a taste. See
-#: that constant for the measurement.
-_MAX_NAMESPACE_DEPTH = MAX_NAMESPACE_DEPTH
 
 
 def _is_expired(expires_at: str) -> bool:
@@ -126,7 +120,7 @@ def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], 
     seen: set[tuple[str, ...]] = set()
     while stack:
         parent = stack.pop()
-        if len(parent) >= _MAX_NAMESPACE_DEPTH or tuple(parent) in seen:
+        if len(parent) >= MAX_NAMESPACE_DEPTH or tuple(parent) in seen:
             continue
         seen.add(tuple(parent))
         if parent:
@@ -210,13 +204,12 @@ async def list_all_tables(
         if authorization_truncated:
             response.context = {**(response.context or {}), "authorization_truncated": "true"}
     # Paginate AFTER the FGA filter so pages count only tables the caller can see.
-    response.tables, response.page_token = _paginate(response.tables, page_token, limit)
+    response.tables, response.page_token = paginate(response.tables, page_token, limit)
     return response
 
 
-# `_paginate` moved to `catalog.api.pagination` when the model registry needed the same cursor —
-# two keyset implementations in one service is two things to keep in step. Re-exported below so this
-# module's callers are unchanged.
+# `paginate` lives in `catalog.api.pagination` (it moved when the model registry needed the same
+# cursor) — two keyset implementations in one service is two things to keep in step.
 @router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
     id: str,
@@ -342,7 +335,7 @@ def describe_table(
             log.warning("describe_schema_metadata_read_failed", extra={"table": "/".join(segments)})
 
     if vend_credentials and response.location:
-        if settings.multibase_data_base_list and _has_external_bases(response.location, so):
+        if settings.multibase_data_base_list and has_external_bases(response.location, so):
             return response  # multi-base: a root-scoped credential cannot reach the data bases
         creds = vendor.vend(table_location=response.location, tier="read")
         if creds is not None:

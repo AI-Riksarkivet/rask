@@ -110,7 +110,9 @@ def test_download_returns_bytes_with_disposition(client: TestClient) -> None:
     assert resp.status_code == 200
     assert resp.content == b"hello"
     assert resp.headers["content-type"].startswith("image/jpeg")
-    assert resp.headers["content-disposition"] == 'attachment; filename="a.jpg"'
+    # VS-10: the key is caller-supplied, so the disposition carries a sanitized ASCII fallback
+    # plus the RFC 6266 pct-encoded form (which conforming clients prefer).
+    assert resp.headers["content-disposition"] == "attachment; filename=\"a.jpg\"; filename*=UTF-8''a.jpg"
 
 
 def test_download_missing_object_is_404(client: TestClient) -> None:

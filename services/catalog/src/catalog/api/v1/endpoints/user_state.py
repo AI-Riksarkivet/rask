@@ -46,19 +46,19 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Response, status
 from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
     ServiceUnavailableError,
     UnauthenticatedError,
 )
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from catalog.api.dependencies import SettingsDep
+from catalog.api.dependencies import SettingsDep, UserStateStoreDep
 from catalog.api.security import CurrentToken
+from catalog.schemas import UserStateEnvelope
 from service_kit.governed.user_state import UserStateDocument, UserStateStore, UserStateUnreadable
 from service_kit.schemas.dock_layout import DockLayoutLibrary, DockLayouts
 from service_kit.schemas.workflow import SavedView, WorkflowGraph
@@ -73,28 +73,6 @@ _GRAPH = TypeAdapter(WorkflowGraph)
 _VIEWS = TypeAdapter(list[SavedView])
 _DOCK_LAYOUTS = TypeAdapter(DockLayouts)
 _DOCK_LAYOUT_LIBRARY = TypeAdapter(DockLayoutLibrary)
-
-
-def get_user_state_store(request: Request) -> UserStateStore | None:
-    """The store client built in the app lifespan, or ``None`` if it was never wired."""
-    return getattr(request.app.state, "user_state", None)
-
-
-UserStateStoreDep = Annotated[UserStateStore | None, Depends(get_user_state_store)]
-
-
-class UserStateEnvelope[T](BaseModel):
-    """One document as served: who owns it, which document, whether it was ever written, and it.
-
-    ``subject`` is echoed from the VERIFIED token — it is what makes a cross-user leak visible in a
-    response body, rather than only in a diff of two documents that happen to look alike.
-    """
-
-    subject: str
-    document: UserStateDocument
-    exists: bool
-    updated_at: datetime | None = None
-    value: T | None = None
 
 
 def _subject(token: CurrentToken) -> str:

@@ -29,7 +29,7 @@ import logging
 from functools import lru_cache
 
 from fastapi import APIRouter, Request
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
+from lance_namespace import InvalidInputError, ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep, get_control_emitter
@@ -167,14 +167,17 @@ async def _access_check(
     """The #68 playground's check primitive — a single ``(user, relation, object)`` OpenFGA Check,
     owner-gated identically to ``access/list`` (probing the graph is the same disclosure as enumerating
     it). Only relations the compiled model defines on ``fga_type`` may be probed, so an unknown relation
-    is a clean 4xx here rather than a 400 that fails closed to a 503 for the caller."""
+    is a clean 400 here — the caller's error, the same code the estate-admin door gives the identical
+    mistake — rather than an OpenFGA 400 that fails closed to a 503 for the caller."""
     if not settings.fga_enabled:
         raise UnsupportedOperationError("access simulation requires OpenFGA (this stack runs auth-off)")
     client = getattr(request.app.state, "fga", None)
     if client is None:  # the router gate already 503s this; kept so the endpoint is safe standalone
         raise ServiceUnavailableError("authorization service is not available")
     if body.relation not in _can_relations(fga_type):
-        raise UnsupportedOperationError(f"{body.relation!r} is not a can_* relation on {fga_type}")
+        # The CLIENT's error (400), never UnsupportedOperation (501): the deployment supports the check
+        # fine, the body names a relation the model does not define — access_admin.py's parity.
+        raise InvalidInputError(f"{body.relation!r} is not a can_* relation on {fga_type}")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     subject = token.sub if token else "anonymous"
@@ -348,7 +351,9 @@ async def _access_mutate(
         raise ServiceUnavailableError("authorization service is not available")
     grantable = _grantable_relations(fga_type)
     if body.relation not in grantable:
-        raise UnsupportedOperationError(f"{body.relation!r} is not a grantable rung on {fga_type} (one of {', '.join(grantable)})")
+        # 400, not 501 — same rule as the check door above: a bad rung NAME is client input, and the
+        # sibling estate-admin surface already answers this class of mistake with InvalidInput.
+        raise InvalidInputError(f"{body.relation!r} is not a grantable rung on {fga_type} (one of {', '.join(grantable)})")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     actor = token.sub if token else "anonymous"

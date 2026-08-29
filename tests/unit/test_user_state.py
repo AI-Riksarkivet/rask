@@ -29,7 +29,7 @@ from typing import Any
 
 import httpx
 import pytest
-from catalog.api.v1.endpoints import user_state as ep
+from catalog.api import dependencies
 from catalog.core.config import Settings, get_settings
 from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
@@ -371,7 +371,7 @@ def app_client(monkeypatch: pytest.MonkeyPatch, store: UserStateStore, tmp_path:
     from catalog.main import app
 
     app.dependency_overrides[get_settings] = lambda: _oidc_settings(str(tmp_path))
-    app.dependency_overrides[ep.get_user_state_store] = lambda: store
+    app.dependency_overrides[dependencies.get_user_state_store] = lambda: store
     with TestClient(app) as client:
         client.app.state.oidc = _SubjectIsTheToken()
         yield client
@@ -457,7 +457,7 @@ def test_anonymous_is_401(app_client: TestClient) -> None:
 def test_unwired_store_is_503_not_an_empty_document(app_client: TestClient) -> None:
     from catalog.main import app
 
-    app.dependency_overrides[ep.get_user_state_store] = lambda: None
+    app.dependency_overrides[dependencies.get_user_state_store] = lambda: None
     resp = app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "alice"))
     assert resp.status_code == 503
     assert resp.headers["content-type"].startswith("application/problem+json")

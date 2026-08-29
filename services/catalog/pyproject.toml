@@ -16,6 +16,9 @@ dependencies = [
     "lance-namespace>=0.11.0",
     # >=0.10.4 with service-kit: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
     "openfga-sdk>=0.10.4",
+    # The canonical S3 seam — warehouses.py builds its bucket client through storage.s3_client.
+    "storage",
+    # Direct boto3 stays for core/vending's STS clients only; S3 clients go through `storage`.
     "boto3>=1.34",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
@@ -31,3 +34,4 @@ packages = ["src/catalog"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
+storage = { workspace = true }

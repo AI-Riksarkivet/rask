@@ -385,7 +385,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
 # neither caused nor could diagnose.
 #
 # The backend is FAKED here, deliberately. This suite has no object store, and the real
-# `_namespace_for_root` dials the warehouse's own bucket (`s3://<bucket>` → minio:9000). A fake also
+# `namespace_for_root` dials the warehouse's own bucket (`s3://<bucket>` → minio:9000). A fake also
 # makes the assertion sharper than a state check could: the question is whether the compensating
 # `drop_namespace` was ISSUED, and the fake answers it directly. `native.call` is plain `getattr`
 # dispatch, so any object with the right method names is a valid backend.
@@ -440,7 +440,7 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
 
     fake = _FakeNamespace(existing)
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
-    monkeypatch.setattr(wh_ep, "_namespace_for_root", lambda request, settings, root_uri: fake)
+    monkeypatch.setattr(wh_ep, "namespace_for_root", lambda request, settings, root_uri: fake)
     s = _settings(tmp_path, fga=True)
     client.app.dependency_overrides[get_settings] = lambda: s
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})

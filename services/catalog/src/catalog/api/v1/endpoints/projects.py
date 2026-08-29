@@ -54,13 +54,13 @@ from lance_namespace import (
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
-from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import CONTROL_ID_RE
+from catalog.schemas import CreateProjectRequest, DeleteProjectResponse, ProjectResponse, ProjectWarehouse
 from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.control_emit import emit_control
@@ -77,25 +77,6 @@ router = APIRouter(prefix="/v1/projects", tags=["projects"])
 # registry filename, so a malformed one is rejected up front. SHARED (`catalog.core.identifiers`): this
 # `\Z` anchor was fixed here first and the two other copies kept the `$` that lets "acme\n" through.
 _ID_RE = CONTROL_ID_RE
-
-
-class ProjectWarehouse(BaseModel):
-    """One warehouse owned by the project — the registry facts an estate observer needs at a glance."""
-
-    id: str
-    bucket: str
-    status: str
-    # "gold" = the project's gold SERVING warehouse (DECISIONS "Medallion tiers"); None = a work warehouse.
-    serving: str | None = None
-
-
-class ProjectResponse(BaseModel):
-    """A derived tenant: its name, the warehouses claiming it, and its effective FGA admins (``[]`` when
-    FGA is off/unavailable — degraded, never fabricated)."""
-
-    project: str
-    warehouses: list[ProjectWarehouse]
-    admins: list[str]
 
 
 def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWarehouse]]:
@@ -165,12 +146,6 @@ async def _load_grouped(settings: Settings) -> dict[str, list[ProjectWarehouse]]
     for record in await run_in_threadpool(project_registry.list_projects, settings.registry_root, so):
         grouped.setdefault(str(record["id"]), [])
     return grouped
-
-
-class CreateProjectRequest(BaseModel):
-    """The create payload. Just the id — a tenant is a name, its admins, and what it later holds."""
-
-    id: str
 
 
 async def _converge_project(settings: Settings, so: dict[str, str], record: dict[str, str]) -> dict[str, str]:
@@ -294,16 +269,6 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     if entries is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     return ProjectResponse(project=project_id, warehouses=entries, admins=await _admins_for(client, settings, project_id))
-
-
-class DeleteProjectResponse(BaseModel):
-    """What the delete actually removed: the retired tenant and how many FGA tuples went with it.
-
-    The count is reported rather than assumed — an operator retiring a tenant needs to see that the authz
-    side really happened (``0`` on an FGA-off stack is a fact, not a silent success)."""
-
-    project: str
-    tuples_revoked: int
 
 
 def _is_principal(user: str) -> bool:

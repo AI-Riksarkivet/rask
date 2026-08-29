@@ -25,7 +25,7 @@ from lance_namespace import InvalidInputError, TableNotFoundError
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, SettingsDep, StorageOptionsDep
-from catalog.api.pagination import _paginate
+from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import PROMOTE_MODEL, emit_write_event
@@ -107,10 +107,10 @@ async def list_models(
         allowed = set(listing.objects)
         authorization_truncated = listing.truncated
         names = [name for name in names if f"table:{fga.canonical_object_id(_segments(name), delimiter=settings.delimiter)}" in allowed]
-    # Sorted before slicing: `_paginate`'s cursor is only stable if the list has a total order, and
+    # Sorted before slicing: `paginate`'s cursor is only stable if the list has a total order, and
     # the docstring's "name-sorted" promise was previously made by `registry.list_models` rather than
     # here — a promise the caller cannot verify and this route cannot enforce.
-    page, next_token = _paginate(sorted(set(names)), page_token, limit)
+    page, next_token = paginate(sorted(set(names)), page_token, limit)
     return ModelsListResponse(
         models=await run_in_threadpool(_summaries, settings, so, page),
         page_token=next_token,

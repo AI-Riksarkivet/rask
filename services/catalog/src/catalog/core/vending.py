@@ -326,3 +326,22 @@ def make_vendor(
             ttl_seconds=ttl_seconds,
         )
     assert_never(mode)
+
+
+def has_external_bases(location: str, storage_options: dict[str, str]) -> bool:
+    """True if the table's data physically lives in registered NON-root bases (#3-B multi-base) — any data
+    file with a ``base_id`` set. Such a table cannot be safely direct-vended: the STS session policy is scoped
+    to the primary root bucket only, so a data-base fragment would be denied at the object store. Short-
+    circuits on the first external file; only called when the multi-base feature is enabled.
+
+    A VENDING question, which is why it lives here rather than in an endpoint module: both the vend
+    door (``credentials.py``) and describe-with-vending (``tables.py``) must answer it identically,
+    and a helper shared across endpoint modules belongs in the layer they both already import.
+    """
+    import lance  # lazy, matching this module's boto3 style: pylance loads only where vending runs
+
+    try:
+        ds = lance.dataset(location, storage_options=storage_options)
+        return any(getattr(df, "base_id", None) for frag in ds.get_fragments() for df in frag.data_files())
+    except (ValueError, OSError):
+        return False

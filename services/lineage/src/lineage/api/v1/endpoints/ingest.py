@@ -19,7 +19,9 @@ from lineage.models import RunEvent
 from lineage.services.consumer import record_event_best_effort
 
 
-router = APIRouter(prefix="/api/v1", tags=["ingest"])
+# Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
+# under /api/v1, the OpenLineage HTTP-transport default path the docstring above names.
+router = APIRouter(tags=["ingest"])
 
 
 @router.post("/lineage", status_code=201)

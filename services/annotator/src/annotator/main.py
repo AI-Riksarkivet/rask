@@ -155,7 +155,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await control_dapr.close()
         _disarm_drain()
         app.state.shutting_down = True
-        for resource in (state.http, state.embedder, state.reranker):
+        # Only the slots THIS lifespan populated. `AppState` is the media plane's shared shape and
+        # carries slots for every media service (the search service's model handles among them) —
+        # closing those here would be a no-op that reads as ownership this service does not have.
+        for resource in (state.http,):
             close = getattr(resource, "close", None)
             if close is not None:
                 try:

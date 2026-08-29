@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends, Request
 from lance_namespace import (
@@ -256,13 +256,16 @@ class DatasetFilter:
         if self._token is None:
             raise UnauthenticatedError("authentication required")
         object_type = self._settings.fga_object_type
+        # Dedupe before the round trip: callers legitimately pass per-item dataset names (one per
+        # column in the subgraph view), and a duplicate-laden batch payload is pure wasted checks.
+        unique = list(dict.fromkeys(names))
         allowed = await fga.batch_check(
             client,
             user=self._token.sub,
             relation="can_get_metadata",
-            objects=[f"{object_type}:{n}" for n in names],
+            objects=[f"{object_type}:{n}" for n in unique],
         )
-        return {n for n in names if allowed.get(f"{object_type}:{n}")}
+        return {n for n in unique if allowed.get(f"{object_type}:{n}")}
 
 
 def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentToken) -> DatasetFilter:
@@ -285,7 +288,7 @@ async def governed[T](
     """
     referenced = {name for item in items for name in refs(item)}
     visible = await datasets.visible(list(referenced))
-    kept: list[Any] = []
+    kept: list[T] = []
     for item in items:
         names = refs(item)
         if fga_enabled and not names:

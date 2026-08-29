@@ -29,6 +29,7 @@ totals so the graph answers "what produced this dataset".
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Final
@@ -276,8 +277,6 @@ def _json_links(shape: Shape | None, links: list[Link] | None) -> str:
     Sorted like `_json_attributes` (replay determinism), and always valid JSON: `[]` for the
     sentinel, a shapeless row, or a draft with no relations — never `""`, which the `pa.json_()`
     column refuses at write time."""
-    import json  # noqa: PLC0415 - only needed on this path
-
     if shape is None or not links:
         return "[]"
     outgoing = sorted(
@@ -298,8 +297,6 @@ def _json_attributes(shape: Shape | None) -> str:
     refuses to encode it into a JSON column and fails the whole publish write. `{}` for a shapeless
     row is the reason this never returns `""`.
     """
-    import json  # noqa: PLC0415 - only needed on this path
-
     return json.dumps(dict(sorted(shape.attributes.items())), separators=(",", ":")) if shape else "{}"
 
 

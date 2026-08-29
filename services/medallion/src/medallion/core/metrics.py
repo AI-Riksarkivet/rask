@@ -34,6 +34,11 @@ _stage_quality_blocked = _meter.create_counter(
     unit="{transition}",
     description="Stage transitions BLOCKED by the quality gate (a data-quality assertion failed).",
 )
+_stage_media_underivable = _meter.create_counter(
+    "medallion.stage.media_underivable",
+    unit="{transition}",
+    description="Stage triggers DROPped on deterministic bad media (the payload matched the content probe but cannot decode); no quality assertion ran.",
+)
 _dlq_parked = _meter.create_counter(
     "medallion.dlq.parked",
     unit="{delivery}",
@@ -201,6 +206,17 @@ def record_denied(transition: str) -> None:
 def record_quality_blocked(transition: str) -> None:
     """Increment the quality-blocked counter (the produced data failed a quality assertion → not promoted)."""
     _stage_quality_blocked.add(1, {"lance.medallion.transition": transition})
+
+
+def record_media_underivable(transition: str) -> None:
+    """Count one stage trigger DROPped on deterministic bad media (undecodable payload).
+
+    Its OWN counter, not ``record_quality_blocked``: the media path shares the gate's OUTCOME contract
+    (record the FAIL run, DROP so redelivery cannot re-read broken bytes) but runs no data-quality
+    assertion, and folding it into ``medallion.stage.quality_blocked`` made the gate's series report
+    blocks the gate never issued — bad bytes in bronze and a tuned-too-tight gate are different pages.
+    """
+    _stage_media_underivable.add(1, {"lance.medallion.transition": transition})
 
 
 def record_other_lane(transition: str) -> None:

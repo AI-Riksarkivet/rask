@@ -1,7 +1,9 @@
 """Ray Dashboard endpoints — viewer's normalized `/api/v1/ray/*` (health, jobs,
 cluster, …). Thin shell over ray_kit.dashboard."""
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
 
 from compute import security
 from compute.dependencies import HttpDep, RayClientDep
@@ -23,6 +25,11 @@ from service_kit.dependencies import SettingsDep
 # deliberately token-protects, and this service holds that token — see `security.py`.
 router = APIRouter(prefix="/ray", tags=["ray"], dependencies=[Depends(security.require_read)])
 
+# `tail`/`lines` are relayed to the Ray dashboard verbatim, so an unbounded value is a
+# log-tail amplification lever against the cluster — and ray_kit caps job logs by slicing
+# `[-tail:]`, which for 0 is `[-0:]`: the WHOLE log, the cap inverted. Hence ge=1, at the door.
+_LOG_LINE_CAP = Query(ge=1, le=100_000)
+
 
 @router.get("/health")
 async def ray_health(client: RayClientDep, settings: SettingsDep) -> RayHealth:
@@ -35,7 +42,9 @@ async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayloa
 
 
 @router.get("/jobs/{submission_id}/logs")
-async def ray_job_logs(http: HttpDep, client: RayClientDep, settings: SettingsDep, submission_id: str, tail: int = 2000) -> RayJobLogsPayload:
+async def ray_job_logs(
+    http: HttpDep, client: RayClientDep, settings: SettingsDep, submission_id: str, tail: Annotated[int, _LOG_LINE_CAP] = 2000
+) -> RayJobLogsPayload:
     return await dashboard.job_logs(http, client, settings.ray_dashboard_url, submission_id, tail)
 
 
@@ -65,6 +74,6 @@ async def ray_logs(
     settings: SettingsDep,
     node_id: str,
     filename: str | None = None,
-    lines: int = 200,
+    lines: Annotated[int, _LOG_LINE_CAP] = 200,
 ) -> RayLogsPayload:
     return await dashboard.logs(http, settings.ray_dashboard_url, node_id, filename, lines)

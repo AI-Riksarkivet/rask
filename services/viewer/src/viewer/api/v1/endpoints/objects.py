@@ -27,6 +27,7 @@ import logging
 import os
 from functools import lru_cache
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
@@ -83,19 +84,23 @@ def _creds(secret: str) -> tuple[str, str]:
     Cached: a secret is estate config, not per-request data, and a sidecar round-trip per listing would
     put OpenBao on the object browser's hot path. Only SUCCESSFUL lookups cache — `lru_cache` never
     stores a raised exception, so a transient outage cannot pin a failure for the process lifetime.
+
+    No try/except around the fetch: `fetch_dapr_secret` swallows every failure internally and returns
+    `{}` — a down sidecar, a missing secret and an empty secret all look the same here (VS-11: a dead
+    handler "caught" the fetch while the real miss fell through to a message claiming the secret
+    existed). The empty/incomplete bundle is the ONLY failure signal, so the 503 says the credentials
+    could not be read and asserts nothing about which of the three states caused it.
     """
     store = os.getenv("RASK_SECRET_STORE", "lance-secrets")
-    try:
-        data = fetch_dapr_secret(store, secret, retries=1)
-    except Exception as exc:
-        log.warning("store_secret_unavailable", extra={"secret": secret})
-        raise ServiceUnavailableError(
-            f"credentials for this store are unavailable: secret {secret!r} could not be read from "
-            f"the {store!r} secret store ({exc}). The store is not readable until it resolves."
-        ) from exc
+    data = fetch_dapr_secret(store, secret, retries=1)
     ak, sk = data.get("access_key"), data.get("secret_key")
     if not (ak and sk):
-        raise ServiceUnavailableError(f"secret {secret!r} exists but carries no access_key/secret_key pair")
+        log.warning("store_secret_unavailable", extra={"secret": secret})
+        raise ServiceUnavailableError(
+            f"credentials for this store could not be read: secret {secret!r} from the {store!r} secret "
+            "store yielded no access_key/secret_key pair — the store may be unreachable, the secret "
+            "missing, or seeded without the pair. The store is not readable until it resolves."
+        )
     return (ak, sk)
 
 
@@ -368,9 +373,21 @@ async def download_object(
 
     resp, data = await run_in_threadpool(_blocking)
     content_type = resp.get("ContentType") or "application/octet-stream"
-    filename = key.rsplit("/", 1)[-1] or "download"
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _attachment_disposition(key.rsplit("/", 1)[-1] or "download")},
     )
+
+
+def _attachment_disposition(filename: str) -> str:
+    """A Content-Disposition the caller-supplied key cannot break out of (VS-10).
+
+    The key is a query parameter, so its basename is attacker-shaped: a `"` inside the quoted
+    `filename=` ends the quoted-string early and the remainder parses as extra disposition
+    parameters (filename spoofing). The ASCII fallback therefore drops `"`/`\\` and anything
+    non-printable; the REAL name is not lost — it rides the RFC 6266 `filename*=UTF-8''` ext
+    parameter, pct-encoded, which conforming clients prefer over the fallback.
+    """
+    fallback = "".join(c for c in filename if c.isascii() and c.isprintable() and c not in '"\\') or "download"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"

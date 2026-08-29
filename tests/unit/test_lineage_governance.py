@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from lance_namespace import (
@@ -30,6 +30,10 @@ from lineage.services.repository import LineageRepository
 
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
+
+
+if TYPE_CHECKING:
+    import psycopg
 
 
 _FULL_AUTH = {
@@ -249,6 +253,9 @@ def test_ingest_unions_facet_tags_with_curated_ones(monkeypatch: pytest.MonkeyPa
     repo = _repo_with(script, monkeypatch)
     facet = {"tags": [{"key": "layer", "value": "gold"}, {"key": "team", "value": "ml"}]}
     ds = Dataset.model_validate({"namespace": "gold", "name": "gold$catalog", "facets": {"tags": facet}})
-    asyncio.run(repo._merge_dataset(None, ds))
+    # `_repo_with` monkeypatches `run_cypher`, so the connection is never dereferenced — the script
+    # records the writes instead. Cast rather than widen the signature: production always holds a real
+    # connection, and typing it optional would lose that.
+    asyncio.run(repo._merge_dataset(cast("psycopg.AsyncConnection", None), ds))
     tag_writes = [p for q, p in script.writes if "SET d.tags=$tags" in q]
     assert tag_writes and tag_writes[0]["tags"] == "pii,layer=gold,team=ml"

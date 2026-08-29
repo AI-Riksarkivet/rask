@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Path, status
+from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
 
 from annotator.api.dependencies import ControlEmitterDep
@@ -151,9 +151,19 @@ async def grant_member(
 
 @router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def revoke_member(
-    project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep, control: ControlEmitterDep
+    project_id: ProjectId,
+    user: Annotated[str, Query(min_length=1, max_length=256)],
+    relation: Rung,
+    checker: CheckerDep,
+    subject: CurrentSubject,
+    fga_client: FgaClientDep,
+    control: ControlEmitterDep,
 ) -> MemberList:
     """Revoke one rung from one person.
+
+    `user` + `relation` ride as QUERY PARAMS, not a body: a DELETE body has no defined semantics
+    (RFC 9110) and some intermediaries strip or refuse it, which would make revoke fail only behind
+    certain infra. The values are the same shape `GrantRequest` carries on the PUT.
 
     REFUSES the last administrative grant. `owner` and `manager` are the rungs that can grant others;
     removing the final one leaves the project administrable only by a tenant admin — which, on a
@@ -167,28 +177,27 @@ async def revoke_member(
     if fga_client is None:
         raise ConflictError("authorization is not configured on this deployment — cannot revoke")
     client = cast("OpenFgaClient", fga_client)
-    user = _user_string(payload.user)
+    user = _user_string(user)
 
     existing = await fga.read_object_tuples(client, obj)
-    present = [t for t in existing if t.object == obj and t.relation == payload.relation and t.user == user]
+    present = [t for t in existing if t.object == obj and t.relation == relation and t.user == user]
     if not present:
         return MemberList(members=_direct_grants(existing, obj))
 
-    if payload.relation in ADMINISTRATIVE:
+    if relation in ADMINISTRATIVE:
         admins = [t for t in existing if t.object == obj and t.relation in ADMINISTRATIVE]
         if len(admins) <= 1:
             raise ConflictError(
-                f"{user} holds the only remaining {payload.relation} on this project — "
-                "grant another owner or manager first, or nobody will be able to administer it"
+                f"{user} holds the only remaining {relation} on this project — grant another owner or manager first, or nobody will be able to administer it"
             )
 
     await fga.delete_tuples(
         client,
-        [fga.ClientTuple(user=user, relation=payload.relation, object=obj)],
+        [fga.ClientTuple(user=user, relation=relation, object=obj)],
         actor=subject,
         origin="annotator",
     )
-    audit("annotation_project.members.revoke", SUCCESS, subject=subject, resource=project_id, relation=payload.relation)
+    audit("annotation_project.members.revoke", SUCCESS, subject=subject, resource=project_id, relation=relation)
     # The sharper half, for the reason `grant_revoked` carries everywhere: after this the subject can
     # no longer see the project, so no visibility-gated feed could tell them — being NAMED is the
     # targeting. Unannounced, losing access to an annotation project is discovered by a 403 mid-task.
@@ -198,6 +207,6 @@ async def revoke_member(
         object_type="grant",
         object_id=obj,
         actor=f"user:{subject}",
-        extra={"relation": payload.relation, "subject": user},
+        extra={"relation": relation, "subject": user},
     )
     return MemberList(members=_direct_grants(await fga.read_object_tuples(client, obj), obj))

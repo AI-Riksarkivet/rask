@@ -74,8 +74,9 @@ def _grant(relation: str, user: str, control: _RecordingControl) -> Any:
 
 
 def _revoke(relation: str, user: str, control: _RecordingControl) -> Any:
-    body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.revoke_member(PROJECT, body, _allow, MANAGER, cast(OpenFgaClient, object()), cast(Any, control)))
+    # Query params on the wire (a DELETE body is stripped by some intermediaries — ANN-20), so the
+    # handler takes the two fields directly rather than a GrantRequest.
+    return asyncio.run(members.revoke_member(PROJECT, user, cast(Any, relation), _allow, MANAGER, cast(OpenFgaClient, object()), cast(Any, control)))
 
 
 def test_a_grant_names_the_person_who_received_it(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, TypedDict, runtime_checka
 
 import nats
 from nats.js import api as jsapi
+from nats.js import errors as jserrors
 from pydantic import BaseModel, Field
 
 
@@ -168,6 +169,17 @@ class BrokerUnreachable(RuntimeError):
     """
 
 
+def _is_stream_already_in_use(exc: Exception) -> bool:
+    """True only for the server's own exists signal, err_code 10058 ("stream name already in use
+    with a different configuration").
+
+    That is the ONE shape "already exists" ever raises as: an `add_stream` whose config matches the
+    live stream succeeds outright, so anything else — a 503, a connection reset, a permission
+    refusal — is a provisioning failure the caller must hear about, not a duplicate create.
+    """
+    return isinstance(exc, jserrors.APIError) and exc.err_code == 10058
+
+
 class WorkQueue:
     """Publish and consume unit tasks over JetStream."""
 
@@ -216,7 +228,14 @@ class WorkQueue:
         try:
             await self._js.add_stream(config)
             return
-        except Exception:
+        except Exception as exc:
+            if not _is_stream_already_in_use(exc):
+                # A REAL provisioning failure — broker down, JetStream disabled, auth refused. It used
+                # to be swallowed here as DEBUG "already exists" (ingest-flow-17), which moved the
+                # first symptom to a later publish dying `NoStreamResponseError` with nothing naming
+                # why the stream is missing. Raising is the honest answer: the caller asked for a
+                # stream and does not have one.
+                raise
             # Already exists — and `add_stream` does NOT reconcile, so whatever is there stands. Debug
             # rather than warning: this is the NORMAL in-cluster path (the chart's Job creates it), and
             # the thing actually worth saying is what the existing stream IS, which the next line says.
@@ -253,7 +272,10 @@ class WorkQueue:
                     retention=jsapi.RetentionPolicy.LIMITS,
                 )
             )
-        except Exception:
+        except Exception as exc:
+            if not _is_stream_already_in_use(exc):
+                # Same contract as `ensure_stream`: only the server's exists signal is benign.
+                raise
             # Already exists — the normal in-cluster path, where the chart's Job got there first.
             logger.debug("%s already exists; not reconciled by add_stream", DLQ_STREAM, exc_info=True)
 

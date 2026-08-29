@@ -946,7 +946,7 @@ def test_list_tables_filtered_by_list_objects(client: TestClient, fake_ns: Magic
     resp = client.get("/v1/table", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     # Sorted, not source-ordered: the merged listing is `sorted(set(...))` (tables.py:113) because
-    # `_paginate`'s keyset cursor is the last NAME of the previous page, and a cursor over an unsorted
+    # `paginate`'s keyset cursor is the last NAME of the previous page, and a cursor over an unsorted
     # list silently skips or repeats rows. Asserting the source order here pinned a shape the endpoint
     # has not had since the cursor landed.
     assert resp.json()["tables"] == ["orders", "users"]  # secret filtered out

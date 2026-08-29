@@ -13,9 +13,8 @@ monkeypatch (the symbol must resolve at call time, not import time).
 
 from __future__ import annotations
 
-import inspect
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from search.services.spec import SearchMode
 from service_kit.exceptions import ServiceUnavailableError
@@ -23,31 +22,11 @@ from service_kit.media.state import dataset_handle
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from search.services.encoders.embedding import EmbeddingClient
     from search.services.encoders.reranker import VLLMReranker
     from service_kit.media.state import AppState
 
 logger = logging.getLogger(__name__)
-
-
-def _construct(factory: Callable[..., Any], available: dict[str, Callable[[], Any]]) -> Any:
-    """Build a client, injecting each named kwarg only if the factory takes it.
-
-    The real encoder clients accept ``embed_url=``/``rerank_url=`` (+
-    ``expected_dim=`` for the embedder). Test fakes monkeypatched over the
-    client class typically take no such parameters; we detect that via the
-    signature and skip the injection so it never breaks them. The values are
-    lazy thunks so a skipped kwarg costs nothing (the dim lookup opens the
-    default dataset).
-    """
-    try:
-        params = inspect.signature(factory).parameters
-    except (TypeError, ValueError):
-        params = {}
-    kwargs = {name: make() for name, make in available.items() if name in params}
-    return factory(**kwargs)
 
 
 def _default_embed_dim(state: AppState) -> int:
@@ -73,13 +52,10 @@ def ensure_embedder(state: AppState) -> EmbeddingClient:
     try:
         from search.services.encoders.embedding import VLLMEmbeddingClient
 
-        state.embedder = _construct(
-            VLLMEmbeddingClient,
-            {
-                "embed_url": lambda: state.settings.embed_url,
-                "expected_dim": lambda: _default_embed_dim(state),
-            },
-        )
+        # Constructed with the real kwargs, unconditionally (VS-19: a signature-introspecting
+        # helper here existed to accommodate param-less test fakes, which meant a drifted real
+        # signature dropped kwargs silently). A double that cannot take these fails loudly.
+        state.embedder = VLLMEmbeddingClient(state.settings.embed_url, expected_dim=_default_embed_dim(state))
         return state.embedder
     except Exception as e:
         logger.exception("failed to initialize embedding client")
@@ -93,7 +69,7 @@ def ensure_reranker(state: AppState) -> VLLMReranker:
     try:
         from search.services.encoders.reranker import VLLMReranker
 
-        state.reranker = _construct(VLLMReranker, {"rerank_url": lambda: state.settings.rerank_url})
+        state.reranker = VLLMReranker(state.settings.rerank_url)
         return state.reranker
     except Exception as e:
         logger.exception("failed to initialize reranker client")

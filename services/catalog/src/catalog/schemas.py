@@ -11,12 +11,15 @@ lineage-emit input reference).
 
 from __future__ import annotations
 
-from typing import Any, Self
+from datetime import datetime
+from typing import Any, Literal, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
+from service_kit.control_events import CatalogControlEvent
+from service_kit.governed.user_state import UserStateDocument
 
 
 # --------------------------------------------------------------------------- #
@@ -902,3 +905,179 @@ class ProjectTransformsResponse(BaseModel):
 
     project: str
     transforms: list[TransformSpecResponse] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Self-describe (`/v1/me`) and tenant membership (`/v1/projects/{id}/members`)
+# --------------------------------------------------------------------------- #
+
+
+class MeProject(BaseModel):
+    """One tenant the caller belongs to, at their strongest role (``admin`` wins over ``member``)."""
+
+    project: str
+    role: Literal["admin", "member"]
+
+
+class MeResponse(BaseModel):
+    """The caller's self-describe: verified claims + effective (possibly degraded) FGA standing."""
+
+    sub: str
+    name: str | None
+    email: str | None
+    estate_admin: bool
+    projects: list[MeProject]
+
+
+#: The membership ladder the members API will grant, most privileged first, and the request type that
+#: names one rung of it. ``team`` is absent on purpose: it is the edge that makes every member of a
+#: team a project ADMIN (``admin: … or member from team``), so granting it here would let one request
+#: confer admin on a set of people the caller cannot enumerate — attaching a team stays an estate
+#: operation. Here rather than in ``endpoints/members.py`` because ``MemberList`` advertises the ladder
+#: on the wire (so a UI does not keep a second copy of the model's rungs) — the endpoint's own policy
+#: constants (lock-out protection's ``ADMINISTRATIVE``) stay with the routing logic that enforces them.
+GRANTABLE: tuple[str, ...] = ("admin", "member")
+Rung = Literal["admin", "member"]
+
+
+class Member(BaseModel):
+    """One direct grant on this tenant."""
+
+    #: The FGA user string as stored (``user:gina``, ``role:x#assignee``, ``team:y#member``). Verbatim,
+    #: because it is what a revoke must send back and a prettified name that cannot round-trip is a trap.
+    user: str
+    relation: str
+
+
+class MemberList(BaseModel):
+    members: list[Member]
+    #: The rungs this API will grant, so a UI does not keep a second copy of the model's ladder.
+    grantable: list[str] = Field(default_factory=lambda: list(GRANTABLE))
+
+
+class GrantRequest(BaseModel):
+    #: A bare subject (``gina``) or a full FGA user string. Normalised by the endpoint — asking a UI to
+    #: know the prefix is asking it to know the authorization model.
+    user: str = Field(min_length=1, max_length=256)
+    relation: Rung
+
+
+# --------------------------------------------------------------------------- #
+# Control events (`/v1/events`)
+# --------------------------------------------------------------------------- #
+
+
+class EventsResponse(BaseModel):
+    """A poll response: control events strictly after the caller's cursor, the new head cursor, and a reset
+    flag (``True`` when the client's cursor fell off the bounded buffer → the console should re-read all)."""
+
+    events: list[CatalogControlEvent]
+    cursor: int
+    reset: bool
+
+
+# --------------------------------------------------------------------------- #
+# Warehouse registry reads + deletion (`/v1/warehouses`)
+# --------------------------------------------------------------------------- #
+
+
+class WarehouseNamespacesResponse(BaseModel):
+    """The namespaces BOUND to one warehouse — the registry's answer, same shape as the spec's
+    ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged."""
+
+    namespaces: list[str]
+
+
+class EstateBindingsResponse(BaseModel):
+    """Every namespace→warehouse binding the caller can see, in ONE read (#86).
+
+    The per-warehouse sibling answers for one id; a page listing the estate's namespaces was
+    calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
+    estate before filtering in Python — O(warehouses × bindings) for a union the underlying
+    ``list_bindings`` already produces in a single pass.
+    """
+
+    bindings: dict[str, str]
+    """``{namespace: warehouse_id}`` — a mapping rather than a list, because every caller so far
+    wants to know WHICH warehouse a namespace lives in, and a list would make them re-derive it."""
+
+    authorization_truncated: bool = False
+
+
+class DeleteWarehouseResponse(BaseModel):
+    """What the delete ACTUALLY did — reported step by step, never assumed.
+
+    A warehouse delete touches four independent stores (the native namespaces, OpenFGA, the registry, the
+    bucket) and only three of them run by default. Reporting each separately is what makes a partial
+    failure diagnosable instead of a lie: ``bucket_purged=false`` names bytes that are still there, and
+    ``tuples_revoked`` is a count OpenFGA really returned.
+    """
+
+    id: str
+    #: The bucket the warehouse owned — named even when it was NOT purged, so the operator knows what survived.
+    bucket: str
+    #: The namespaces a ``cascade`` actually dropped and unbound (empty on a non-cascade delete).
+    namespaces_dropped: list[str]
+    #: Tuples removed across the warehouse object AND every cascaded namespace. 0 when FGA is off.
+    tuples_revoked: int
+    bucket_purged: bool
+    objects_purged: int
+
+
+# --------------------------------------------------------------------------- #
+# Per-subject user state (`/v1/user-state/*`)
+# --------------------------------------------------------------------------- #
+
+
+class UserStateEnvelope[T](BaseModel):
+    """One document as served: who owns it, which document, whether it was ever written, and it.
+
+    ``subject`` is echoed from the VERIFIED token — it is what makes a cross-user leak visible in a
+    response body, rather than only in a diff of two documents that happen to look alike.
+    """
+
+    subject: str
+    document: UserStateDocument
+    exists: bool
+    updated_at: datetime | None = None
+    value: T | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Tenants (`/v1/projects`)
+# --------------------------------------------------------------------------- #
+
+
+class ProjectWarehouse(BaseModel):
+    """One warehouse owned by the project — the registry facts an estate observer needs at a glance."""
+
+    id: str
+    bucket: str
+    status: str
+    # "gold" = the project's gold SERVING warehouse (DECISIONS "Medallion tiers"); None = a work warehouse.
+    serving: str | None = None
+
+
+class ProjectResponse(BaseModel):
+    """A derived tenant: its name, the warehouses claiming it, and its effective FGA admins (``[]`` when
+    FGA is off/unavailable — degraded, never fabricated)."""
+
+    project: str
+    warehouses: list[ProjectWarehouse]
+    admins: list[str]
+
+
+class CreateProjectRequest(BaseModel):
+    """The create payload. Just the id — a tenant is a name, its admins, and what it later holds."""
+
+    id: str
+
+
+class DeleteProjectResponse(BaseModel):
+    """What the delete actually removed: the retired tenant and how many FGA tuples went with it.
+
+    The count is reported rather than assumed — an operator retiring a tenant needs to see that the authz
+    side really happened (``0`` on an FGA-off stack is a fact, not a silent success)."""
+
+    project: str
+    tuples_revoked: int

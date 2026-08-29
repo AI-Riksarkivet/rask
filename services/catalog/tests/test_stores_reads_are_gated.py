@@ -50,9 +50,8 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 def _app(*, fga_enabled: bool, allow: bool, subject: str | None = "carol") -> FastAPI:
-    from catalog.api.dependencies import get_fga_client, get_settings
+    from catalog.api.dependencies import get_fga_client, get_settings, get_user_state_store
     from catalog.api.security import authenticate
-    from catalog.api.v1.endpoints.user_state import get_user_state_store
     from catalog.api.v1.router import api_router
 
     from service_kit.exceptions import register_handlers

@@ -34,11 +34,6 @@ from ray_kit import submit as rk
 
 log = logging.getLogger(__name__)
 
-# Still live after A13: the TRAIN path reads it to decide re-attach vs already_failed
-# (:237). Its sibling _TERMINAL_OK and the poll-error tolerance went with the completion
-# poll — nothing observes a job to SUCCEEDED any more, so only the FAILED/STOPPED test
-# survives, and only at submit time.
-
 
 #: The ONE Ray dashboard client for this worker process.
 #:

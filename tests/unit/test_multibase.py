@@ -138,11 +138,11 @@ def test_has_external_bases_detects_multibase(tmp_path: Any) -> None:
     # audit follow-up (#3-B ⊥ #2): the vend path must DETECT a multi-base table (data in a registered base)
     # so it can fall back to server-mediated instead of handing out a root-scoped STS policy that can't reach
     # the base. Real local Lance writes, no mocks.
-    from catalog.api.v1.endpoints.credentials import _has_external_bases
+    from catalog.core.vending import has_external_bases
 
     single = str(tmp_path / "single")
     lance.write_dataset(_table(), single, data_storage_version="2.2")
-    assert _has_external_bases(single, {}) is False  # single-location → no external bases
+    assert has_external_bases(single, {}) is False  # single-location → no external bases
 
     mb = str(tmp_path / "mb")
     base = str(tmp_path / "base")
@@ -153,7 +153,7 @@ def test_has_external_bases_detects_multibase(tmp_path: Any) -> None:
         target_bases=["b1"],
         data_storage_version="2.2",
     )
-    assert _has_external_bases(mb, {}) is True  # data lands in the registered base → detected
+    assert has_external_bases(mb, {}) is True  # data lands in the registered base → detected
 
 
 def test_config_allowlist_parsing() -> None:

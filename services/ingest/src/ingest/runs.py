@@ -9,6 +9,7 @@ and the semantics cannot drift apart again.
 from __future__ import annotations
 
 import uuid
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -165,22 +166,38 @@ class RunStore(Protocol):
     async def recent(self, limit: int) -> list[RunRecord]: ...
 
 
+#: The cache's ceiling. Large enough that eviction never touches a run anyone is still polling — the
+#: list endpoint reads at most 200 — and small enough that a pod accepting runs for months stays flat:
+#: unbounded, the store grew one record per accepted run for the pod's lifetime (ingest-flow-15).
+RUN_STORE_MAX_RECORDS = 10_000
+
+
 class InMemoryRunStore:
     """The default store. Deliberately NOT durable — run truth is the workflow's, not this cache.
 
     The workflow owns run state (docs/DECISIONS.md: Dapr Workflow IS adopted); this is a read-side
     index so `GET /v1/ingests/{id}` can answer without a workflow query on every poll. Losing it
     costs a re-read, never correctness.
+
+    BOUNDED, because a cache that only grows is a leak wearing a cache's name. Least-recently-WRITTEN
+    goes first: a `put` is the accept path recording a claim or an outcome, so write recency tracks
+    which runs are still live. Evicting is safe for the same reason losing the whole store is —
+    `record_from_workflow_state` rebuilds an evicted run from the engine's `serialized_input` on GET.
     """
 
-    def __init__(self) -> None:
-        self._runs: dict[str, RunRecord] = {}
+    def __init__(self, max_records: int = RUN_STORE_MAX_RECORDS) -> None:
+        self._runs: OrderedDict[str, RunRecord] = OrderedDict()
+        self._max_records = max_records
 
     async def get(self, run_id: str) -> RunRecord | None:
         return self._runs.get(run_id)
 
     async def put(self, record: RunRecord) -> None:
         self._runs[record.run_id] = record
+        # An update counts as recency: the run being written to is the one a poll is about to read.
+        self._runs.move_to_end(record.run_id)
+        while len(self._runs) > self._max_records:
+            self._runs.popitem(last=False)
 
     async def recent(self, limit: int) -> list[RunRecord]:
         """The runs THIS REPLICA accepted, newest first.
@@ -191,6 +208,9 @@ class InMemoryRunStore:
         presented as the estate's run list. The durable list is the LINEAGE graph, which is why the
         compute zone's runs page reads that.
         """
+        # Sorted on read, by created_at rather than write order (an outcome update moves a run to the
+        # OrderedDict's end without making it newer). The full sort is fine now that the map is
+        # capped; it was the second half of ingest-flow-15 when the map was unbounded.
         ordered = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
         return ordered[: max(0, limit)]
 

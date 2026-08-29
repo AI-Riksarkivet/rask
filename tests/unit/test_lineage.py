@@ -1133,9 +1133,8 @@ def test_demo_read_failure_is_logged(monkeypatch: pytest.MonkeyPatch, caplog: py
         raise OSError("s3 unreachable")
 
     monkeypatch.setattr(demo.lance, "dataset", _boom)
-    demo._reset_peek_cache()
     with caplog.at_level(logging.WARNING, logger="lineage.api.v1.endpoints.demo"):
-        result = demo._read_dataset("bronze$events", "s3://bucket/bronze/events", {}, 5)
+        result = demo._read_dataset(demo.PeekCache(), "bronze$events", "s3://bucket/bronze/events", {}, 5)
 
     assert result.exists is False  # unchanged: a read failure still yields the "not present" payload
     assert any(rec.levelno == logging.WARNING for rec in caplog.records), "the swallowed read was not logged"
@@ -1153,6 +1152,5 @@ def test_demo_read_reraises_programming_error(monkeypatch: pytest.MonkeyPatch) -
         raise AttributeError("typo in the peek code")
 
     monkeypatch.setattr(demo.lance, "dataset", _bug)
-    demo._reset_peek_cache()
     with pytest.raises(AttributeError, match="typo in the peek code"):
-        demo._read_dataset("bronze$events", "s3://bucket/bronze/events", {}, 5)
+        demo._read_dataset(demo.PeekCache(), "bronze$events", "s3://bucket/bronze/events", {}, 5)

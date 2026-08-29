@@ -712,7 +712,7 @@ class LineageRepository:
                         {"name": event.author, "ds": ds.name, "tm": event.event_time},
                     )
 
-    async def _schema_is_current(self, conn, name: str, version: str) -> bool:
+    async def _schema_is_current(self, conn: psycopg.AsyncConnection, name: str, version: str) -> bool:
         """True when ``version`` is at least the newest WROTE version the graph records for ``name``
         — the recency gate that makes the column-inventory seeding AND prune idempotent under
         redelivery reordering. Unparseable versions → False (never touch the inventory on
@@ -725,7 +725,7 @@ class LineageRepository:
         except (TypeError, ValueError):
             return False
 
-    async def _merge_dataset(self, conn, ds: Dataset) -> None:
+    async def _merge_dataset(self, conn: psycopg.AsyncConnection, ds: Dataset) -> None:
         await run_cypher(
             conn,
             self._graph,
@@ -749,7 +749,7 @@ class LineageRepository:
             merged = list(dict.fromkeys(existing + sanitized))
             await run_cypher(conn, self._graph, _SET_DATASET_TAGS, {"name": ds.vertex_name, "tags": ",".join(merged)})
 
-    async def _ingest_columns(self, conn, event: RunEvent) -> None:
+    async def _ingest_columns(self, conn: psycopg.AsyncConnection, event: RunEvent) -> None:
         """Materialise column nodes + field-to-field edges from each output's schema/columnLineage (#24).
 
         Caller guarantees ``event.is_success`` (a failed run asserts no data). Per output dataset: (1) seed

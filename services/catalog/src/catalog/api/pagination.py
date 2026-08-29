@@ -10,7 +10,7 @@ owns the OFFSET strategy, which has no such precondition.
 from __future__ import annotations
 
 
-def _paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:
+def paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:
     """Keyset pagination over an already-sorted, deduped name list.
 
     The cursor is the last name of the previous page — stateless, and stable across calls because
