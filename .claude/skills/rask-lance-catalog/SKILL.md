@@ -15,14 +15,20 @@ Two contracts stack here, and confusing them is how bugs happen:
 
 ## The spec surface (verified 2026-08-04 against lance.org)
 
-- **Operations: 54/54 ROUTED, 47 backend-backed.** `tests/integration/test_spec_conformance.py`
+- **Operations: 54/54 ROUTED, 48 backend-backed.** `tests/integration/test_spec_conformance.py`
   asserts both halves — every spec op has a served route, and the vendored
   `lance_docs/ns_catalog/spec.yaml` still carries 54 ops (a shrunken spec would silently weaken the
-  check). The other **7 answer a spec-correct 501** because the native `dir` backend stubs them:
-  `rename_table`, `backfill_columns`, `alter_transaction`, `batch_create_table_versions`,
-  `batch_commit_tables`, and BOTH materialized-view ops (`docs/COVERAGE.md`). The spec's *minimum*
-  is 8 metadata ops; we carry the whole list including versioning, tags, branches, indices and
-  transactions.
+  check). The other **6 answer a spec-correct 501** because the native `dir` backend stubs them:
+  `backfill_column`, `alter_transaction`, `batch_create_table_versions`, `batch_commit_tables`, and
+  BOTH materialized-view ops (`docs/COVERAGE.md`). Spelling matters when grepping: the spec op and
+  the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
+  `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
+  **`rename_table` is NOT one of them, and this bullet said it was for months.** #5b backs it
+  in-process (`endpoints/tables.py::rename_table` copies the dataset root, repoints the namespace and
+  deregisters the source, never reaching `native.call`), so it answers 200; `docs/COVERAGE.md:15-17`
+  carries the correction, dated 2026-08-05, and this file kept naming the native stub the endpoint
+  had deliberately stopped using. The spec's *minimum* is 8 metadata ops; we carry the whole list
+  including versioning, tags, branches, indices and transactions.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
   query-param pagination; data ops (create/insert/query) are **Arrow IPC**, not JSON; count/explain
@@ -100,7 +106,10 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 ## Lifecycle
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
-`services/maintenance/services/{sweep,optimize,purge,reconcile,base_refs,index_health,tiers}.py`
+`services/maintenance/services/{sweep,optimize,purge,reconcile,index_health,tiers}.py` — plus
+`packages/service-kit/src/service_kit/lakehouse/base_refs.py`, the shallow-clone-source pre-pass, which
+lives in service-kit rather than the service because the catalog's on-demand maintenance doors
+(`catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep
 before changing anything the sweep, the reconciler or the orphan scan touches. This used to point at
 a root `open_*.md`, which is ephemeral by design: the plan was deleted when its work landed and the
 pointer dangled. The per-table/namespace/project POLICY that governs a sweep is
@@ -180,19 +189,37 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   ("read the body, not the docstring") was itself stale by 2026-08-16. A policy may skip a STEP
   (`cleanup_enabled`/`optimize_indices_enabled`), never reorder them — which is why they are modules
   in one service rather than four services each rescanning every bucket.
-- **A dataset URI encodes its TIER in three different places, and two of them encode it at opposite
-  ends.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
+- **A dataset URI encodes its TIER in FIVE different places, and they do not agree on which end it
+  sits.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
   524 288 rows — bronze rows are ~1.8 MB page images, silver/gold ~2 KB records, so one row count
   cannot serve all three). Reading the tier from the wrong segment does not error, it returns `None`
   and silently falls back to Lance's own sizing:
   `<bucket>/<project>-<tier>/<table>` (nested — tier TRAILS, reduce from the right);
-  `<bucket>/medallion/<tier>` (the cascade — the child IS the namespace, and lanes are `<tier>-<lane>`
-  like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
+  `<bucket>/medallion/<tier>[-<lane>]` (the cascade — the child IS the namespace, and lanes are
+  `<tier>-<lane>` like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
   `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
-  ONE directory name, so the tier is in `parts[-1]`, not a parent directory).
+  ONE directory name, so the tier is in `parts[-1]`, not a parent directory);
+  `<bucket>/medallion/<project>$<tier>` (the cascade under a PROJECT — `project_root` reroutes the
+  medallion base per tenant, so the promoted child is project-qualified);
+  `<bucket>/<uuid8>_<tier>-<lane>$<table>` (a cascade LANE vended through the catalog — the flat
+  layout carrying the cascade's order rather than the catalog's).
   Until 2026-08-16 only the first was handled, so measured live, EVERY governed tier read as untiered
-  and the per-tier defaults had never once applied. Only `medallion` may promote its child; widening
+  and the per-tier defaults had never once applied. Layouts 4 and 5 landed later still and are the
+  reason the branch ORDER is load-bearing: `medallion` has to be asked before the delimiter test, or a
+  project's `acme$bronze` reads as the flat layout, reduces to the namespace `acme`, and the widest
+  rows in the estate get Lance's default row count. Only `medallion` may promote its child; widening
   that would let a table NAMED `gold` size itself as gold.
+  **`None` IS STILL REACHABLE, so do not read the list as "all shapes handled".** Measured against
+  `tier_of` at HEAD: a NESTED namespace in the flat layout
+  (`<bucket>/<uuid8>_<parent>$<tier>$<table>`, e.g. `aa3bed10_acme$bronze$events`) reduces the leaf on
+  its FIRST delimiter and yields the PARENT; and a table nested under a cascade lane
+  (`<bucket>/medallion/<tier>-<lane>/<table>`, e.g. `medallion/bronze-media/pages`) is layout 1, which
+  reduces `bronze-media` from the right and yields `media`. Neither errors. The estate's *rendered*
+  URIs all resolve today (`chart/templates/medallion.yaml` writes `s3://<bucket>/medallion/<ns>` for
+  every tier and lane, and the catalog vends the flat layout for top-level namespaces), so both are a
+  hazard of the next layout change rather than a live miss — but nesting a namespace or landing a
+  table under a lane is a config change, not a code change, which is exactly how the first three
+  layouts each arrived.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.
@@ -218,8 +245,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   table name); everything else in that map is opaque user data.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
-  `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED`, off by
-  default — it opens every dataset, unlike the rest of the drift report which compares three stores).
+  `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens
+  every dataset, unlike the rest of the drift report which compares three stores). **It is ON in the
+  deployed estate**, which is the opposite of what this line said: `maintenance/core/config.py:196`
+  defaults it `False`, but `chart/values.yaml:1356` ships `orphanScan: true`, and the chart is the
+  single deploy artefact — so "off by default" describes a configuration nothing runs. Read the chart
+  for what an estate does; read `config.py` only for what an unconfigured process does.
 - **Three Lance file classes look like orphans and are not.** A scan that names any of them would
   drive a reclaimer into live data, and all three were found by running against a real estate, not by
   reading the layout doc: `_refs/tags/*.json` are TAGS, which PIN versions (`cleanup_old_versions`
@@ -261,8 +292,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The
   reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against either cascade tier
   (`s3://lance-catalog/medallion/{silver,gold}`), whose index `medallion/services/compute.py::
-  _ensure_lineage_index` creates as `IndexConfig(index_type="json", parameters={"target_index_type":
-  "btree", "path": ...})`. `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
+  _index_lineage` (:250) creates as `IndexConfig(index_type="json", parameters={"target_index_type":
+  "btree", "path": ...})`. It is a PROVENANCE index, not a search one — the indexed path is
+  `lineage -> run_id` on the R26 consume-layer document, so a governed row can be filtered back to the
+  run that wrote it; nothing in it serves text or vector search. (The name here was
+  `_ensure_lineage_index`, which has never existed; grepping for it finds nothing and reads as though
+  the index were built somewhere this file does not know about.) `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
   index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
   upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
   `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
@@ -302,9 +337,35 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   halves of the declared-id chain are live (producer stamps `lineage.dataset_id`, sweep prefers it),
   and the read half is witnessed in AGE for `silver$emitproof` — but no medallion tier has yet been
   observed emitting, because every sweep since has measured `fragments_removed: 0, versions_removed:
-  0`. That is the gate behaving correctly, not a defect. Nor can the emit be forced, and the reason is
-  worth more than the verification was: **the medallion tiers are DATA WITHOUT GOVERNANCE.** A policy
-  door does reach them — `set_namespace_policy` builds its path from `settings.root` and
+  0`. That is the gate behaving correctly, not a defect.
+
+  **THE CASCADE'S TIERS ARE GOVERNED — ALL BUT ONE. This bullet said the opposite, and it was the most
+  misleading sentence in the file.** It read *"the medallion tiers are DATA WITHOUT GOVERNANCE"* and
+  concluded *"those tiers simply were never registered"*. At HEAD that is false for silver and gold
+  and true only of the PRODUCER's bronze seed. Split them:
+
+  - **Every MOVER output is a catalog table.** `transform.py` calls
+    `catalog_register.ensure_stage_output` BEFORE the write — describe, create-if-absent, then take
+    the location from the catalog's own answer — so the tier is a `table:` object with ownership
+    tuples before a byte lands, and it then publishes the written version through
+    `catalog_register.publish_stage_output` (the catalog's quality gate; `workflow.py::_resume_publish`
+    is the approval resume of the same call). That is bronze→silver, silver→gold and the media lane —
+    i.e. silver, gold and silver-media. The chart always supplies the URL
+    (`chart/templates/medallion.yaml` renders `MEDALLION_CATALOG_URL` for producer and movers alike),
+    so the ungoverned branch — `if settings.catalog_url and to_dataset` — is the dev shape, not the
+    deployed one. Symbols rather than line numbers throughout this sub-bullet on purpose: the mover is
+    edited often enough that a cited line goes wrong within the week.
+  - **The producer's bronze seed is the one that is NOT.** `medallion/services/produce.py::run_produce`
+    composes `bronze_uri` from settings (or from the project's warehouse root) and calls
+    `seed_bronze` directly; the module imports nothing from `catalog_register` at all. So
+    `bronze$events` has no table record, and a `policy/set` on it cannot succeed from either end: the
+    router-level authorize denies `can_drop` on an object no tuple names (403), and even a principal
+    that passes the gate falls out at `policies.py:120-121`, where `describe_table` raises
+    `TableNotFoundError` → **404**. (Bronze written by the INGEST plane is a different story and IS
+    governed — `ingest.catalog_service.ensure` creates namespace and table first.)
+
+  What follows below still holds for that bronze seed, and only for it. A policy
+  door does reach the bytes — `set_namespace_policy` builds its path from `settings.root` and
   `resolve_policy` matches a namespace record by directory prefix (`rel.startswith(path + "/")`), so a
   record on `medallion` governs `medallion/bronze`; and `retain_versions` alone sets
   `effective_older_than = None`, which is keep-last-N with no age bound and would sidestep the 7-day
@@ -315,24 +376,32 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   resolution — and neither object exists: `medallion` is not a catalog namespace (it is absent even
   from the reconciler's `unbound_namespaces`, which lists `bronze`, `transcripts_v2` and the three
   `acme-*`), and `bronze$events` is not a registered table. With no namespace record, no table record
-  and no parent tuple, NO principal can hold `can_delete`/`can_drop` there, so no policy, protection or
-  grant can ever be applied to the datasets the cascade writes. **Read that precisely: they are not
-  UNMAINTAINED, they are un-OVERRIDABLE.** The sweep covers them like everything else under the
+  and no parent tuple, NO principal can hold `can_delete`/`can_drop` on the seed's dataset, so no
+  policy, protection or grant can be applied to it. **Read that precisely, and note the scope this
+  sentence used to have: it said "the datasets the cascade writes", which now over-claims — the mover
+  outputs ARE registered and take all three. It is the seed that is not UNMAINTAINED but
+  un-OVERRIDABLE.** The sweep covers them like everything else under the
   platform's own settings — `MAINTENANCE_OLDER_THAN_DAYS` (7), `tiers.py`'s per-tier fragment sizing,
   `optimize_indices` — which is why every live summary counts them among its 27 datasets and reports
   `index_findings` for `medallion/{silver,gold}`. What is unavailable is the TENANT-facing layer: a
   per-dataset policy override, a `_protection/` record, an FGA grant.
-  **But "no table record" is a STATE, not a law — and the door that fixes it already exists.**
+  **"No table record" is a STATE, not a law — and the door that fixes it is already wired.**
   `register_table` is precisely for data written outside the catalog's own doors: it turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
   credential vending, the FGA doors) keys off that object. It needs no warehouse, which is why it works
   in the RESERVED bucket — proven by shipped code (`#88`), not theory: a gold tier was registered there
   and its lane ran live end-to-end. So the reserved bucket blocks the WAREHOUSE route (a tenant claiming
   platform storage) while leaving the REGISTRATION route open (naming an individual dataset) — two
-  different mechanisms, and conflating them is how you conclude the cascade can never be governed. It
-  can; those tiers simply were never registered. `medallion/services/catalog_register.py` is the seam,
-  and it takes only an id and a URI: registration belongs to the CASCADE, so every lane gets it or the
-  first workload built is the only governed one.
+  different mechanisms, and conflating them is how you conclude the cascade can never be governed.
+  **THE SEAM IS `catalog_register.py::ensure_stage_output`, and this file named `register_table` /
+  `register_stage_output` instead** — which sends a reader to a function that does something else.
+  `ensure_stage_output` describes the table, CREATES it through the catalog's own door when absent,
+  and returns the location the catalog vends, which the mover then writes to (rule I2 applied to the
+  write side). The telling-after-the-fact form `register_stage_output` — compose a path, write, then
+  register it — was DELETED once that ordering was fixed and its only remaining callers were its own
+  test stubs; `relative_location` and `MEDALLION_CATALOG_ROOT` went with it. Registration belongs to
+  the CASCADE, which is why the module is workload-neutral and takes only an id and a schema: every
+  lane gets it, or the first workload built is the only governed one.
   **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
   `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
   `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform
@@ -371,12 +440,37 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   as garbage. Branches are caught by the `tree/` directory probe; base_paths by TWO checks, and both
   are needed — the consequence (a referenced path not present locally) plus the MANIFEST FLAG.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
-  `maintenance/core/features.py` reads `reader_feature_flags`/`writer_feature_flags` as varints at
+  `packages/service-kit/src/service_kit/lakehouse/features.py` reads
+  `reader_feature_flags`/`writer_feature_flags` as varints at
   protobuf fields 9/10 of `LanceDataset._ds.serialized_manifest()` — pylance exposes neither field
-  but its own pickle path uses that blob. Measured on pylance 9.0.0: plain `(0,0)`, `delete()`
-  `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed
-  `LanceOperation.DataOverlay` sets 64. Both `compact_one` (BEFORE any rewrite) and the orphan scan
-  refuse anything outside `SUPPORTED` (= 1|2|4|8), and the sweep reports refusals as their own
+  but its own pickle path uses that blob. (This bullet cited a `maintenance/core/features.py` that has
+  never existed; the masks live in service-kit because `services/maintenance` and
+  `catalog/services/maintenance.py` both consume them, and a mask widened for one must not silently
+  widen for the other.) Measured on pylance 9.0.0: plain `(0,0)`,
+  `delete()` `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed
+  `LanceOperation.DataOverlay` sets 64.
+  **TWO GATES, NOT ONE — and this bullet used to say one blanket refusal, which contradicted its own
+  `SUPPORTED_FOR_GC` paragraph further up.** `compact_one` runs both in order, before touching a byte
+  (`optimize.py::compact_one` — that seam is under active edit, so read it rather than trusting a line
+  number): `describe_gc_unsupported_flags` against **`SUPPORTED_FOR_GC` (= `SUPPORTED` | 16)** refuses
+  the whole dataset, and then `describe_unsupported_flags` against **`SUPPORTED` (= 1|2|4|8)** refuses
+  only the COMPACTION step, while root-scoped work (`optimize_indices`, `cleanup_old_versions`) still
+  runs. So flag 16 is NOT refused outright: such a dataset is maintained, minus the rewrite, because
+  root-scoped operations are safe on a shallow clone while compacting one silently materialises the
+  base into it. The ORPHAN scan keeps the narrow `SUPPORTED` mask for everything, where the refusal is
+  genuinely required. The cost of the old blanket refusal was measured: 17 of the estate's datasets
+  were refused on flag 16, exactly the ones with fragments and version history, so the 120s sweep did
+  no work at all.
+  **The compaction half's remaining cost is an OPEN OWNER QUESTION, recorded at the gate.** Two
+  layouts set flag 16 and only the clone was measured: the other is an ingest bronze table whose base
+  is the external blob prefix its payload bytes already live at, which compacts safely (4 fragments ->
+  1, base untouched, pylance 10.0.0). It is refused anyway, so the widest-rowed tier in the estate
+  accumulates fragments while the sweep reports a clean pass. It is not widened because the manifest
+  cannot carry the distinction: `initial_bases` (a blob prefix no data file will ever land under) and
+  `add_bases` (an alternate base the next write may use) produce byte-identical entries, and this
+  service refuses the second deliberately. `features.describe_compaction_unsupported_flags` implements
+  the decidable half; whether to use it is a ruling, not a gate.
+  The sweep reports refusals as their own
   `summarize()` line + `compaction.datasets.refused` counter — never inside `errors` or `skipped`.
   Two reasons the flags rather than the consequence: **flag 16 compaction was genuinely destroying
   the feature** (`compact_one` on a shallow clone returned `fragments_removed=8, error=None` and
