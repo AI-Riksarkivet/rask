@@ -25,11 +25,13 @@ observed in-cluster described current code.
 | 9 | **`/ingest-media` writes bronze with NO catalog call** — identical defect to row 7, same service | **OPEN** | `medallion/services/media_produce.py`. Not fixed with row 7; recorded in `531864e2` so it is not mistaken for closed |
 | 10 | **Rebuild + redeploy rows 6/7** | **OPEN** | Estate runs `main-7ab00ef4`, which predates both |
 | 11 | **e2e suites against current code** | **OPEN** | Only meaningful since rev 86. `test_medallion_e2e`, `test_maintenance_e2e`, `test_lineage_e2e`, `test_media_e2e`, `test_dummy_lane_e2e`, `test_annotator_catalog_live` |
-| 12 | **Playwright visual pass + governance/lineage logs** | **OPEN** | Owner asked for it explicitly; screenshots shown, not just described |
+| 12 | **Playwright visual pass + governance/lineage logs** | **PARTIAL** | Done against rev 86 (frontend zones are current; rows 6/7/9 are backend-only so the UI pass is valid). VERIFIED: anonymous browse redirects to Dex; catalog lists 4 pages of governed `acme-bronze$*` tables, header states the list is FGA-filtered; **lineage graph LIVE, 55 datasets**, bronze→silver→gold edges plus `compaction/*` and `lance-reconcile/*` nodes; bell 99+ so the inbox lane delivers. Repeat after row 10 |
 | 13 | `catalog/services/maintenance.py:61` tells the operator the sweep refuses flag 16 "for the same reason" — after row 6 the on-demand button is the STRICTER of the two | **OPEN** | Fails safe, but the sentence is now false |
 | 14 | `make openapi-check` red at HEAD — committed spec stale in 8 unrelated paths + 3 schemas | **OPEN** | Pre-existing, independent of row 1 |
 | 15 | ~118 audit findings remain | **OPEN** | All triaged, none exploitable. `open_python-audit.md` |
 | 16 | 9 owner decisions | **BLOCKED** | Needs the owner. Incl. ANN-05 fail-open posture |
+| 17 | `lance-medallion/embed_features` + `aggregate_gold` FAILING repeatedly on the live estate | **OPEN** | Observed in the runs board: many failures 2026-08-28 → 2026-08-29T17:06, i.e. all BEFORE the rev-86 redeploy, so they describe the old code. Movers are 1/1 healthy with only health probes since restart. Needs a fresh cascade run (row 11) to know whether it recurs |
+| 18 | Those failures author as `data_eng` / `analyst` — chart ROLE LITERALS, not people | **OPEN** | Per `.claude/skills/rask-notifications` trap 1, `author_subject()` reads `author.sub` only, so a failed cascade addresses an inbox actor NAMED `data_eng` and no human is told. The ORIGINATOR field is the intended fix and is what the `/train` chain already carries |
 
 ## Standing rules this work is held to
 
