@@ -117,13 +117,18 @@ def test_the_catalog_skill_names_the_registration_seam_that_exists() -> None:
     )
 
 
-def test_the_catalog_skill_says_the_producers_bronze_is_the_ungoverned_one() -> None:
-    """`services/produce.py` never touches the catalog — the bronze seed writes a composed URI."""
+def test_the_catalog_skill_does_not_still_call_the_producers_bronze_ungoverned() -> None:
+    """This test used to pin the DEFECT: `produce.py` never touched the catalog, so the head's own tier
+    held no `table:` object and `policy/set` on it answered 404. That was closed by registering the
+    bronze dataset before seeding it, and a skill that still calls the seed the ungoverned one would
+    now send a reader looking for a gap that is shut."""
     produce = _read(PRODUCE_SERVICE)
-    assert "catalog_register" not in produce
-    assert "ensure_stage_output" not in produce
+    assert "catalog_register" in produce, "the cascade head does not register the tier it writes"
+    assert "register_written_dataset" in produce
 
-    assert "producer's bronze" in _read(SKILL).lower(), "SKILL.md never says which tier is ungoverned, which is the half that is still true."
+    skill = _read(SKILL).lower()
+    assert "producer's bronze" in skill, "SKILL.md never says which tier this was, which is the half a reader needs to place the fix."
+    assert "the producer's bronze seed is the one that is not" not in skill, "SKILL.md still describes the head's tier as ungoverned."
 
 
 def test_the_catalog_skill_agrees_with_the_coverage_doc_on_the_501s() -> None:
@@ -167,11 +172,20 @@ def test_the_catalog_skill_reports_the_orphan_scan_default_the_chart_ships() -> 
 
 
 def test_the_catalog_skill_describes_both_feature_flag_gates() -> None:
-    """`compact_one` runs TWO gates: `SUPPORTED_FOR_GC` (permits flag 16) then `SUPPORTED`."""
+    """`compact_one` runs TWO gates: `SUPPORTED_FOR_GC` (permits flag 16) for the root-scoped work,
+    then the base-EVIDENCE gate for the rewrite.
+
+    MOVED WITH THE CODE, deliberately: the second gate was `describe_unsupported_flags` (flags-only,
+    refusing every flag-16 dataset) and is now `describe_compaction_unsupported_flags`, which weighs
+    what the bases actually are. The assertion is unchanged — SKILL.md must name both gates
+    `compact_one` really calls — only the matcher tolerates the call now spanning lines, since the
+    evidence argument does not fit on one.
+    """
     optimize = _read(OPTIMIZE)
     # CALL SITES, not mentions: this seam names other gate helpers in prose while deciding whether to
-    # adopt them, and a doc gate that counts those would go red on a comment.
-    gates = sorted(set(re.findall(r"(describe_\w*unsupported_flags)\(reader_flags", optimize)))
+    # adopt them, and a doc gate that counts those would go red on a comment. `\s*` and nothing more —
+    # a prose mention still carries no `(reader_flags` after it, so this stays a call-site matcher.
+    gates = sorted(set(re.findall(r"(describe_\w*unsupported_flags)\(\s*reader_flags", optimize)))
     assert len(gates) == 2, gates
 
     skill = _read(SKILL)

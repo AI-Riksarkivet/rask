@@ -17,6 +17,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+from lance.blob import Blob
 from maintenance.services.optimize import compact_one
 
 
@@ -286,29 +287,158 @@ def test_compaction_refuses_a_shallow_clone_without_materializing_it(tmp_path: P
     assert not (tmp_path / "clone.lance" / "data").exists(), "the clone was MATERIALIZED: metadata-only data got copied in"
 
 
-def test_compaction_refuses_a_registered_but_unused_base(tmp_path: Path) -> None:
-    """`add_bases` sets flag 16 while every `DataFile.base_id` stays `None` — nothing about the
-    files looks different yet, and the very next write can land under that base.
+def test_compaction_is_PERMITTED_on_an_external_blob_base_and_payloads_still_resolve(tmp_path: Path) -> None:
+    """The over-refusal this test exists to kill, driven through the SHIPPED `compact_one`.
 
-    This is the shape a consequence-based detector cannot see, which is why the gate reads the
-    manifest FLAGS rather than inspecting file paths.
+    `ingest/lander.py::create_empty` and `medallion/services/compute.py` both register ONE external
+    blob base through `initial_bases`: a bare object-store prefix where the payload bytes already
+    live. That sets flag 16 exactly as a shallow clone does — and the flags-only gate refused both,
+    so the cascade's own tiers accumulated fragments forever while the sweep reported a clean pass
+    (`fragments_removed_total=0` over 785 ticks on the live estate).
+
+    Nothing about this layout is the clone hazard: the dataset's own data files are under its own
+    root (every `DataFile.base_id` is None), so compaction merges its own fragments and copies
+    nothing foreign in. MEASURED on pylance 10.0.0 building this same fixture by hand: 4 fragments
+    -> 1, 9,445 -> 14,366 bytes locally, base directory byte-identical, 20/20 payloads still
+    resolving.
+
+    The load-bearing assertion is not `refused is None` — it is that fragments actually MERGED and
+    that every external payload still reads back afterwards.
     """
-    from lance.dataset import DatasetBasePath
+    payloads = tmp_path / "payloads"
+    payloads.mkdir()
+    uris = []
+    for i in range(20):
+        blob = payloads / f"page-{i:03d}.bin"
+        blob.write_bytes(b"X" * 4096)
+        uris.append(blob.resolve().as_uri())
 
+    def chunk(lo: int, hi: int) -> pa.Table:
+        return pa.table({"id": pa.array(range(lo, hi), pa.int64()), "payload": lance.blob_array([Blob.from_uri(uris[i]) for i in range(lo, hi)])})
+
+    uri = str(tmp_path / "bronze.lance")
+    lance.write_dataset(
+        chunk(0, 5),
+        uri,
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+        initial_bases=[lance.DatasetBasePath(str(payloads.resolve()), "payloads")],
+        external_blob_mode="reference",
+    )
+    for lo in (5, 10, 15):
+        lance.write_dataset(chunk(lo, lo + 5), uri, mode="append", data_storage_version="2.2", external_blob_mode="reference")
+    assert len(lance.dataset(uri).get_fragments()) == 4, "fixture must really be fragmented"
+    base_files_before = sorted(p.name for p in payloads.iterdir())
+
+    result = compact_one(uri, {}, older_than=timedelta(0))
+
+    assert result.refused is None, f"the cascade's own bronze layout was refused compaction: {result.refused}"
+    assert result.error is None, f"compaction errored on an external-blob-base dataset: {result.error}"
+    assert result.fragments_removed >= 4 and result.fragments_added == 1, (
+        f"nothing was actually merged: removed={result.fragments_removed} added={result.fragments_added}"
+    )
+    assert len(lance.dataset(uri).get_fragments()) == 1
+    # The whole point of the base: its bytes are NOT ours to rewrite, and every pointer must survive.
+    assert sorted(p.name for p in payloads.iterdir()) == base_files_before, "compaction touched the external base"
+    table = lance.dataset(uri).scanner(columns=["payload"], blob_handling="all_binary").to_table()
+    assert sum(1 for v in table.column("payload").to_pylist() if v) == 20, "payloads stopped resolving after compaction"
+
+
+def test_compaction_refuses_a_base_that_HOLDS_this_datasets_data_files(tmp_path: Path) -> None:
+    """The half of `add_bases` that is genuinely the clone hazard, and the one the manifest's own
+    `BasePath.is_dataset_root` bit CANNOT see.
+
+    `write_dataset(..., target_bases=["alt"])` lands this dataset's data files under the registered
+    base. The manifest still reports `is_dataset_root=False` and the base directory still has no
+    `_versions/` — it is not a dataset root by either reading — yet the files are foreign-resident
+    and compaction pulls them home. MEASURED on pylance 10.0.0 with this exact fixture: local root
+    3,540 -> 5,991 bytes, the base's three data files left behind as garbage, every surviving
+    `base_id` None.
+
+    So `DataFile.base_id` is a third, independent signal, and the gate refuses on it.
+    """
+    alt = tmp_path / "altbase"
+    alt.mkdir()
+    uri = str(tmp_path / "targeted.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(10), pa.int64())}), uri, initial_bases=[lance.DatasetBasePath(str(alt), "alt")])
+    for i in range(3):
+        lance.write_dataset(pa.table({"id": pa.array(range(10 + i * 5, 15 + i * 5), pa.int64())}), uri, mode="append", target_bases=["alt"])
+    assert any(df.base_id is not None for f in lance.dataset(uri).get_fragments() for df in f.data_files()), "fixture must really put data under the base"
+    base_files_before = sorted(p.name for p in alt.iterdir())
+    version_before = lance.dataset(uri).version
+
+    result = compact_one(uri, {}, older_than=timedelta(0))
+
+    assert result.refused is not None, "a dataset whose data files live under a base must be REFUSED"
+    assert "16" in result.refused and "base_paths" in result.refused, f"the refusal must name the flag: {result.refused}"
+    assert result.error is None
+    assert result.fragments_removed == 0 and result.fragments_added == 0
+    assert lance.dataset(uri).version == version_before, "a base-resident dataset was rewritten anyway"
+    assert sorted(p.name for p in alt.iterdir()) == base_files_before, "the base's files were orphaned by a rewrite"
+
+
+def test_compaction_refuses_a_registered_base_that_IS_A_LANCE_DATASET_ROOT(tmp_path: Path) -> None:
+    """Why the gate PROBES object storage instead of trusting the manifest's self-report.
+
+    `add_bases` pointed at another dataset's root produces `BasePath(is_dataset_root=False)` —
+    measured on pylance 10.0.0, the bit is only set by `shallow_clone`. A gate reading that bit alone
+    would permit compaction on a dataset registered against a live Lance root, which is the clone
+    shape wearing the blob shape's manifest. The listing does not lie: `<base>/_versions/` is there.
+    """
+    source = str(tmp_path / "src.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(40), pa.int64())}), source)
+    assert (tmp_path / "src.lance" / "_versions").is_dir(), "fixture must really be a dataset root"
+
+    uri = str(tmp_path / "registered.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(20), pa.int64())}), uri)
+    for i in range(3):
+        lance.write_dataset(pa.table({"id": pa.array(range(20 + i * 5, 25 + i * 5), pa.int64())}), uri, mode="append")
+    lance.dataset(uri).add_bases([lance.DatasetBasePath(path=source, name="src")])
+    from service_kit.lakehouse import features
+
+    assert [ref.is_dataset_root for ref in features.manifest_base_path_refs(lance.dataset(uri))] == [False], (
+        "fixture assumption broken: the manifest bit would have been enough after all"
+    )
+    version_before = lance.dataset(uri).version
+
+    result = compact_one(uri, {}, older_than=timedelta(0))
+
+    assert result.refused is not None, "a base that IS a Lance dataset root must be refused"
+    assert "16" in result.refused and "base_paths" in result.refused, f"the refusal must name the flag: {result.refused}"
+    assert result.error is None
+    assert lance.dataset(uri).version == version_before
+
+
+def test_a_registered_but_unused_BARE_PREFIX_is_now_compacted(tmp_path: Path) -> None:
+    """MOVED WITH THE CODE, deliberately and not quietly.
+
+    This test used to be `test_compaction_refuses_a_registered_but_unused_base` and asserted the
+    blanket flag-16 refusal, on the reasoning that "the very next write can land under that base".
+    That reasoning is what kept the cascade's own tiers uncompacted forever, and it is answered
+    rather than ignored: when a write DOES land under the base, `DataFile.base_id` says so and
+    `test_compaction_refuses_a_base_that_HOLDS_this_datasets_data_files` pins the refusal. A gate
+    cannot refuse today's safe rewrite because tomorrow's write might be unsafe — the next tick reads
+    the manifest again.
+
+    An `add_bases` prefix that is empty and holds none of our files is the ingest bronze shape with
+    the blobs not yet landed, and compaction here merges only our own fragments.
+    """
     uri = str(tmp_path / "based.lance")
     lance.write_dataset(pa.table({"id": pa.array(range(20), pa.int64())}), uri)
     for i in range(3):
         lance.write_dataset(pa.table({"id": pa.array(range(20 + i * 5, 25 + i * 5), pa.int64())}), uri, mode="append")
     alt = tmp_path / "altbase"
     alt.mkdir()
-    lance.dataset(uri).add_bases([DatasetBasePath(path=str(alt), name="alt")])
-    version_before = lance.dataset(uri).version
+    lance.dataset(uri).add_bases([lance.DatasetBasePath(path=str(alt), name="alt")])
+    assert lance.dataset(uri).count_rows() == 35
 
     result = compact_one(uri, {}, older_than=timedelta(0))
 
-    assert result.refused is not None and "16" in result.refused
+    assert result.refused is None, f"a bare registered prefix was refused: {result.refused}"
     assert result.error is None
-    assert lance.dataset(uri).version == version_before, "a multi-base dataset was rewritten anyway"
+    assert result.fragments_removed >= 4 and result.fragments_added == 1
+    assert lance.dataset(uri).count_rows() == 35, "compaction lost rows"
+    assert sorted(alt.iterdir()) == [], "compaction wrote into the registered base"
 
 
 def test_compaction_refuses_a_dataset_that_uses_data_overlays(tmp_path: Path, overlay_dataset: Callable[[Path], str]) -> None:

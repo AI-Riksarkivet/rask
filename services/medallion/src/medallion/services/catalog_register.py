@@ -23,15 +23,27 @@ create through the catalog's own door (`POST /v1/table/{id}/create` when `descri
 the location from that response, and `transform.py` calls it BEFORE the write. Registration is still
 the goal; asking first is how the goal is reached.
 
-THE TELLING-AFTER-THE-FACT FORM IS GONE. `register_stage_output` — compose a path, write there,
-then register it — outlived its last caller when the ordering above was fixed, and a door only tests
-open is not a door: three suites went on stubbing it, which reads as coverage and is none. Deleted
-with `relative_location` (the catalog's connection root is only expressible for a path this module
-composed) and the `MEDALLION_CATALOG_ROOT` setting that fed it. Two lessons it carried are now
-STRUCTURAL rather than enforced: a mover cannot mint a top-level namespace, because no namespace
-call remains here; and a registration cannot disagree with where the stage wrote, because the stage
-writes where `ensure_stage_output` said. Bytes written outside the catalog entirely still belong at
-the catalog's own register door — reached from wherever that writing happens, not from a mover.
+TWO DOORS, AND WHICH ONE A WRITER USES IS DECIDED BY WHO OWNS ITS LOCATION. A MOVER asks
+(`ensure_stage_output`): nothing else names where its output lives, so the catalog's answer is the
+only answer. The CASCADE HEAD tells (`register_written_dataset`): `POST /produce` writes to
+`MEDALLION_BRONZE_URI`, which `chart/templates/medallion.yaml` renders from the same expression as the
+bronze->silver mover's `MEDALLION_FROM_URI`, and the `medallion.bronze` trigger carries no `from_uri`
+for that mover to follow — so a head that took a vended location would leave the cascade's first leg
+opening a path nothing writes to, with nothing red. `register_table` is the door built for exactly
+that case (bytes written outside the catalog's own doors), and it needs no WAREHOUSE, which is why it
+reaches the medallion path in the reserved platform bucket that no warehouse may ever claim.
+
+This paragraph used to say the telling form was GONE, and for a while it was: `register_stage_output`
+outlived its last caller when the movers' ordering was fixed, and three suites went on stubbing a door
+nothing opened. What was actually wrong with it was never the direction — it was that a MOVER used it.
+The form is back, once, for the one writer whose location is a deployment contract rather than a guess,
+and the two lessons it paid for are kept: it mints no namespace (a top-level parent belongs to the
+warehouse, and `require_warehouse_scoped` refuses one outright — measured in-cluster, every hop
+dead-lettered on that 400), and a 409 is convergence only after the catalog CONFIRMS it governs the
+location the caller wrote.
+
+Ordering is unchanged either way: registration strictly precedes the first row, so there is no window
+in which rows exist that the catalog has no record of.
 """
 
 from __future__ import annotations
@@ -261,3 +273,103 @@ def _vended(response: httpx.Response, table_id: str) -> str:
     if not location:
         raise RegisterError(f"the catalog returned no location for {table_id!r} — refusing to compose one, which is the defect this call replaces")
     return location
+
+
+def relative_location(dataset_uri: str, catalog_root: str) -> str:
+    """``dataset_uri`` expressed relative to the catalog's connection root, or raise naming both.
+
+    `register_table` addresses a location INSIDE the root it is connected to and nowhere else —
+    measured against the real door: an absolute path answers *"Absolute paths are not allowed for
+    register_table"* (400) and an absolute URI the same. So a dataset zoned into its own bucket is
+    unregisterable through this door, and that is a refusal rather than a fallback: writing bytes the
+    catalog cannot name is precisely the ungoverned state the caller is trying to leave.
+    """
+    root = catalog_root.rstrip("/")
+    if not root:
+        raise RegisterError(
+            f"cannot register {dataset_uri!r}: MEDALLION_CATALOG_ROOT is unset, so no location relative to the catalog's connection root can be formed"
+        )
+    if not dataset_uri.startswith(root + "/"):
+        raise RegisterError(
+            f"cannot register {dataset_uri!r}: it is not under the catalog root {catalog_root!r} "
+            "(register_table addresses only paths inside the root it is connected to — a dataset zoned into "
+            "another bucket cannot be governed through this door)"
+        )
+    return dataset_uri[len(root) + 1 :]
+
+
+def register_written_dataset(
+    *,
+    catalog_url: str,
+    catalog_root: str,
+    table_id: str,
+    dataset_uri: str,
+    delimiter: str = CATALOG_DELIMITER,
+    token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
+    timeout_seconds: float = 30.0,
+    client: httpx.Client | None = None,
+) -> None:
+    """Attach the dataset at ``dataset_uri`` to the catalog as ``table_id``; 409 means already governed.
+
+    THE DOOR FOR A WRITER THAT OWNS ITS OWN LOCATION — see this module's header for why the cascade
+    head is one and a mover is not. Registering is what turns written bytes into a ``table:`` object:
+    it seeds the caller's FGA ownership through the catalog's own door, and every governed path —
+    the maintenance policy, the protection record, trash/undrop, credential vending, the FGA doors —
+    keys off that object rather than off the bytes.
+
+    Workload-neutral by construction, like everything else here: an id and a URI. It creates no
+    namespace — a top-level parent is the WAREHOUSE's to make, and asking for one is refused 400 by
+    `require_warehouse_scoped` before the existence check ever runs, so a lane that tried it
+    dead-lettered every hop.
+
+    Raises :class:`RegisterError` on anything short of success, ``catalog_url`` unset included: a tier
+    the catalog cannot govern must not report success.
+    """
+    if not catalog_url:
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot register the dataset it lands")
+    location = relative_location(dataset_uri, catalog_root)
+    segments = table_id.split(delimiter)
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
+        try:
+            response = client.post(f"/v1/table/{table_id}/register", json={"id": segments, "location": location}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable registering {table_id!r}: {exc}") from exc
+        if response.status_code == 409:
+            # Already registered — every call after the first lands here. But "already registered" is
+            # not "registered WHERE I write", and the difference is invisible from this side. Measured
+            # live once: a table was registered against a leftover warehouse while its writer wrote
+            # elsewhere; the 409 read as convergence, and the publish that followed opened the stale
+            # location and found nothing. Inside the `with`, so the check reuses this client.
+            _require_same_location(client, table_id, location, catalog_root, headers)
+            log.info("written_dataset_already_registered", extra={"table_id": table_id, "location": location})
+            return
+        if response.status_code >= 400:
+            raise RegisterError(f"catalog refused to register {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
+    log.info("written_dataset_registered", extra={"table_id": table_id, "location": location})
+
+
+def _require_same_location(client: httpx.Client, table_id: str, location: str, catalog_root: str, headers: dict[str, str]) -> None:
+    """Refuse a 409 whose registration points somewhere other than where this writer writes.
+
+    An unreadable describe is NOT agreement: a check that cannot be made has not passed, and treating
+    it as one restores the exact silence this closes.
+    """
+    try:
+        described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
+    except httpx.HTTPError as exc:
+        raise RegisterError(f"catalog unreachable verifying where {table_id!r} is registered: {exc}") from exc
+    if described.status_code >= 400:
+        raise RegisterError(
+            f"{table_id!r} is already registered but the catalog would not say where (HTTP {described.status_code}) — refusing to assume it matches {location!r}"
+        )
+    registered = str((described.json() or {}).get("location") or "")
+    expected = f"{catalog_root.rstrip('/')}/{location.lstrip('/')}"
+    if registered.rstrip("/") != expected.rstrip("/"):
+        raise RegisterError(
+            f"{table_id!r} is registered at {registered!r} but this writer writes {expected!r} — the catalog governs a different copy of this table. "
+            "Re-point the registration (deregister, then register at the written location) rather than letting the two drift."
+        )

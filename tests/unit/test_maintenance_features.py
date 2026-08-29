@@ -23,6 +23,7 @@ import pytest
 from lance.dataset import DatasetBasePath
 
 from service_kit.lakehouse import features
+from service_kit.lakehouse.objectfs import dataset_root_probe, is_lance_dataset_root, same_store_uri
 
 
 def _table(n: int = 20) -> pa.Table:
@@ -228,11 +229,14 @@ def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a
     1,072 -> 108,199 bytes against a 119,693-byte base, because compaction materialises the shared
     data into the clone's own root. That reasoning does not reach a dataset whose base is an external
     blob prefix: its data files were always its own, so compaction merges its own fragments and copies
-    nothing. Measured on pylance 10.0.0 for the blob case: 4 fragments -> 1, 40 rows still readable,
-    the base directory untouched.
+    nothing. Measured on pylance 10.0.0 for the blob case: 4 fragments -> 1, 9,445 -> 14,366 bytes,
+    the base directory byte-identical, 20/20 payloads still resolving.
 
-    With the two folded together, every ingest bronze table — the tier with the widest rows and the
-    most fragments in the estate — accumulated fragments forever while the sweep reported success.
+    With the two folded together, every ingest bronze table and every medallion tier — the rows with
+    the most fragments in the estate — accumulated fragments forever while the sweep reported success.
+
+    Driven through the SHIPPED gatherer with the SHIPPED object-store probe, so the two halves cannot
+    agree in a test and disagree in the sweep.
     """
     external = tmp_path / "external"
     external.mkdir()
@@ -241,32 +245,165 @@ def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a
     ds = lance.dataset(based)
     assert features.manifest_feature_flags(ds) == (16, 16), "fixture must really set flag 16"
 
+    probe = dataset_root_probe(based, {})
+
     reader, writer = features.manifest_feature_flags(ds)
-    assert features.describe_compaction_unsupported_flags(reader, writer, features.manifest_base_path_refs(ds)) is None
+    assert features.describe_compaction_unsupported_flags(reader, writer, features.gather_compaction_bases(ds, probe)) is None
 
     source = str(tmp_path / "src.lance")
     src = lance.write_dataset(_table(), source)
     clone = str(tmp_path / "clone.lance")
     src.shallow_clone(clone, reference=src.version)
     cds = lance.dataset(clone)
-    refusal = features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(cds), features.manifest_base_path_refs(cds))
+    refusal = features.describe_compaction_unsupported_flags(
+        *features.manifest_feature_flags(cds), features.gather_compaction_bases(cds, dataset_root_probe(clone, {}))
+    )
     assert refusal is not None and "16" in refusal, f"the clone refusal must survive, got: {refusal}"
 
 
-def test_an_UNREADABLE_base_list_keeps_the_flag_16_refusal(tmp_path: pathlib.Path) -> None:
+def test_the_OBJECT_STORE_probe_is_what_separates_a_clone_from_a_blob_prefix(tmp_path: pathlib.Path) -> None:
+    """Why the gate reads a listing instead of trusting `BasePath.is_dataset_root`.
+
+    Measured on pylance 10.0.0: `shallow_clone` is the ONLY writer that sets that bit. `add_bases`
+    pointed straight at a live Lance dataset root reports False — so a gate reading the manifest alone
+    would permit the clone shape wearing the blob shape's manifest. `<base>/_versions/` does not lie.
+    """
+    source = str(tmp_path / "src.lance")
+    lance.write_dataset(_table(), source)
+    based = str(tmp_path / "registered.lance")
+    lance.write_dataset(_table(), based)
+    lance.dataset(based).add_bases([DatasetBasePath(path=source, name="src")])
+    ds = lance.dataset(based)
+
+    refs = features.manifest_base_path_refs(ds)
+    assert [ref.is_dataset_root for ref in refs] == [False], "the manifest bit would have been enough after all — this test's premise is gone"
+    assert is_lance_dataset_root(source, {}) is True
+    assert is_lance_dataset_root(str(tmp_path), {}) is False
+
+    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), {}))
+    assert [base.probed_dataset_root for base in gathered.bases] == [True]
+    assert features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(ds), gathered) is not None
+
+
+def test_DATA_LIVING_UNDER_A_BASE_refuses_even_when_the_base_is_no_dataset_root(tmp_path: pathlib.Path) -> None:
+    """The third reading, and the shape neither of the other two can see.
+
+    `write_dataset(..., target_bases=["alt"])` lands this dataset's own data files under a registered
+    base which is not declared a dataset root and has no `_versions/` — and compacting pulls them home
+    (measured on pylance 10.0.0: local root 3,540 -> 5,991 bytes, the base's three files orphaned).
+    `DataFile.base_id` is the only signal that says so.
+    """
+    alt = tmp_path / "altbase"
+    alt.mkdir()
+    uri = str(tmp_path / "targeted.lance")
+    lance.write_dataset(_table(), uri, initial_bases=[DatasetBasePath(str(alt), "alt")])
+    lance.write_dataset(_table(), uri, mode="append", target_bases=["alt"])
+    ds = lance.dataset(uri)
+
+    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), {}))
+    assert gathered.bases == [features.BaseEvidence(path=str(alt), declares_dataset_root=False, probed_dataset_root=False)], (
+        "neither the manifest bit nor the listing calls this base a dataset root — that is the premise"
+    )
+    assert gathered.data_resolves_through_a_base is True
+    assert features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(ds), gathered) is not None
+
+
+def test_EVERY_UNREADABLE_reading_keeps_the_flag_16_refusal() -> None:
     """The whitelist is loud on purpose, so the allowance only applies where the evidence is present.
 
-    If the manifest sets flag 16 and yet no `BasePath` could be parsed out of it — a renumbered field,
-    a wire type the walker stops on — we do not know which kind of base it is, and "we could not tell"
-    must read as the refusal rather than as permission. Same direction as every other gate here.
+    Four ways to not know, and every one of them refuses. The asymmetry is deliberate and stated at
+    the gate: a wrong refusal costs disk and a counted line in the sweep summary; a wrong permit costs
+    a clone its whole reason to exist.
     """
-    assert features.describe_compaction_unsupported_flags(16, 16, []) is not None
+    external = features.BaseEvidence(path="/x/external", probed_dataset_root=False)
+
+    # (1) no evidence gathered at all.
+    assert features.describe_compaction_unsupported_flags(16, 16, None) is not None
+    # (2) flag 16 set, yet no BasePath the walker could parse — a renumbered field, a wire type it stops on.
+    assert features.describe_compaction_unsupported_flags(16, 16, features.CompactionBases(bases=[], data_resolves_through_a_base=False)) is not None
+    # (3) the object store could not answer for a base.
+    unprobed = features.CompactionBases(bases=[features.BaseEvidence(path="/x/external", probed_dataset_root=None)], data_resolves_through_a_base=False)
+    assert features.describe_compaction_unsupported_flags(16, 16, unprobed) is not None
+    # (4) the fragments could not be read, so whether our data lives under the base is unknown.
+    unread = features.CompactionBases(bases=[external], data_resolves_through_a_base=None)
+    assert features.describe_compaction_unsupported_flags(16, 16, unread) is not None
+
     # A mixed manifest is a clone as far as this gate is concerned: one dataset-root base is enough.
-    mixed = [
-        features.BasePathRef(path="/x/external", is_dataset_root=False),
-        features.BasePathRef(path="/x/src.lance", is_dataset_root=True),
-    ]
+    mixed = features.CompactionBases(
+        bases=[external, features.BaseEvidence(path="/x/src.lance", declares_dataset_root=True, probed_dataset_root=True)],
+        data_resolves_through_a_base=False,
+    )
     assert features.describe_compaction_unsupported_flags(16, 16, mixed) is not None
     # And an unrelated unknown flag is never waved through by the base-path allowance.
-    external_only = [features.BasePathRef(path="/x/external", is_dataset_root=False)]
-    assert features.describe_compaction_unsupported_flags(16 | 64, 16 | 64, external_only) is not None
+    clean = features.CompactionBases(bases=[external], data_resolves_through_a_base=False)
+    assert features.describe_compaction_unsupported_flags(16 | 64, 16 | 64, clean) is not None
+    assert features.describe_compaction_unsupported_flags(16, 16, clean) is None, "the permitted case must still be permitted"
+
+
+def test_a_gatherer_whose_probe_raises_records_the_unknown_rather_than_raising(tmp_path: pathlib.Path) -> None:
+    """`gather_compaction_bases` runs inside `compact_one`'s pass, where a raise would be reported as a
+    per-dataset ERROR — "something failed" — rather than as the REFUSAL it is. It records `None`, and
+    the gate turns that into a refusal that names the base it could not read."""
+    external = tmp_path / "external"
+    external.mkdir()
+    based = str(tmp_path / "bronze.lance")
+    lance.write_dataset(_table(), based, initial_bases=[DatasetBasePath(str(external), "external")])
+    ds = lance.dataset(based)
+
+    def exploding(path: str) -> bool:
+        raise OSError("the endpoint is unreachable")
+
+    gathered = features.gather_compaction_bases(ds, exploding)
+
+    assert [base.probed_dataset_root for base in gathered.bases] == [None]
+    refusal = features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(ds), gathered)
+    assert refusal is not None and str(external) in refusal, f"the refusal must name the base it could not read: {refusal}"
+
+
+def test_a_base_is_probed_in_the_DATASETS_OWN_store_never_the_local_filesystem() -> None:
+    """The respelling between the manifest and the probe, and why leaving it out fails OPEN.
+
+    A Lance manifest states a base as the object store reads it: on S3 that is the schemeless
+    `/bucket/ns/src.lance`, while the sweep holds `s3://bucket/ns/t.lance` — the two spellings
+    `base_refs.normalise` exists to reconcile for COMPARISON. A probe cannot use that one, it has to
+    hand a resolver something resolvable. Handed the schemeless form, `pyarrow.fs` reads it as a LOCAL
+    absolute path, finds nothing there, and answers "not a dataset root" — which for a real shallow
+    clone is a wrong PERMIT, the one direction this gate must never take.
+
+    A base in a store the dataset does not live in RAISES, and `gather_compaction_bases` turns that
+    into `probed_dataset_root=None` — unknown reaching the gate as unknown.
+    """
+    assert same_store_uri("s3://bucket/ns/t.lance", "/bucket/ns/src.lance") == "s3://bucket/ns/src.lance"
+    assert same_store_uri("s3://bucket/ns/t.lance", "s3://bucket/ns/src.lance") == "s3://bucket/ns/src.lance"
+    assert same_store_uri("/tmp/a.lance", "/tmp/b") == "/tmp/b"
+
+    with pytest.raises(ValueError):
+        same_store_uri("s3://bucket/x", "gs://other/y")
+    with pytest.raises(ValueError):
+        same_store_uri("/tmp/a.lance", "s3://bucket/y")
+
+
+def test_a_base_in_another_store_is_UNKNOWN_and_therefore_refused(tmp_path: pathlib.Path) -> None:
+    """The end of that path, through the shipped binding: a base the probe cannot answer for is
+    recorded as None and the gate turns None into a refusal — never into a permit.
+
+    Offline on purpose. The unreconcilable spelling raises inside `dataset_root_probe` before any
+    filesystem is touched, which is the behaviour that matters: no store is consulted about a path
+    that does not belong to it.
+    """
+    probe = dataset_root_probe("s3://bucket/ns/t.lance", {})
+    with pytest.raises(ValueError):
+        probe("gs://elsewhere/blobs")
+
+    unreadable = features.CompactionBases(
+        bases=[features.BaseEvidence(path="gs://elsewhere/blobs", probed_dataset_root=None)],
+        data_resolves_through_a_base=False,
+    )
+    refusal = features.describe_compaction_unsupported_flags(16, 16, unreadable)
+    assert refusal is not None and "gs://elsewhere/blobs" in refusal, f"the refusal must name the base it could not read: {refusal}"
+
+    # And the probe DOES answer, offline, for a base that really is in the dataset's own store.
+    source = str(tmp_path / "src.lance")
+    lance.write_dataset(_table(), source)
+    assert dataset_root_probe(str(tmp_path / "clone.lance"), {})(source) is True
+    assert dataset_root_probe(str(tmp_path / "clone.lance"), {})(str(tmp_path)) is False

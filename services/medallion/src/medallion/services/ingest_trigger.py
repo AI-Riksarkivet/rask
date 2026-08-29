@@ -8,7 +8,10 @@ arrival of external raw INTO bronze — every stage, the head included, reacts t
 already run.
 
 **Loop-guarded**: the lineage topic also carries the movers' own silver/gold writes; those are acked and
-ignored (their output namespace isn't bronze), so publishing the trigger can never re-fire the head.
+ignored (their output namespace isn't bronze), so publishing the trigger can never re-fire the head. The
+second guard is by OPERATION rather than by namespace: the catalog publishes its own markers here, and an
+attach/detach/declare names the bronze table on a ``COMPLETE`` event without a byte having moved — so
+registering the head's tier would otherwise fire a second, batch-less cascade over the same data.
 Best-effort with ``RETRY`` so a sidecar/broker outage is redelivered rather than dropped.
 """
 
@@ -34,12 +37,40 @@ _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
 
 
+#: Catalog operations that MOVE NO BYTES — an attach, a detach, or a metadata-only declaration.
+#:
+#: The catalog emits its markers on this very topic, as ``COMPLETE`` events whose single output is the
+#: table's own ``(namespace, name)`` — indistinguishable, on the fields above, from a batch landing. So
+#: the moment the cascade HEAD began registering the bronze it seeds, one ``/produce`` published TWO
+#: matching events and would have driven two unrelated bronze->gold runs over one batch, the second with
+#: a token nothing else in the cascade carries. Registering is a governance act, not an arrival.
+#:
+#: A DENYLIST, not an allowlist of write ops: an external OpenLineage producer names its own operations
+#: (or none), and it must keep firing the head exactly as before. Only the ops the catalog itself stamps
+#: for a byte-free change are excluded, and the strings are the wire contract — the medallion reads the
+#: bus, it does not import the catalog.
+_BYTE_FREE_CATALOG_OPERATIONS = frozenset({"register_table", "deregister_table", "declare_table"})
+
+
+def _lance_facet(event: dict[str, Any]) -> dict[str, Any]:
+    """The event's ``lance`` run facet, or an empty mapping — the untrusted-envelope guards in one place."""
+    run = event.get("run")
+    if isinstance(run, dict):
+        facets = run.get("facets")
+        if isinstance(facets, dict):
+            lance = facets.get("lance")
+            if isinstance(lance, dict):
+                return lance
+    return {}
+
+
 def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, project: str) -> str | None:
     """The bronze dataset this event COMPLETED a write to (the cascade's entry point), else ``None``.
 
     Filters on ``eventType == COMPLETE``: a START or FAIL bronze event announces intent / failure, not a
     landed batch, so firing the cascade off one would kick the pipeline over data that isn't there (yet).
-    Only a terminal-success bronze write is a real arrival. TWO ingest lanes share the head: the events
+    Only a terminal-success bronze write is a real arrival — and an ATTACH is not a write, which is what
+    :data:`_BYTE_FREE_CATALOG_OPERATIONS` excludes. TWO ingest lanes share the head: the events
     lane (``bronze_dataset``) — the returned name is
     the one actually written, so the trigger tells the mover which lane fired.
 
@@ -50,6 +81,8 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
     equals the (equally qualified) bronze namespace.
     """
     if str(event.get("eventType", "")).upper() != "COMPLETE":
+        return None
+    if str(_lance_facet(event).get("operation") or "") in _BYTE_FREE_CATALOG_OPERATIONS:
         return None
     expected_namespace = project_namespace(project, settings.bronze_namespace)
     expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
@@ -111,13 +144,12 @@ def _cascade_token(event: dict[str, Any]) -> str:
     stages together rides the ``lance`` facet instead. Fall back to the ``runId`` (still a stable
     per-run handle), then to a fresh id, so an external bronze writer that omits the facet still cascades.
     """
+    token = _lance_facet(event).get("token")
+    if token:
+        return str(token)
     run = event.get("run")
-    if isinstance(run, dict):
-        lance = (run.get("facets") or {}).get("lance")
-        if isinstance(lance, dict) and lance.get("token"):
-            return str(lance["token"])
-        if run.get("runId"):
-            return str(run["runId"])
+    if isinstance(run, dict) and run.get("runId"):
+        return str(run["runId"])
     return uuid.uuid4().hex[:12]
 
 
@@ -128,14 +160,8 @@ def _cascade_project(event: dict[str, Any]) -> str:
     become an S3 prefix or a lineage-name qualifier, and with ``""`` the qualified bronze filter reduces to
     the fixed pair — so a forged/garbage facet cannot fire the head for a tenant.
     """
-    run = event.get("run")
-    if isinstance(run, dict):
-        lance = (run.get("facets") or {}).get("lance")
-        if isinstance(lance, dict):
-            project = lance.get("project")
-            if isinstance(project, str) and is_safe_project(project):
-                return project
-    return ""
+    project = _lance_facet(event).get("project")
+    return project if isinstance(project, str) and is_safe_project(project) else ""
 
 
 def _cascade_originator(event: dict[str, Any]) -> str:
@@ -146,16 +172,8 @@ def _cascade_originator(event: dict[str, Any]) -> str:
     and putting it on the trigger is what lets a failure five stages later still name the person whose
     work it was.
     """
-    run = event.get("run")
-    if isinstance(run, dict):
-        facets = run.get("facets")
-        if isinstance(facets, dict):
-            lance = facets.get("lance")
-            if isinstance(lance, dict):
-                originator = lance.get("originator")
-                if isinstance(originator, str) and originator.strip():
-                    return originator.strip()
-    return ""
+    originator = _lance_facet(event).get("originator")
+    return originator.strip() if isinstance(originator, str) else ""
 
 
 async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, event: Any) -> dict[str, str]:

@@ -68,6 +68,11 @@ async def produce(
     publish failure surfaces as **503** (not the 202 that would hide it), letting the caller retry; the
     request is otherwise 202.
 
+    Before it seeds anything it REGISTERS ``bronze$events`` with the catalog, so the head's own tier is a
+    governed ``table:`` object like every tier below it (retention/legal-hold policy, protection, FGA
+    grants all key off that object). A catalog that refuses or cannot be reached is also a **503**: the
+    refusal happens before the first byte, so the run did not half-happen and the same retry converges.
+
     Guarded by ``require_dapr_token`` (the shared app-api-token) so an in-cluster workload can't forge the
     cascade head: /produce is a direct operator trigger (not sidecar-delivered), and without this any pod that
     could reach ``medallion-producer:8000`` could drive the pipeline / fabricate medallion provenance. No-op in dev
@@ -91,7 +96,7 @@ async def produce(
             media_type="application/problem+json",
             content=problem_body(ErrorCode.INVALID_TABLE_STATE, status=409, title="Conflict", detail=str(exc)),
         )
-    if result.get("status") == "publish_failed":
+    if result.get("status") in ("publish_failed", "register_failed"):
         # RFC 9457 problem+json + Retry-After (parity with catalog/lineage errors), not a bare FastAPI 503.
         return JSONResponse(
             status_code=503,
@@ -103,7 +108,11 @@ async def produce(
                 ErrorCode.SERVICE_UNAVAILABLE,
                 status=503,
                 title="ServiceUnavailable",
-                detail="medallion trigger publish failed; retry",
+                # TWO WAYS TO REACH THIS, one contract. `register_failed` is the catalog refusing or
+                # being unreachable BEFORE any byte is written — so, exactly like a failed publish,
+                # nothing happened and the caller's retry (same Idempotency-Key) converges. The detail
+                # names which, because "retry" is the same advice but the thing to look at is not.
+                detail=f"medallion {'catalog registration' if result.get('status') == 'register_failed' else 'trigger publish'} failed; retry",
             ),
         )
     return result

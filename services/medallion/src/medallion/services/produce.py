@@ -8,7 +8,13 @@ write. It does NOT itself trigger the cascade — medallion-producer's own ``/br
 (GOAL 4 B2). In production this is a real Ray Data job; here it is a dummy emitter, which is all the
 event-driven demo needs.
 
-Best-effort: a sidecar/broker outage logs + still returns (never 500s the producer) — the catalog contract.
+The bronze dataset it seeds is REGISTERED with the catalog first, so the cascade's head tier is a governed
+``table:`` object exactly like the silver and gold the movers write. Until it was, the same tier was
+governed or not purely by which door produced it.
+
+Best-effort ON THE BUS ONLY: a sidecar/broker outage logs + still returns (never 500s the producer) — the
+catalog contract. A REGISTRATION failure is not best-effort; it happens before any byte is written, so the
+call reports ``register_failed`` and the route answers 503, and nothing half-ran.
 """
 
 from __future__ import annotations
@@ -22,8 +28,9 @@ from fastapi.concurrency import run_in_threadpool
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from medallion.core.config import MedallionSettings, project_namespace
+from medallion.core.config import MedallionSettings, dedicated_token_for, project_namespace
 from medallion.schemas.events import build_run_event
+from medallion.services import catalog_register
 from medallion.services.compute import seed_bronze
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError, project_root
@@ -43,9 +50,15 @@ async def produce(
     originator: str = "",
     rows: int | None = None,
 ) -> dict[str, str]:
-    """Ingest the bronze dataset and emit its write event (the event-driven cascade head).
+    """Register, ingest and announce the bronze dataset — the event-driven cascade head.
 
-    With ``compute_enabled`` it FIRST seeds a real ``bronze$events`` Lance dataset (the fake medallion-producer
+    It REGISTERS ``bronze$events`` with the catalog before writing a row, so the tier the head writes is
+    a governed object: the maintenance policy, the protection record and every FGA grant key off it.
+    Skipped exactly when this call writes nothing to govern — no ``MEDALLION_CATALOG_URL`` (the
+    ungoverned dev shape) or no ``compute_enabled``/``bronze_uri`` (the pure-emit shape). A catalog
+    refusal returns ``{"status": "register_failed"}`` and nothing is written or emitted.
+
+    With ``compute_enabled`` it then seeds a real ``bronze$events`` Lance dataset (the fake medallion-producer
     ingest) so the emitted lineage carries the real version; off → a dummy emit (version 1). It then emits
     ONE OpenLineage event for ``bronze$events``. It does NOT publish ``medallion.bronze`` — medallion-producer's
     ``/bronze-arrival`` subscription reacts to this bronze-write event and fires the trigger, so the
@@ -57,7 +70,8 @@ async def produce(
     ASSUMED, and measuring a real distribution takes promotions of different sizes. Absent → the
     seeder's own default, byte-identical to before.
 
-    Best-effort: a sidecar/broker outage logs + still returns (the catalog-style contract).
+    Best-effort ON THE BUS: a sidecar/broker outage logs + still returns (the catalog-style contract).
+    A registration failure is not — it precedes every effect, so the call reports it and nothing ran.
 
     ``token`` is the caller's idempotency key (skill rule: an operation whose route invites retry must
     pair it with one): the route's 503 tells the caller to retry, but the publish timeout is ambiguous —
@@ -90,6 +104,10 @@ async def produce(
     # rule it is held to is the other one — the span must cover the operation it names.
     with tracer.start_as_current_span("medallion.produce") as span:
         bronze_uri = settings.bronze_uri
+        # The root the write location is expressed RELATIVE to when it is registered below: the estate's
+        # shared catalog root, or — per tenant (#84) — the project's own warehouse root, which is the
+        # root the catalog itself connects to for that project's top-level namespace.
+        catalog_root = settings.catalog_root
         if project:
             if not settings.control_root:
                 raise UnresolvableProjectError(f"project {project!r} produce refused: routing is disabled (MEDALLION_CONTROL_ROOT unset)")
@@ -97,9 +115,54 @@ async def produce(
             if root is None:
                 raise UnresolvableProjectError(f"project {project!r} has no active warehouse")
             bronze_uri = f"{root}/medallion/{settings.bronze_namespace}"
+            catalog_root = root
         # The canonical name for the dataset this call writes — emitted as the event's `output_name` AND
         # stamped onto the dataset itself, from ONE expression so the two can never drift.
         bronze_dataset_id = project_namespace(project, settings.bronze_dataset)
+        # GOVERNANCE PRECEDES THE FIRST ROW. The head's own tier was the one the catalog had never
+        # heard of: no `table:` object, so `policy/set` answered 404 "table has no storage location to
+        # police", no `_protection/` record was reachable and no FGA grant could name it — while silver
+        # and gold, written by the very same cascade, were governed. Registering here closes that, in
+        # the movers' own order (`test_no_rows_without_a_catalog_record`): ask first, write second, so
+        # no window exists in which bronze rows sit on disk unregistered.
+        #
+        # IT TELLS RATHER THAN ASKS, and this is the ONE place the head departs from a mover. A mover
+        # takes the location `ensure_stage_output` vends because nothing else names where its output
+        # lives. This URI is a DEPLOYMENT CONTRACT: the chart renders it and the bronze->silver mover's
+        # `MEDALLION_FROM_URI` from one expression, and the `medallion.bronze` trigger carries no
+        # `from_uri`, so a vended location would leave that mover opening a path nothing writes to —
+        # the cascade's first leg dead, with nothing red.
+        #
+        # A REFUSAL FAILS THE REQUEST, deliberately, and it is not a new failure mode for the cascade:
+        # nothing has been written and nothing has been emitted at this point, so the run did not
+        # half-happen — the route answers 503 + Retry-After, the same contract a failed publish already
+        # has, and a retry carrying the same Idempotency-Key converges. Best-effort was the alternative
+        # and it reinstates this very defect silently: an ungoverned tier nobody is told about.
+        # GATED ON THE SAME CONDITION AS THE SEED, so it governs exactly what this call writes. No
+        # catalog URL is the ungoverned dev shape (the movers keep the same escape hatch); no compute
+        # is the pure-emit shape, which writes no dataset at all — registering there would attach a
+        # `table:` object to bytes that never arrive, and would turn a demo that needs no object store
+        # into one that fails on a URI it was never going to open.
+        if settings.catalog_url and settings.compute_enabled and bronze_uri:
+            try:
+                await run_in_threadpool(
+                    partial(
+                        catalog_register.register_written_dataset,
+                        catalog_url=settings.catalog_url,
+                        catalog_root=catalog_root,
+                        table_id=bronze_dataset_id,
+                        dataset_uri=bronze_uri,
+                        delimiter=settings.delimiter,
+                        token=settings.catalog_token,
+                        app_token=settings.app_api_token,
+                        service_identity=settings.catalog_service_identity,
+                        dedicated_token=dedicated_token_for(settings),
+                    )
+                )
+            except catalog_register.RegisterError as exc:
+                span.set_status(Status(StatusCode.ERROR, "register_failed"))
+                log.warning("medallion_produce_register_failed", extra={"token": token, "dataset": bronze_dataset_id, "error": str(exc)})
+                return {"status": "register_failed", "token": token}
         result = None
         if settings.compute_enabled and bronze_uri:
             # Fake-Ray ingest: a REAL Lance write of bronze$events (blocking IO → threadpool) → the real version

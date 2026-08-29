@@ -5730,3 +5730,38 @@ def test_an_image_the_chart_hardens_declares_a_NUMERIC_user() -> None:
         + "\n  ".join(offenders)
         + "\nDeclare the uid the dockerfile already creates (e.g. `USER 10001`), not its name."
     )
+
+
+def test_the_producer_can_reach_the_catalog_regardless_of_the_quality_review_flag() -> None:
+    """The cascade HEAD must be able to register what it writes on every shipped configuration.
+
+    `MEDALLION_CATALOG_URL` / `_ROOT` / `_SERVICE_IDENTITY` used to render only inside the
+    `medallion.qualityReview` conditional, and that flag defaults FALSE (`chart/values.yaml`) and is
+    unset in values-local, values-prod and values-live-pins. So on the shipped chart the producer had no
+    catalog address, `produce.py`'s registration branch read an empty `settings.catalog_url` and skipped
+    SILENTLY, and `POST /produce` wrote a bronze dataset with no `table:` object — no FGA ownership
+    tuple, `policy/set` 404, no `_protection/` record reachable, no grant able to name it. Nothing went
+    red, which is the whole problem.
+
+    This is the second instance of the shape. The first is recorded on the mover env block in the same
+    file ("Governance belongs to the cascade, so the catalog's address does too: unconditional, on every
+    mover") — and the producer, which is the cascade's head, was left behind. Gating a service's ability
+    to register what it writes on an unrelated feature flag is how a tier becomes ungovernable while
+    every gate stays green.
+    """
+    import yaml
+
+    for review in ("false", "true"):
+        rendered = _helm_template(f"medallion.qualityReview={review}")
+        producer = next(
+            (doc for doc in yaml.safe_load_all(rendered) if doc and doc.get("kind") == "Deployment" and "medallion-producer" in doc["metadata"]["name"]),
+            None,
+        )
+        assert producer is not None, f"the medallion producer did not render at qualityReview={review}"
+        env = {item["name"] for item in producer["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+        missing = {"MEDALLION_CATALOG_URL", "MEDALLION_CATALOG_ROOT", "MEDALLION_CATALOG_SERVICE_IDENTITY"} - env
+        assert not missing, (
+            f"at medallion.qualityReview={review} the producer cannot reach the catalog: {sorted(missing)} "
+            "not rendered. Its bronze writes would carry no table record, so no policy, protection or "
+            "grant could ever name them — and the registration code skips silently when the URL is empty."
+        )

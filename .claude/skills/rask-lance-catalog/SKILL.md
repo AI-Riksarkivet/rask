@@ -355,16 +355,34 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
     so the ungoverned branch — `if settings.catalog_url and to_dataset` — is the dev shape, not the
     deployed one. Symbols rather than line numbers throughout this sub-bullet on purpose: the mover is
     edited often enough that a cited line goes wrong within the week.
-  - **The producer's bronze seed is the one that is NOT.** `medallion/services/produce.py::run_produce`
-    composes `bronze_uri` from settings (or from the project's warehouse root) and calls
-    `seed_bronze` directly; the module imports nothing from `catalog_register` at all. So
-    `bronze$events` has no table record, and a `policy/set` on it cannot succeed from either end: the
-    router-level authorize denies `can_drop` on an object no tuple names (403), and even a principal
-    that passes the gate falls out at `policies.py:120-121`, where `describe_table` raises
-    `TableNotFoundError` → **404**. (Bronze written by the INGEST plane is a different story and IS
-    governed — `ingest.catalog_service.ensure` creates namespace and table first.)
+  - **The producer's bronze seed WAS the one that was not, and is governed as of 2026-08-29.**
+    `medallion/services/produce.py` composed `bronze_uri` from settings (or from the project's
+    warehouse root), called `seed_bronze`, and imported nothing from `catalog_register` at all — so
+    `bronze$events` had no table record and a `policy/set` on it could not succeed from either end: the
+    router-level authorize denies `can_drop` on an object no tuple names (403), and a principal that
+    passed the gate fell out at `policies.py`'s `describe_table` → **404 "table has no storage location
+    to police"**. The head now calls `catalog_register.register_written_dataset` BEFORE it seeds — the
+    `register_table` door described further down, which needs no warehouse and therefore reaches the
+    reserved bucket. It TELLS rather than asks, and that is the one place it departs from a mover: its
+    write location is a deployment contract (`chart/templates/medallion.yaml` renders
+    `MEDALLION_BRONZE_URI` and the bronze→silver mover's `MEDALLION_FROM_URI` from one expression, and
+    the `medallion.bronze` trigger carries no `from_uri`), so a vended location would leave that mover
+    opening a path nothing writes to. The location is sent RELATIVE to `MEDALLION_CATALOG_ROOT` — the
+    dir backend answers *"Absolute URIs are not allowed for register_table"* — and a catalog refusal
+    fails the request **503** before any byte is written, rather than seeding an ungoverned tier
+    quietly. (Bronze written by the INGEST plane was governed all along —
+    `ingest.catalog_service.ensure` creates namespace and table first.)
+  - **A registration is not an arrival, and the cascade head has to know that.** The catalog's own
+    `register_table` marker is a `COMPLETE` lineage event whose single output is `bronze` /
+    `bronze$events` — indistinguishable, on the fields `/bronze-arrival` matched, from a batch landing.
+    Measured: without a filter, one `/produce` fired TWO cascades. `ingest_trigger.py` now drops the
+    byte-free catalog operations (`register_table`, `deregister_table`, `declare_table`) as a denylist,
+    so an external OpenLineage producer naming its own operation still fires the head.
 
-  What follows below still holds for that bronze seed, and only for it. A policy
+  What follows below is the state that closure ENDED for the seed, kept because the mechanism it
+  measures is still exactly how the sweep and the namespace lever behave, and because it is what any
+  fix had to satisfy. It remains the live description of any dataset written by something that does
+  NOT register. A policy
   door does reach the bytes — `set_namespace_policy` builds its path from `settings.root` and
   `resolve_policy` matches a namespace record by directory prefix (`rel.startswith(path + "/")`), so a
   record on `medallion` governs `medallion/bronze`; and `retain_versions` alone sets
@@ -377,14 +395,15 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   from the reconciler's `unbound_namespaces`, which lists `bronze`, `transcripts_v2` and the three
   `acme-*`), and `bronze$events` is not a registered table. With no namespace record, no table record
   and no parent tuple, NO principal can hold `can_delete`/`can_drop` on the seed's dataset, so no
-  policy, protection or grant can be applied to it. **Read that precisely, and note the scope this
-  sentence used to have: it said "the datasets the cascade writes", which now over-claims — the mover
-  outputs ARE registered and take all three. It is the seed that is not UNMAINTAINED but
-  un-OVERRIDABLE.** The sweep covers them like everything else under the
+  policy, protection or grant can be applied to it. **Read that precisely, and note how the scope of this
+  sentence has moved twice: it said "the datasets the cascade writes", which over-claimed once the
+  mover outputs were registered, and it then said "the seed", which over-claims now that the head
+  registers too. The seed was never UNMAINTAINED, only un-OVERRIDABLE, and it is neither today.** The sweep covers them like everything else under the
   platform's own settings — `MAINTENANCE_OLDER_THAN_DAYS` (7), `tiers.py`'s per-tier fragment sizing,
   `optimize_indices` — which is why every live summary counts them among its 27 datasets and reports
-  `index_findings` for `medallion/{silver,gold}`. What is unavailable is the TENANT-facing layer: a
-  per-dataset policy override, a `_protection/` record, an FGA grant.
+  `index_findings` for `medallion/{silver,gold}`. What was unavailable is the TENANT-facing layer — a
+  per-dataset policy override, a `_protection/` record, an FGA grant — which is precisely the trio
+  registration restores, and precisely what any unregistered dataset still lacks.
   **"No table record" is a STATE, not a law — and the door that fixes it is already wired.**
   `register_table` is precisely for data written outside the catalog's own doors: it turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
@@ -393,15 +412,20 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   and its lane ran live end-to-end. So the reserved bucket blocks the WAREHOUSE route (a tenant claiming
   platform storage) while leaving the REGISTRATION route open (naming an individual dataset) — two
   different mechanisms, and conflating them is how you conclude the cascade can never be governed.
-  **THE SEAM IS `catalog_register.py::ensure_stage_output`, and this file named `register_table` /
-  `register_stage_output` instead** — which sends a reader to a function that does something else.
-  `ensure_stage_output` describes the table, CREATES it through the catalog's own door when absent,
-  and returns the location the catalog vends, which the mover then writes to (rule I2 applied to the
-  write side). The telling-after-the-fact form `register_stage_output` — compose a path, write, then
-  register it — was DELETED once that ordering was fixed and its only remaining callers were its own
-  test stubs; `relative_location` and `MEDALLION_CATALOG_ROOT` went with it. Registration belongs to
-  the CASCADE, which is why the module is workload-neutral and takes only an id and a schema: every
-  lane gets it, or the first workload built is the only governed one.
+  **THERE ARE TWO SEAMS IN `catalog_register.py`, and which one a writer uses is decided by who owns
+  its location.** A MOVER asks: `ensure_stage_output` describes the table, CREATES it through the
+  catalog's own door when absent, and returns the location the catalog vends, which the mover then
+  writes to (rule I2 applied to the write side) — correct because nothing else names where a mover's
+  output lives. The CASCADE HEAD tells: `register_written_dataset` attaches the URI the producer
+  already owns, relative to `MEDALLION_CATALOG_ROOT`, treating 409 as convergence only after a
+  `describe` CONFIRMS the catalog governs that same location. The telling form was deleted once, when
+  its only caller was a mover that should have been asking (and `relative_location` and
+  `MEDALLION_CATALOG_ROOT` went with it); the direction was never the defect, the CALLER was.
+  Registration belongs to the CASCADE, which is why the module is workload-neutral and takes only an
+  id and a URI or schema: every lane gets it, or the first workload built is the only governed one.
+  Neither seam mints a namespace — a top-level parent belongs to the warehouse, and
+  `require_warehouse_scoped` refuses one outright BEFORE the existence check, so a lane that tried it
+  dead-lettered every hop.
   **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
   `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
   `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform
@@ -453,31 +477,45 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `SUPPORTED_FOR_GC` paragraph further up.** `compact_one` runs both in order, before touching a byte
   (`optimize.py::compact_one` — that seam is under active edit, so read it rather than trusting a line
   number): `describe_gc_unsupported_flags` against **`SUPPORTED_FOR_GC` (= `SUPPORTED` | 16)** refuses
-  the whole dataset, and then `describe_unsupported_flags` against **`SUPPORTED` (= 1|2|4|8)** refuses
-  only the COMPACTION step, while root-scoped work (`optimize_indices`, `cleanup_old_versions`) still
-  runs. So flag 16 is NOT refused outright: such a dataset is maintained, minus the rewrite, because
-  root-scoped operations are safe on a shallow clone while compacting one silently materialises the
-  base into it. The ORPHAN scan keeps the narrow `SUPPORTED` mask for everything, where the refusal is
-  genuinely required. The cost of the old blanket refusal was measured: 17 of the estate's datasets
-  were refused on flag 16, exactly the ones with fragments and version history, so the 120s sweep did
-  no work at all.
-  **The compaction half's remaining cost is an OPEN OWNER QUESTION, recorded at the gate.** Two
-  layouts set flag 16 and only the clone was measured: the other is an ingest bronze table whose base
-  is the external blob prefix its payload bytes already live at, which compacts safely (4 fragments ->
-  1, base untouched, pylance 10.0.0). It is refused anyway, so the widest-rowed tier in the estate
-  accumulates fragments while the sweep reports a clean pass. It is not widened because the manifest
-  cannot carry the distinction: `initial_bases` (a blob prefix no data file will ever land under) and
-  `add_bases` (an alternate base the next write may use) produce byte-identical entries, and this
-  service refuses the second deliberately. `features.describe_compaction_unsupported_flags` implements
-  the decidable half; whether to use it is a ruling, not a gate.
+  the whole dataset, and then `describe_compaction_unsupported_flags` refuses only the COMPACTION
+  step, while root-scoped work (`optimize_indices`, `cleanup_old_versions`) still runs. So flag 16 is
+  NOT refused outright: such a dataset is maintained, minus the rewrite, because root-scoped
+  operations are safe on a shallow clone while compacting one silently materialises the base into it.
+  The ORPHAN scan and the catalog's on-demand doors keep the narrow flags-only
+  `describe_unsupported_flags`/`SUPPORTED` mask for everything, where the refusal is genuinely
+  required. The cost of the old blanket refusal was measured: 17 of the estate's datasets were refused
+  on flag 16, exactly the ones with fragments and version history, so the 120s sweep did no work at
+  all.
+  **The COMPACTION gate asks about the BASES, not about the flag — it is the one gate here that is not
+  flags-only.** Refusing every flag-16 dataset was still over-broad by exactly the shape the cascade
+  writes: `ingest/lander.py::create_empty` and `medallion/services/compute.py` register ONE external
+  blob prefix via `initial_bases`, which sets 16 while every data file stays under the dataset's own
+  root — measured on pylance 10.0.0, compacting that is a merge and nothing more (4 fragments -> 1,
+  9,445 -> 14,366 bytes locally, base byte-identical, 20/20 payloads still resolving). Refused anyway,
+  the estate's most-fragmented tiers accumulated fragments forever while the sweep reported clean
+  passes (`fragments_removed_total=0` over 785 ticks). `features.gather_compaction_bases` therefore
+  takes THREE readings and `describe_compaction_unsupported_flags` weighs them; it permits only when
+  all three say no, and **every unknown refuses**:
+  1. `BasePath.is_dataset_root` — the manifest's self-report. A true positive and a useless negative:
+     measured, `shallow_clone` is the ONLY writer that sets it, so `add_bases` pointed at a live Lance
+     root reports False. A gate reading this bit alone (the earlier, never-wired attempt) waves the
+     clone shape through.
+  2. **The object store's own answer** — `objectfs.is_lance_dataset_root`, i.e. does `<base>/_versions/`
+     exist. Ground truth, and the load-bearing signal.
+  3. `DataFile.base_id` — is OUR data living over there. The only signal that catches
+     `write_dataset(..., target_bases=[...])`, where the base is a dataset root by neither reading yet
+     compaction pulls the files home (measured: local root 3,540 -> 5,991 bytes, the base's three
+     files orphaned).
+  A registered-but-unused bare prefix is now COMPACTED (`add_bases` at an empty prefix); the "the next
+  write may land under that base" worry is answered by reading (3) again on the next tick, not by
+  refusing today.
   The sweep reports refusals as their own
   `summarize()` line + `compaction.datasets.refused` counter — never inside `errors` or `skipped`.
-  Two reasons the flags rather than the consequence: **flag 16 compaction was genuinely destroying
-  the feature** (`compact_one` on a shallow clone returned `fragments_removed=8, error=None` and
-  left the clone holding a full local copy of data it had only referenced), and **`add_bases`
-  registers a base no `DataFile` resolves through yet** — every `base_id` stays `None`, so the
-  consequence check passed it as `checked=True` with orphans named. Flag 64 was only ACCIDENTALLY
-  safe: pylance refuses that open itself, and the untyped `open:` error it produced is exactly what
+  **The ORPHAN scan stays flags-only, and that is not an oversight.** Its own consequence check cannot
+  stand in for the flag: `add_bases` registers a base no `DataFile` resolves through yet, every
+  `base_id` stays `None`, and the scan passed such a dataset as `checked=True` with orphans named. A
+  scan that names live data as garbage is a different and worse failure than a rewrite it declined.
+  Flag 64 was only ACCIDENTALLY safe: pylance refuses that open itself, and the untyped `open:` error it produced is exactly what
   the sweep's lineage layer drops as noise. Widening `SUPPORTED` is a deliberate edit — it is a
   whitelist, so a pylance upgrade adding a legitimate flag silently stops maintaining every dataset
   that sets it, which is why the refusal counter has to be loud. **Residual: the source-side mirror

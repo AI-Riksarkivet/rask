@@ -23,11 +23,14 @@ from maintenance.core.lineage_emit import declared_table_id
 from maintenance.services.index_health import inspect_indices
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
+    FLAG_BASE_PATHS,
+    describe_compaction_unsupported_flags,
     describe_gc_unsupported_flags,
-    describe_unsupported_flags,
+    gather_compaction_bases,
     manifest_feature_flags,
     unsupported_features_from_open_error,
 )
+from service_kit.lakehouse.objectfs import dataset_root_probe
 
 
 log = logging.getLogger(__name__)
@@ -172,7 +175,13 @@ def compact_one(
     two: both running is not additive, it is two processes racing to delete the same manifests.
 
     A dataset whose manifest sets a feature flag this pass cannot correctly rewrite is REFUSED before
-    any rewrite (#64, :mod:`service_kit.lakehouse.features`) — see :attr:`DatasetResult.refused`.
+    any rewrite (#64, :mod:`service_kit.lakehouse.features`) — see :attr:`DatasetResult.refused`. The
+    COMPACTION half of that gate does not stop at the flag: ``base_paths`` (16) is set both by a
+    shallow clone, where a rewrite silently materialises another root's data, and by a dataset that
+    merely registers an external blob prefix, where a rewrite is an ordinary merge. Which one this is
+    comes from ``gather_compaction_bases`` — the manifest's self-report, the object store's own answer
+    for each base, and whether any ``DataFile`` resolves through one — and any of those coming back
+    unknown REFUSES.
     """
     try:
         # The shared bounded session (#102): per-tick reopens are correct for a mutating pass, but
@@ -206,30 +215,44 @@ def compact_one(
     # materialises the shared data into its own root (1,072 -> 108,199 bytes against a 119,693-byte
     # base), defeating the point of cloning. A refusal that says so beats doing it behind someone's back.
     #
-    # THE COST OF THAT REFUSAL IS OPEN, AND IT IS THE INGEST TIER. Two different layouts set flag 16
-    # and only the clone was measured: the other is a bronze table whose base is the external blob
-    # prefix its payload bytes already live at (`ingest/lander.py::create_empty` registers one through
-    # `initial_bases`). Its own data files are its own, so compacting it copies nothing — measured on
-    # pylance 10.0.0 as 4 fragments -> 1, every row still readable, the base untouched — yet it is
-    # refused here, so the estate's widest-rowed, most-fragmented tier accumulates fragments forever
-    # while this pass reports a clean pass over it.
+    # AND THE COMPACTION GATE ASKS ABOUT THE BASES, NOT ABOUT THE FLAG. Refusing on flag 16 alone was
+    # over-broad by exactly the shape the cascade writes: `ingest/lander.py::create_empty` and
+    # `medallion/services/compute.py` both register ONE external blob prefix through `initial_bases`,
+    # which sets flag 16 while every data file stays under this dataset's own root. Measured on pylance
+    # 10.0.0, compacting that is a merge and nothing more — 4 fragments -> 1, the base directory
+    # byte-identical, 20/20 external payloads still resolving — yet it was refused, so the estate's
+    # most-fragmented tiers accumulated fragments forever while this pass reported a clean sweep over
+    # them (`fragments_removed_total=0` across 785 ticks).
     #
-    # NOT WIDENED, because the manifest cannot carry the distinction that would make it safe.
-    # `service_kit.lakehouse.features.describe_compaction_unsupported_flags` separates a CLONE from a
-    # non-clone base (`BasePath.is_dataset_root`, measured), and that much is decidable. What is not
-    # is the non-clone half: `initial_bases` (an external blob prefix, no Lance data file will ever
-    # live there) and `add_bases` (a registered ALTERNATE base a later write may place data files
-    # under) produce BYTE-IDENTICAL manifest entries — verified on pylance 10.0.0 — and this service
-    # already refuses the second on purpose
-    # (`tests/unit/test_maintenance_optimize.py::test_compaction_refuses_a_registered_but_unused_base`,
-    # whose stated reason is exactly "the very next write can land under that base"). Permitting one
-    # permits the other. Which way that goes is an owner's call, not a gate's; until it is made this
-    # keeps the strict flags-only refusal.
+    # `gather_compaction_bases` takes the three readings `describe_compaction_unsupported_flags`
+    # weighs, and the object-store probe is the load-bearing one: `BasePath.is_dataset_root` is set by
+    # `shallow_clone` and by nothing else, so an `add_bases` pointed at a live Lance root reports False
+    # and a manifest-only gate would wave the clone shape straight through. `DataFile.base_id` catches
+    # the third shape neither of those sees — `target_bases=[...]` puts OUR files under a base that is
+    # a dataset root by neither reading (measured: compacting it pulled 3,540 -> 5,991 bytes home and
+    # orphaned the base's three files).
+    #
+    # IT FAILS CLOSED, and the asymmetry is the point: an unreadable probe, an unparseable BasePath or
+    # an unreadable fragment list all REFUSE. A wrong refusal costs disk and prints a counted line in
+    # the sweep summary; a wrong permit costs a clone its entire reason to exist.
     gc_refusal = describe_gc_unsupported_flags(reader_flags, writer_flags)
     if gc_refusal is not None:
         log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": gc_refusal})
         return DatasetResult(uri=uri, refused=gc_refusal)
-    compact_refusal = describe_unsupported_flags(reader_flags, writer_flags)
+    compact_refusal = describe_compaction_unsupported_flags(
+        reader_flags,
+        writer_flags,
+        # Gathered ONLY when the flag is actually set: this is the one place the gate costs IO (one
+        # `get_file_info` per declared base), and the overwhelming majority of datasets declare none.
+        #
+        # `dataset_root_probe` binds the probe to THIS dataset's store, and that binding is load-bearing
+        # rather than tidy: on S3 a manifest states its base as `/bucket/ns/t.lance` while this `uri` is
+        # `s3://bucket/ns/t.lance` (the two spellings `base_refs.normalise` exists to reconcile).
+        # Probing the schemeless form directly reads it as a LOCAL absolute path, finds nothing, and
+        # answers "not a dataset root" — a wrong PERMIT on a real clone, which is the one direction
+        # this gate must never take.
+        gather_compaction_bases(ds, dataset_root_probe(uri, storage_options)) if (reader_flags | writer_flags) & FLAG_BASE_PATHS else None,
+    )
     # #114 — the OTHER direction, and the flag check above cannot see it. Flag 16 marks the dataset
     # that SPANS bases (the clone); the dataset in danger here is the SOURCE, which carries no flag
     # and no base_paths of its own and looks completely ordinary. Only the cross-estate pre-pass
@@ -266,7 +289,13 @@ def compact_one(
         if compact_refusal is not None:
             # Root-scoped work still runs below; only the rewrite is skipped. Recorded on the result so
             # the reason is visible without inferring it from a zero, and logged once per dataset.
-            log.info("maintenance_compaction_skipped_unsupported", extra={"uri": uri, "reason": compact_refusal})
+            #
+            # WARNING, not info, and it matches what `sweep.summarize`'s own docstring already promised
+            # ("its visibility is the WARNING log, the `lance.refused` span attribute, the
+            # `compaction.datasets.refused` counter"). It was info while the gate refused every flag-16
+            # dataset — 17 per tick on this estate, which is a level nobody can leave on. Now that the
+            # refusal means a real clone hazard, each line is one an operator should see.
+            log.warning("maintenance_compaction_skipped_unsupported", extra={"uri": uri, "reason": compact_refusal})
             result.refused = compact_refusal
             metrics: Any = None
         else:

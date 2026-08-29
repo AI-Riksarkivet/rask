@@ -179,11 +179,23 @@ spec:
                    silently dropped rather than refused. So on the DEFAULT chart the producer had no
                    catalog URL at all, and `publish_promotion` — which no longer skips terminal tiers —
                    would fail its resume with nothing having asked for it. */}}
-            {{- if .Values.medallion.qualityReview }}
+            {{- /* UNCONDITIONAL, and it must stay that way. These three used to sit inside the
+                   `qualityReview` conditional above, which defaults FALSE in values.yaml and is unset in
+                   values-local, values-prod and values-live-pins — so on every shipped configuration the
+                   producer had no catalog address, and `POST /produce` wrote its bronze dataset with no
+                   `table:` object: no FGA ownership tuple, so `policy/set` 404s, no `_protection/` record
+                   is reachable, and no grant can name it. The registration code reads
+                   `settings.catalog_url` and skips silently when it is empty, so nothing went red.
+
+                   This is the SECOND time this exact shape has bitten, and the first is recorded three
+                   hundred lines below on the mover env: "Governance belongs to the cascade, so the
+                   catalog's address does too: unconditional, on every mover." The producer is part of
+                   the cascade — it is its HEAD — and was left behind. Gating a service's ability to
+                   register what it writes on an unrelated feature flag is how a tier becomes
+                   ungovernable without anything failing. */}}
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.rustfs.bucket | quote }} }
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
-            {{- end }}
             {{- if .Values.medallion.qualityReview }}
             # S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
             # movers hold promotions; only this app-id can raise the decision event into the instance,

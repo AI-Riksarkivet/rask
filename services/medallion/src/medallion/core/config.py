@@ -293,13 +293,22 @@ class MedallionSettings(BaseSettings):
     # The catalog service a mover ASKS where its output table lives (`ensure_stage_output`) and then
     # PUBLISHES that version through. Empty by default: the lane fails at the seam naming the env
     # var, never guessing — a gold table the catalog cannot govern must not report success.
-    #
-    # There is no second root setting beside it any more. `MEDALLION_CATALOG_ROOT` existed so a
-    # mover-composed path could be expressed RELATIVE to the catalog's connection root (the dir
-    # backend refuses absolute URIs — the #75 lesson); the mover composes no path now, so the value
-    # had no reader. The chart still renders it into both mover templates: harmless
-    # (`extra="ignore"`), and its removal belongs to the chart's own change.
     catalog_url: str = Field(default="", alias="MEDALLION_CATALOG_URL")
+    #: The catalog's own CONNECTION ROOT — read by the producer, which registers rather than asks.
+    #:
+    #: A mover needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER
+    #: cannot, because where it writes is a deployment contract — `chart/templates/medallion.yaml`
+    #: renders `MEDALLION_BRONZE_URI` and the bronze->silver mover's `MEDALLION_FROM_URI` from one
+    #: expression, and the `medallion.bronze` trigger carries no `from_uri` for that mover to follow. So
+    #: the head keeps its URI and ATTACHES it through `register_table`, which on the dir backend refuses
+    #: an absolute location and accepts only a path RELATIVE to this root (the #75 lesson, re-measured
+    #: 2026-08-29: `"Absolute URIs are not allowed for register_table"`).
+    #:
+    #: This setting was deleted once, correctly, when its last reader went — and the chart kept
+    #: rendering it (producer and both movers). It has a reader again, and only the producer's.
+    #: Empty with a catalog URL set is a REFUSAL, not a guess: an unaddressable registration means an
+    #: ungoverned bronze tier, which is the defect this closes.
+    catalog_root: str = Field(default="", alias="MEDALLION_CATALOG_ROOT")
     # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
     # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
     catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")
