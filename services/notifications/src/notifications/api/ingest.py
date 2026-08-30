@@ -85,6 +85,7 @@ async def ingest_run_event(
     push: ChannelPush | None = None,
     open_inbox: InboxOpener,
     event_seq: int | None = None,
+    first_sight: bool = True,
 ) -> dict[str, str]:
     """Project one OpenLineage run event onto its audience and return the sidecar's status.
 
@@ -95,6 +96,11 @@ async def ingest_run_event(
     `event_seq` is the feed's sequence number and is stamped only on the lane that has one. It is
     written onto an already-validated delivery, so the copy needs no revalidation, and it is what
     makes an inbox row say which lane first told this subject about this run.
+
+    `first_sight` is false only for a row the FEED lane's overlap is deliberately RE-OFFERING (see
+    `FEED_OVERLAP`). It changes no outcome — delivery is idempotent and a drop is terminal either way
+    — and exists solely so that a permanent fault is REPORTED once instead of once per tick. The bus
+    lane has no such window and leaves it at the default.
     """
     try:
         event = LineageRunEvent.model_validate(raw)
@@ -102,7 +108,16 @@ async def ingest_run_event(
         # DROP, not RETRY: redelivery cannot make a malformed payload parse, and retrying it forever
         # is how a subscription stops delivering anything at all. Logged as faults rather than as the
         # rendered message — see `_faults`, which is where the claim-check invariant is kept.
-        log.error("lineage_event_invalid", extra={"lane": lane.value, "faults": _faults(exc)})
+        #
+        # ERROR only at FIRST SIGHT. The drop is terminal, so a row the feed overlap hands back has no
+        # new fault to report — and on an idle feed it hands the same one back every thirty seconds
+        # forever. Measured live: one malformed row, 1 210 ERRORs in ten hours. DEBUG keeps the
+        # re-sighting inspectable without letting one dead payload drown the estate's real errors.
+        log.log(
+            logging.ERROR if first_sight else logging.DEBUG,
+            "lineage_event_invalid",
+            extra={"lane": lane.value, "faults": _faults(exc)},
+        )
         record_ingress(lane, Outcome.DROPPED)
         return DAPR_DROP
 

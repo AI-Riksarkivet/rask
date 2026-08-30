@@ -344,6 +344,8 @@ async def reconcile(
     retried = 0
     truncated = True
     gapped = False
+    #: The feed floor this pass found sitting ABOVE our own, i.e. the prune it is about to report.
+    observed_floor: int | None = None
     stored = None
     after: int | None = None
     high = 0
@@ -381,6 +383,7 @@ async def reconcile(
                 # deployment is one nobody keeps listening to.
                 if page.oldest_seq is not None and page.oldest_seq > walk_floor + 1:
                     gapped = True
+                    observed_floor = page.oldest_seq if observed_floor is None else max(observed_floor, page.oldest_seq)
                 fresh = [record for record in page.events if record.seq > walk_floor]
                 for record in fresh:
                     scanned += 1
@@ -400,6 +403,10 @@ async def reconcile(
                         watchers=watchers,
                         push=push,
                         event_seq=record.seq,
+                        # Above the previous mark = news. At or below it, this row is one the overlap
+                        # is deliberately re-offering, so a permanent fault in it has already been
+                        # reported and must not be reported again on every tick.
+                        first_sight=record.seq > stored.seq,
                     )
                     if status == DAPR_RETRY:
                         retried += 1
@@ -408,6 +415,18 @@ async def reconcile(
                     truncated = False
                     break
                 after = page.next_cursor
+            # ACCEPT the loss into the floor. A gap is unrecoverable, so it is news exactly once; but
+            # `walk_floor` is re-derived from the mark on every tick, so on an IDLE feed — where the
+            # mark cannot climb away from the hole — every tick re-detects the SAME prune and reports
+            # it again. Measured on the live estate: one prune, 1 210 ERRORs over ten hours, and a
+            # `record_feed_gap()` counter that made one gap look like a permanent haemorrhage.
+            #
+            # `floor` already means "the rows this deployment deliberately skipped", and rows deleted
+            # before this lane read them are exactly that, so this is the field's existing job rather
+            # than a new one. Raising it to the observed floor cannot hide a LATER prune: that one
+            # moves `oldest_seq` above the new floor and is detected on its own terms.
+            if observed_floor is not None:
+                settled_floor = max(settled_floor, observed_floor - 1)
     except TimeoutError as exc:
         if not budget.expired():
             # Somebody else's TimeoutError — the Dapr SDK's blocking sidecar health check is the one
@@ -429,8 +448,41 @@ async def reconcile(
             log.warning("lineage_feed_walk_parked", extra={"resume_from": after, "pending_high": high, "scanned": scanned})
         raise LineageFeedBudgetExceeded(f"the lineage feed reconcile pass exceeded its {budget_seconds}s budget") from exc
 
-    # `stored` is not None from here: the no-cursor branch returned inside the walk, and the checker
-    # narrows it accordingly — a guard here is provably dead code rather than defence.
+    return await _settle(
+        store=store,
+        stored=stored,
+        high=high,
+        scanned=scanned,
+        retried=retried,
+        truncated=truncated,
+        gapped=gapped,
+        settled_floor=settled_floor,
+        max_pages=max_pages,
+    )
+
+
+async def _settle(
+    *,
+    store: LineageCursorStore,
+    stored: LineageCursor,
+    high: int,
+    scanned: int,
+    retried: int,
+    truncated: bool,
+    gapped: bool,
+    settled_floor: int,
+    max_pages: int,
+) -> ReconcileResult:
+    """Write the mark the walk earned and report what it cost to get there.
+
+    Split from `reconcile` because they answer different questions and only one of them talks to
+    lineage: the walk decides WHAT HAPPENED, this decides WHERE THE MARK LANDS given that. Keeping
+    them in one function meant every new outcome the walk can report added a branch to a body that
+    already held the paging loop, the budget guard and the resume logic.
+
+    `stored` is non-optional here by construction: the no-cursor branch returns from inside the walk,
+    so a guard would be provably dead code rather than defence.
+    """
     if truncated:
         # Loud, and an ERROR rather than a warning: the walk covers the feed's whole retention by
         # default, so running out of pages means the rows between here and the cursor are already

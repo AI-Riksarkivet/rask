@@ -6,6 +6,7 @@ our own function was called with the arguments we then assert it was called with
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -842,3 +843,75 @@ async def test_a_gap_still_lets_the_pass_deliver_and_advance() -> None:
     assert result.gapped is True
     assert result.scanned == 1, "the row that DID survive must still be delivered"
     assert memory.seq == 9000, "the mark must advance past a loss it cannot undo"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# BOTH unrecoverable conditions above are REPORTS, and a report is something you make once. Measured
+# on the live estate 2026-08-30: one pruned feed and one malformed row produced 1 210 identical ERROR
+# pairs over ten hours — two every thirty seconds, from the cron tick re-walking an IDLE feed. The
+# mark cannot climb away from either condition when no new rows arrive, so each tick re-derives the
+# same loss and re-announces it. Nothing was wrong with the diagnosis; it was the repetition that
+# made `record_feed_gap()` count one gap 1 210 times and buried the estate's real errors.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_SAME_prune_is_reported_ONCE_not_on_every_tick() -> None:
+    """A gap is unrecoverable, so the second tick over an unchanged feed has nothing new to say.
+
+    The cursor already carries the field this needs: `floor` means "rows this deployment deliberately
+    skipped", and rows lineage deleted before we read them are exactly that. Accepting the observed
+    feed floor INTO the cursor is what turns the report into a one-shot — and it stays honest, because
+    a LATER prune raises `oldest_seq` again and is detected on its own terms.
+    """
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    plane = _Plane()
+    store, memory = _store(5)
+
+    first = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+    second = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    assert first.gapped is True, "the prune must be reported the first time it comes into view"
+    assert second.gapped is False, "the same prune, re-reported: this is the 1 210-errors-in-ten-hours bug"
+    assert memory.floor is not None and memory.floor >= 8998, "the accepted loss must be recorded in the cursor's floor"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_LATER_prune_is_still_reported_after_an_earlier_one_was_accepted() -> None:
+    """The other half of the same contract: accepting a gap must not deafen the detector. If it did,
+    the fix for the noise would silently cost the estate every future report of real data loss."""
+    plane = _Plane()
+    store, _memory = _store(5)
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(20000)], "next_cursor": None, "oldest_seq": 19999}))
+    later = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    assert later.gapped is True, "retention moved again and deleted rows 9001..19998 unread"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_malformed_row_the_overlap_RE_OFFERS_is_not_re_reported_every_tick(caplog: pytest.LogCaptureFixture) -> None:
+    """`FEED_OVERLAP` deliberately re-offers rows at or below the mark, and delivery is idempotent so
+    that is free. It is NOT free for the malformed ones: the drop is terminal, so every re-offer
+    re-derives the same fault and logs it again — one bad payload, an unbounded ERROR stream.
+
+    First sight is the only sighting that carries news, so it is the only one that reports.
+    """
+    bad = {"eventType": "FAIL", "seq": 101}  # no `run`, no `job` — cannot be a run event
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [{"seq": 101, "event": bad}], "next_cursor": None, "oldest_seq": 1}))
+    plane = _Plane()
+    store, _memory = _store(100, floor=100)
+
+    with caplog.at_level(logging.ERROR, logger="notifications.api.ingest"):
+        await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+        first_sight = [r for r in caplog.records if r.getMessage() == "lineage_event_invalid"]
+        await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+        after_re_offer = [r for r in caplog.records if r.getMessage() == "lineage_event_invalid"]
+
+    assert len(first_sight) == 1, "a malformed payload must be reported when it is first seen"
+    assert len(after_re_offer) == 1, "the overlap re-offered the same dead row: reporting it again is the noise bug"
