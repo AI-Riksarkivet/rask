@@ -839,8 +839,14 @@ auth:
 #   web_identity  — the RUSTFS-NATIVE path: the caller's Dex id_token is exchanged via
 #                   AssumeRoleWithWebIdentity for creds bound to ROLE_POLICY, narrowed per-table by an inline
 #                   session policy. Requires rustfs.oidc.enabled + auth.enabled (the caller presents a token).
-#   sts           — plain AssumeRole + session policy. Works on a compliant STS (AWS / MinIO / Ceph / moto);
-#                   NOT on RustFS (its STS rejects plain AssumeRole — that's why web_identity exists).
+#   sts           — plain AssumeRole + session policy. Works on a compliant STS: AWS / MinIO / Ceph / moto
+#                   AND RustFS. Measured 2026-08-30 against the live RustFS STS — a SigV4-signed AssumeRole
+#                   returns a session token and the inline policy is enforced (out-of-scope prefix, bucket
+#                   and read-tier PUT all 403). An UNSIGNED probe answers InvalidRequest, which is about
+#                   signing, not support; reading it as "unsupported" is what kept this mode unused.
+#                   It is also the only mode that can serve the CASCADE: web_identity needs the caller to
+#                   present an OIDC token, and a mover authenticates with dapr-api-token +
+#                   x-lance-service-identity, never a bearer.
 #   static        — pre-provisioned per-bucket keys.
 vending:
   mode: mode_b # mode_b | web_identity | sts | static

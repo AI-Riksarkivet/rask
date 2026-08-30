@@ -174,12 +174,24 @@ def _expiry_millis(expiration: object, ttl_seconds: int) -> int:
 class StsVendor:
     """STS ``AssumeRole`` + inline session policy → short-TTL, per-table creds.
 
-    The gold-standard plug for S3-family stores that implement the plain ``AssumeRole`` flow (AWS / MinIO /
-    Ceph RGW / moto). NOTE: RustFS (this project's default store) does NOT — its STS verifies SigV4 as the
-    ``s3`` service and rejects plain ``AssumeRole`` with ``InvalidRequest``; it requires
-    ``AssumeRoleWithWebIdentity`` (an OIDC-token flow, a follow-up). So the chart defaults to ``mode_b`` on
-    RustFS. ``assume_role`` defaults to a lazily-built boto3 STS client's ``assume_role`` and is injectable
-    for tests.
+    The gold-standard plug for S3-family stores that implement the plain ``AssumeRole`` flow — AWS, MinIO,
+    Ceph RGW, moto **and RustFS**, this project's default store.
+
+    RUSTFS ACCEPTS IT, MEASURED. `AssumeRole` with an inline session policy against the live RustFS STS
+    endpoint returns a session token (2026-08-30, from the Ray head, boto3 with the tenant credential),
+    and the policy is ENFORCED: in-scope list/GET allowed, an out-of-scope prefix and bucket refused 403,
+    a read-tier PUT refused, a write-tier in-scope PUT allowed. An UNSIGNED probe fails with
+    ``InvalidRequest`` because RustFS verifies STS requests as SigV4-signed ``s3`` — which is a statement
+    about signing, not about the operation being unsupported, and reading it as the latter is what put
+    this plug out of reach.
+
+    That matters for which mode can serve which caller. ``web_identity`` requires the CALLER to present an
+    OIDC token, so it cannot serve the cascade at all: a mover authenticates with ``dapr-api-token`` +
+    ``x-lance-service-identity`` and never holds a bearer, so the vend returns ``None``. This plug has no
+    such requirement.
+
+    ``assume_role`` defaults to a lazily-built boto3 STS client's ``assume_role`` and is injectable for
+    tests.
     """
 
     def __init__(
