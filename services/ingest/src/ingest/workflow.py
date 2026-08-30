@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 from ingest.config import settings
 from ingest.metrics import record_run, record_units
 from ingest.sizing import ResolvedSizing
+from service_kit.activity_loop import run_activity
 
 
 if TYPE_CHECKING:
@@ -1376,16 +1377,18 @@ def _lineage() -> Any:  # noqa: ANN401 — resolved lazily so importing this mod
 
 
 def _run_async(coro: Any) -> Any:  # noqa: ANN401
-    """Run a coroutine from a SYNC activity body.
+    """Run a coroutine from a SYNC activity body, on the worker's ONE loop.
 
     Dapr Workflow activities are sync callables, but the queue client is async — `nats-py` has no
-    sync surface. A fresh loop per activity is correct here rather than wasteful: an activity is a
-    short, isolated unit that Dapr may replay on any worker thread, so there is no long-lived loop to
-    attach to and nothing to keep warm between invocations.
-    """
-    import asyncio
+    sync surface. This used to be `asyncio.run`, on the argument that an activity is a short isolated
+    unit with nothing to keep warm between invocations. That argument was measured false next door:
+    medallion's activities pool an HTTP client across invocations, and a fresh-loop-per-activity
+    bridge left every one of them holding a connection bound to a closed loop.
 
-    return asyncio.run(coro)
+    It is stated here rather than left implicit because the two services shared the bridge's shape and
+    would have re-acquired the bug independently — see `service_kit.activity_loop`.
+    """
+    return run_activity(coro)
 
 
 WORKFLOWS = (ingest_run, chunk_run)

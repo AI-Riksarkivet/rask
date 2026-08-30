@@ -15,6 +15,7 @@ Run: ``uvicorn medallion.mover:app``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -28,6 +29,7 @@ from medallion.api.events import register_stage_route
 from medallion.api.stage_ops import router as stage_ops_router
 from medallion.core.config import get_settings
 from medallion.services.ray_submit import close_ray_client
+from service_kit.activity_loop import run_activity, stop_worker_loop
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import build_fga_client
@@ -139,8 +141,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # `app.state` — an activity has no `Request` and no way to reach it — so it takes the worker's
         # lifetime instead, and this is where that lifetime ends. Without this the pooling would trade a
         # per-call teardown for a permanent leak plus an "Unclosed client session" on every stop.
+        #
+        # CLOSED ON THE LOOP THAT OWNS IT, not on this one. The client's pool is bound to the activity
+        # loop (`service_kit.activity_loop`), and tearing an httpx pool down from a foreign loop is the
+        # very cross-loop fault that seam exists to prevent — it would turn every shutdown into the
+        # `Event loop is closed` this estate just stopped logging. `to_thread` because `run_activity`
+        # blocks by contract and this one is still a running loop's coroutine.
         with suppress(Exception):
-            await close_ray_client()
+            await asyncio.to_thread(run_activity, close_ray_client())
+        stop_worker_loop()
         if app.state.fga is not None:
             with suppress(Exception):
                 await app.state.fga.close()

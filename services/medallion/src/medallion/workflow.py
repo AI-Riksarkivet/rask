@@ -58,6 +58,7 @@ from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
+from service_kit.activity_loop import run_activity
 
 
 if TYPE_CHECKING:
@@ -701,14 +702,19 @@ def _is_terminal(status: str | None) -> bool:
 
 
 def _run_async(coro: Any) -> Any:  # noqa: ANN401 — mirrors ingest.workflow._run_async
-    """Run a coroutine from an activity's worker thread.
+    """Run a coroutine from an activity's worker thread, on the worker's ONE loop.
 
-    Activities execute on the workflow worker's threads, which have no running event loop, so
-    `asyncio.run` is correct here and would be a bug inside the FastAPI handler.
+    It used to be `asyncio.run` — a fresh loop per activity, closed on the way out — on the argument
+    that an activity is isolated and has no long-lived loop to attach to. The activities here are not
+    isolated: `ray_submit` pools one `httpx.AsyncClient` for the worker's lifetime, deliberately and
+    with a test, and a pooled keep-alive connection belongs to the loop that opened it. So every
+    stage dispatch handed the next activity a connection bound to a dead loop, failed with
+    `Event loop is closed`, and succeeded on the retry once the corpse had been evicted.
+
+    See `service_kit.activity_loop`: the loop now has the same lifetime the pooled client always
+    claimed, which is the only way both claims can be true at once.
     """
-    import asyncio
-
-    return asyncio.run(coro)
+    return run_activity(coro)
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:
