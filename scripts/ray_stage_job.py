@@ -15,9 +15,10 @@ TWO paths, chosen by whether the upstream carries a blob-v2 column:
   typing (exposes plain LargeBinary), so a blob column must be re-materialised via a
   ``blob_handling="all_binary"`` scan (NOT ``read_blobs`` — it drops null rows) and
   re-wrapped with ``blob_array`` before a 2.2 write, and image payloads get an inline thumbnail +
-  embedding derived here. This is the SAME contract as compute.transform_stage / derivers — the deriver
-  is inlined (self-contained job, like ray_train_job) and drift-pinned to services/medallion by a unit
-  test. Closes the Phase-3 gap that forced media stages onto the in-process fallback (Ray blob parity).
+  embedding derived here. This is the SAME contract as compute.transform_stage / derivers, and by the
+  same code: the derivers are IMPORTED from ``service_kit.lakehouse.media``, not inlined and
+  drift-pinned (B14 — the pin was the wrong fix, and this docstring described it long after the copies
+  were gone). Closes the Phase-3 gap that forced media stages onto the in-process fallback.
 
 Consume-layer provenance (R26): the submitting mover hands over this run's ``LineageDoc`` as
 ``LINEAGE_JSON``, and every path below writes it as the ``lineage`` column (Arrow JSON → Lance JSONB) in
@@ -64,9 +65,7 @@ from lance import blob_array, blob_field
 # `service-kit[media]` extra, which the ray-cluster image installs.
 from service_kit.lakehouse import media
 from service_kit.lakehouse.blobs import blob_field_names
-
-
-_LINEAGE_COLUMN = "lineage"  # == compute._LINEAGE_COLUMN (R26)
+from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, STAGE_COLUMN
 
 
 def _storage_options() -> dict[str, str]:
@@ -114,15 +113,6 @@ def _reset_if_legacy(to_uri: str, so: dict[str, str]) -> None:
         _reset_dataset(to_uri, so)
 
 
-def _lineage_array(lineage: str, rows: int) -> pa.Array:
-    """``rows`` copies of the run's provenance document as Arrow JSON (Lance stores it as JSONB).
-
-    Mirror of compute._lineage_column: the extension type is what makes the cell queryable in place
-    (``json_get_string`` / ``json_extract`` in a scan filter) rather than an opaque string.
-    """
-    return pa.array([lineage] * rows, pa.json_())
-
-
 def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
     """The per-stage provenance stamp — delegated to the ONE implementation both drivers share.
 
@@ -130,10 +120,33 @@ def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
     re-stamp it dropped `stage` and re-appended it at the end while the in-process driver replaced it
     in place, so a silver table's column ORDER — and therefore its dataset schema, since
     `write_dataset(mode="overwrite")` takes the table's — depended on which compute path wrote it.
+
+    It is now the ONLY thing in this job that decides where a provenance column sits: the media lane
+    stamps through it, the distributed lane's blocks come out of it, and the schema the distributed
+    lane creates its destination with is derived from it (:func:`_target_schema`).
     """
     from service_kit.lakehouse.stage_stamp import stamp_stage
 
     return stamp_stage(table, stage=stage, lineage=lineage)
+
+
+def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str) -> pa.Schema:
+    """The schema the distributed lane must create its destination with: the transform's OWN output.
+
+    Derived by running the real stamp over a zero-row slice of the real upstream — not rebuilt from a
+    field list. That distinction is the 2026-08-30 defect, which broke every tabular cascade at gold:
+    this schema was assembled by dropping `stage`/`lineage` from the upstream and appending them
+    back, while the blocks came from :func:`_stamp_stage`, which re-stamps IN PLACE and so keeps the
+    upstream's positions. Over the producer's bronze (`id, payload, stage`) they differ from silver
+    on — `[…, stage, source_rowid, lineage]` emitted against `[…, source_rowid, stage, lineage]`
+    created — and `lance_ray` casts each block to the destination schema BY POSITION
+    (`lance_ray/pandas.py::pd_to_arrow` → `df.cast(schema)`), so the append died with
+    `LanceError(Arrow): … field names are not matching`. Same columns, one transposed pair, no run.
+
+    Two constructions of one schema can only ever agree by luck, which is the class `stage_stamp`'s
+    own module docstring records for the two drivers. One function answers for both sides here.
+    """
+    return _stamp_stage(upstream.schema.empty_table(), stage, lineage).schema
 
 
 #: How many rows the media lane holds in the driver at once.
@@ -159,7 +172,16 @@ def _derivable_blob_column(ds: Any, blob_cols: list[str]) -> str | None:
 
     A column of entirely null payloads yields None, which is the honest answer: there is nothing to
     decide from, and null artifacts on a null payload are what the unbatched form produced anyway.
+
+    A tier that ALREADY carries the artifacts derives nothing — the same first line as
+    ``derivers.derive_artifacts`` ("skips when the upstream already carries the artifact columns; a
+    later stage carries them forward rather than re-deriving"), which this driver was missing. Without
+    it the carried column and the freshly appended one collided and the write died
+    ``LanceError(Schema): Duplicate field name "thumbnail"``, so the media lane could do exactly one
+    hop: bronze→silver worked and silver→gold could not.
     """
+    if any(name in ds.schema.names for name in media.ARTIFACT_COLUMNS):
+        return None
     for name in blob_cols:
         scanner = ds.scanner(columns=[name], blob_handling="all_binary", batch_size=MEDIA_BATCH_ROWS)
         for batch in scanner.to_batches():
@@ -175,9 +197,12 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
 
     Same contract as compute.transform_stage + derivers.derive_artifacts: re-materialise each blob column
     as bytes and re-wrap with ``blob_array`` (lance_ray's write would demote it to plain binary), stamp
-    ``stage``, and for a blob column whose first non-null payload decodes as an image, append an inline
-    ``thumbnail`` (PNG) + ``embedding`` (fixed-size floats). Non-image blobs carry through untouched.
-    ``lineage`` re-stamps the consume-layer provenance column (R26) in this same write.
+    the provenance columns through the shared ``stamp_stage``, and for a blob column whose first
+    non-null payload decodes as an image, append an inline ``thumbnail`` (PNG) + ``embedding``
+    (fixed-size floats). Non-image blobs carry through untouched, and an upstream that ALREADY carries
+    the artifacts carries them forward rather than deriving a second pair (see
+    :func:`_derivable_blob_column`). ``lineage`` re-stamps the consume-layer provenance column (R26) in
+    this same write.
 
     NULL-SAFE BY CONSTRUCTION (R27), mirroring compute._carry_forward: ONE
     ``scanner(blob_handling="all_binary")`` scan carries tabular AND blob columns row-aligned with the
@@ -194,7 +219,7 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
     """
     ds = lance.dataset(from_uri, storage_options=so)
     blob_cols = blob_field_names(ds.schema)
-    carried = [f.name for f in ds.schema if f.name not in ("stage", _LINEAGE_COLUMN)]
+    carried = [f.name for f in ds.schema if f.name not in (STAGE_COLUMN, LINEAGE_COLUMN)]
     derive_from = _derivable_blob_column(ds, blob_cols)
 
     # with_row_id so the head can mint source_rowid from the SAME aligned scan (a carried source_rowid is a
@@ -232,41 +257,36 @@ def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | Non
 
     Every batch takes the same branches and therefore produces the same schema, which is what lets
     the caller append them into one dataset.
+
+    THE PROVENANCE STAMP IS :func:`_stamp_stage`, not a copy of it. This function used to append
+    `source_rowid`, `stage` and `lineage` itself — a third construction of the same three columns in
+    a job that already had two, and one that appended `stage` UNCONDITIONALLY (harmless only because
+    the scan above excludes it, which nothing stated). Handing the aligned batch — `_rowid` and all —
+    to the shared stamp gets the identical schema from the one function that owns the question.
     """
-    rows = aligned.num_rows
     columns: dict = {}
     fields: list[pa.Field] = []
     for name in aligned.schema.names:
-        if name == "_rowid":
-            continue
         if name in blob_cols:
             fields.append(blob_field(name))
             columns[name] = blob_array(aligned.column(name).to_pylist())
         else:
+            # `_rowid` included deliberately: the stamp mints `source_rowid` from it at the cascade
+            # head and drops it (it is Lance's reserved metacolumn and is never persisted).
             fields.append(aligned.schema.field(name))
             columns[name] = aligned.column(name)
-    # Root provenance (mirror compute._carry_source_rowid): carry source_rowid if the upstream has it, else
-    # mint it from the aligned _rowid at the head. _rowid is never persisted.
-    if "source_rowid" not in columns:
-        fields.append(pa.field("source_rowid", pa.uint64()))
-        columns["source_rowid"] = aligned.column("_rowid").cast(pa.uint64())
-    fields.append(pa.field("stage", pa.string()))
-    columns["stage"] = pa.array([stage] * rows, pa.string())
-    if lineage:
-        fields.append(pa.field(_LINEAGE_COLUMN, pa.json_()))
-        columns[_LINEAGE_COLUMN] = _lineage_array(lineage, rows)
-    out = pa.table(columns, schema=pa.schema(fields))
+    out = _stamp_stage(pa.table(columns, schema=pa.schema(fields)), stage, lineage)
 
     # Row-wise, image payloads only — a payload past the header probe that fails full decode raises,
     # FAILing the run; a NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
     if derive_from is not None:
         payloads = aligned.column(derive_from).to_pylist()
         out = out.append_column(
-            pa.field("thumbnail", pa.large_binary()),
+            pa.field(media.THUMBNAIL_COLUMN, pa.large_binary()),
             pa.array([None if p is None else media.derive_thumbnail(p) for p in payloads], pa.large_binary()),
         )
         out = out.append_column(
-            pa.field("embedding", pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
+            pa.field(media.EMBEDDING_COLUMN, pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
             pa.array([None if p is None else media.derive_embedding(p) for p in payloads], type=pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
         )
     return out
@@ -401,13 +421,9 @@ def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str], *, li
             enable_stable_row_ids=True,
         )
     else:
-        base = upstream.schema
-        for restamped in ("stage", _LINEAGE_COLUMN):
-            if restamped in base.names:
-                base = base.remove(base.get_field_index(restamped))
-        out_schema = base.append(pa.field("stage", pa.string()))
-        if lineage:
-            out_schema = out_schema.append(pa.field(_LINEAGE_COLUMN, pa.json_()))
+        # The destination is created with the schema the transform EMITS (see _target_schema): every
+        # block lance_ray appends is cast to it positionally, so the two must be one construction.
+        out_schema = _target_schema(upstream, stage, lineage)
 
         import lance_ray as lr  #   # Ray-image only; lazy (see module top)
 

@@ -21,8 +21,10 @@ that no data change caused.
 The fix is the one `references/anti-patterns.md` § "Mixed I/O and business logic" prescribes: the
 stamping is pure — a table in, a table out, no storage, no Ray — so it is extracted here and both
 drivers import it. This module is the right home rather than the medallion because the Ray job CANNOT
-import the service: it is baked into `.docker/ray-cluster.dockerfile`, which installs `--package ratch`
-— and ratch depends on `service-kit[lancekit]`, so both images already carry this package.
+import the service: it is baked into `.docker/ray-cluster.dockerfile`, which installs
+`--package ray-cluster-env` (the deps-only platform-environment member, after `packages/ratch` was
+dissolved 2026-08-28) — and that member carries `service-kit`, so both images already have this
+package.
 """
 
 from __future__ import annotations

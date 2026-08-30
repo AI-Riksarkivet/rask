@@ -29,6 +29,15 @@ from PIL import Image
 THUMBNAIL_SIZE = (128, 128)
 EMBEDDING_DIMS = 8
 
+#: The columns an image payload derives, named HERE for the same B14 reason the derivers are: both
+#: drivers append them and both have to recognise a tier that already CARRIES them. The Ray driver
+#: held its own literals and no such check, so a media stage reading a tier its predecessor had
+#: already derived appended a second `thumbnail` and died `LanceError(Schema): Duplicate field name`
+#: — the in-process driver's `derive_artifacts` had the guard, its copy did not.
+THUMBNAIL_COLUMN = "thumbnail"
+EMBEDDING_COLUMN = "embedding"
+ARTIFACT_COLUMNS: tuple[str, ...] = (THUMBNAIL_COLUMN, EMBEDDING_COLUMN)
+
 # Decompression-bomb ceiling (audit 2026-07-12): Pillow's DEFAULT raises only above 2× its limit —
 # the [limit, 2×limit) band merely WARNS and then fully decodes, so a small-on-disk ~150M-pixel PNG
 # would pass is_image() and allocate ~half a GB of pixel buffer in the deriver. Cap at a bound that

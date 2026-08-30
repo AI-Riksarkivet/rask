@@ -28,14 +28,18 @@ from service_kit.lakehouse import media
 #: emit a null artifact for it and keep the row, never drop or shift it (R27 alignment contract).
 Deriver = Callable[[pa.Table, list[bytes | None]], pa.Table]
 
-_THUMBNAIL_COLUMN = "thumbnail"
-_EMBEDDING_COLUMN = "embedding"
+_THUMBNAIL_COLUMN = media.THUMBNAIL_COLUMN
+_EMBEDDING_COLUMN = media.EMBEDDING_COLUMN
 
 #: The columns a deriver may ADD to the carried table (absent upstream) — the single source of truth for
 #: compute's columnLineage edge classification (#1): an output column matching one of these that is NOT in
 #: the upstream schema was DERIVED from the blob content (TRANSFORMATION); everything else that survives a
 #: stage is carried forward (IDENTITY). Extend alongside ``_DERIVERS`` when a new modality adds artifacts.
-ARTIFACT_COLUMNS: tuple[str, ...] = (_THUMBNAIL_COLUMN, _EMBEDDING_COLUMN)
+#:
+#: The NAMES live in ``service_kit.lakehouse.media`` (B14) because the Ray driver appends the same two
+#: columns and must recognise a tier that already carries them; two copies of a column name is how one
+#: driver ended up without the guard the other has.
+ARTIFACT_COLUMNS: tuple[str, ...] = media.ARTIFACT_COLUMNS
 
 
 class UnderivableMediaError(ValueError):
