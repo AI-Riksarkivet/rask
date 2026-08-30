@@ -866,6 +866,24 @@ async def _run_compute(
                     service_identity=settings.catalog_service_identity,
                     dedicated_token=dedicated_token_for(settings),
                 )
+                # AND PROVE WE MAY WRITE IT. `_run_compute` is where this lane's destination is
+                # GOVERNED — it runs before `_write_stage` dispatches — so this is the one place a
+                # check gates the Ray path and the in-process path alike. The Ray job opens the
+                # destination with the pod's ROOT credential and authorizes nothing, which makes it
+                # the path with no other check at all.
+                #
+                # It does NOT change how the bytes move: under `mode_b` the catalog vends nothing and
+                # answers `server_mediated`. What it adds is the WRITE rung (`can_write_data`, which
+                # the catalog evaluates only on the write tier) and an audit record of the decision.
+                await run_in_threadpool(
+                    catalog_register.authorize_stage_write,
+                    catalog_url=settings.catalog_url,
+                    table_id=to_dataset,
+                    token=settings.catalog_token,
+                    app_token=settings.app_api_token,
+                    service_identity=settings.catalog_service_identity,
+                    dedicated_token=dedicated_token_for(settings),
+                )
             lineage_doc = promotion_lineage(
                 settings,
                 from_namespace=from_namespace,

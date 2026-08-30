@@ -199,6 +199,52 @@ def publish_stage_output(
     )
 
 
+def authorize_stage_write(
+    *,
+    catalog_url: str,
+    table_id: str,
+    token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
+    timeout_seconds: float = 30.0,
+    client: httpx.Client | None = None,
+) -> str:
+    """Prove this mover may WRITE `table_id`, at the catalog's own door. Returns the vending mode.
+
+    CALLED FOR ITS SIDE EFFECT, and the answer is deliberately discarded by the caller. The stage job
+    opens its destination with the RustFS ROOT credential from the Ray pod's environment and performs
+    no authorization at all — so of every door in this estate, the one that actually moves a tenant's
+    bytes was the one answering to nothing. This does not close that: with `LANCE_VENDING_MODE=mode_b`
+    the vendor returns nothing (`core/vending.py`), the response is `server_mediated`, and the bytes
+    still move under the pod credential. THE BYTE PATH IS UNCHANGED ON PURPOSE — a change that also
+    re-routed the IO would be a much larger one, and this estate's cascade is load-bearing.
+
+    What it does buy is the two things that were absent entirely: the WRITE rung is checked
+    (`can_write_data` on the table, which the catalog evaluates only on the write tier — the read
+    tier carries the router guard's rung alone), and the decision lands in the audit stream keyed to
+    the table and the tier, allow or deny alike.
+
+    THE WRITE TIER SPECIFICALLY. Asking for `read` would pass a rung the cascade does not need and
+    make a reader's grant indistinguishable from a writer's on the one path that writes.
+
+    Raises on a refusal. A 403 means this mover may not write the table it is about to write, and a
+    stage that proceeds anyway makes the check decorative — which is the failure mode of every
+    authorization added for tidiness rather than for a decision.
+    """
+    if not catalog_url:
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot authorize its write")
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
+        try:
+            response = client.post(f"/v1/table/{table_id}/credentials", params={"tier": "write"}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable authorizing the write of {table_id!r}: {exc}") from exc
+    if response.status_code >= 400:
+        raise RegisterError(f"catalog refused this stage's write of {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
+    return str(response.json().get("mode") or "")
+
+
 @contextmanager
 def _catalog_client(catalog_url: str, timeout_seconds: float, client: httpx.Client | None) -> Iterator[httpx.Client]:
     """The shared client when the caller has one, otherwise a per-call client it owns.
