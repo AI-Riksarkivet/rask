@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
+
 from ingest import create_app
 from ingest.runs import ScheduleUnavailable
 from ingest.sources import register

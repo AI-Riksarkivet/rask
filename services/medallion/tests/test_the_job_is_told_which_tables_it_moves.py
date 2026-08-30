@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.services import ray_submit, transform
 from medallion.services.trigger_guards import StageTrigger

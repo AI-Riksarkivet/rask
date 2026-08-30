@@ -12,12 +12,13 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from catalog.services import models as registry
 from lance_namespace import (
     InvalidTableStateError,
     TableNotFoundError,
     TableVersionNotFoundError,
 )
+
+from catalog.services import models as registry
 
 
 def _publish(uri: str, metrics: dict[str, Any], token: str, *, first: bool) -> int:

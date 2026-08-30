@@ -8,8 +8,9 @@ preserves them.
 
 from __future__ import annotations
 
-from annotator.api.v1.endpoints import members
 from fastapi.routing import APIRoute
+
+from annotator.api.v1.endpoints import members
 
 
 def _delete_route() -> APIRoute:

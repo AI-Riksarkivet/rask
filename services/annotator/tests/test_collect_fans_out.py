@@ -19,6 +19,7 @@ import asyncio
 from typing import Any, cast
 
 import pytest
+
 from annotator.projects.publish import PublishRefusal
 from annotator.projects.saga import ProjectHandle, collect
 

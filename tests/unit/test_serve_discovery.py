@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 import pytest
+
 from annotator.api.v1.endpoints.assist import backend_for, producer_listing
 from annotator.api.v1.endpoints.serve_discovery import (
     discovered_backends,

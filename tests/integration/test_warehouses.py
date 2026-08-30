@@ -12,11 +12,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
+
 from catalog.core.config import Settings, get_settings
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
-from fastapi.testclient import TestClient
-
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 

@@ -13,17 +13,27 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
-from maintenance.api import routes
-from maintenance.core.config import MaintenanceSettings
 from pydantic import SecretStr
 
+from maintenance.api import routes
+from maintenance.core.config import MaintenanceSettings
 from service_kit.control_emit import NoopControlEmitter
 
 
 def _settings(**over: Any) -> MaintenanceSettings:
     return MaintenanceSettings(s3_bucket="unit-bucket", s3_secret_access_key=SecretStr("unit"), **over)
+
+
+def _router(**over: Any) -> APIRouter:
+    """The cron router, BUILT from settings (MAINT-13) rather than a module-level singleton.
+
+    `routes.py` used to read `get_settings()` and register both routes at import time, so these
+    assertions read a topology frozen by whatever environment imported the module first. Building it
+    here from the same `_settings()` the assertions use is what makes the binding names testable.
+    """
+    return routes.build_router(_settings(**over))
 
 
 # --------------------------------------------------------------------------- #
@@ -37,7 +47,7 @@ def test_the_reconcile_route_exists_at_its_binding_name() -> None:
     sidecar posts, gets a 404, and the report simply never runs."""
     # The ROUTER's own routes, not the app's: this FastAPI resolves `include_router` lazily
     # (`_IncludedRouter`), so an app inspected before startup reports no expanded routes at all.
-    declared = {(getattr(r, "path", ""), m) for r in routes.router.routes for m in getattr(r, "methods", set())}
+    declared = {(getattr(r, "path", ""), m) for r in _router().routes for m in getattr(r, "methods", set())}
     binding = f"/{_settings().reconcile_binding_name}"
     assert (binding, "POST") in declared, f"no POST route at {binding} — the sidecar's tick would 404"
 
@@ -46,7 +56,7 @@ def test_the_reconcile_binding_answers_the_options_preflight() -> None:
     """Dapr's binding-discovery pre-flight is an OPTIONS. Without a handler it 405s and Dapr logs the
     app as NOT consuming the binding — the cron then never fires and nothing reports why."""
     binding = f"/{_settings().reconcile_binding_name}"
-    options = [r for r in routes.router.routes if getattr(r, "path", None) == binding and "OPTIONS" in getattr(r, "methods", set())]
+    options = [r for r in _router().routes if getattr(r, "path", None) == binding and "OPTIONS" in getattr(r, "methods", set())]
     assert options, "no OPTIONS handler — Dapr would consider the binding unconsumed"
 
 
@@ -63,7 +73,7 @@ def test_the_reconcile_route_is_token_gated() -> None:
     exactly why the gate is easy to forget — but an ungated trigger is an estate-wide disclosure, not
     merely a wasted scan."""
     binding = f"/{_settings().reconcile_binding_name}"
-    post = cast(Any, next(r for r in routes.router.routes if getattr(r, "path", None) == binding and "POST" in getattr(r, "methods", set())))
+    post = cast(Any, next(r for r in _router().routes if getattr(r, "path", None) == binding and "POST" in getattr(r, "methods", set())))
     names = {getattr(d.call, "__name__", "") for d in post.dependant.dependencies}
     assert "require_dapr_token" in names, f"the reconcile binding is UNGATED (deps: {names})"
 
@@ -317,7 +327,7 @@ def test_the_app_registers_both_bindings_together() -> None:
     """Both cron routes come from the one router the service includes, so a service that boots has both
     or neither. Guards the split-brain where the sweep ticks and the reconcile silently does not."""
     settings = _settings()
-    posted = {getattr(r, "path", "") for r in routes.router.routes if "POST" in getattr(r, "methods", set())}
+    posted = {getattr(r, "path", "") for r in _router().routes if "POST" in getattr(r, "methods", set())}
     assert f"/{settings.binding_name}" in posted
     assert f"/{settings.reconcile_binding_name}" in posted
 
@@ -330,7 +340,7 @@ def test_the_reconcile_route_is_reachable_over_http() -> None:
     from service_kit.governed.dapr_auth import require_dapr_token
 
     app = FastAPI()
-    app.include_router(routes.router)
+    app.include_router(_router())
     app.dependency_overrides[require_dapr_token] = lambda: None
 
     async def stub(*_a: Any, **_kw: Any) -> Any:

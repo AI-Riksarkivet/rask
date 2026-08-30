@@ -20,19 +20,15 @@ from lineage.api.dapr import register_dapr
 from lineage.api.v1.endpoints import demo
 from lineage.api.v1.router import api_router
 from lineage.core.age import make_pool, run_cypher
-from lineage.core.config import apply_dapr_secrets, get_settings
+from lineage.core.config import apply_lineage_secrets, get_settings
 from lineage.services.repository import LineageRepository
-from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
-from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.middleware import RequestIDMiddleware
+from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
-from service_kit.probes import make_probes_router
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
@@ -65,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # catalog. No-op (and no Dapr dependency) when secrets_from_dapr is off; fails closed on the S3 secret.
     # In a thread: the fetch is sync (blocking httpx + sleep between retries, ~80s worst case) — event-loop
     # hygiene; nothing is served until the lifespan completes, but the loop must stay free regardless.
-    await run_in_threadpool(apply_dapr_secrets, settings)
+    await run_in_threadpool(apply_lineage_secrets, settings)
     pool = make_pool(settings.database_url, statement_timeout_seconds=settings.age_statement_timeout_seconds)
 
     # The `finally` owns `pool.close()`, so the pool must be opened INSIDE the guarded scope: a bootstrap
@@ -145,41 +141,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await pool.close()
 
 
-_docs = get_settings().docs_enabled  # gate /docs + /openapi.json (off in prod), like the catalog
-# Application logging, before the app exists — every module here uses getLogger(__name__), and
-# without this they propagate to a root logger with no handlers and are DISCARDED. That is not
-# hypothetical: it hid a two-day lineage feed outage (see service_kit.setup_logging).
-setup_logging()
-
-app = FastAPI(
-    title="Lance Lineage Service",
-    version="0.1.0",
-    lifespan=lifespan,
-    docs_url="/docs" if _docs else None,
-    redoc_url="/redoc" if _docs else None,
-    openapi_url="/openapi.json" if _docs else None,
-)
-
-# Dapr pub/sub subscription (#25): build app first, then wire the subscription so `app` exists before
-# the registration. DaprApp(app) also serves GET /dapr/subscribe (the sidecar's startup registration).
-register_dapr(app)
-app.include_router(api_router)
-
-
-# AND the fleet handlers, before the lance translator. `service_kit.exceptions.DomainError`
-# subclasses `HTTPException`, so without `register_handlers` starlette's built-in handler renders
-# it — status and headers intact, `{"detail": ...}` body — which is how the draining 503 came to
-# declare problem+json over a body that was not one. Registered FIRST so the lance translator
-# still wins for `RequestValidationError`, exactly the order `make_service_app` uses.
-register_handlers(app)
-install_problem_handlers(app, log)
-# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
-# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
-# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
-# passes streaming bodies through untouched (this plane serves Arrow IPC).
-app.add_middleware(RequestIDMiddleware)
-
-
 async def _graph_ready(request: Request) -> Readiness:
     """Gate readiness on the AGE pool AND the graph — lineage's sole hard dependency — so a pod with an
     unhealthy pool is pulled from rotation instead of serving 500s.
@@ -201,8 +162,25 @@ async def _graph_ready(request: Request) -> Readiness:
     return Readiness(status=ReadinessStatus.ready, components={"database": "healthy"})
 
 
-# /livez + /readyz — the shared router (service_kit.probes), not a hand-rolled copy.
-app.include_router(make_probes_router(_graph_ready))
+# THE SHARED LANCE-PLANE ASSEMBLY (open_python-audit DUP-12). Logging before the app exists, the docs
+# gate, the handler pair in the order that makes it work, one request id, and the probes — see
+# `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+#
+# `_graph_ready` is the readiness this service adds: lineage's sole hard dependency is the AGE pool
+# and the graph itself, so a pod whose graph is absent must be pulled from rotation rather than
+# rotated in to silently DISCARD every delivered event.
+app = build_lance_service_app(
+    title="Lance Lineage Service",
+    docs_enabled=get_settings().docs_enabled,
+    lifespan=lifespan,
+    log=log,
+    routers=[api_router],
+    ready_check=_graph_ready,
+)
+
+# Dapr pub/sub subscription (#25): wired after the app exists, because `DaprApp(app)` needs it.
+# DaprApp also serves GET /dapr/subscribe (the sidecar's startup registration).
+register_dapr(app)
 
 
 # Demo data peek (reads the real Lance datasets on S3) — mounted only when explicitly enabled.

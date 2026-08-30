@@ -30,20 +30,17 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
-from maintenance.api.routes import router
-from maintenance.core.config import MaintenanceSettings, apply_dapr_secrets, get_settings
+from maintenance.api.routes import build_router
+from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
-from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter
-from service_kit.exceptions import register_handlers
 from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
+from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.middleware import RequestIDMiddleware
+from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
-from service_kit.probes import router as probes_router
 from storage import s3_client
 
 
@@ -114,7 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Fail fast at boot if the S3 secret is still empty (neither the store nor plaintext env provided it) —
     # the sweep is a real S3 consumer, so a silent empty key would otherwise fail every later compaction
     # with a cryptic S3 SignatureDoesNotMatch instead of a clear startup error (parity with the catalog's
-    # 'credentials required, no silent fallback'). apply_dapr_secrets already fails closed when the store IS
+    # 'credentials required, no silent fallback'). The shared apply_dapr_secrets already fails closed when the store IS
     # the source; this covers the plaintext-env path (secrets_from_dapr off) the comment used to over-claim.
     if not settings.s3_secret_access_key.get_secret_value():
         raise RuntimeError("MAINTENANCE_S3_SECRET_ACCESS_KEY is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR)")
@@ -161,39 +158,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await dapr_client.close()
 
 
-_docs = get_settings().docs_enabled  # gate /docs + /openapi.json (off in prod), like the catalog
-# Application logging, before the app exists — every module here uses getLogger(__name__), and
-# without this they propagate to a root logger with no handlers and are DISCARDED
-# (see service_kit.setup_logging).
-setup_logging()
-
-app = FastAPI(
+# THE SHARED LANCE-PLANE ASSEMBLY (open_python-audit DUP-12). Logging before the app exists, the docs
+# gate, the handler pair in the order that makes it work, one request id, and the probes — see
+# `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+app = build_lance_service_app(
     title="Lance table maintenance",
-    version="0.1.0",
+    docs_enabled=get_settings().docs_enabled,
     lifespan=lifespan,
-    docs_url="/docs" if _docs else None,
-    redoc_url="/redoc" if _docs else None,
-    openapi_url="/openapi.json" if _docs else None,
+    log=log,
 )
 
-
-# Problem+json handlers (parity with catalog/lineage — maintenance runs the same lance stack, so an
-# unhandled LanceNamespaceError must surface as the same RFC 9457 body, not Starlette's plain 500 text).
-# AND the fleet handlers, before the lance translator. `service_kit.exceptions.DomainError`
-# subclasses `HTTPException`, so without `register_handlers` starlette's built-in handler renders
-# it — status and headers intact, `{"detail": ...}` body — which is how the draining 503 came to
-# declare problem+json over a body that was not one. Registered FIRST so the lance translator
-# still wins for `RequestValidationError`, exactly the order `make_service_app` uses.
-register_handlers(app)
-install_problem_handlers(app, log)
-# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
-# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
-# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
-# passes streaming bodies through untouched (this plane serves Arrow IPC).
-app.add_middleware(RequestIDMiddleware)
-
-# /livez + /readyz — the shared router, not a hand-rolled copy (service_kit.probes).
-app.include_router(probes_router)
-
 # The Dapr cron route (POST /<binding-name>) + its OPTIONS discovery ack, with the require_dapr_token gate.
-app.include_router(router)
+# BUILT from the settings this app was assembled with, not stamped into the routes module at import.
+app.include_router(build_router(get_settings()))

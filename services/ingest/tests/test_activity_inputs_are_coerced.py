@@ -32,8 +32,9 @@ from __future__ import annotations
 import inspect
 import re
 
-from ingest import workflow
 from pydantic import BaseModel
+
+from ingest import workflow
 
 
 def _activities() -> list[tuple[str, str, type]]:

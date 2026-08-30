@@ -21,6 +21,7 @@ import asyncio
 from typing import Any
 
 import pytest
+
 from catalog.core.lineage_emit import OriginatorBoundEmitter, emit_write_event
 
 
@@ -119,7 +120,6 @@ class TestTheAnonymousSubjectIsNotAPerson:
     def test_the_literal_matches_the_estates(self) -> None:
         """Hard-coding it here would rot silently if the shared constant ever changed."""
         from catalog.core.lineage_emit import is_person_subject
-
         from service_kit.governed.deps import ANONYMOUS_SUBJECT
 
         assert not is_person_subject(ANONYMOUS_SUBJECT)

@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 import pytest
 import respx
+
 from ingest.catalog_service import CatalogServiceClient
 
 

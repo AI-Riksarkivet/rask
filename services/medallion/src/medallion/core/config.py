@@ -356,7 +356,12 @@ class MedallionSettings(BaseSettings):
     # sole source (the chart omits the plaintext env entirely); a store miss FAILS CLOSED — an env
     # fallback would contradict "OpenBao is the sole source" (the audit's original finding).
     secrets_from_dapr: bool = Field(default=False, alias="MEDALLION_SECRETS_FROM_DAPR")
-    dapr_secret_store: str = Field(default="lance-secrets", alias="MEDALLION_DAPR_SECRET_STORE")
+    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
+    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
+    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: still be moved on its own.
+    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MEDALLION_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="MEDALLION_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="MEDALLION_DAPR_SECRET_S3_FIELD")
     s3_region: str = Field(default="us-east-1", alias="MEDALLION_S3_REGION")
@@ -407,7 +412,7 @@ class MedallionSettings(BaseSettings):
 
         Only fires when the plaintext env is the SOURCE: with ``secrets_from_dapr`` the chart deliberately
         withholds the plaintext secret and the lifespan fetches it from OpenBao fail-closed
-        (``apply_dapr_secrets``, the same shape as catalog/lineage/compaction) — a guard here would crash
+        (``service_kit.governed.secrets.apply_dapr_secrets``, the estate's ONE implementation) — a guard here would crash
         exactly the compute+OpenBao combo the chart renders (audit 2026-07-15). Surface a genuinely
         credential-less deploy at boot instead of at first produce.
         """
@@ -503,23 +508,6 @@ class MedallionSettings(BaseSettings):
 def get_settings() -> MedallionSettings:
     """The process-wide medallion settings (read once from env)."""
     return MedallionSettings()
-
-
-def apply_dapr_secrets(settings: MedallionSettings) -> None:
-    """Consume the S3 secret from the Dapr secret store (OpenBao) and set it on ``settings`` in place.
-
-    When ``secrets_from_dapr`` is on the store is the STRICT sole source: a store miss FAILS CLOSED
-    (raises), never falling back to a plaintext env value — the chart ships none, and silently using
-    one would contradict 'OpenBao is the sole source'. No-op (and no fetch) when off. Symmetric with
-    ``compaction.core.config.apply_dapr_secrets`` / lineage / the catalog lifespan. SYNC by design
-    (the fetch retries while the store seeds) — lifespans call it via ``run_in_threadpool``.
-    """
-    if not settings.secrets_from_dapr:
-        return
-    from service_kit.governed.secrets import fetch_required_secrets
-
-    bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
-    settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
 
 
 @lru_cache(maxsize=1)

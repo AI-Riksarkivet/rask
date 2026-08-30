@@ -2,9 +2,10 @@
 (the same reasoning as the outbox: one service writes the records, another enforces them, and a
 per-service copy of the format would drift).
 
-Stateless-over-object-store, the same shape as the warehouse registry: each policy is one JSON record
-under ``<control_root>/_policies/``, written by the catalog (owner-gated) and read directly off the
-bucket by the compaction service on every sweep tick (it has no catalog client by design). A record
+Stateless-over-object-store, the same shape as the warehouse registry — and that shape is now written
+ONCE, in :mod:`service_kit.lakehouse.record_store`; this module is the policy vocabulary over it. Each
+policy is one JSON record under ``<control_root>/_policies/``, written by the catalog (owner-gated)
+and read directly off the bucket by the compaction service on every sweep tick (it has no catalog client by design). A record
 carries the *logical* id it was set for plus the *physical* bucket-qualified path (``<bucket>/<path>``
 — the sweep spans per-warehouse and multi-base buckets, so a bucket-relative path would let a policy
 govern a same-named path in another tenant's bucket), so the two services never need a shared resolver:
@@ -34,64 +35,48 @@ threadpool it.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from typing import Any
 
-import pyarrow.fs as pafs
-
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 
 
 log = logging.getLogger(__name__)
 
 _POLICIES_PREFIX = "_policies"
 
-
-def _key(kind: str, canonical_id: str) -> str:
-    """A collision-free record key: the id is user-shaped (contains ``$``), so hash it."""
-    digest = hashlib.sha256(f"{kind}:{canonical_id}".encode()).hexdigest()[:24]
-    return f"{_POLICIES_PREFIX}/{kind}-{digest}.json"
+#: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
+_EVENT = "maintenance_policy"
 
 
 def put_policy(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
     """Persist one policy record (overwrite — set is idempotent)."""
-    fs, base = fs_and_base(control_root, storage_options)
-    key = _key(record["kind"], record["id"])
-    parent = f"{base}/{key}".rsplit("/", 1)[0]
-    fs.create_dir(parent, recursive=True)
-    with fs.open_output_stream(f"{base}/{key}") as stream:
-        stream.write(json.dumps(record).encode("utf-8"))
+    put_record(control_root, storage_options, record_key(_POLICIES_PREFIX, record["kind"], record["id"]), record)
 
 
 def get_policy(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> dict[str, Any] | None:
-    """The policy record for one object, or ``None`` when unset."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        stream = fs.open_input_stream(f"{base}/{_key(kind, canonical_id)}")
-    except FileNotFoundError:
-        return None
-    with stream:
-        return json.loads(stream.readall().decode("utf-8"))
+    """The policy record for one object, or ``None`` when unset — or when what is stored is not a record.
+
+    The malformed case used to be MISSING here while both sibling registries had it: this returned
+    ``json.loads(...)`` unguarded, so a non-object document reached :func:`resolve_policy` as whatever
+    JSON was on disk. It now reads as absent, and the sweep falls back to its global defaults.
+    """
+    return get_record(control_root, storage_options, record_key(_POLICIES_PREFIX, kind, canonical_id), event=_EVENT)
 
 
 def delete_policy(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> bool:
     """Remove one policy record; ``False`` when it did not exist (delete is idempotent)."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{_key(kind, canonical_id)}")
-    except FileNotFoundError:
-        return False
-    return True
+    return delete_record(control_root, storage_options, record_key(_POLICIES_PREFIX, kind, canonical_id))
 
 
 def migrate_policy(control_root: str, storage_options: StorageOptions, kind: str, old_id: str, new_id: str) -> bool:
     """Move one policy record to a new canonical id; ``False`` when there was nothing to move.
 
     For RENAME, where deleting would be wrong in both directions. The record key is a hash of
-    ``kind:canonical_id`` (see :func:`_key`), so a renamed object's policy no longer resolves under its
+    ``kind:canonical_id`` (see :func:`service_kit.lakehouse.record_store.record_key`), so a renamed
+    object's policy no longer resolves under its
     new id while the old key lingers forever matching nothing — the operator's retention window,
     fragment sizing and cleanup toggles silently revert to defaults on an operation that is supposed to
     move a table, not reconfigure it.
@@ -120,22 +105,12 @@ def list_policies(control_root: str, storage_options: StorageOptions) -> list[di
     or unreadable record is SKIPPED with a warning, never allowed to void the others — a tick that
     silently dropped every policy would maintain opted-out datasets and ignore protective retention.
     """
-    fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, Any]] = []
-    selector = pafs.FileSelector(f"{base}/{_POLICIES_PREFIX}", allow_not_found=True, recursive=False)
-    for info in fs.get_file_info(selector):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
-        try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except Exception as exc:
-            log.warning("maintenance_policy_unreadable", extra={"path": info.path, "error": str(exc)})
-            continue
-        if isinstance(record, dict) and _record_is_well_formed(record):
+    for record in list_records(control_root, storage_options, _POLICIES_PREFIX, event=_EVENT):
+        if _record_is_well_formed(record):
             out.append(record)
         else:
-            log.warning("maintenance_policy_malformed", extra={"path": info.path})
+            log.warning("maintenance_policy_malformed", extra={"id": record.get("id"), "kind": record.get("kind")})
     return out
 
 
@@ -222,30 +197,25 @@ def resolve_policy(
 def _state_key(record: dict[str, Any], uri: str) -> str:
     # Per (policy, DATASET): a namespace policy covers many datasets, and a shared stamp would let the
     # first success starve every sibling until the interval elapsed (audit 2026-07-16).
-    digest = hashlib.sha256(f"{record['kind']}:{record['id']}:{uri}".encode()).hexdigest()[:24]
-    return f"{_POLICIES_PREFIX}/state/{record['kind']}-{digest}.json"
+    #
+    # The same deriver as every other record here, under the sweep's own `state/` prefix: the composite
+    # `<id>:<uri>` is what the stamp is FOR, so it takes the canonical-id slot and the digest is
+    # byte-identical to the hand-rolled sha256 this used to carry (pinned in the drain suite, because
+    # changing it orphans every stamp already written and re-maintains every dataset once).
+    return record_key(f"{_POLICIES_PREFIX}/state", str(record["kind"]), f"{record['id']}:{uri}")
 
 
 def read_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], uri: str) -> str | None:
     """The sweep's ``last_maintained_at`` stamp for one dataset under a policy, or ``None``. State lives
     under ``_policies/state/`` — a separate prefix the sweep owns, so the catalog's policy writes and the
     sweep's stamps never contend."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        stream = fs.open_input_stream(f"{base}/{_state_key(record, uri)}")
-    except FileNotFoundError:
+    stamped = get_record(control_root, storage_options, _state_key(record, uri), event="maintenance_policy_state")
+    if stamped is None:
         return None
-    with stream:
-        stamped = json.loads(stream.readall().decode("utf-8"))
     value = stamped.get("last_maintained_at")
     return value if isinstance(value, str) else None
 
 
 def write_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], uri: str, at: str) -> None:
     """Persist the sweep's ``last_maintained_at`` stamp for one dataset under a policy (overwrite)."""
-    fs, base = fs_and_base(control_root, storage_options)
-    key = _state_key(record, uri)
-    parent = f"{base}/{key}".rsplit("/", 1)[0]
-    fs.create_dir(parent, recursive=True)
-    with fs.open_output_stream(f"{base}/{key}") as stream:
-        stream.write(json.dumps({"last_maintained_at": at}).encode("utf-8"))
+    put_record(control_root, storage_options, _state_key(record, uri), {"last_maintained_at": at})

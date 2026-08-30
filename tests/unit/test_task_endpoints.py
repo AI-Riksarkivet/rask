@@ -22,13 +22,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import tasks as tasks_ep
 from annotator.projects.machines import TASK_EDGES
 from annotator.projects.models import ProjectState, TaskState
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from service_kit.exceptions import register_handlers
 
 
@@ -56,7 +56,17 @@ class _FakeActor:
 
     async def save_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.drafts.append(payload)
-        return {"revision": 1, "shapes": payload.get("shapes", [])}
+        # A `Draft` as the actor stores one — `task_id`/`project_id`/`author` are required on the
+        # model and were missing here, so this double answered a document the actor cannot produce.
+        return {
+            "revision": 1,
+            "shapes": payload.get("shapes", []),
+            "links": payload.get("links", []),
+            "task_id": str(payload.get("task_id", "t1")),
+            "project_id": str(payload.get("project_id", PROJECT_ID)),
+            "author": str(payload.get("author", SUBJECT)),
+            "origin": payload.get("origin", "human"),
+        }
 
     async def get_draft(self) -> dict[str, Any] | None:
         return self.draft
@@ -77,12 +87,22 @@ def _app(*, allow: bool, seen: list[dict[str, Any]] | None = None) -> FastAPI:
 
 
 def _task(**kw: Any) -> dict[str, Any]:
+    """A task document as the ACTOR produces one.
+
+    `source` and `media` are required on `Task` and were absent here: the double described a
+    document the actor cannot store, which is exactly the shape of double that lets a route break
+    with the suite green (`test_publish_token_after_credential_removal.py` has the same lesson).
+    The routes now publish the `Task` model (open_python-audit ANN-07), so a document that could
+    not exist no longer passes through them either.
+    """
     base: dict[str, Any] = {
         "state": TaskState.UNASSIGNED,
         "assignee": None,
         "submitted_by": None,
         "task_id": "t1",
         "project_id": PROJECT_ID,
+        "source": {"kind": "chunks", "keys": ["t1"]},
+        "media": {"kind": "image", "image_url": "s3://bucket/t1.jpg"},
     }
     base.update(kw)
     return base

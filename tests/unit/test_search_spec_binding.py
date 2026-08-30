@@ -14,9 +14,9 @@ import inspect
 from typing import cast
 
 import pytest
+
 from search.api.v1 import router as router_module
 from search.api.v1.router import _spec_from_query
-
 from service_kit.exceptions import ValidationError
 
 

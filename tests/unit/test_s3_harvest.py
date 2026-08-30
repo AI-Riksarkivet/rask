@@ -13,9 +13,9 @@ from typing import Any
 
 import lance
 import pytest
+
 from medallion.services.ingest import ingest_to_bronze
 from medallion.services.s3_harvest import S3PrefixSource, s3_input
-
 from storage import S3Source
 
 

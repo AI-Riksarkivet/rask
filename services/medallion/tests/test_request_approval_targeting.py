@@ -24,6 +24,7 @@ from typing import Any, cast
 
 import pytest
 from dapr.ext.workflow import WorkflowActivityContext
+
 from medallion import workflow as wf
 
 

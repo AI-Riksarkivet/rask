@@ -47,7 +47,7 @@ router = APIRouter(prefix="/v1", tags=["stores"])
 _ATTACHED = TypeAdapter(list[Store])
 
 
-async def _attached(state: UserStateStoreDep) -> list[Store]:
+async def _attached(state: UserStateStore | None) -> list[Store]:
     """Stores attached at runtime, or ``[]`` when none have been.
 
     A registry that cannot be READ is not reported as absent: ``UserStateUnreadable`` becomes a 503,

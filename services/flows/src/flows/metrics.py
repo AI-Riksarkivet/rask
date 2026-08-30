@@ -17,8 +17,18 @@ ids and error text stay on spans and logs — `models.NodeResult` already carrie
 
 from __future__ import annotations
 
-from opentelemetry import metrics
+from collections.abc import Iterable
 
+from opentelemetry import metrics
+from opentelemetry.metrics import CallbackOptions, Observation
+
+
+#: The two lanes a run can execute on. Declared HERE because this module owns the label vocabulary —
+#: `record_run` and `record_lane` both spend it, and `lifespan` and `routes` both name it. A second
+#: copy of these two strings is how a startup gauge and a per-run counter come to disagree about what
+#: "durable" is called.
+DURABLE = "durable"
+INLINE = "inline"
 
 _meter = metrics.get_meter("lance.flows")
 
@@ -54,3 +64,37 @@ def record_node(status: str) -> None:
     owns.
     """
     _nodes.add(1, {"lance.flows.status": status})
+
+
+#: Which lane THIS PROCESS settled on at startup, published by `lifespan` through `record_lane`.
+#: Module state rather than a counter argument because a gauge is observed on the collector's
+#: schedule, not on ours.
+_startup_lane = INLINE
+
+
+def _observe_lane(_options: CallbackOptions) -> Iterable[Observation]:
+    """Report the startup lane as a 1/0 gauge, labelled with the lane it settled on."""
+    yield Observation(1 if _startup_lane == DURABLE else 0, {"lance.flows.lane": _startup_lane})
+
+
+_meter.create_observable_gauge(
+    "flows.durable_lane",
+    callbacks=[_observe_lane],
+    unit="{lane}",
+    description="1 when this process started the durable workflow lane, 0 when it fell back to inline.",
+)
+
+
+def record_lane(lane: str) -> None:
+    """Publish the lane this process started on — the answer to "durable expected, inline actual".
+
+    A GAUGE, not a counter, and it is the one flows signal that is useful on a service with no
+    traffic at all: `record_run` can only speak once somebody runs a flow, so a deployment whose
+    sidecar never came up looked identical to one nobody had used. The startup decision was
+    previously announced only as a log line, which meant an operator had to already suspect the
+    problem to find it. Paired with `lifespan`'s ERROR line, which carries the exception this gauge
+    cannot.
+    """
+    # One process-wide fact, read by the observable-gauge callback above.
+    global _startup_lane
+    _startup_lane = lane

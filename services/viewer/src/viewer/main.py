@@ -1,31 +1,23 @@
 """Viewer service entry — the lance-ns thin-``main.py`` template.
 
-Module-level ``app``; ALL construction in ``lifespan`` onto ``app.state``
-(importing this module does zero I/O). Problem+json handlers, CORS middleware,
-``/livez`` + ``/readyz`` gated on ``startup_complete``/``shutting_down``.
+Module-level ``app``; ALL construction in the lifespan onto ``app.state`` (importing this module does
+zero I/O). The lifespan and the assembly are both SHARED — ``service_kit.media.lifespan`` and
+``service_kit.media.app`` — because viewer, search and annotator are three deployments of one shape
+and used to hand-write it three times (open_python-audit DUP-16 / X12 / DUP-20).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
-import httpx
 from fastapi import FastAPI
-from starlette.concurrency import run_in_threadpool
 
 from service_kit import setup_logging
-from service_kit.draining import arm_drain_on_sigterm
-from service_kit.exceptions import register_handlers
-from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.media.config import get_settings
-from service_kit.media.middleware import register_middleware
-from service_kit.media.state import AppState, dataset_handle
+from service_kit.media.app import build_media_app
+from service_kit.media.config import MediaSettings, get_settings
+from service_kit.media.lifespan import make_media_lifespan, make_media_state
+from service_kit.media.state import AppState
 from service_kit.obs import configure_app_logging
-from service_kit.probes import router as probes_router
 from viewer.api.v1.router import router as api_router
 from viewer.core.config import get_viewer_settings
 
@@ -34,85 +26,37 @@ logger = logging.getLogger(__name__)
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_viewer_settings()
-    state = AppState(settings=settings, http=httpx.Client())
-    app.state.resources = state
-    try:
-        # OFF THE STARTUP LOOP: building the default handle reads `settings.storage_options()`,
-        # a blocking Dapr secret fetch on the cold path. Threadpooled here so the lifespan does
-        # not block the event loop, and — because `_store_secret` is cached — this WARMS the
-        # secret before serving, so every request-path read is a pure dict build.
-        handle = await run_in_threadpool(dataset_handle, state)  # fail-fast open of the default descriptor
-        logger.info("viewer: default dataset %s ready (%d tables)", handle.id, len(handle.descriptor.tables))
-    except Exception:
-        # /livez stays green; per-request resolution surfaces the problem as a domain 404.
-        logger.exception("viewer: default dataset failed to open — serving degraded")
-    # AUTHN/AUTHZ. Both default OFF, and the service behaves exactly as it always did when they are
-    # — the corpus list is only gated once someone turns FGA on. Built here, never at import: an
-    # OIDCVerifier fetches discovery, so module scope would make importing this file do I/O.
-    #
-    # A failure to BUILD is logged and left non-fatal — the estate default — so the dependency then
-    # finds no verifier/client on app.state and answers 503, which is the honest reading. Falling back
-    # to a permissive checker instead would turn a broken authorization layer into an open one.
-    await attach_auth(app, settings, service="viewer")
-
-    app.state.startup_complete = True
-    app.state.shutting_down = False
-    # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
-    # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
-    # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM
-    # at the START of termination, and that window is exactly when the sidecar is still
-    # delivering. Owner ruling 2026-08-25.
-    _disarm_drain = arm_drain_on_sigterm(app)
-    # A BARE `yield`, so nothing below ran if the app raised — teardown belongs in a `finally`.
-    # `production-patterns.md`: "Always clean up after `yield`. Pools leak on shutdown otherwise."
-    try:
-        yield
-    finally:
-        # The OpenFGA client this lifespan opened. Its SDK is aiohttp-backed, so collecting it unclosed
-        # leaves one half-open connection per replica until OpenFGA's own idle timeout, with an
-        # "Unclosed client session" line as the only trace. Disposal lives beside the factory
-        # (`service_kit.governed.fga.dispose`) rather than as a sixth copy of the same block.
-        await fga_dispose(app)
-        _disarm_drain()
-        app.state.shutting_down = True
-        for resource in (state.http, state.embedder, state.reranker):
-            close = getattr(resource, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except Exception:
-                    logger.warning("error closing %s on shutdown", type(resource).__name__)
-
-
 # Application logging, before the app exists — every module here uses getLogger(__name__), and
 # without this they propagate to a root logger with no handlers and are DISCARDED
 # (see service_kit.setup_logging).
 setup_logging()
 
-# Docs are OPT-IN (`MEDIA_DOCS`). This constructor used to set none of the three, so FastAPI's
-# defaults stood and /docs, /redoc and /openapi.json were all served — see
-# `service_kit.media.config.Settings.docs_enabled`.
-_docs = get_settings().docs_enabled
-app = FastAPI(
-    title="lance-media viewer",
-    lifespan=lifespan,
-    docs_url="/docs" if _docs else None,
-    redoc_url="/redoc" if _docs else None,
-    openapi_url="/openapi.json" if _docs else None,
+
+#: `closes` names the resources THIS service opens and must therefore close. `AppState` carries slots
+#: for the whole media plane; the viewer fills the http pool and (lazily, on first use) the two model
+#: clients, and closing a slot it never filled would read as ownership it does not have.
+def _settings() -> MediaSettings:
+    """Read the settings AT LIFESPAN TIME, never at import.
+
+    A named indirection rather than passing `get_viewer_settings` itself: resolving the module global on
+    each call is what lets a test drive the real lifespan against its own settings, and what keeps
+    the process's configuration from being decided by this module's import order.
+    """
+    return get_viewer_settings()
+
+
+lifespan = make_media_lifespan(
+    _settings,
+    service="viewer",
+    closes=lambda state: (state.http, state.embedder, state.reranker),
 )
-register_handlers(app)
-# `register_handlers` maps `DomainError` only. The OIDC verifier raises `lance_namespace`'s
-# `UnauthenticatedError` (a `LanceNamespaceError`), so an expired or wrong-audience bearer escaped
-# unmapped and FastAPI answered 500 — which a zone renders as "unreachable", sending everyone to look
-# at networking for what is really "sign in again". Same installer the catalog has always used.
-install_problem_handlers(app, logger)
-register_middleware(app, get_viewer_settings())
-app.include_router(probes_router)
-app.include_router(api_router)
+
+app = build_media_app(
+    title="lance-media viewer",
+    settings=get_viewer_settings(),
+    routers=[api_router],
+    lifespan=lifespan,
+)
 
 
 def run() -> None:
@@ -122,21 +66,21 @@ def run() -> None:
     uvicorn.run("viewer.main:app", host=s.host, port=s.service_port)
 
 
-def create_viewer_state(settings=None) -> AppState:
+def create_viewer_state(settings: MediaSettings | None = None) -> AppState:
     """Standalone viewer state — registry + HTTP pool (the test/tooling seam)."""
-    from service_kit.media.config import get_settings
-
-    return AppState(settings=settings or get_settings(), http=httpx.Client())
+    return make_media_state(settings or get_settings())
 
 
-def create_viewer_app(settings=None, state: AppState | None = None) -> FastAPI:
-    """Viewer app around shared or standalone state — the test/composition seam."""
-    from service_kit.media.config import get_settings
+def create_viewer_app(settings: MediaSettings | None = None, state: AppState | None = None) -> FastAPI:
+    """Viewer app around shared or standalone state — the test/composition seam.
 
-    settings = settings or get_settings()
-    test_app = FastAPI(title="viewer api")
-    test_app.state.resources = state if state is not None else create_viewer_state(settings)
-    register_handlers(test_app)
-    register_middleware(test_app, settings)
-    test_app.include_router(api_router)
+    THE SAME BUILDER production uses (X12). This used to construct its own bare ``FastAPI`` with
+    ``register_handlers`` and the middleware only: no ``install_problem_handlers``, no probes — so an
+    app built here could not reproduce the one regression the deployed app's comments are about (an
+    ``UnauthenticatedError`` answering 500 instead of 401). No lifespan, because the caller supplies
+    the state this app runs over.
+    """
+    resolved = settings or get_settings()
+    test_app = build_media_app(title="viewer api", settings=resolved, routers=[api_router])
+    test_app.state.resources = state if state is not None else create_viewer_state(resolved)
     return test_app

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 from lineage_kit.consume import LINEAGE_DOC_SCHEMA, DatasetRef, LineageDoc, LineageEdge, as_json_rows, parse_doc
 from lineage_kit.schemas import PRODUCER, RunEvent, custom_facet
 

@@ -4,7 +4,8 @@ Project actors are one-per-id, so without this nothing can answer "which project
 hold?" — the question A1's landing page IS. Same shape as the project actor's task index: the
 create endpoint registers synchronously after seeding the project actor, registration is
 idempotent (a retried create must not double-list), and a failure fails the create loudly so an
-unlisted-but-existing project cannot silently haunt the estate. Order is insertion order; the
+unlisted-but-existing project cannot silently haunt the estate — `unregister` is how the create
+takes its own entry back when a LATER write in that sequence fails. Order is insertion order; the
 landing sorts by whatever the project documents say once they are fanned out.
 """
 
@@ -25,6 +26,10 @@ class TenantProjectsActorInterface(ActorInterface):
 
     @actormethod(name="Register")
     async def register(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="Unregister")
+    async def unregister(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
     @actormethod(name="ListProjects")
@@ -48,6 +53,23 @@ class TenantProjectsActor(Actor, TenantProjectsActorInterface):
         await self._state_manager.set_state(PROJECTS_KEY, json.dumps(ids))
         await self._state_manager.save_state()
         return {"project_id": project_id, "created": True, "total": len(ids)}
+
+    async def unregister(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Take an id back OUT of the index — the create saga's compensation, and nothing else.
+
+        `POST /projects` writes three things in sequence and this undoes the second. It is
+        idempotent for the reason every compensation must be: it runs on a path that has already
+        failed once, and a compensation that can fail again buys nothing. Removing an id that is
+        not there is a no-op, reported as `removed: false` rather than raised.
+        """
+        project_id = str(payload["project_id"])
+        ids = await self._load()
+        if project_id not in ids:
+            return {"project_id": project_id, "removed": False, "total": len(ids)}
+        ids = [i for i in ids if i != project_id]
+        await self._state_manager.set_state(PROJECTS_KEY, json.dumps(ids))
+        await self._state_manager.save_state()
+        return {"project_id": project_id, "removed": True, "total": len(ids)}
 
     async def list_projects(self) -> dict[str, Any]:
         ids = await self._load()

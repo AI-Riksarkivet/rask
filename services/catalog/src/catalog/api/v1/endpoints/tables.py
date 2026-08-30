@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -182,14 +183,27 @@ async def list_all_tables(
     # is the same binding resolution the per-id routes use; a seed that fails (deactivated warehouse,
     # unreadable bucket) degrades to a warning, never a blank registry.
     bound = await run_in_threadpool(warehouses.list_bindings, settings.registry_root, settings.storage_options())
-    for b in bound:
-        top = b["top_ns"]
-        try:
-            seed_ns = await namespace_for_top_ns(request, settings, top)
-            listed = await run_in_threadpool(native.call, seed_ns, "list_tables", ListTablesRequest(id=[top], include_declared=include_declared))
-            response.tables.extend(f"{top}{settings.delimiter}{name}" for name in (listed.tables or []))
-        except Exception:  # noqa: BLE001 — one bad warehouse, not a blank estate
-            log.warning("could not list bound namespace %s", top, exc_info=True)
+
+    async def _seed_tables(top: str) -> list[str]:
+        seed_ns = await namespace_for_top_ns(request, settings, top)
+        listed = await run_in_threadpool(native.call, seed_ns, "list_tables", ListTablesRequest(id=[top], include_declared=include_declared))
+        return [f"{top}{settings.delimiter}{name}" for name in (listed.tables or [])]
+
+    # CONCURRENT, not one seed at a time (catalog-api-11). Each bound warehouse is an independent
+    # round trip whose result is only collected — nothing between two of them makes the order matter —
+    # and this runs on the registry page every render, so a sequential walk made the estate listing
+    # cost N round trips in N tenants. `gather(return_exceptions=True)` keeps the per-seed tolerance
+    # exactly as it was: one unreachable warehouse degrades to a warning, never a blank registry.
+    # Bounded by anyio's own threadpool limiter, which every `run_in_threadpool` here shares.
+    for top, listed_or_error in zip(
+        [b["top_ns"] for b in bound],
+        await asyncio.gather(*(_seed_tables(b["top_ns"]) for b in bound), return_exceptions=True),
+        strict=True,
+    ):
+        if isinstance(listed_or_error, BaseException):
+            log.warning("could not list bound namespace %s", top, exc_info=listed_or_error)
+        else:
+            response.tables.extend(listed_or_error)
     response.tables = await run_in_threadpool(_collect_tables, ns, settings.delimiter, response.tables, include_declared)
     # When FGA is on and the caller is known, return only the tables they can read.
     if settings.fga_enabled and token is not None and client is not None:
@@ -632,7 +646,6 @@ async def get_table_protection(id: str, settings: SettingsDep) -> ProtectionResp
 async def table_tasks(
     id: str,
     settings: SettingsDep,
-    token: CurrentToken,
 ) -> list[TrashEntry]:
     """What is queued for THIS table (#75 brings §2.4). Today that is exactly one thing: a pending
     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
@@ -658,7 +671,6 @@ async def undrop_table(
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
-    client: FgaClientDep,
     control: ControlEmitterDep,
 ) -> RegisterTableResponse:
     """Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old

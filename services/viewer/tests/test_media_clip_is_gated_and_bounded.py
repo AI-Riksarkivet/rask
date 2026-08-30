@@ -24,6 +24,7 @@ and bounding alone leaves it open to the internet.
 from __future__ import annotations
 
 import pytest
+
 from viewer.services import clips
 
 

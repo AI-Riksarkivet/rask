@@ -26,7 +26,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from catalog.api.v1.endpoints import projects as ep
 from lance_namespace import (
     InvalidInputError,
     NamespaceNotEmptyError,
@@ -35,6 +34,7 @@ from lance_namespace import (
     TableNotFoundError,
 )
 
+from catalog.api.v1.endpoints import projects as ep
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 
 

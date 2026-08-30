@@ -9,6 +9,7 @@ success is how an estate ends up believing it is repaired.
 from __future__ import annotations
 
 import pytest
+
 from catalog.core.config import Settings
 from catalog.services import cascade_backfill
 

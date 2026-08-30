@@ -19,11 +19,13 @@ import re
 from typing import TYPE_CHECKING, cast
 
 import pytest
+
 from viewer.api.v1.endpoints import objects as objects_ep
 
 
 if TYPE_CHECKING:
     from fastapi.responses import Response
+
     from viewer.core.config import ViewerSettings
 
 #: One quoted-string with no raw quote/backslash/control char inside, optionally followed by

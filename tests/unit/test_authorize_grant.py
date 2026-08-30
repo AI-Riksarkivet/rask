@@ -20,9 +20,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from lance_namespace import PermissionDeniedError
+
 from catalog.api import fga_deps
 from catalog.core.config import Settings
-from lance_namespace import PermissionDeniedError
 
 
 def _run(

@@ -37,7 +37,6 @@ record's id once through the shared ``lane_key`` helper.
 from __future__ import annotations
 
 from medallion.services.transform import accepted_input_names
-
 from service_kit.lakehouse.transform_specs import TransformSpec
 
 

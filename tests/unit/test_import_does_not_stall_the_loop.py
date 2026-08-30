@@ -34,11 +34,11 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
+
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import tasks as tasks_ep
 from annotator.projects.models import TaskState
-from fastapi import FastAPI
-
 from service_kit.exceptions import register_handlers
 
 

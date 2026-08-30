@@ -22,6 +22,7 @@ from contextlib import suppress
 from typing import Any, cast
 
 import pytest
+
 from medallion.workflow import PromotionOutcome, PromotionReport, PromotionSpec, StageJobOutcome, StageJobSpec, StageReport, request_approval
 
 

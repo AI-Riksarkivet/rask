@@ -23,8 +23,8 @@ import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
 from lance.blob import Blob
-from medallion.services.compute import transform_stage
 
+from medallion.services.compute import transform_stage
 from service_kit.lakehouse import blobs
 
 

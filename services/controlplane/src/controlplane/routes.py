@@ -1,5 +1,4 @@
 import logging
-import os
 from functools import lru_cache
 from typing import Annotated
 
@@ -7,8 +6,10 @@ import urllib3.exceptions
 from fastapi import APIRouter, Depends, HTTPException
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
+from pydantic import ValidationError
 
 from controlplane import security, service
+from controlplane.dependencies import ControlplaneSettingsDep
 from controlplane.k8s import PROJECT_GROUP, PROJECT_PLURAL, K8sProjectReader, ProjectReader
 from controlplane.schemas import ProjectsResponse
 
@@ -27,6 +28,10 @@ router = APIRouter(prefix="/projects", tags=["projects"], dependencies=[Depends(
 _K8S_ERRORS = (ApiException, ConfigException, urllib3.exceptions.HTTPError, OSError)
 
 _UNREACHABLE_DETAIL = "cannot reach kubernetes api"
+_UNREADABLE_CR_DETAIL = (
+    "the cluster returned a Project custom resource this service cannot read — its shape does not "
+    f"match {PROJECT_PLURAL}.{PROJECT_GROUP}/v1alpha1 as this build understands it"
+)
 _NO_OPERATOR_DETAIL = (
     f"project operator not installed: this cluster registers no {PROJECT_PLURAL}.{PROJECT_GROUP} resource type, so it holds no Project CRs to list"
 )
@@ -59,10 +64,17 @@ ReaderDep = Annotated[ProjectReader, Depends(get_reader)]
 
 
 @router.get("/")
-def list_projects(reader: ReaderDep) -> ProjectsResponse:
-    scheme = os.environ.get("RASK_PROJECT_URL_SCHEME", "http")
+def list_projects(reader: ReaderDep, settings: ControlplaneSettingsDep) -> ProjectsResponse:
     try:
-        dtos = service.list_project_dtos(reader, scheme)
+        dtos = service.list_project_dtos(reader, settings.project_url_scheme)
+    except ValidationError as exc:
+        # A CR the boundary model refuses. 502, because the failure is UPSTREAM of this service and
+        # it is neither absent (501) nor unreachable (503) — the API server answered, with a Project
+        # whose shape this build does not know. The alternative the `.get()` chains gave was an
+        # `AttributeError` 500 naming a line in `service.py`; the alternative of skipping the row is
+        # the empty-200 answer the branch below exists to refuse, one project at a time.
+        log.warning("unreadable Project CR: %s", exc)
+        raise HTTPException(status_code=502, detail=_UNREADABLE_CR_DETAIL) from exc
     except _K8S_ERRORS as exc:
         # NEVER an empty 200. A successful-looking empty gallery on an estate with no project
         # operator is strictly worse than a named failure: it reports "you have no projects" for a

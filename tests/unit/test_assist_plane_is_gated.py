@@ -31,12 +31,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from annotator.api.security import current_subject, get_checker
-from annotator.api.v1.endpoints import assist as assist_ep
-from annotator.api.v1.endpoints.assist import router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from annotator.api.security import current_subject, get_checker
+from annotator.api.v1.endpoints import assist as assist_ep
+from annotator.api.v1.endpoints.assist import router
 from service_kit.exceptions import register_handlers
 from service_kit.media.config import Settings
 from service_kit.media.deps import get_state

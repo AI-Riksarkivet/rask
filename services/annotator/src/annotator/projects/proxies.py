@@ -14,7 +14,6 @@ mapping is declared — it cannot drift.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 
@@ -68,6 +67,14 @@ def _translating(call: Any) -> Any:
     Translating HERE rather than in each endpoint is what keeps it fixed: this proxy is the single
     seam every actor call already goes through, so the endpoints' existing handlers work as written
     and a future actor-side precondition inherits the behaviour for free.
+
+    **The domain fields ride a structured token, not the prose.** This used to substring-match the
+    class name and then rebuild `kind`/`state`/`event` with a regex over the formatted sentence,
+    after a hand-rolled loop tried to undo Dapr's two layers of JSON escaping. All three steps were
+    wrong on live paths — see `machines._WIRE_MARKER` for the measured failures. `IllegalTransition`
+    now carries its own fields in its `repr`, which is exactly what Dapr serialises, so this side
+    DECODES rather than guesses; anything without that token is not a refused transition and is
+    re-raised as the failure it is.
     """
 
     async def invoke(*args: Any, **kwargs: Any) -> Any:
@@ -76,31 +83,10 @@ def _translating(call: Any) -> Any:
         try:
             return await call(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 - re-raised unless it is the one shape we own
-            message = str(exc)
-            if "IllegalTransition" not in message:
+            refusal = IllegalTransition.from_wire(str(exc))
+            if refusal is None:
                 raise
-            # Rebuild it through its real constructor, from the message the actor formatted:
-            #   illegal {kind} transition: {event!r} is not permitted from {state!r}
-            # so `kind`/`state`/`event` survive the hop and the re-raised error is indistinguishable
-            # from a locally-raised one. Unparseable (a message shape that changed) degrades to the
-            # whole text as the event — still a 409 carrying the reason, never a silent 500.
-            #
-            # UNESCAPE first: the text arrives nested inside Dapr's JSON envelope inside the SDK's
-            # own message, so the quotes are escaped several layers deep. Parsing the raw string
-            # matched nothing and surfaced the entire envelope as the user-facing reason.
-            text = message
-            while True:
-                unescaped = text.replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
-                if unescaped == text:
-                    break
-                text = unescaped
-            parsed = re.search(r"illegal (\w+) transition: [\"'](.+?)[\"'] is not permitted from (.+?)(?:['\"]\)|$)", text, re.DOTALL)
-            if not parsed:
-                raise IllegalTransition("task", "unknown", text) from exc
-            # The state arrives as the enum's repr (`<TaskState.CLAIMED: 'claimed'>`) rather than a
-            # bare value, so take the quoted value when there is one.
-            state = re.search(r"'([^']+)'", parsed.group(3))
-            raise IllegalTransition(parsed.group(1), state.group(1) if state else parsed.group(3).strip(), parsed.group(2)) from exc
+            raise refusal from exc
 
     return invoke
 

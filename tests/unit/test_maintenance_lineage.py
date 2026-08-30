@@ -20,6 +20,7 @@ import time
 from typing import Any, cast
 
 import pytest
+
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
     COMPACTION,
@@ -292,7 +293,7 @@ def test_fail_batch_bounded_through_the_real_emitter_with_a_hung_sidecar() -> No
         async def publish_event(self, **_kw: Any) -> None:
             await asyncio.sleep(60)
 
-    emitter = DaprMaintenanceEmitter(cast(Any, _HungClient()), "p", "t", job_namespace="compaction", timeout_seconds=0.2)
+    emitter = DaprMaintenanceEmitter(cast(Any, _HungClient()), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=0.2)
     results = [_result(f"s3://b/u{i}_ns$t{i}", error="maintain: hung") for i in range(30)]
     start = time.monotonic()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
@@ -369,8 +370,8 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
     client = _FakeDaprClient()
     emitter = DaprMaintenanceEmitter(
         cast(Any, client),
-        "lineage-pubsub",
-        "lineage.events.v1",
+        pubsub="lineage-pubsub",
+        topic="lineage.events.v1",
         job_namespace="compaction",
         timeout_seconds=5.0,
     )
@@ -389,7 +390,7 @@ def test_dapr_emitter_best_effort_swallows_publish_failure() -> None:
         async def publish_event(self, **_kw: Any) -> None:
             raise RuntimeError("sidecar down")
 
-    emitter = DaprMaintenanceEmitter(cast(Any, _BoomClient()), "p", "t", job_namespace="compaction", timeout_seconds=5.0)
+    emitter = DaprMaintenanceEmitter(cast(Any, _BoomClient()), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=5.0)
     asyncio.run(emitter.emit_maintenance(table_id="ns$a", namespace="ns"))  # no raise == pass
     asyncio.run(  # the FAIL path is best-effort the same way
         emitter.emit_maintenance_failed(table_id="ns$a", namespace="ns", error="maintain: x")
@@ -401,7 +402,7 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
     # MERGEs one (:Run) node and /events dedups the redelivered terminal — while COMPLETE keeps uuid4
     # (each materially-compacting tick IS a distinct run; §4 says do NOT change that).
     client = _FakeDaprClient()
-    emitter = DaprMaintenanceEmitter(cast(Any, client), "p", "t", job_namespace="compaction", timeout_seconds=5.0)
+    emitter = DaprMaintenanceEmitter(cast(Any, client), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=5.0)
 
     async def drive() -> None:
         await emitter.emit_maintenance_failed(table_id="ns$a", namespace="ns", error="maintain: t1")
@@ -434,6 +435,7 @@ def test_a_DECLARED_lineage_name_is_read_from_the_dataset(tmp_path: Any) -> None
     """
     import lance
     import pyarrow as pa
+
     from maintenance.core.lineage_emit import LINEAGE_DATASET_ID_KEY, declared_table_id
 
     uri = str(tmp_path / "medallion-bronze.lance")
@@ -449,6 +451,7 @@ def test_an_UNDECLARED_dataset_yields_None_rather_than_a_guess(tmp_path: Any) ->
     already on disk carry no key, so this is the common case until a producer stamps it."""
     import lance
     import pyarrow as pa
+
     from maintenance.core.lineage_emit import declared_table_id
 
     uri = str(tmp_path / "plain.lance")
@@ -472,6 +475,7 @@ def test_the_PRODUCER_stamp_and_the_SWEEP_read_agree(tmp_path: Any) -> None:
     """
     import lance
     import pyarrow as pa
+
     from maintenance.core.lineage_emit import declared_table_id
     from medallion.services.compute import LINEAGE_DATASET_ID_KEY, _with_declared_id
 
@@ -489,6 +493,7 @@ def test_the_PRODUCER_stamp_and_the_SWEEP_read_agree(tmp_path: Any) -> None:
 def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     """A replace would destroy the #21 self-describing coordinates other producers write. Merge only."""
     import pyarrow as pa
+
     from medallion.services.compute import _with_declared_id
 
     table = pa.table({"v": [1]}).replace_schema_metadata({"lineage.run_id": "r-1", "owner": "data_eng"})
@@ -515,6 +520,7 @@ def test_the_DECLARED_name_is_what_the_sweep_EMITS_under(tmp_path: Any) -> None:
 
     import lance
     import pyarrow as pa
+
     from maintenance.services.optimize import compact_one
     from medallion.services.compute import _with_declared_id
 
@@ -533,6 +539,7 @@ def test_an_UNDECLARED_dataset_still_falls_back_to_the_uri(tmp_path: Any) -> Non
 
     import lance
     import pyarrow as pa
+
     from maintenance.core.lineage_emit import table_id_from_uri
     from maintenance.services.optimize import compact_one
 
@@ -569,8 +576,8 @@ def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare
     monkeypatch.setattr(module.outbox, "publish_lineage_with_outbox", _fake_outbox)
     emitter = DaprMaintenanceEmitter(
         cast(Any, object()),
-        "maintenance-pubsub",
-        "lineage.events.v1",
+        pubsub="maintenance-pubsub",
+        topic="lineage.events.v1",
         job_namespace="compaction",
         timeout_seconds=5.0,
         outbox_uri="s3://staging/outbox",

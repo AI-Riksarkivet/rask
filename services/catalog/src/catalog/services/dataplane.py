@@ -18,7 +18,6 @@ import re
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
 from typing import Any
 
 import lance
@@ -71,18 +70,18 @@ from lance_namespace import (
     UpdateTableTagRequest,
     UpdateTableTagResponse,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
+from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
 from catalog.services import native
 from service_kit.lakehouse import blobs
-from service_kit.lakehouse.objectfs import s3_filesystem
+from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 log = logging.getLogger(__name__)
-
-StorageOptions = dict[str, str]
 
 
 def _table_id(req: object) -> list[str]:
@@ -91,15 +90,6 @@ def _table_id(req: object) -> list[str]:
     if not table_id:
         raise InvalidInputError("table identifier is required")
     return table_id
-
-
-def _version(ns: LanceNamespace, so: StorageOptions, table_id: list[str], branch: str | None = None) -> int:
-    """Return the table's current dataset version after an in-place mutation.
-
-    ``branch`` MUST be the one the mutation targeted: a branch has its own version sequence, so reading it
-    off main would answer a branch write with main's (unchanged) version — a wrong number that looks right.
-    """
-    return open_dataset(ns, so, table_id, branch=branch).version
 
 
 def read_version_and_schema(
@@ -152,44 +142,6 @@ def payload_schema_fields(data: bytes, table_id: list[str]) -> SchemaFields:
     except Exception as exc:
         log.warning("schema_facet_parse_failed", extra={"table": table_id, "error": str(exc)})
         return []
-
-
-def create_table(
-    ns: LanceNamespace,
-    so: StorageOptions,
-    segments: list[str],
-    data: bytes,
-    *,
-    mode: str | None = None,
-    properties: dict[str, str] | None = None,
-    allow_external_blobs: bool = False,
-    external_blob_bases: list[str] | None = None,
-    data_bases: list[str] | None = None,
-) -> CreateTableResponse:
-    """Create a table from an Arrow-IPC payload — a direct file-format-2.2 write with stable row ids.
-
-    Runs off the event loop (blocking pyarrow decode + Lance/S3 IO), so the endpoint stays a single delegated
-    call. ``allow_external_blobs`` permits ``Blob.from_uri`` columns pointing ANYWHERE outside the dataset
-    root (the blanket bypass); ``external_blob_bases`` is the safer allowlist — external pointers are accepted
-    only under one of these registered bases, with the blanket bypass left off.
-
-    ``data_bases`` (#3-B) spreads the table's fragments across N approved buckets (Lance multi-base). Empty
-    (the default) → a single-base write.
-    """
-    # 2.2 + stable row ids are CREATE-TIME-ONLY (they cannot be added later), so EVERY create must take this
-    # path — a plain table that skipped it would be permanently unable to carry the durable row identity
-    # `row_id_lineage` needs (row-level provenance: model → dataset version → the exact source rows).
-    return _create_table_direct(
-        ns,
-        so,
-        segments,
-        data,
-        mode=mode,
-        properties=properties,
-        allow_external=allow_external_blobs,
-        external_blob_bases=external_blob_bases or [],
-        data_bases=data_bases,
-    )
 
 
 def _base_name(uri: str) -> str:
@@ -277,22 +229,31 @@ def _write_blob(
         raise
 
 
-def _create_table_direct(
+def create_table(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
     data: bytes,
     *,
-    mode: str | None,
-    properties: dict[str, str] | None,
-    allow_external: bool,
-    external_blob_bases: list[str],
+    mode: str | CreateMode | None = None,
+    properties: dict[str, str] | None = None,
+    allow_external_blobs: bool = False,
+    external_blob_bases: list[str] | None = None,
     data_bases: list[str] | None = None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
-    Serves EVERY create: 2.2 + stable row ids are create-time-only, so a table that skipped this path could
-    never gain the durable row identity row-id lineage needs — see ``create_table``.
+    Serves EVERY create, and IS the door: this used to sit behind a same-named 36-line wrapper that
+    forwarded all nine arguments and renamed two on the way (CAT-CORE-17). 2.2 + stable row ids are
+    create-time-only, so a table that skipped this path could never gain the durable row identity
+    ``row_id_lineage`` needs (row-level provenance: model → dataset version → the exact source rows).
+
+    Runs off the event loop (blocking pyarrow decode + Lance/S3 IO), so the endpoint stays a single
+    delegated call. ``allow_external_blobs`` permits ``Blob.from_uri`` columns pointing ANYWHERE outside
+    the dataset root (the blanket bypass); ``external_blob_bases`` is the safer allowlist — external
+    pointers are accepted only under one of these registered bases, with the blanket bypass left off.
+    ``data_bases`` (#3-B) spreads the table's fragments across N approved buckets (Lance multi-base);
+    empty (the default) → a single-base write.
 
     Honours the create ``mode`` against a *written* table (``ExistOk`` keeps it, ``Overwrite`` replaces its
     data, ``Create`` conflicts). A *declared-only* table — one that exists in the namespace but was never
@@ -303,12 +264,14 @@ def _create_table_direct(
     ``data_storage_version="2.2"`` (lance_docs/guide.md — Version Compatibility). Any failed fresh write is
     rolled back with ``drop_table`` so the name stays retryable rather than stuck describable-but-unreadable.
     """
+    allow_external = allow_external_blobs
+    external_blob_bases = external_blob_bases or []
     table = pa.ipc.open_stream(data).read_all()
-    normalized = (mode or "create").lower()
+    normalized = CreateMode.parse(mode)
     existing, only_declared = _existing_location(ns, segments)
 
     if existing is not None and not only_declared:  # a written, readable table already lives here
-        if normalized == "overwrite":
+        if normalized is CreateMode.OVERWRITE:
             dataset = _write_blob(
                 table,
                 existing,
@@ -319,7 +282,7 @@ def _create_table_direct(
                 data_bases=data_bases,
             )
             return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
-        if normalized in ("existok", "exist_ok"):  # keep it untouched, just report its current version
+        if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
             version = lance.dataset(existing, storage_options=so).version
             return CreateTableResponse(location=existing, version=version, properties=properties)
         # `create` against a written table → let declare surface the canonical TableAlreadyExists conflict.
@@ -792,17 +755,24 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
 _BLOB_CHUNK_BYTES = 8 * 1024 * 1024
 
 
-@dataclass
-class BlobStream:
+class BlobStream(BaseModel):
     """One served blob read: the resolved window + a chunked reader, never the buffered payload.
 
     ``start``/``length`` are the RESOLVED window (``end`` derives the inclusive RFC 9110
     Content-Range position); ``ranged`` says whether the caller asked for a range (→ 206 +
     Content-Range) or the whole payload (→ 200); ``satisfiable=False`` means the requested range
     starts beyond the blob (→ 416 with ``bytes */size``). ``etag`` is the strong validator for the
-    served ``(version, column, row)`` address. The private handle/dataset refs keep the lazy
-    ``BlobFile`` (and the dataset it reads through) alive until the response finishes streaming.
+    served ``(version, column, row)`` address. ``handle``/``dataset`` are the live pylance refs — the
+    lazy ``BlobFile`` :meth:`chunks` reads through, and the dataset that owns it — held so neither is
+    collected until the response finishes streaming.
+
+    A ``BaseModel``, not a ``@dataclass`` (CAT-CORE-16): the estate builds its value objects on
+    pydantic. ``arbitrary_types_allowed`` because those two refs are opaque pylance objects with no
+    schema, and both are ``exclude``d from a dump — this never crosses the wire, the endpoint reads
+    the fields directly.
     """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     size: int
     start: int
@@ -810,8 +780,8 @@ class BlobStream:
     etag: str
     ranged: bool
     satisfiable: bool
-    _handle: Any = None
-    _dataset: Any = None
+    handle: Any = Field(default=None, exclude=True)
+    dataset: Any = Field(default=None, exclude=True)
 
     @property
     def end(self) -> int:
@@ -828,7 +798,7 @@ class BlobStream:
         offset, remaining = self.start, self.length
         while remaining > 0:
             step = min(_BLOB_CHUNK_BYTES, remaining)
-            yield self._handle.read_range(offset, step)
+            yield self.handle.read_range(offset, step)
             offset += step
             remaining -= step
 
@@ -917,8 +887,8 @@ def read_blob(
             etag=etag,
             ranged=False,
             satisfiable=True,
-            _handle=handle,
-            _dataset=dataset,
+            handle=handle,
+            dataset=dataset,
         )
     first, last = range_spec
     if first is None:  # suffix range: the final `last` bytes
@@ -938,8 +908,8 @@ def read_blob(
         etag=etag,
         ranged=True,
         satisfiable=True,
-        _handle=handle,
-        _dataset=dataset,
+        handle=handle,
+        dataset=dataset,
     )
 
 
@@ -1106,21 +1076,24 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     updates = dict(req.updates or [])
     if not updates:
         raise InvalidInputError("update requires at least one [path, expression] pair")
+    dataset = open_dataset(ns, so, table_id)
     with _user_sql("invalid update expression or predicate"):
-        result = open_dataset(ns, so, table_id).update(updates, where=req.predicate)
+        result = dataset.update(updates, where=req.predicate)
     # pylance's update() returns an UpdateResult TypedDict (a plain dict at runtime); the row count is
     # `num_rows_updated`. (The previous `getattr(result, "num_updated_rows", ...)` was wrong twice — attr
     # access on a dict + wrong key — so updated_rows was hard-wired to 0 on every successful update.)
     updated = result.get("num_rows_updated") if isinstance(result, dict) else None
-    return UpdateTableResponse(updated_rows=updated if updated is not None else 0, version=_version(ns, so, table_id))
+    # The version off the SAME handle the update committed through — pylance advances it in place.
+    return UpdateTableResponse(updated_rows=updated if updated is not None else 0, version=dataset.version)
 
 
 def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTableRequest) -> DeleteFromTableResponse:
     """Delete rows matching the request predicate."""
     table_id = _table_id(req)
+    dataset = open_dataset(ns, so, table_id)
     with _user_sql("invalid delete predicate"):
-        open_dataset(ns, so, table_id).delete(req.predicate)
-    return DeleteFromTableResponse(version=_version(ns, so, table_id))
+        dataset.delete(req.predicate)
+    return DeleteFromTableResponse(version=dataset.version)
 
 
 def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumnsRequest) -> AlterTableAddColumnsResponse:
@@ -1155,7 +1128,7 @@ def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumn
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
     with _column_op("add_columns", dataset.schema.names):
         dataset.add_columns(transforms)
-    return AlterTableAddColumnsResponse(version=_version(ns, so, table_id, req.branch))
+    return AlterTableAddColumnsResponse(version=dataset.version)
 
 
 def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterColumnsRequest) -> AlterTableAlterColumnsResponse:
@@ -1178,7 +1151,7 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
         # pylance accepts plain dict alterations at runtime; its stub types them as
         # AlterColumn (a TypedDict), which ty can't match from dict[str, object].
         dataset.alter_columns(*alterations)  # ty: ignore[invalid-argument-type]
-    return AlterTableAlterColumnsResponse(version=_version(ns, so, table_id, req.branch))
+    return AlterTableAlterColumnsResponse(version=dataset.version)
 
 
 def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColumnsRequest) -> AlterTableDropColumnsResponse:
@@ -1187,7 +1160,7 @@ def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColu
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
     with _column_op("drop_columns", dataset.schema.names):
         dataset.drop_columns(list(req.columns or []))
-    return AlterTableDropColumnsResponse(version=_version(ns, so, table_id, req.branch))
+    return AlterTableDropColumnsResponse(version=dataset.version)
 
 
 def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
@@ -1277,7 +1250,7 @@ def update_field_metadata(
     # A None value is the key-deletion signal for the backend; drop those from the
     # echoed map since the response model's field values are non-nullable strings.
     fields = {path: {k: v for k, v in meta.items() if v is not None} for path, meta in field_updates.items()}
-    return UpdateFieldMetadataResponse(version=_version(ns, so, table_id, branch), fields=fields)
+    return UpdateFieldMetadataResponse(version=dataset.version, fields=fields)
 
 
 #: Per-operation fields worth surfacing in a commit log, keyed by the pylance operation class name. Read

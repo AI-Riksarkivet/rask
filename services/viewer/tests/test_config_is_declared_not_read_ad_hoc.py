@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from viewer.core.config import ViewerSettings
 from viewer.services import voice_service
 

@@ -29,11 +29,11 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
+
+from service_kit.media.state import AppState
 from viewer.api.v1 import router as viewer_router
 from viewer.api.v1.endpoints import media as media_ep
 from viewer.core.config import ViewerSettings
-
-from service_kit.media.state import AppState
 
 
 HOSTILE_HOST = "internal-metadata.local"

@@ -416,17 +416,17 @@ def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     payload = PollInput.model_validate(payload)
-    import httpx
-
-    from medallion.core.config import get_settings
+    from medallion.services.ray_submit import ray_client
     from ray_kit.submit import job_status
 
-    settings = get_settings()
     submission_id = payload.submission_id
 
     async def _read() -> str | None:
-        async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-            return await job_status(client, submission_id)
+        # THE POOLED CLIENT (DUP-21), not a fresh one per tick. This activity runs on every polling
+        # tick of every running stage, so an `async with httpx.AsyncClient(...)` here paid a TCP
+        # connect, a TLS handshake and a pool teardown per tick — beside a client for the same host
+        # that `ray_submit` already opens once per worker and the mover's lifespan closes.
+        return await job_status(await ray_client(), submission_id)
 
     return _run_async(_read())
 
@@ -596,16 +596,12 @@ def _read_stage_failure(submission_id: str) -> Any:
     workflow history on every tick, so changing its shape breaks replay for in-flight instances, and
     no poll needs a traceback. This costs one extra read, only when a job has actually failed.
     """
-    import httpx
-
-    from medallion.core.config import get_settings
+    from medallion.services.ray_submit import ray_client
     from ray_kit.submit import job_failure
 
-    settings = get_settings()
-
     async def _read() -> Any:
-        async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-            return await job_failure(client, submission_id)
+        # The pooled client, for the reason `poll_stage` records (DUP-21).
+        return await job_failure(await ray_client(), submission_id)
 
     # Best-effort by design — a Ray outage must not stop the failure being reported — but the reason a
     # FAIL carries no detail is worth knowing, so the swallow is no longer silent.
@@ -846,17 +842,14 @@ def poll_train(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     payload = PollInput.model_validate(payload)
-    import httpx
-
-    from medallion.core.config import get_settings
+    from medallion.services.ray_submit import ray_client
     from ray_kit.submit import job_status
 
-    settings = get_settings()
     submission_id = payload.submission_id
 
     async def _read() -> str | None:
-        async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-            return await job_status(client, submission_id)
+        # The pooled client, for the reason `poll_stage` records (DUP-21).
+        return await job_status(await ray_client(), submission_id)
 
     return _run_async(_read())
 

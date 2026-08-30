@@ -23,6 +23,7 @@ import nats
 import pyarrow as pa
 import pytest
 import pytest_asyncio
+
 from ingest.lander import create_empty
 from ingest.queue import DLQ_SUBJECT, STREAM, UnitTask, WorkQueue, unit_subject
 from ingest.runtime import BRONZE_SCHEMA, _rows_in

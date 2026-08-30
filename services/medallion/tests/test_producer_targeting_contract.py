@@ -21,6 +21,7 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 from dapr.aio.clients import DaprClient
+
 from medallion.api import produce as produce_route
 from medallion.core.config import MedallionSettings
 
@@ -216,7 +217,7 @@ def _emit_fail_run_calls() -> list[tuple[int, set[str]]]:
     transform = SRC / "services" / "transform.py"
     out: list[tuple[int, set[str]]] = []
     for node in ast.walk(ast.parse(transform.read_text())):
-        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_emit_fail_run":
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") in {"_emit_fail_run", "_emit_stage_failure"}:
             out.append((node.lineno, {k.arg for k in node.keywords if k.arg is not None}))
     return out
 
@@ -248,13 +249,32 @@ def test_every_stage_outcome_reaches_the_person_through_the_fail_helper() -> Non
     Consolidating the four inline FAIL blocks into `_emit_fail_run` means `_emit_sites()` sees one
     `build_run_event` call, not four — so `test_every_published_lineage_emit_stamps_originator`
     (which walks that helper) proves the emit CAN name the person, but not that every stage outcome
-    passes the person down to it. That is what these call sites carry: drop `originator=` at any one
-    of them and that stage's failed run reaches an inbox actor named after a chart role, exactly the
+    passes the person down to it. That is what these call sites carry: drop the person at any one of
+    them and that stage's failed run reaches an inbox actor named after a chart role, exactly the
     silent loss the sibling gate was written for. The mover has four failure exits (project
     unresolvable, media underivable, stage failed, promotion held), so four call sites.
+
+    MED-004 added ONE more level between them: the four sites now call `_emit_stage_failure`, which
+    pairs `best_effort` with `_emit_fail_run` instead of repeating fourteen keyword lines each time.
+    So the scan accepts either name, and the guarantee splits in two — every call site must hand down
+    the tenant and the trigger the person is read off, and the one `_emit_fail_run` call must stamp
+    both onto the event. Neither half is sufficient alone.
     """
     calls = _emit_fail_run_calls()
-    assert len(calls) >= 4, f"the mover should route all four stage-outcome FAILs through `_emit_fail_run`; found {len(calls)}"
-    for line, stamped in calls:
-        assert "originator" in stamped, f"_emit_fail_run call at transform.py:{line} drops `originator` — the failed run cannot reach the person who started it"
-        assert "project" in stamped, f"_emit_fail_run call at transform.py:{line} drops `project` — the watcher fan-out is skipped for this outcome"
+    assert len(calls) >= 5, f"the mover should route all four stage-outcome FAILs through the shared FAIL emit; found {len(calls)}"
+
+    forwarding = [(line, stamped) for line, stamped in calls if "originator" not in stamped]
+    assert len(forwarding) >= 4, f"expected the four stage-outcome call sites to forward through `_emit_stage_failure`; found {len(forwarding)}"
+    for line, stamped in forwarding:
+        assert "project" in stamped, f"the FAIL emit at transform.py:{line} drops `project` — the watcher fan-out is skipped for this outcome"
+
+    stamping = [(line, stamped) for line, stamped in calls if "originator" in stamped]
+    assert stamping, "nothing stamps `originator` onto the FAIL event any more"
+    for line, stamped in stamping:
+        assert "project" in stamped, f"the FAIL emit at transform.py:{line} drops `project` — the watcher fan-out is skipped for this outcome"
+
+    # The person is read off the TRIGGER, which is what every call site forwards. A helper that
+    # defaulted the originator would satisfy the two halves above and still reach nobody.
+    source = (SRC / "services" / "transform.py").read_text()
+    _, _, helper = source.partition("async def _emit_stage_failure(")
+    assert "originator=trigger.originator" in helper.partition("\nasync def ")[0]

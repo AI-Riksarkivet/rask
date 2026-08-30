@@ -19,8 +19,9 @@ a dependency quietly dropped, is caught by something that counts rather than by 
 
 from __future__ import annotations
 
-from catalog.api.v1.endpoints import access_admin as ep
 from fastapi.routing import APIRoute
+
+from catalog.api.v1.endpoints import access_admin as ep
 
 
 def _routes() -> list[APIRoute]:
@@ -53,11 +54,21 @@ def test_every_access_route_is_covered_by_that_gate() -> None:
 def test_the_gate_is_still_the_same_check() -> None:
     """Hoisting must not quietly weaken it. `can_observe_events` on the FIXED root object is the
     platform privilege the tuple store requires — not a per-project relation, because the store is the
-    whole estate's authorization state (authz scope == data scope)."""
+    whole estate's authorization state (authz scope == data scope).
+
+    The FGA-off / FGA-unwired preamble MOVED into ``fga_deps.require_fga`` (catalog-api-09) — eleven
+    handlers carried their own copy of it, which is how two of them ended up disagreeing about what an
+    absent client means. The check follows the code: this reads the gate together with the body it
+    delegates to, so relocating the branch is fine and DELETING it is still caught.
+    ``test_access_admin.py`` pins both refusals behaviourally as well.
+    """
     import inspect
 
-    source = inspect.getsource(ep.estate_gate)
-    assert "can_observe_events" in source
-    assert "fga_root_object" in source
+    from catalog.api import fga_deps
+
+    gate = inspect.getsource(ep.estate_gate)
+    assert "can_observe_events" in gate
+    assert "fga_root_object" in gate
+    source = gate + inspect.getsource(fga_deps.require_fga) + inspect.getsource(fga_deps.require_wired)
     assert "fga_enabled" in source, "the FGA-off 501 branch was dropped"
     assert "ServiceUnavailableError" in source, "the enabled-but-unwired fail-closed branch was dropped"

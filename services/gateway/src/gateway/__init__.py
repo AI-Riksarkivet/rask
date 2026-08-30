@@ -1,8 +1,9 @@
 """gateway — the single API origin for the SPA.
 
-Path-routes `/api/*` to the per-domain backends and streams responses back. This
-is the frontend proxy target (`:8888`), so the SPA needs no changes. Does not
-import `viewer` — it only forwards HTTP.
+Path-routes `/api/*` to the per-domain backends and streams BOTH halves — the request body up and
+the response body back — so an upload is never materialised in this process (see
+`_upstream_content`). This is the frontend proxy target (`:8888`), so the SPA needs no changes. Does
+not import `viewer` — it only forwards HTTP.
 
 Routing is longest-prefix-first; upstreams are env-overridable with localhost
 defaults that match `Procfile.micro`.
@@ -19,7 +20,6 @@ silently 404s (the dev-micro.sh warning). The nginx `lance.lineageSidecarOnlyRou
 
 import asyncio
 import logging
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -27,7 +27,6 @@ from typing import Any, NamedTuple
 from urllib.parse import quote, unquote
 
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -35,6 +34,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from gateway.config import GatewaySettings, build_gateway_settings
 from service_kit import setup_otel
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
@@ -120,6 +120,33 @@ def _forwarded_chain(request: Request) -> list[tuple[bytes, bytes]]:
     return chain
 
 
+def _upstream_content(request: Request) -> AsyncIterator[bytes] | bytes:
+    """The request body as it should be handed to httpx: an async STREAM, or nothing at all.
+
+    `await request.body()` materialised the whole upload in this process before a byte reached the
+    upstream. The gateway fronts `/api/ingest`, `/api/explorer/annotations` (Arrow-IPC writes) and
+    `/api/produce` — the three least-bounded payload planes in the estate — so concurrent large POSTs
+    multiplied straight into the pod's memory limit, and every one of them also paid full-upload
+    latency before the upstream saw anything. The RESPONSE half was streamed all along
+    (`StreamingResponse(upstream_resp.aiter_raw())`), which is the asymmetry that gave it away.
+
+    THE BODYLESS CASE IS NOT AN OPTIMISATION. httpx frames an async-iterator body it cannot size as
+    `Transfer-Encoding: chunked`, and `request.stream()` yields one empty chunk for a request that
+    has no body — so streaming unconditionally would re-frame every proxied GET, HEAD and DELETE as a
+    chunked request, which is a different request from the one the client made. A body is present
+    only when the client said so, which on the wire is exactly these two headers; when it did say so,
+    its `content-length` is in the forwarded header list and httpx keeps it, so a sized upload stays
+    sized and only a genuinely chunked one stays chunked.
+    """
+    encoding = request.headers.get("transfer-encoding", "")
+    if "chunked" in encoding.lower():
+        return request.stream()
+    length = request.headers.get("content-length", "").strip()
+    if length and length != "0":
+        return request.stream()
+    return b""
+
+
 def _rewrite_location(location: str) -> str:
     """Scrub an upstream redirect Location: an absolute URL (which carries the
     upstream's internal host, e.g. 127.0.0.1:8804) becomes path(+query) so the
@@ -153,37 +180,40 @@ class Route(NamedTuple):
     fallback_url: str
 
 
-def _routes() -> list[Route]:
-    # Mirror RASK_API_PREFIX so routing lines up with where the rask endpoints
-    # mount. load_dotenv() so the gateway sees the same .env config the backends do.
-    load_dotenv()
-    prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
+def _routes(settings: GatewaySettings | None = None) -> list[Route]:
+    # Mirror RASK_API_PREFIX so routing lines up with where the rask endpoints mount. The prefix and
+    # every upstream below come from ONE validated read (`GatewaySettings`, which loads `.env`
+    # itself) rather than from a dozen `os.environ.get` calls with a `load_dotenv()` in front of only
+    # some of them. The argument is optional so a caller with no app — a test, or the import-time
+    # build below — gets a fresh read rather than having to construct one.
+    settings = settings or build_gateway_settings()
+    prefix = settings.api_prefix
     # The Ray-plane service is `compute` (R22) — dapr app-id `compute`, upstream
     # RASK_COMPUTE_URL. Its PUBLIC rows stay /api/ray + /api/serve: the URL
     # namespace names the Ray cluster those endpoints introspect/proxy, not the
     # service that serves them, so renaming the service does not move the paths.
-    compute = ("compute", os.environ.get("RASK_COMPUTE_URL", "http://127.0.0.1:8804"))
-    controlplane = ("controlplane", os.environ.get("RASK_CONTROLPLANE_URL", "http://127.0.0.1:8820"))
+    compute = ("compute", settings.compute_url)
+    controlplane = ("controlplane", settings.controlplane_url)
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
     # dev conventions: catalog 2333, lineage 8000, the medallion-producer producer 8002 (the
     # port-forward the verify/e2e scripts use — its in-cluster port 8000 collides
     # with lineage on one host), explorer trio 8101/8102/8103 (chart explorer.services).
-    catalog = ("catalog", os.environ.get("RASK_CATALOG_API_URL", "http://127.0.0.1:2333"))
-    lineage = ("lineage", os.environ.get("RASK_LINEAGE_API_URL", "http://127.0.0.1:8000"))
-    medallion = ("medallion-producer", os.environ.get("RASK_MEDALLION_API_URL", "http://127.0.0.1:8002"))
-    viewer = ("viewer", os.environ.get("RASK_EXPLORER_VIEWER_URL", "http://127.0.0.1:8101"))
-    explorer_search = ("search", os.environ.get("RASK_EXPLORER_SEARCH_URL", "http://127.0.0.1:8102"))
-    annotator = ("annotator", os.environ.get("RASK_EXPLORER_ANNOTATOR_URL", "http://127.0.0.1:8103"))
+    catalog = ("catalog", settings.catalog_url)
+    lineage = ("lineage", settings.lineage_url)
+    medallion = ("medallion-producer", settings.medallion_url)
+    viewer = ("viewer", settings.explorer_viewer_url)
+    explorer_search = ("search", settings.explorer_search_url)
+    annotator = ("annotator", settings.explorer_annotator_url)
     # The ingest plane (open_ingest.md Phase 1) — a BARE app-id, deliberately: the medallion row
     # below points at `medallion-producer`, a legacy app-id that no longer names anything about the service
     # it reaches (audit m1). A new row does not inherit that mistake.
-    ingest = ("ingest", os.environ.get("RASK_INGEST_URL", "http://127.0.0.1:8830"))
+    ingest = ("ingest", settings.ingest_url)
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
     # validation, and run execution. Bare app-id, like `ingest` and for the same reason.
-    flows = ("flows", os.environ.get("RASK_FLOWS_URL", "http://127.0.0.1:8840"))
+    flows = ("flows", settings.flows_url)
     # The notification plane (open_notifications.md D2): the per-subject inbox behind the bell. Bare
     # app-id, like `ingest` and `flows`, and 8850 continues the 8830/8840 fleet run.
-    notifications = ("notifications", os.environ.get("RASK_NOTIFICATIONS_URL", "http://127.0.0.1:8850"))
+    notifications = ("notifications", settings.notifications_url)
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
     # The two deeper explorer rows MUST outrank /api/explorer. There is NO bare /api
     # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
@@ -287,27 +317,26 @@ def _normalize_raw_path(raw: bytes) -> bytes:
     return normalized
 
 
-def _lineage_sidecar_only_routes() -> tuple[str, ...]:
+def _lineage_sidecar_only_routes(settings: GatewaySettings | None = None) -> tuple[str, ...]:
     """The Dapr-delivered lineage routes (pub/sub ingest + the cron reconcile
     binding) that must never be reachable through the public edge — proxying them
     would ride the gateway's own sidecar and stamp the trusted app-api-token.
     Ported from the retired nginx gateway's `lance.lineageSidecarOnlyRoutes` helm
     helper (lance-ns-merge.md P1); the chart renders the same one-source list into
     RASK_LINEAGE_SIDECAR_ONLY_ROUTES (comma-separated route-name prefixes)."""
-    raw = os.environ.get("RASK_LINEAGE_SIDECAR_ONLY_ROUTES", "lineage-events,lineage-reconcile-cron")
-    return tuple(r.strip().lower() for r in raw.split(",") if r.strip())
+    return (settings or build_gateway_settings()).sidecar_only_routes
 
 
-def _dapr_enabled() -> bool:
-    return os.environ.get("RASK_DAPR_ENABLED", "false").strip().lower() in ("1", "true", "yes")
-
-
-def _target_base(app_id: str, fallback_url: str) -> str:
+def _target_base(app_id: str, fallback_url: str, settings: GatewaySettings | None = None) -> str:
     """Invoke base for an app: the local Dapr sidecar when enabled, else the
-    direct httpx upstream URL. Append the request path to this to get the URL."""
-    if _dapr_enabled():
-        port = os.environ.get("DAPR_HTTP_PORT", "3500")
-        return f"http://127.0.0.1:{port}/v1.0/invoke/{app_id}/method"
+    direct httpx upstream URL. Append the request path to this to get the URL.
+
+    The lane is a STARTUP fact, read off the settings the lifespan built. It used to be two
+    `os.environ` reads taken on every proxied request, so an environment change under a running
+    server re-routed live traffic between the sidecar and the direct upstream, mid-flight."""
+    settings = settings or build_gateway_settings()
+    if settings.dapr_enabled:
+        return f"http://127.0.0.1:{settings.dapr_http_port}/v1.0/invoke/{app_id}/method"
     return fallback_url
 
 
@@ -376,16 +405,20 @@ async def _merged_openapi(client: httpx.AsyncClient, prefix: str, targets: list[
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # ONE read for the whole process. Every per-request lookup below — the prefix, the route table,
+    # the Dapr lane, the sidecar-only blocklist — is now an attribute on this object.
+    settings = build_gateway_settings()
+    app.state.settings = settings
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
-    app.state.routes = _routes()
+    app.state.routes = _routes(settings)
     # Declared BEFORE anything can read it: a flag that exists only on the happy path cannot be what a
     # probe gates on. Armed on SIGTERM rather than on lifespan unwind — see `arm_drain_on_sigterm`.
     app.state.shutting_down = False
     app.state.startup_complete = False
     _disarm_drain = arm_drain_on_sigterm(app)
-    app.state.api_prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
+    app.state.api_prefix = settings.api_prefix
     for prefix, upstream_prefix, app_id, fallback in app.state.routes:
-        log.info(f"route {prefix} -> {app_id} ({_target_base(app_id, fallback)}{upstream_prefix})")
+        log.info(f"route {prefix} -> {app_id} ({_target_base(app_id, fallback, settings)}{upstream_prefix})")
     # LAST, after the route table and the client exist: `/readyz` answers `starting` until this
     # flips, and a flag set before the thing it describes would report Ready on a half-built app.
     app.state.startup_complete = True
@@ -400,7 +433,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # DOCS ARE OPT-IN AT THE FRONT DOOR (`RASK_DOCS`), and this is the one that mattered most: the chart
 # publishes `/api` at the Ingress, so everything the gateway serves under the prefix is reachable
 # unauthenticated from the internet.
-_docs_enabled = os.environ.get("RASK_DOCS", "").strip().lower() in {"1", "true", "yes", "on"}
+# The ONE read that genuinely cannot wait for the lifespan: `FastAPI(...)` decides at construction
+# whether these three routes exist at all. It goes through the same settings model as everything
+# else, which is what makes a `.env` that opens the docs actually open them — the raw `os.environ`
+# read this replaced ran before `_routes()`'s `load_dotenv()` and so could never see one.
+_docs_enabled = build_gateway_settings().docs_enabled
 
 app = FastAPI(
     title="gateway",
@@ -475,7 +512,9 @@ async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request],
     exact variants the nginx case-insensitive regex covered. Defense-in-depth: the
     services' own app-api-token check is the load-bearing guard either way."""
     path = _normalize_path(request.scope["path"]).lower()
-    for route in _lineage_sidecar_only_routes():
+    # Off `app.state`, not the environment: the blocklist was re-parsed on EVERY request that
+    # reached this middleware, including the probes.
+    for route in _lineage_sidecar_only_routes(getattr(request.app.state, "settings", None)):
         if path.startswith(f"/api/lineage/{route}"):
             return JSONResponse(
                 status_code=403,
@@ -531,7 +570,8 @@ async def healthz(request: Request) -> JSONResponse:
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def proxy(path: str, request: Request) -> Response:
-    prefix: str = request.app.state.api_prefix
+    settings: GatewaySettings = request.app.state.settings
+    prefix: str = settings.api_prefix
     client: httpx.AsyncClient = request.app.state.http
 
     # TWO VIEWS OF THE PATH, and the whole correctness of this hop is in keeping them apart.
@@ -586,7 +626,7 @@ async def proxy(path: str, request: Request) -> Response:
     if picked is None:
         raise HTTPException(status_code=404, detail=f"no upstream for {scope_path}")
     route_prefix, upstream_prefix, app_id, fallback = picked
-    base = _target_base(app_id, fallback)
+    base = _target_base(app_id, fallback, settings)
 
     raw_norm = _normalize_raw_path(raw_path)
     # The one input where the two views genuinely disagree: a dot-segment hidden behind an encoded
@@ -615,7 +655,7 @@ async def proxy(path: str, request: Request) -> Response:
         raise HTTPException(status_code=400, detail=f"unrepresentable request path: {exc}") from exc
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP and k.lower() not in _CLIENT_SPOOFABLE]
     headers += _forwarded_chain(request)
-    upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
+    upstream_req = client.build_request(request.method, url, headers=headers, content=_upstream_content(request))
     try:
         upstream_resp = await client.send(upstream_req, stream=True)
     except httpx.RequestError as exc:

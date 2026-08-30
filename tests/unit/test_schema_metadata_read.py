@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+
 from catalog.services import dataplane
 
 

@@ -58,7 +58,9 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from catalog.api.dependencies import SettingsDep, UserStateStoreDep
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.schemas import UserStateEnvelope
+from service_kit.governed.oidc import IDToken
 from service_kit.governed.user_state import UserStateDocument, UserStateStore, UserStateUnreadable
 from service_kit.schemas.dock_layout import DockLayoutLibrary, DockLayouts
 from service_kit.schemas.workflow import SavedView, WorkflowGraph
@@ -75,7 +77,7 @@ _DOCK_LAYOUTS = TypeAdapter(DockLayouts)
 _DOCK_LAYOUT_LIBRARY = TypeAdapter(DockLayoutLibrary)
 
 
-def _subject(token: CurrentToken) -> str:
+def _subject(token: IDToken | None) -> str:
     """The caller's verified subject, or 401. The ONLY identity source these routes have.
 
     With OIDC off there is no token and therefore no subject: per-subject state without a subject is not a
@@ -95,7 +97,7 @@ def _require_store(store: UserStateStore | None) -> UserStateStore:
 
 async def _fetch[T](
     store: UserStateStore | None,
-    token: CurrentToken,
+    token: IDToken | None,
     document: UserStateDocument,
     adapter: TypeAdapter[T],
 ) -> tuple[str, datetime | None, T | None]:
@@ -136,8 +138,8 @@ async def _fetch[T](
 
 async def _store_document(
     store: UserStateStore | None,
-    token: CurrentToken,
-    settings: SettingsDep,
+    token: IDToken | None,
+    settings: Settings,
     document: UserStateDocument,
     payload: JsonValue,
 ) -> tuple[str, datetime]:
@@ -150,7 +152,36 @@ async def _store_document(
     return subject, stored.updated_at
 
 
-async def _erase(store: UserStateStore | None, token: CurrentToken, document: UserStateDocument) -> Response:
+async def _read[T](
+    store: UserStateStore | None,
+    token: IDToken | None,
+    document: UserStateDocument,
+    adapter: TypeAdapter[T],
+) -> UserStateEnvelope[T]:
+    """The GET body, once (catalog-api-14). Four documents each hand-built this envelope — same five
+    fields, same ``exists`` rule — and the ``exists=value is not None`` clause is the one a copy gets
+    wrong: reporting a document that EXISTS as absent is what makes a client seed a fresh canvas over
+    live work."""
+    subject, updated_at, value = await _fetch(store, token, document, adapter)
+    return UserStateEnvelope[T](subject=subject, document=document, exists=value is not None, updated_at=updated_at, value=value)
+
+
+async def _write[T](
+    store: UserStateStore | None,
+    token: IDToken | None,
+    settings: Settings,
+    document: UserStateDocument,
+    value: T,
+    payload: JsonValue,
+) -> UserStateEnvelope[T]:
+    """The PUT tail, once. ``payload`` stays the CALLER's — the four documents serialise differently on
+    purpose (two strip nulls for a valibot client, two must not touch an opaque dockview payload), so
+    the serialisation is the route's and only the envelope is shared."""
+    subject, updated_at = await _store_document(store, token, settings, document, payload)
+    return UserStateEnvelope[T](subject=subject, document=document, exists=True, updated_at=updated_at, value=value)
+
+
+async def _erase(store: UserStateStore | None, token: IDToken | None, document: UserStateDocument) -> Response:
     """Drop the caller's document. Idempotent — deleting what was never written is still a 204."""
     await _require_store(store).delete(subject=_subject(token), document=document)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -162,24 +193,14 @@ async def _erase(store: UserStateStore | None, token: CurrentToken, document: Us
 @router.get("/workflow-graph", response_model_exclude_none=True)
 async def get_workflow_graph(token: CurrentToken, store: UserStateStoreDep) -> UserStateEnvelope[WorkflowGraph]:
     """The caller's saved workflow canvas, or ``exists: false`` if they have never saved one."""
-    document = UserStateDocument.WORKFLOW_GRAPH
-    subject, updated_at, value = await _fetch(store, token, document, _GRAPH)
-    return UserStateEnvelope[WorkflowGraph](
-        subject=subject,
-        document=document,
-        exists=value is not None,
-        updated_at=updated_at,
-        value=value,
-    )
+    return await _read(store, token, UserStateDocument.WORKFLOW_GRAPH, _GRAPH)
 
 
 @router.put("/workflow-graph", response_model_exclude_none=True)
 async def put_workflow_graph(graph: WorkflowGraph, token: CurrentToken, store: UserStateStoreDep, settings: SettingsDep) -> UserStateEnvelope[WorkflowGraph]:
     """Save the caller's workflow canvas, replacing whatever they had."""
-    document = UserStateDocument.WORKFLOW_GRAPH
     payload = graph.model_dump(mode="json", by_alias=True, exclude_none=True)
-    subject, updated_at = await _store_document(store, token, settings, document, payload)
-    return UserStateEnvelope[WorkflowGraph](subject=subject, document=document, exists=True, updated_at=updated_at, value=graph)
+    return await _write(store, token, settings, UserStateDocument.WORKFLOW_GRAPH, graph, payload)
 
 
 @router.delete("/workflow-graph", status_code=status.HTTP_204_NO_CONTENT)
@@ -194,24 +215,14 @@ async def delete_workflow_graph(token: CurrentToken, store: UserStateStoreDep) -
 @router.get("/saved-views", response_model_exclude_none=True)
 async def get_saved_views(token: CurrentToken, store: UserStateStoreDep) -> UserStateEnvelope[list[SavedView]]:
     """The caller's named read-plane selections, in the order the client stored them."""
-    document = UserStateDocument.SAVED_VIEWS
-    subject, updated_at, value = await _fetch(store, token, document, _VIEWS)
-    return UserStateEnvelope[list[SavedView]](
-        subject=subject,
-        document=document,
-        exists=value is not None,
-        updated_at=updated_at,
-        value=value,
-    )
+    return await _read(store, token, UserStateDocument.SAVED_VIEWS, _VIEWS)
 
 
 @router.put("/saved-views", response_model_exclude_none=True)
 async def put_saved_views(views: list[SavedView], token: CurrentToken, store: UserStateStoreDep, settings: SettingsDep) -> UserStateEnvelope[list[SavedView]]:
     """Replace the caller's saved-view list wholesale — the client owns the ordering and the dedupe."""
-    document = UserStateDocument.SAVED_VIEWS
     payload: JsonValue = [v.model_dump(mode="json", by_alias=True, exclude_none=True) for v in views]
-    subject, updated_at = await _store_document(store, token, settings, document, payload)
-    return UserStateEnvelope[list[SavedView]](subject=subject, document=document, exists=True, updated_at=updated_at, value=views)
+    return await _write(store, token, settings, UserStateDocument.SAVED_VIEWS, views, payload)
 
 
 @router.delete("/saved-views", status_code=status.HTTP_204_NO_CONTENT)
@@ -238,24 +249,14 @@ async def delete_saved_views(token: CurrentToken, store: UserStateStoreDep) -> R
 @router.get("/dock-layout")
 async def get_dock_layout(token: CurrentToken, store: UserStateStoreDep) -> UserStateEnvelope[DockLayouts]:
     """The caller's dock workbench layouts, or ``exists: false`` if they have never saved one."""
-    document = UserStateDocument.DOCK_LAYOUT
-    subject, updated_at, value = await _fetch(store, token, document, _DOCK_LAYOUTS)
-    return UserStateEnvelope[DockLayouts](
-        subject=subject,
-        document=document,
-        exists=value is not None,
-        updated_at=updated_at,
-        value=value,
-    )
+    return await _read(store, token, UserStateDocument.DOCK_LAYOUT, _DOCK_LAYOUTS)
 
 
 @router.put("/dock-layout")
 async def put_dock_layout(layouts: DockLayouts, token: CurrentToken, store: UserStateStoreDep, settings: SettingsDep) -> UserStateEnvelope[DockLayouts]:
     """Replace the caller's dock layouts wholesale — the client owns which workbenches it keeps."""
-    document = UserStateDocument.DOCK_LAYOUT
     payload = layouts.model_dump(mode="json")
-    subject, updated_at = await _store_document(store, token, settings, document, payload)
-    return UserStateEnvelope[DockLayouts](subject=subject, document=document, exists=True, updated_at=updated_at, value=layouts)
+    return await _write(store, token, settings, UserStateDocument.DOCK_LAYOUT, layouts, payload)
 
 
 @router.delete("/dock-layout", status_code=status.HTTP_204_NO_CONTENT)
@@ -280,15 +281,7 @@ async def delete_dock_layout(token: CurrentToken, store: UserStateStoreDep) -> R
 @router.get("/dock-layout-library")
 async def get_dock_layout_library(token: CurrentToken, store: UserStateStoreDep) -> UserStateEnvelope[DockLayoutLibrary]:
     """The caller's saved views, or ``exists: false`` if they have never saved one."""
-    document = UserStateDocument.DOCK_LAYOUT_LIBRARY
-    subject, updated_at, value = await _fetch(store, token, document, _DOCK_LAYOUT_LIBRARY)
-    return UserStateEnvelope[DockLayoutLibrary](
-        subject=subject,
-        document=document,
-        exists=value is not None,
-        updated_at=updated_at,
-        value=value,
-    )
+    return await _read(store, token, UserStateDocument.DOCK_LAYOUT_LIBRARY, _DOCK_LAYOUT_LIBRARY)
 
 
 @router.put("/dock-layout-library")
@@ -296,10 +289,8 @@ async def put_dock_layout_library(
     library: DockLayoutLibrary, token: CurrentToken, store: UserStateStoreDep, settings: SettingsDep
 ) -> UserStateEnvelope[DockLayoutLibrary]:
     """Replace the caller's saved views wholesale — the client owns which views it keeps."""
-    document = UserStateDocument.DOCK_LAYOUT_LIBRARY
     payload = library.model_dump(mode="json")
-    subject, updated_at = await _store_document(store, token, settings, document, payload)
-    return UserStateEnvelope[DockLayoutLibrary](subject=subject, document=document, exists=True, updated_at=updated_at, value=library)
+    return await _write(store, token, settings, UserStateDocument.DOCK_LAYOUT_LIBRARY, library, payload)
 
 
 @router.delete("/dock-layout-library", status_code=status.HTTP_204_NO_CONTENT)

@@ -18,6 +18,7 @@ from typing import Any
 
 import lance
 import pyarrow as pa
+
 from catalog.api.v1.endpoints import models as ep
 from catalog.core.config import Settings
 from catalog.services import models as registry

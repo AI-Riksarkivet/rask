@@ -35,11 +35,11 @@ from datetime import datetime
 from typing import Any, Final
 
 import pyarrow as pa
-from lineage_kit.schemas import custom_facet
 from pydantic import BaseModel, Field
 
 from annotator.projects.agreement import group_scores, summarize
 from annotator.projects.models import AnnotationProject, Draft, Link, Shape, Task, TaskState
+from lineage_kit.schemas import custom_facet
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 

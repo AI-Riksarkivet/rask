@@ -13,9 +13,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from search.services.spec import SearchSpec
 from search.services.target import resolve_target
-
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.lancekit.registry import DatasetHandle

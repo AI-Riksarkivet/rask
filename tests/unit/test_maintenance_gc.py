@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
 from catalog.services import maintenance
 
 
@@ -63,6 +64,12 @@ class _FakeDs:
 
     def versions(self) -> list[dict[str, Any]]:
         return self._versions
+
+    def get_fragments(self) -> list[Any]:
+        """The fragment walk the compaction gate performs — reached only by a dataset that BOTH sets
+        flag 16 and can say where it lives, which no fake here does, so an empty list is faithful.
+        Present because `compact_now` now STATES that surface (CAT-CORE-15) instead of taking `Any`."""
+        return []
 
     def cleanup_old_versions(self, **kw: Any) -> Any:
         self.cleaned = kw  # record that a mutation was attempted (and with what bounds)
@@ -324,6 +331,7 @@ def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
     """
     import lance
     import pyarrow as pa
+
     from catalog.services import maintenance as svc
 
     source = str(tmp_path / "aa11_ns$src.lance")

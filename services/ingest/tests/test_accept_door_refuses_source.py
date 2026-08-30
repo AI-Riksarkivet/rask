@@ -21,8 +21,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from ingest.api import IngestRequest, _refuse_unusable_source
 
+from ingest.api import IngestRequest, _refuse_unusable_source
 from service_kit.exceptions import ValidationError
 
 

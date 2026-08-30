@@ -44,6 +44,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from medallion.workflow import PromotionOutcome, PromotionReport, PromotionSpec, emit_promotion_outcome
 
 

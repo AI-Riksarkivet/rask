@@ -18,9 +18,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from viewer.services import voice_service
 
 from service_kit.exceptions import ValidationError
+from viewer.services import voice_service
 
 
 OUTAGE = OSError("connection reset by peer while reading s3://warehouse/voice_embeddings.lance")

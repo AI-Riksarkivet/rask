@@ -21,8 +21,14 @@ from service_kit.media.config import Settings
 from service_kit.middleware import RequestIDMiddleware
 
 
-def register_middleware(app: FastAPI, settings: Settings) -> None:
-    """Register CORS and the request-body ceiling. Called once from ``create_app``."""
+def register_media_middleware(app: FastAPI, settings: Settings) -> None:
+    """Register CORS and the request-body ceiling for a MEDIA app. Called once from ``build_media_app``.
+
+    NAMED FOR ITS PLANE (open_python-audit DUP-20). This was `register_middleware`, the same name and
+    the same signature as `service_kit.middleware.register_middleware` — a DIFFERENT stack (the fleet
+    one adds Timing and sends `allow_credentials`; this one exposes the Range headers a browser needs
+    to seek video and deliberately runs no Timing layer). Both were imported bare, so a call site said
+    nothing about which of the two it had registered."""
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

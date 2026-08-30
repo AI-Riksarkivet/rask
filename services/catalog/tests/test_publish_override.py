@@ -22,9 +22,10 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+from lance_namespace import connect
+
 from catalog.services.dataplane import create_table
 from catalog.services.publication import publish
-from lance_namespace import connect
 
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])

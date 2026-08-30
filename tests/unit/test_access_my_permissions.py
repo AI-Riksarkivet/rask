@@ -21,10 +21,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
+from openfga_sdk.client import OpenFgaClient
+
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
-
 from service_kit.governed.oidc import IDToken
 
 
@@ -50,10 +51,10 @@ def _run(
         return relation in (allow or set())
 
     monkeypatch.setattr(access.fga, "check", fake_check)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object())))
+    client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
     settings = cast(Settings, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
     token = cast(IDToken, SimpleNamespace(sub=sub)) if token_present else None
-    resp = asyncio.run(access._my_permissions(cast(access.Request, request), settings, token, fga_type, ident))
+    resp = asyncio.run(access._my_permissions(client, settings, token, fga_type, ident))
     return resp, asked
 
 

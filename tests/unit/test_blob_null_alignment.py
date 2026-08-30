@@ -32,8 +32,8 @@ import lance
 import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
-from medallion.services import compute
 
+from medallion.services import compute
 from service_kit.lakehouse import blobs
 
 

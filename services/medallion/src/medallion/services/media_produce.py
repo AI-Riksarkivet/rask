@@ -1,7 +1,7 @@
 """The medallion-producer producer's MEDIA ingest business logic — the multimodal head of the cascade (§9).
 
 :func:`ingest_media` lands external media objects as a bronze blob-v2 table (through the provider-agnostic
-:class:`service_kit.lakehouse.sources.S3Source` seam), emits the ``source URIs -> bronze media`` OpenLineage event with the
+:class:`service_kit.lakehouse.sources.S3FileSystemSource` seam), emits the ``source URIs -> bronze media`` OpenLineage event with the
 blob-aware schema facet, then publishes the media-chain trigger — the deployed bronze→silver media mover
 consumes it and derives the inline artifacts (thumbnail + embedding) by CONTENT in the generic compute.
 
@@ -38,7 +38,7 @@ from medallion.services.ingest import IngestResult, ingest_to_bronze
 from service_kit import dapr_publish
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.objectfs import s3_filesystem
-from service_kit.lakehouse.sources import S3Source
+from service_kit.lakehouse.sources import S3FileSystemSource
 
 
 log = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def _seed_and_ingest(settings: MedallionSettings) -> IngestResult:
             path = f"{settings.media_source_bucket}/{settings.media_source_prefix}/{name}"
             with fs.open_output_stream(path) as stream:
                 stream.write(_png(color))
-    source = S3Source(fs, settings.media_source_bucket, settings.media_source_prefix)
+    source = S3FileSystemSource(fs, settings.media_source_bucket, settings.media_source_prefix)
     return ingest_to_bronze(
         source,
         settings.media_bronze_uri,
@@ -240,34 +240,31 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
             span.set_status(Status(StatusCode.ERROR, "publish_failed: emit"))
             log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "emit", "error": str(exc)})
             return {"status": "publish_failed", "token": token}
-        try:
-            # The media-chain trigger (consumed by the media mover's durable consumer). Published AFTER the
-            # lineage emit so the graph never shows a derived silver before its bronze head exists.
-            await dapr_publish.publish_event(
-                dapr,
-                timeout_seconds=settings.publish_timeout_seconds,
-                pubsub_name=settings.pubsub,
-                topic_name=settings.media_topic,
-                data=json.dumps(
-                    {
-                        "token": token,
-                        "dataset": settings.media_bronze_dataset,
-                        "namespace": settings.media_bronze_namespace,
-                        # The human the chain is for, threaded past the head. `/produce`'s cascade reads
-                        # this back off the bronze event in `_cascade_originator`; the media head fires its
-                        # own trigger instead, so without it the sub died at bronze and every derive below
-                        # authored as a role literal. Omitted (byte-identical payload) when unset — the
-                        # service path names nobody and must not invent one.
-                        **({"originator": originator} if originator else {}),
-                    }
-                ),
-                data_content_type="application/json",
-            )
-        except Exception as exc:
+        # The media-chain trigger (consumed by the media mover's durable consumer). Published AFTER the
+        # lineage emit so the graph never shows a derived silver before its bronze head exists.
+        landed = await dapr_publish.publish_json(
+            dapr,
+            pubsub_name=settings.pubsub,
+            topic_name=settings.media_topic,
+            payload={
+                "token": token,
+                "dataset": settings.media_bronze_dataset,
+                "namespace": settings.media_bronze_namespace,
+                # The human the chain is for, threaded past the head. `/produce`'s cascade reads this
+                # back off the bronze event in `_cascade_originator`; the media head fires its own
+                # trigger instead, so without it the sub died at bronze and every derive below authored
+                # as a role literal. Omitted (byte-identical payload) when unset — the service path
+                # names nobody and must not invent one.
+                **({"originator": originator} if originator else {}),
+            },
+            timeout_seconds=settings.publish_timeout_seconds,
+            failure_event="medallion_media_publish_failed",
+            context={"token": token, "stage": "trigger"},
+        )
+        if not landed:
             # The estate's convention, on the stage that failed — `stage` is already the log's own
             # discriminator, so the span description says which half of the chain broke.
             span.set_status(Status(StatusCode.ERROR, "publish_failed: trigger"))
-            log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "trigger", "error": str(exc)})
             return {"status": "publish_failed", "token": token}
         log.info(
             "medallion_media_ingested",

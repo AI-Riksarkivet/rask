@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from ingest.runtime import _prior_commit_for_run, finalize_run
 from ingest.workflow import RunSpec
 

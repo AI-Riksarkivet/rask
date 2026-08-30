@@ -19,24 +19,24 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Header
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from flows import executor, security
 from flows.catalog import CATALOG
 from flows.dependencies import FlowsSettingsDep, HttpDep, RunReaderDep, RunsDep, SchedulerDep, ScheduleUnconfirmed
 from flows.graph import validate_graph
-from flows.metrics import record_run
+from flows.metrics import DURABLE, INLINE, record_run
 from flows.models import (
     CatalogResponse,
     FlowGraph,
     RunJob,
     RunRefused,
+    RunRefusedError,
     RunRequest,
     RunState,
     ValidateResponse,
 )
-from service_kit.exceptions import PROBLEM_JSON, ForbiddenError, NotFoundError, ServiceUnavailableError
+from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from service_kit.governed.audit import ALLOW, DENY, audit
 
 
@@ -111,7 +111,12 @@ async def validate(
 
 @router.post(
     "/runs",
-    response_model=RunState,
+    # NO `response_model=`: the return annotation is `RunState` and FastAPI derives the schema from
+    # it, so restating it would carry no information — the argument is reserved for a wire shape that
+    # DIFFERS from the annotation (`tests/unit/test_response_model_is_not_redundant.py`). It was not
+    # redundant while this route was declared `-> RunState | JSONResponse`; the union is gone
+    # (FLOWS-422-BYPASSES-HIERARCHY) and so is the reason for the argument.
+    #
     # HTTPStatus, not `fastapi.status.HTTP_422_UNPROCESSABLE_ENTITY`: starlette deprecated that alias
     # in favour of ..._CONTENT and emits a warning at IMPORT of this module. `service_kit.exceptions`
     # already builds its problem bodies from `http.HTTPStatus`, so this is the estate's spelling too.
@@ -126,7 +131,7 @@ async def create_run(
     subject: security.CurrentSubject,
     checker: security.CheckerDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
-) -> RunState | JSONResponse:
+) -> RunState:
     """Execute a flow.
 
     Validation first, always: an invalid graph is refused with the problem LIST rather than
@@ -141,18 +146,16 @@ async def create_run(
     converge on, and inventing one would make every retry a new run while pretending otherwise
     (`ingest.api`).
 
-    The refusal is a `JSONResponse` rather than a raised `UnprocessableEntityError` for one reason:
-    `service_kit.exceptions._problem` flattens a problem to a single `detail` string, and the
-    builder needs the list to highlight nodes. The media type and the other four members match the
-    estate's problem+json exactly, so a client parses this like any other refusal.
+    The refusal is RAISED, through the estate's one exception hierarchy, and carries the problem list
+    as an RFC 9457 extension member. It used to be a hand-built `JSONResponse` — with
+    `-> RunState | JSONResponse` on the signature — because `service_kit.exceptions._problem`
+    flattened a problem to a single `detail` string and the builder needs the LIST to highlight
+    nodes. That reason is gone (`DomainError(..., extensions=...)`), and with it the only route in
+    this service whose refusal no handler produced.
     """
     problems = validate_graph(request.graph)
     if problems:
-        return JSONResponse(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            media_type=PROBLEM_JSON,
-            content=RunRefused(detail=f"{len(problems)} problem(s) in the graph", problems=problems).model_dump(),
-        )
+        raise RunRefusedError(f"{len(problems)} problem(s) in the graph", extensions={"problems": problems})
 
     # AUTHZ, after shape (identity 401 → shape 422 → authz 403, the estate's door order). A flow's
     # model nodes invoke live Serve endpoints, so this is the one route that spends compute. The
@@ -220,12 +223,12 @@ async def create_run(
             # per-node state back out of the workflow history is the follow-up (open_studio_flows.md
             # defers streaming per-node progress) — v0 proves the seam, it does not stream it.
             state = RunState(run_id=run_id, status="running")
-            record_run("durable")
+            record_run(DURABLE)
 
     if state is None:
         # The lane is decided here, per request — the startup log announces only what the process COULD
         # do, not what this run did.
-        record_run("inline")
+        record_run(INLINE)
         state = await executor.execute(
             request.graph,
             request.seeds,

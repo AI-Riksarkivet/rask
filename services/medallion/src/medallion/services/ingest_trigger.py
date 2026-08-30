@@ -17,7 +17,6 @@ Best-effort with ``RETRY`` so a sidecar/broker outage is redelivered rather than
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from typing import Any
@@ -211,18 +210,17 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
     originator = _cascade_originator(data)
     if originator:  # the human the whole cascade is for; omitted (byte-identical) when unset
         trigger["originator"] = originator
-    try:
-        await dapr_publish.publish_event(
-            dapr,
-            timeout_seconds=settings.publish_timeout_seconds,
-            pubsub_name=settings.pubsub,
-            topic_name=settings.bronze_topic,
-            data=json.dumps(trigger),
-            data_content_type="application/json",
-        )
-        record_transition(f"source->{settings.bronze_namespace}")
-    except Exception as exc:
-        log.warning("medallion_bronze_arrival_publish_failed", extra={"token": token, "error": str(exc)})
+    landed = await dapr_publish.publish_json(
+        dapr,
+        pubsub_name=settings.pubsub,
+        topic_name=settings.bronze_topic,
+        payload=trigger,
+        timeout_seconds=settings.publish_timeout_seconds,
+        failure_event="medallion_bronze_arrival_publish_failed",
+        context={"token": token, "dataset": dataset},
+    )
+    if not landed:
         return _RETRY
+    record_transition(f"source->{settings.bronze_namespace}")
     log.info("medallion_cascade_triggered", extra={"token": token, "dataset": dataset})
     return _SUCCESS

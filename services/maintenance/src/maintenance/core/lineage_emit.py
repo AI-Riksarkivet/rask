@@ -219,9 +219,9 @@ class DaprMaintenanceEmitter:
     def __init__(
         self,
         client: DaprClient,
+        *,
         pubsub: str,
         topic: str,
-        *,
         job_namespace: str,
         timeout_seconds: float,
         outbox_uri: str = "",
@@ -304,8 +304,8 @@ def make_emitter(
     if enabled and dapr is not None:
         return DaprMaintenanceEmitter(
             dapr,
-            pubsub,
-            topic,
+            pubsub=pubsub,
+            topic=topic,
             job_namespace=job_namespace,
             timeout_seconds=timeout_seconds,
             outbox_uri=outbox_uri,

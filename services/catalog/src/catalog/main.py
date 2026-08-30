@@ -17,32 +17,27 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
-from pydantic import SecretStr
 
 from catalog.api.dapr import register_control_dapr
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.v1.router import api_router
-from catalog.core.config import get_settings
+from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import make_vendor
 from catalog.services import warehouses
-from service_kit import setup_logging
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
-from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.secrets import fetch_required_secrets
+from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.middleware import RequestIDMiddleware
+from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
-from service_kit.probes import make_probes_router
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
@@ -67,6 +62,22 @@ async def _backfill_cascade_grants(app: FastAPI) -> None:
         log.info("cascade_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
 
 
+def consume_dapr_secrets(settings: Settings) -> None:
+    """Resolve the S3 secret for this boot, whichever source is configured — and refuse to boot without one.
+
+    The SPLICE itself is `service_kit.governed.secrets.apply_dapr_secrets`, the estate's one
+    implementation: this block used to inline its own copy of the fetch-and-splice, which is the fourth
+    copy open_python-audit DUP-09 names.
+
+    What stays HERE is the half that is genuinely the catalog's own posture: with the store OFF, an empty
+    plaintext key is a boot failure rather than a service that comes up and signs every S3 request wrong.
+    A named function, not an inline block, so the unit tier can drive the decision without a lifespan.
+    """
+    apply_dapr_secrets(settings)
+    if not settings.secrets_from_dapr and not settings.s3_secret_access_key.get_secret_value():
+        raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when secrets_from_dapr is off")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -84,22 +95,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # secrets_from_dapr on, the chart does not put the secret in pod env, so reading the env would yield
     # nothing — we fetch from the store (retrying while it seeds) and FAIL CLOSED if it never arrives,
     # rather than booting with an empty/plaintext key.
-    if settings.secrets_from_dapr:
-        # Strict sole source: a store miss FAILS CLOSED (the shared helper raises) — never fall back to a
-        # plaintext env value. fetch_required_secrets retries while the store/sidecar/seed come up; it is
-        # sync (blocking httpx + sleep between retries, ~80s worst case), so it runs in a thread — event-loop
-        # hygiene: nothing served during the lifespan anyway, but the loop must stay free for other startup
-        # tasks and must never normalize blocking calls in async context.
-        bundle = await run_in_threadpool(
-            fetch_required_secrets,
-            settings.dapr_secret_store,
-            settings.dapr_secret_key,
-            require=settings.dapr_secret_s3_field,
-        )
-        settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
-        log.info("secret_from_dapr_store", extra={"field": settings.dapr_secret_s3_field})
-    elif not settings.s3_secret_access_key.get_secret_value():
-        raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when secrets_from_dapr is off")
+    # THE SHARED SEAM (DUP-09), in a thread: the fetch is sync (blocking httpx + sleep between retries,
+    # ~80s worst case) — event-loop hygiene: nothing is served during the lifespan anyway, but the loop
+    # must stay free for other startup tasks and must never normalize blocking calls in async context.
+    await run_in_threadpool(consume_dapr_secrets, settings)
     app.state.namespace = build_namespace(settings)  # fail fast if storage misconfigured
     # #3-A warehouse routing caches (only used when warehouses_enabled): top-level-namespace → its physical
     # root_uri (bindings are immutable, so cache-forever is safe) and root_uri → its namespace connection.
@@ -229,48 +228,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.user_state.aclose()
 
 
-_settings = get_settings()
-# Application logging, before the app exists — every module here uses getLogger(__name__), and
-# without this they propagate to a root logger with no handlers and are DISCARDED. That is not
-# hypothetical: it hid a two-day lineage feed outage (see service_kit.setup_logging).
-setup_logging()
-
-app = FastAPI(
-    title="Lance Namespace REST Catalog",
-    version="1.0.0",
-    lifespan=lifespan,
-    docs_url="/docs" if _settings.docs_enabled else None,
-    redoc_url="/redoc" if _settings.docs_enabled else None,
-    openapi_url="/openapi.json" if _settings.docs_enabled else None,
-)
-app.include_router(api_router)
-# Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
-# adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
-register_control_dapr(app)
-# Read-only maintenance gate (no-op unless LANCE_MAINTENANCE_READ_ONLY=true).
-app.middleware("http")(maintenance_middleware)
-# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
-# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
-# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
-# passes streaming bodies through untouched (this plane serves Arrow IPC).
-app.add_middleware(RequestIDMiddleware)
-# Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
-app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
-# Outermost (added LAST → wraps everything, runs FIRST): shed a bulk-write burst with 429 once the
-# concurrent-write cap is reached, BEFORE the body is buffered — so shedding relieves memory pressure rather
-# than adding to it. Sits above body_limit so an over-cap write is rejected before even the size check. (P5)
-app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes)
-
-
-# AND the fleet handlers, before the lance translator. `service_kit.exceptions.DomainError`
-# subclasses `HTTPException`, so without `register_handlers` starlette's built-in handler renders
-# it — status and headers intact, `{"detail": ...}` body — which is how the draining 503 came to
-# declare problem+json over a body that was not one. Registered FIRST so the lance translator
-# still wins for `RequestValidationError`, exactly the order `make_service_app` uses.
-register_handlers(app)
-install_problem_handlers(app, log)
-
-
 async def _namespace_ready(request: Request) -> Readiness:
     """Report the resolved namespace id alongside ``ready`` — a boot-config fact worth surfacing on
     the probe. Best-effort: a backend that cannot answer ``namespace_id()`` is not a readiness fault
@@ -283,5 +240,33 @@ async def _namespace_ready(request: Request) -> Readiness:
     return body
 
 
-# /livez + /readyz — the shared router (service_kit.probes), not a hand-rolled copy.
-app.include_router(make_probes_router(_namespace_ready))
+_settings = get_settings()
+# THE SHARED LANCE-PLANE ASSEMBLY (open_python-audit DUP-12). Logging before the app exists, the docs
+# gate, the handler pair in the order that makes it work, one request id, and the probes — see
+# `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+#
+# `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) goes
+# in as `inner_middleware` and NOT after this call, because middleware added later is OUTER: outside
+# the request-id layer its 503 never passes back through `RequestIDMiddleware` and goes out with no
+# `X-Request-ID`, so an operator cannot correlate the refusal with anything. That ordering is the
+# entire reason the factory has the hook.
+app = build_lance_service_app(
+    title="Lance Namespace REST Catalog",
+    version="1.0.0",
+    docs_enabled=_settings.docs_enabled,
+    lifespan=lifespan,
+    log=log,
+    routers=[api_router],
+    ready_check=_namespace_ready,
+    inner_middleware=[maintenance_middleware],
+)
+# Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
+# adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
+register_control_dapr(app)
+# ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
+# Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
+# Outermost (added LAST → wraps everything, runs FIRST): shed a bulk-write burst with 429 once the
+# concurrent-write cap is reached, BEFORE the body is buffered — so shedding relieves memory pressure rather
+# than adding to it. Sits above body_limit so an over-cap write is rejected before even the size check. (P5)
+app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes)

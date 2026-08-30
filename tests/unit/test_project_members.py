@@ -20,10 +20,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from catalog.api.v1.endpoints import members
-from catalog.core.config import Settings
 from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 
+from catalog.api.v1.endpoints import members
+from catalog.core.config import Settings
+from service_kit.control_emit import NoopControlEmitter
 from service_kit.exceptions import ForbiddenError
 from service_kit.governed.oidc import IDToken
 
@@ -76,8 +77,16 @@ class _RecordingControl:
         self.events.append(event)
 
 
-def _request(control: _RecordingControl | None = None) -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object(), control_emitter=control)))
+def _client() -> Any:
+    """The injected OpenFGA client (catalog-api-09): the doors take it as a dependency now rather than
+    reaching into ``request.app.state``. Loosely typed — every test that needs behaviour monkeypatches
+    ``members.fga.*``."""
+    return object()
+
+
+def _control(control: _RecordingControl | None = None) -> Any:
+    """The injected control emitter; a door handed ``None`` announces into the void, as before."""
+    return control if control is not None else NoopControlEmitter()
 
 
 def _settings(*, fga_enabled: bool = True) -> Settings:
@@ -90,12 +99,12 @@ def _token() -> IDToken:
 
 def _grant(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.grant_member("acme", body, _request(control), _settings(), _token()))
+    return asyncio.run(members.grant_member("acme", body, _client(), _control(control), _settings(), _token()))
 
 
 def _revoke(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.revoke_member("acme", body, _request(control), _settings(), _token()))
+    return asyncio.run(members.revoke_member("acme", body, _client(), _control(control), _settings(), _token()))
 
 
 # --------------------------------------------------------------------------- #
@@ -123,7 +132,7 @@ def test_listing_is_gated_on_can_read_assignments(monkeypatch: pytest.MonkeyPatc
     """Who belongs to a tenant names the people worth phishing — a plain member must not enumerate it."""
     h = _Harness()
     h.install(monkeypatch)
-    asyncio.run(members.list_members("acme", _request(), _settings(), _token()))
+    asyncio.run(members.list_members("acme", _client(), _settings(), _token()))
     assert h.gated == [("can_read_assignments", "project:acme")]
 
 
@@ -214,7 +223,7 @@ def test_the_team_edge_is_never_listed_as_a_member(monkeypatch: pytest.MonkeyPat
         ]
     )
     h.install(monkeypatch)
-    out = asyncio.run(members.list_members("acme", _request(), _settings(), _token()))
+    out = asyncio.run(members.list_members("acme", _client(), _settings(), _token()))
     assert [m.relation for m in out.members] == ["admin"]
 
 
@@ -238,7 +247,7 @@ def test_authz_off_refuses_rather_than_reporting_a_grant_that_never_happened(mon
     h.install(monkeypatch)
     body = members.GrantRequest(user="bob", relation=cast(Any, "member"))
     with pytest.raises(ServiceUnavailableError, match="not configured"):
-        asyncio.run(members.grant_member("acme", body, _request(), _settings(fga_enabled=False), _token()))
+        asyncio.run(members.grant_member("acme", body, _client(), _control(), _settings(fga_enabled=False), _token()))
 
 
 class TestTenantMembershipIsAnnounced:

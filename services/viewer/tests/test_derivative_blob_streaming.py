@@ -37,9 +37,9 @@ import pytest
 from fastapi.responses import StreamingResponse
 from lance import blob_array, blob_field
 from lance.blob import BlobFile
-from viewer.api.v1.endpoints import media as media_ep
 
 from service_kit.exceptions import NotFoundError
+from viewer.api.v1.endpoints import media as media_ep
 
 
 JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF"

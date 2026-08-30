@@ -24,12 +24,12 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from service_kit.exceptions import register_handlers
 from viewer.api.security import BROWSE_STORAGE
 from viewer.api.v1.endpoints import objects as ob
 from viewer.api.v1.endpoints.objects import router
 from viewer.core.config import ViewerSettings, get_viewer_settings
-
-from service_kit.exceptions import register_handlers
 
 
 STORE = "lance-catalog"

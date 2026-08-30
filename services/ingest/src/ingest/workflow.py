@@ -139,7 +139,7 @@ class RunLimits(BaseModel):
 
     `max_units` refuses the RUN — the queue publish, the fan-out, the state-store churn of a fan-out
     nobody intended. It does NOT prevent the source LISTING, because all three adapters materialize
-    their listing below this seam (`S3Source` does a full recursive LIST when `prefix` is empty, which
+    their listing below this seam (`S3FileSystemSource` does a full recursive LIST when `prefix` is empty, which
     the registry explicitly invites). An `islice` at the ceiling would look like a bound and stop
     nothing: the walk has already happened by the time a key reaches us. So there is deliberately NO
     "stops pulling at the limit" test — it would pass against a lazy fake and be false for every

@@ -12,19 +12,85 @@ a sidecar, or a running OpenFGA.
 
 from __future__ import annotations
 
+import base64
+import json
+import re
 from typing import Final
 
 from annotator.projects.models import ProjectState, TaskState
 
 
-class IllegalTransition(ValueError):
-    """Raised for an edge absent from the table — the closed-world guarantee of §5."""
+#: The wire form of a refused transition, and the reason it exists.
+#:
+#: Dapr gives an actor-side exception exactly ONE channel to this side of the sidecar: the actor
+#: HTTP surface answers 500 with ``repr(ex)`` inside a JSON envelope
+#: (``dapr/ext/fastapi/actor.py``) and the SDK nests that inside its own message. So whatever the
+#: caller is to rebuild has to survive as text — and the text is JSON-escaped twice on the way.
+#:
+#: Reconstructing the domain fields by PARSING THE PROSE cost three things, all on live paths: the
+#: estate's own refusal reasons contain an em dash and ``json.dumps`` renders it ``\u2014``, a
+#: backslash in a subject was eaten by the hand-rolled un-escaper, and any failure whose text merely
+#: mentioned the class was rewritten into a refused transition (a 409 for what is a 500 — and
+#: ``saga._converge`` reads this exception type as "already converged", i.e. as SUCCESS).
+#:
+#: So the fields ride as a base64 payload instead. The alphabet (``A-Za-z0-9_-=``) is exactly the set
+#: JSON never escapes, which is the whole point: no un-escaping step can exist to get it wrong.
+_WIRE_MARKER: Final = "illegal-transition"
+_WIRE_RE: Final = re.compile(rf"\[{_WIRE_MARKER}:([A-Za-z0-9_-]+=*)\]")
 
-    def __init__(self, kind: str, state: str, event: str) -> None:
-        super().__init__(f"illegal {kind} transition: {event!r} is not permitted from {state!r}")
-        self.kind = kind
-        self.state = state
-        self.event = event
+
+class IllegalTransition(ValueError):
+    """Raised for an edge absent from the table — the closed-world guarantee of §5.
+
+    ``str()`` is the human sentence a 409 carries. ``repr()`` is the WIRE form: the same sentence
+    plus :meth:`wire_token`, because ``repr`` is what Dapr serialises and therefore the only place a
+    structured payload can ride. Keeping the two apart is what lets the endpoints go on handing
+    ``str(exc)`` to the client while the proxy rebuilds the exact fields.
+    """
+
+    def __init__(self, kind: str, state: str, event: str, *, message: str | None = None) -> None:
+        super().__init__(message if message is not None else f"illegal {kind} transition: {event!r} is not permitted from {state!r}")
+        # `str(...)`: `state` is handed in as an enum member at most call sites, and the wire payload
+        # has to be JSON. The rendered sentence above still uses the value as it was passed, so the
+        # text a locally-raised error carries is unchanged.
+        self.kind = str(kind)
+        self.state = str(state)
+        self.event = str(event)
+
+    def wire_token(self) -> str:
+        """The structured payload, in a form two layers of JSON escaping cannot touch."""
+        blob = json.dumps({"kind": self.kind, "state": self.state, "event": self.event, "message": str(self)}, ensure_ascii=False)
+        return f"[{_WIRE_MARKER}:{base64.urlsafe_b64encode(blob.encode()).decode('ascii')}]"
+
+    def __repr__(self) -> str:
+        """What crosses the sidecar — the sentence AND the token, in one ordinary exception repr."""
+        return f"{type(self).__name__}({str(self) + ' ' + self.wire_token()!r})"
+
+    @classmethod
+    def from_wire(cls, text: str) -> IllegalTransition | None:
+        """Rebuild the error from `text`, or `None` when `text` does not carry one.
+
+        `None` is a real answer and the caller must re-raise on it: a failure that is not a refused
+        transition has to stay the failure it is. There is deliberately NO prose fallback — an actor
+        that answers without a token is not running this code, and guessing at its sentence is the
+        behaviour this replaces.
+        """
+        found = _WIRE_RE.search(text)
+        if found is None:
+            return None
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(found.group(1).encode("ascii")).decode())
+        except ValueError:  # binascii.Error, UnicodeDecodeError and JSONDecodeError are all ValueError
+            return None
+        if not isinstance(payload, dict):
+            return None
+        message = payload.get("message")
+        return cls(
+            str(payload.get("kind", "")),
+            str(payload.get("state", "")),
+            str(payload.get("event", "")),
+            message=str(message) if message else None,
+        )
 
 
 #: (from, event) -> (to, required permission). `None` = caused by the system (a workflow or an actor

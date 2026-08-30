@@ -15,10 +15,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from controlplane import routes, security
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from controlplane import routes, security
 from service_kit.exceptions import register_handlers
 
 

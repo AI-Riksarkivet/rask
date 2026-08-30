@@ -23,14 +23,14 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from catalog.services import projects as proj_svc
-from catalog.services import warehouses as wh_svc
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceUnavailableError, connect
-from maintenance.core.config import MaintenanceSettings
-from maintenance.services import reconcile as mod
 from openfga_sdk.client.models import ClientTuple
 from pydantic import SecretStr
 
+from catalog.services import projects as proj_svc
+from catalog.services import warehouses as wh_svc
+from maintenance.core.config import MaintenanceSettings
+from maintenance.services import reconcile as mod
 from service_kit.governed import fga as fga_module
 
 
@@ -298,7 +298,7 @@ def test_a_namespace_is_not_a_directory_so_the_scan_must_read_the_manifest(tmp_p
     table_dirs = sorted(p.name for p in (tmp_path / "data").iterdir() if p.name != "__manifest")
     assert table_dirs == ["orders.lance"], f"a table is the only root directory the catalog makes: {table_dirs}"
 
-    found = mod._top_level_namespaces(f"file://{tmp_path / 'data'}", {}, "$")
+    found = mod._top_level_namespaces(f"file://{tmp_path / 'data'}", {}, delimiter="$")
     assert found == ["legacy_ns"], "the manifest read must see the namespace and NOT the table directory"
 
 

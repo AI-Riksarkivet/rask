@@ -24,6 +24,7 @@ anonymous) is the shape that finding argued for.
 from __future__ import annotations
 
 import pytest
+
 from annotator.core.config import AnnotatorSettings
 from annotator.projects import lakehouse
 

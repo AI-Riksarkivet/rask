@@ -16,8 +16,9 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from catalog.services.dataplane import commit_appended_fragments
 from lance_namespace import ConcurrentModificationError, InvalidInputError
+
+from catalog.services.dataplane import commit_appended_fragments
 
 
 def _fragments(uri: str, table: pa.Table) -> list[dict[str, Any]]:
@@ -88,8 +89,9 @@ def test_classify_commit_error_maps_the_taxonomy() -> None:
     #   INCOMPATIBLE transaction -> 400, NON-RETRYABLE (spec) — re-WRITE, never re-commit
     #   genuine contention       -> 409 (the loser of a race can safely re-read + re-commit)
     #   raw store 5xx            -> 503 (ArrowIOError subclasses OSError) — an outage, not contention
-    from catalog.services.dataplane import _classify_commit_error
     from lance_namespace import ServiceUnavailableError
+
+    from catalog.services.dataplane import _classify_commit_error
 
     assert isinstance(
         _classify_commit_error(OSError("Append with different schema: fields did not match")),

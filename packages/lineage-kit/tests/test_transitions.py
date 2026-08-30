@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 import pytest
+
 from lineage_kit import LineageRun, RecordingEmitter, RunState, job_run
 
 

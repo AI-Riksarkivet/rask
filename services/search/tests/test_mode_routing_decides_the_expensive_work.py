@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from search.services.service import _mode_needs_query_vector
 from search.services.spec import SearchMode
 from search.services.target import SearchTarget

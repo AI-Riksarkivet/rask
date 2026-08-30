@@ -19,15 +19,15 @@ import logging
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from annotator.api.security import (
     ANONYMOUS_SUBJECT,
     CheckerDep,
     CurrentSubject,
 )
 from annotator.core.config import AnnotatorSettings
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from service_kit.exceptions import register_handlers
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 

@@ -30,6 +30,7 @@ from typing import Any, cast
 import pytest
 import respx
 from httpx import Response
+
 from medallion.core.config import MedallionSettings
 from medallion.services import media_produce as media_module
 from medallion.services.ingest import IngestResult
@@ -265,6 +266,7 @@ class TestTheRouteTellsTheCallerToRetry:
     @pytest.mark.asyncio
     async def test_a_register_failure_is_a_503_with_retry_after(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from fastapi.responses import JSONResponse
+
         from medallion.api import ingest_media as route_module
 
         async def refused(*_a: object, **_kw: object) -> dict[str, str]:

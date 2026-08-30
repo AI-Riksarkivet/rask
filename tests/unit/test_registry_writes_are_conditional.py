@@ -27,8 +27,8 @@ import re
 from pathlib import Path
 
 import pytest
-from catalog.services import warehouses
 
+from catalog.services import warehouses
 from service_kit.lakehouse.records import RecordChangedError, RecordMissingError
 
 
@@ -206,7 +206,6 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
     an unconditional write no window to lose.
     """
     from catalog.services import projects
-
     from service_kit.lakehouse import records as rec
 
     _seed_project(control_root)

@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 
 from annotator.api.v1.endpoints.assist import _SAM_CLICK_PATCH, AssistRequest, Point, Region, _mock, _remote
-
 from service_kit.media.state import AppState
 
 

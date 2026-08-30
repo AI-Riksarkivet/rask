@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from lineage.services import repository as repo_mod
 from lineage.services.repository import LineageRepository
 

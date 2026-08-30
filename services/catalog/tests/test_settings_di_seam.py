@@ -26,13 +26,13 @@ from __future__ import annotations
 
 import inspect
 
-from catalog.api import dependencies as deps
-
 # Module level, NOT inside the test: `from __future__ import annotations` makes every annotation a
 # string, and FastAPI resolves them against the DEFINING module's namespace. A function-local
 # import leaves `Request` unresolvable, and FastAPI then treats it as a query parameter — which
 # presents as a 422 about a missing `request` field rather than as an import problem.
 from fastapi import FastAPI, Request
+
+from catalog.api import dependencies as deps
 
 
 def test_get_namespace_takes_its_settings_by_injection() -> None:
@@ -56,8 +56,9 @@ def test_the_dependency_no_longer_calls_the_provider_directly() -> None:
 
 def test_an_override_actually_changes_what_the_dependency_sees() -> None:
     """End to end through FastAPI's own resolution, which is the only proof that matters."""
-    from catalog.core.config import Settings
     from fastapi.testclient import TestClient
+
+    from catalog.core.config import Settings
 
     app = FastAPI()
 

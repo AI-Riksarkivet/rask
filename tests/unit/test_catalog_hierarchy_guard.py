@@ -14,8 +14,9 @@ is missing just moves the confusion one layer out.
 from __future__ import annotations
 
 import pytest
-from catalog.api import fga_deps
 from lance_namespace import InvalidInputError
+
+from catalog.api import fga_deps
 
 
 DELIM = "$"

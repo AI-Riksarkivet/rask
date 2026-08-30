@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+
 from ingest.workflow import RunOutcome, RunSpec, TerminalInput, ingest_run
 
 
@@ -341,6 +342,7 @@ def test_a_terminal_run_is_COUNTED_by_status_and_volume(monkeypatch: pytest.Monk
     value off a payload — the per-unit ids and the error text stay in the `errors` dict on the log.
     """
     import pytest as _pytest  # noqa: F401
+
     from ingest import metrics as ingest_metrics
     from ingest.workflow import emit_terminal
 
@@ -385,11 +387,12 @@ def test_the_terminal_span_names_the_RUN_and_marks_a_failed_one(monkeypatch: pyt
     And a FAILED run never marks its span: the error boundary RETURNS `RunOutcome(status="FAILED")`
     rather than raising, so daprd sees an activity that completed normally.
     """
-    from ingest.workflow import emit_terminal
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from opentelemetry.trace import StatusCode
+
+    from ingest.workflow import emit_terminal
 
     monkeypatch.setattr("ingest.runtime.release_run_units", lambda _r: _noop_coro())
     monkeypatch.setattr("ingest.workflow._lineage", lambda: _SilentLineage())

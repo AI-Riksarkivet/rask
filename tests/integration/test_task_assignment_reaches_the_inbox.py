@@ -28,13 +28,13 @@ import json
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from annotator.api.dependencies import get_control_emitter
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import tasks as tasks_ep
 from annotator.projects.models import ProjectState, TaskState
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from notifications.api.control_events import ingest_control_event
 from notifications.models import NotificationReason
 from notifications.proxies import TypedActorProxy

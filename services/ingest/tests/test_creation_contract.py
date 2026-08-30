@@ -21,6 +21,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+
 from ingest.catalog import CreationContractError, LocalCatalog, assert_creation_contract
 
 

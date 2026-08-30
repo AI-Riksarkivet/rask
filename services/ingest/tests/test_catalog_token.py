@@ -98,6 +98,7 @@ def test_the_bearer_actually_reaches_the_REQUEST_headers(monkeypatch: pytest.Mon
     """Resolving the token and then not sending it would look identical from the outside — a 401 from
     the catalog either way — so the header assembly is pinned too."""
     import pyarrow as pa
+
     from ingest import catalog_service
 
     monkeypatch.setenv("RASK_INGEST_USE_CATALOG", "true")

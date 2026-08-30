@@ -12,6 +12,7 @@ raters, unlike Cohen's), true polygon area IoU via shapely.
 from __future__ import annotations
 
 import pytest
+
 from annotator.projects.agreement import (
     IOU_MATCH_THRESHOLD,
     NOT_ANNOTATED,

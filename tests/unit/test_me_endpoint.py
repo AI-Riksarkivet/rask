@@ -15,9 +15,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from catalog.api.v1.endpoints import me as ep
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
+from catalog.api.v1.endpoints import me as ep
 from service_kit.governed.oidc import IDToken
 
 

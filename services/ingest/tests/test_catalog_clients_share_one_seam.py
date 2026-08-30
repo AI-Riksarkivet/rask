@@ -27,6 +27,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
+
 from ingest.catalog import LocalCatalog
 from ingest.catalog_service import CatalogServiceClient
 

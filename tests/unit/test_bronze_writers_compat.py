@@ -12,6 +12,7 @@ story reads the same whichever head landed it.
 from __future__ import annotations
 
 import pyarrow as pa
+
 from ingest.runtime import BRONZE_SCHEMA
 from medallion.services.ingest import _ingest_schema  # noqa: PLC2701 — the writer's real schema, not a copy
 

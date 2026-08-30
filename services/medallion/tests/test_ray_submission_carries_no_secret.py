@@ -25,6 +25,7 @@ import json
 from typing import Any
 
 import pytest
+
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit
 

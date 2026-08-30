@@ -22,6 +22,7 @@ import inspect
 from typing import Any, cast
 
 import pytest
+
 from medallion.core.config import MedallionSettings
 from medallion.services import produce as produce_module
 from medallion.services.compute import seed_bronze

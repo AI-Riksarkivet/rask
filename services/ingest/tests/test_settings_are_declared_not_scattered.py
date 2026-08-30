@@ -23,6 +23,7 @@ import ast
 from pathlib import Path
 
 import pytest
+
 from ingest import config as config_mod
 
 
@@ -64,6 +65,7 @@ def test_the_catalog_delimiter_has_ONE_reader(monkeypatch: pytest.MonkeyPatch) -
     two different tables.
     """
     import pyarrow as pa
+
     from ingest.catalog_service import CatalogServiceClient
     from ingest.naming import bronze_table_id, delimiter
 
@@ -144,8 +146,9 @@ def test_a_MISTYPED_catalog_flag_refuses_instead_of_silently_writing_locally(mon
     a false reading means the run writes governed bytes no catalog knows about and no mover will ever
     be told of — the silent local fallback `catalog_enabled`'s own docstring forbids.
     """
-    from ingest.config import settings
     from pydantic import ValidationError
+
+    from ingest.config import settings
 
     monkeypatch.setenv("RASK_INGEST_USE_CATALOG", "ture")
     with pytest.raises(ValidationError):

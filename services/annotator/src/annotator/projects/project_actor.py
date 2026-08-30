@@ -100,6 +100,10 @@ class AnnotationProjectActorInterface(ActorInterface):
     async def get(self) -> dict[str, Any] | None:
         raise NotImplementedError
 
+    @actormethod(name="Discard")
+    async def discard(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
     @actormethod(name="Fire")
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
@@ -193,6 +197,35 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
     async def get(self) -> dict[str, Any] | None:
         project = await self._load()
         return project.model_dump(mode="json") if project else None
+
+    async def discard(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        """Erase a project that never finished being created — the create saga's compensation.
+
+        `POST /projects` seeds this actor, then registers the id in the tenant index, then seeds the
+        FGA owner tuples. A failure after the first left the document behind: unlisted and untupled
+        (unreachable forever), or listed and untupled (visible and denying every check). Retrying
+        the create does not repair either one — `project_id` is minted per attempt, so a retry
+        makes a SECOND project and orphans the first.
+
+        **Narrow by construction, which is the only reason it is safe to expose at all**: an empty
+        DRAFT and nothing else. A project that has left draft, or that holds a single indexed task,
+        is refused — so this can never be reached for as a delete-project door, and a compensation
+        that arrives late (after the caller retried and someone started labelling) refuses rather
+        than destroys.
+
+        Idempotent: discarding what is already gone is a no-op, because a compensation runs on a
+        path that has already failed once.
+        """
+        project = await self._load()
+        if project is None:
+            return {"discarded": False}
+        index = await self._load_index()
+        if project.state is not ProjectState.DRAFT or index:
+            raise IllegalTransition("project", project.state, f"discard (only an empty draft can be discarded; this one holds {len(index)} task(s))")
+        for key in (PROJECT_KEY, INDEX_KEY, DROPPED_KEY):
+            await self._state_manager.try_remove_state(key)
+        await self._state_manager.save_state()
+        return {"discarded": True}
 
     async def set_ontology(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Replace the ontology. The ROUTE owns the authz and state gates; this owns the write.

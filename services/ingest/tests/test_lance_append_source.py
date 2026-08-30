@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
+
 from ingest.adapters import LANCE_ROOT_ENV, register_builtin_sources
 from ingest.sources import SourceSpec, build_source, iter_units, lineage_input_for, registered_kinds
 

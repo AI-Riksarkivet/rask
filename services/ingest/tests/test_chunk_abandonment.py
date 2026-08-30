@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+
 from ingest.workflow import TerminateChunksInput, ingest_run, terminate_chunks
 
 

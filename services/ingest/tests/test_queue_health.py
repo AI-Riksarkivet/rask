@@ -21,9 +21,10 @@ from fastapi.testclient import TestClient
 
 
 if TYPE_CHECKING:
-    from ingest.queue import WorkQueue
     from nats.aio.client import Client as NatsClient
     from nats.js import JetStreamContext
+
+    from ingest.queue import WorkQueue
 
 
 def _queue_over(js: object) -> WorkQueue:

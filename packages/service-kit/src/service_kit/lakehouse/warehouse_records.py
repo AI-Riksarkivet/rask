@@ -7,25 +7,23 @@ answer changes at runtime — a warehouse is provisioned by an API call, not by 
 
 So the reader lives here, in the shared lakehouse library, deliberately narrow: it lists records and
 nothing else. It cannot write, bind, or delete, which keeps the catalog the only writer while giving
-the sweep a truthful answer. Same store shape as its siblings (one JSON per record under a prefix) —
-see the note in `protection.py` about collapsing these into one primitive.
+the sweep a truthful answer. Same store shape as its siblings (one JSON per record under a prefix),
+and that primitive now exists: :mod:`service_kit.lakehouse.record_store`.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 from typing import Any
 
-import pyarrow.fs as pafs
+from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lakehouse.record_store import list_records
 
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-
-
-log = logging.getLogger(__name__)
 
 #: Where the catalog writes warehouse records. Kept in sync with `catalog/services/warehouses.py`.
 REGISTRY_PREFIX = "_warehouses"
+
+#: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
+_EVENT = "warehouse_record"
 
 
 def list_warehouse_records(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
@@ -34,22 +32,11 @@ def list_warehouse_records(control_root: str, storage_options: StorageOptions) -
     One unreadable record is skipped with a warning rather than blinding the whole listing: this
     feeds a maintenance sweep, and one bad record must not stop every other tenant being maintained.
     A caller making a DESTRUCTIVE decision must not use this — it is deliberately tolerant.
+
+    A record with no ``id`` is dropped here rather than in the store: it is readable and well-formed
+    JSON, it just names nothing this registry can route to.
     """
-    fs, base = fs_and_base(control_root, storage_options)
-    selector = pafs.FileSelector(f"{base}/{REGISTRY_PREFIX}", allow_not_found=True, recursive=False)
-    records: list[dict[str, Any]] = []
-    for info in fs.get_file_info(selector):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
-        try:
-            with fs.open_input_stream(info.path) as stream:
-                loaded: Any = json.loads(stream.read().decode())
-        except Exception:  # noqa: BLE001 — one bad record must not empty the list
-            log.warning("warehouse_record_unreadable", extra={"path": info.path})
-            continue
-        if isinstance(loaded, dict) and loaded.get("id"):
-            records.append(loaded)
-    return records
+    return [record for record in list_records(control_root, storage_options, REGISTRY_PREFIX, event=_EVENT) if record.get("id")]
 
 
 def maintainable_buckets(records: list[dict[str, Any]]) -> list[str]:

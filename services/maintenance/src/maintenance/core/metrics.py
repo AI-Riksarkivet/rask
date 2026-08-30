@@ -129,7 +129,7 @@ def record_run() -> None:
     _runs.add(1)
 
 
-def record_trash_purge(purged_by_kind: dict[str, int], refused_by_kind: dict[str, int], bytes_reclaimed: int) -> None:
+def record_trash_purge(*, purged_by_kind: dict[str, int], refused_by_kind: dict[str, int], bytes_reclaimed: int) -> None:
     """Record one tick's reclamation. Always emits — adding 0 is a valid no-op that still CREATES the
     series (the :func:`record_reclaimed` rule), and for a reclaimer the zero is the interesting number:
     "nothing was purged this tick" and "the purge never ran" must not look identical on a dashboard."""
@@ -139,7 +139,7 @@ def record_trash_purge(purged_by_kind: dict[str, int], refused_by_kind: dict[str
     _trash_bytes.add(bytes_reclaimed)
 
 
-def record_reclaimed(fragments_removed: int, versions_removed: int, indices_optimized: int = 0) -> None:
+def record_reclaimed(*, fragments_removed: int, versions_removed: int, indices_optimized: int = 0) -> None:
     """Record what one sweep reclaimed + re-optimized across all datasets. Always emit — adding 0 is a valid
     no-op that still CREATES the counter series, so a dashboard/alert on ``rate(compaction_*_total[5m])``
     has data from the first sweep instead of reading "no data" until the first non-zero reclaim (obs audit

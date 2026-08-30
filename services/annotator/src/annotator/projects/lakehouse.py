@@ -15,6 +15,12 @@ Retry safety maps onto the catalog's own contract:
   attempt already tagged it (success); pointing elsewhere means a different publish owns the name
   (loud failure, never silently adopted).
 
+The transport itself is TWO stacks, and they used to disagree about failure: the tag calls go
+through the generated client (`Configuration(retries=...)`), while the token mint and the S4
+``create`` were bare ``httpx.post`` calls — a fresh client and connection each, with no retries at
+all, on the half that WRITES. Both now share :func:`publish_client`, one pooled retrying client per
+publisher, released by :meth:`CatalogPublisher.close`.
+
 `spawn_publish` is the seam the project actor's watchdog reminder calls: it schedules
 :func:`run_publish_for` on the event loop OUTSIDE the actor's turn, because the saga drives the
 actor through its own proxy surface and an in-turn await would deadlock on the actor's mailbox.
@@ -42,6 +48,29 @@ logger = logging.getLogger(__name__)
 #: The catalog header that carries caller-supplied run facets (`{name: payload}`). The catalog's
 #: ``merge_insert`` already parses it; the ``create`` side is the S4 extension.
 RUN_FACETS_HEADER = "X-Lance-Run-Facets"
+
+#: Connect-failure retries for the publish transport's DIRECT-HTTP half, kept equal to the retry
+#: budget the generated client is built with below (`Configuration(retries=...)`).
+#:
+#: The two halves used to disagree: the tag calls went through the SDK and survived a dropped
+#: connection, while the token mint and the `create` — the call that WRITES — were bare
+#: `httpx.post(...)` at httpx's default of 0. A transient reset on the write half fires
+#: `publish_failed` and leaves the project waiting for a watchdog tick. Retrying `create` is safe by
+#: construction, not by hope: it posts `mode=exist_ok`, which is the same property the whole
+#: retry-safety argument in this module's docstring rests on.
+CATALOG_TRANSPORT_RETRIES = 3
+
+
+def publish_client(timeout: float) -> Any:
+    """One pooled, retrying `httpx.Client` for the publish path's direct-HTTP calls.
+
+    A `Client` (and therefore a connection) per call was the other half of the same finding: the
+    module-level `httpx.post` helper builds one, uses it once and throws it away. Callers own the
+    returned client and must close it.
+    """
+    import httpx  # noqa: PLC0415 - publish path only, like every other httpx use in this module
+
+    return httpx.Client(transport=httpx.HTTPTransport(retries=CATALOG_TRANSPORT_RETRIES), timeout=timeout)
 
 
 def _bare_facets(run_facet: dict[str, Any]) -> dict[str, Any]:
@@ -93,8 +122,6 @@ def publish_token(settings: Any) -> str | None:
     if not (settings.publish_token_url and settings.publish_username):
         return None
 
-    import httpx  # noqa: PLC0415
-
     from service_kit.governed.secrets import fetch_required_secrets  # noqa: PLC0415 - publish path only
 
     bundle = fetch_required_secrets(settings.publish_secret_store, settings.publish_secret_key, require="publisher-oidc-password")
@@ -110,7 +137,8 @@ def publish_token(settings: Any) -> str | None:
     # no-OpenBao fallback, the same shape as every other guarded credential.
     client_secret = bundle.get("publisher-oidc-client-secret") or settings.publish_client_secret or ""
     auth = (settings.publish_client_id, client_secret) if settings.publish_client_id else None
-    response = httpx.post(settings.publish_token_url, data=data, auth=auth, timeout=15.0)
+    with publish_client(15.0) as client:
+        response = client.post(settings.publish_token_url, data=data, auth=auth)
     if response.status_code >= 400:
         raise RuntimeError(f"the IdP refused the publish identity: HTTP {response.status_code} {response.text[:200]}")
     payload = response.json()
@@ -131,10 +159,20 @@ class CreateTableResult(BaseModel):
 
 class _HttpCreateApi:
     """The create call over direct HTTP — same signature as the SDK's ``DataApi.create_table`` so
-    the injectable test seam is unchanged, plus the S4 params the generated client cannot send."""
+    the injectable test seam is unchanged, plus the S4 params the generated client cannot send.
+
+    Holds ONE pooled, retrying client for the life of the publisher (see
+    :data:`CATALOG_TRANSPORT_RETRIES`); `close` releases it, and `CatalogPublisher.close` is what
+    calls that.
+    """
 
     def __init__(self, base_url: str) -> None:
         self._base = base_url.rstrip("/")
+        self._client = publish_client(60.0)
+
+    def close(self) -> None:
+        """Release the pooled connection. Called by `CatalogPublisher.close`."""
+        self._client.close()
 
     def create_table(
         self,
@@ -151,8 +189,6 @@ class _HttpCreateApi:
     ) -> CreateTableResult:
         from urllib.parse import quote  # noqa: PLC0415
 
-        import httpx  # noqa: PLC0415 - publish path only
-
         params: dict[str, str] = {"delimiter": delimiter}
         if mode:
             params["mode"] = mode
@@ -162,7 +198,7 @@ class _HttpCreateApi:
             params["source"] = source
             if source_version is not None:
                 params["source_version"] = str(source_version)
-        response = httpx.post(
+        response = self._client.post(
             f"{self._base}/v1/table/{quote(table_id, safe='')}/create",
             params=params,
             content=body,
@@ -210,7 +246,7 @@ class CatalogPublisher:
         from lance_namespace_urllib3_client import ApiClient, Configuration  # noqa: PLC0415 - optional dep
         from lance_namespace_urllib3_client.api.tag_api import TagApi  # noqa: PLC0415
 
-        client = ApiClient(Configuration(host=base_url, retries=3))
+        client = ApiClient(Configuration(host=base_url, retries=CATALOG_TRANSPORT_RETRIES))
         if token:
             client.set_default_header("Authorization", f"Bearer {token}")
         # The tag call goes through the generated client, which does not read `self._headers` — wiring
@@ -221,6 +257,21 @@ class CatalogPublisher:
         # our S4 `source`/`source_version` query params (OPEN-WORK §B3), and the pin must travel.
         self._data = _HttpCreateApi(base_url)
         self._tags = TagApi(client)
+
+    def close(self) -> None:
+        """Release both transports' connections.
+
+        Only what THIS publisher opened: an injected `data_api`/`tag_api` belongs to its injector,
+        and closing it here would be ownership this object does not have (the same reasoning the
+        annotator's lifespan applies to `AppState`'s slots).
+        """
+        for api in (self._data, self._tags):
+            closer = getattr(api, "close", None)
+            if closer is not None:
+                try:
+                    closer()
+                except Exception:  # noqa: BLE001 - a shutdown that raises hides whatever came after it
+                    logger.warning("error closing the publish transport %s", type(api).__name__)
 
     async def create_table(
         self,
@@ -414,10 +465,16 @@ async def run_publish_for(project_id: str) -> PublishOutcome | None:
         token=token,
         originator=subject,
     )
-    return await run_publish(
-        project_handle=project_handle,
-        task_handle=task_handle,
-        publisher=publisher,
-        namespace=namespace,
-        subject=subject,
-    )
+    try:
+        return await run_publish(
+            project_handle=project_handle,
+            task_handle=task_handle,
+            publisher=publisher,
+            namespace=namespace,
+            subject=subject,
+        )
+    finally:
+        # The publisher holds pooled connections to the catalog (and the SDK's own client). One
+        # publisher is built per saga run, so leaving them to the collector leaks a connection per
+        # publish — the same shape as the FGA session the lifespan closes.
+        publisher.close()

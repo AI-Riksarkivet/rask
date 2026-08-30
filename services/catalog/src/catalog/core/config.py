@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -178,7 +178,12 @@ class Settings(BaseSettings):
     # the STRICT sole source: the chart omits the plaintext secret from pod env, and a store miss FAILS
     # CLOSED at boot (no env fallback) — matching the module docstring's "no silent fallback".
     secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
-    dapr_secret_store: str = Field(default="lance-secrets", alias="LANCE_DAPR_SECRET_STORE")
+    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
+    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
+    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: still be moved on its own.
+    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
 

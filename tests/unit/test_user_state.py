@@ -29,12 +29,12 @@ from typing import Any
 
 import httpx
 import pytest
-from catalog.api import dependencies
-from catalog.core.config import Settings, get_settings
 from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
 
+from catalog.api import dependencies
+from catalog.core.config import Settings, get_settings
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.user_state import (
     DAPR_APP_ID_SEPARATOR,

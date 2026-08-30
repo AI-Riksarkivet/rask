@@ -28,9 +28,9 @@ from typing import Any, cast
 import pytest
 from fastapi import Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+
 from lineage.api import security
 from lineage.core.config import LineageSettings
-
 from service_kit.governed import dapr_auth
 from service_kit.governed.dapr_auth import ServiceIdentity
 

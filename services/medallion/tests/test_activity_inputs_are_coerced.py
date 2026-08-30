@@ -26,8 +26,9 @@ from __future__ import annotations
 import inspect
 import re
 
-from medallion import workflow
 from pydantic import BaseModel
+
+from medallion import workflow
 
 
 def _activities() -> list[tuple[str, str, type]]:

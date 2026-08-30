@@ -13,7 +13,6 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from catalog.services.dataplane import create_table
 from lance import Blob, blob_array, blob_field
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -25,6 +24,7 @@ from lance_namespace import (
     connect,
 )
 
+from catalog.services.dataplane import create_table
 from service_kit.lakehouse import blobs
 
 
@@ -414,8 +414,9 @@ def test_rename_refuses_a_table_with_branches(tmp_path: Path) -> None:
     beats a 200 that quietly destroys their branches.
     """
     import pytest
-    from catalog.services.dataplane import _refuse_rename_with_branches
     from lance_namespace import InvalidInputError
+
+    from catalog.services.dataplane import _refuse_rename_with_branches
 
     uri = str(tmp_path / "t")
     ds = lance.write_dataset(pa.table({"id": [1, 2]}), uri)

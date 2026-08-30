@@ -13,6 +13,16 @@ import uuid
 from typing import Any
 
 import pytest
+from openlineage.client.facet_v2 import (
+    BaseFacet,
+    dataset_version_dataset,
+    datasource_dataset,
+    error_message_run,
+    output_statistics_output_dataset,
+    parent_run,
+    schema_dataset,
+)
+
 from lineage_kit import (
     BASE_FACET_SCHEMA_URL,
     DATASET_VERSION_FACET_SCHEMA_URL,
@@ -40,15 +50,6 @@ from lineage_kit import (
 )
 from lineage_kit.context import LineageContext
 from lineage_kit.schemas import DatasetFacets, OutputDatasetFacets, RunFacets
-from openlineage.client.facet_v2 import (
-    BaseFacet,
-    dataset_version_dataset,
-    datasource_dataset,
-    error_message_run,
-    output_statistics_output_dataset,
-    parent_run,
-    schema_dataset,
-)
 
 
 _JOB_RUN_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"

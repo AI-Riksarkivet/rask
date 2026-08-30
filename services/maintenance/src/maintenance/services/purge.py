@@ -606,7 +606,7 @@ def _record_metrics(out: TrashPurgeReport) -> None:
         purged[entry.kind] = purged.get(entry.kind, 0) + 1
     for refusal in out.refused:
         refused[refusal.kind] = refused.get(refusal.kind, 0) + 1
-    record_trash_purge(purged, refused, sum(p.bytes_deleted for p in out.purged))
+    record_trash_purge(purged_by_kind=purged, refused_by_kind=refused, bytes_reclaimed=sum(p.bytes_deleted for p in out.purged))
 
 
 def _estate_base_refs(roots: set[str], storage_options: StorageOptions) -> BaseRefs:

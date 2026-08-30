@@ -9,6 +9,7 @@ without which KIE and DocVQA are not expressible at all, at any level of attribu
 from __future__ import annotations
 
 import pytest
+
 from annotator.projects.ontology import (
     LabelClass,
     LabelOntology,

@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from ingest.staging import (
     UnitManifestMissing,
     discover_staged,

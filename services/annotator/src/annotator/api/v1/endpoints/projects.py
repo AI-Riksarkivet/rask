@@ -12,6 +12,7 @@ decides *what* — they are deliberately separate.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
@@ -19,6 +20,7 @@ from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
+from annotator.api.v1.responses import LegalEvent, ProjectDetail, ProjectListing
 from annotator.projects.machines import legal_project_events
 from annotator.projects.models import AnnotationProject, ProjectState
 from annotator.projects.ontology import LabelOntology
@@ -30,6 +32,8 @@ from service_kit.governed.audit import FAILURE, SUCCESS, audit
 if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects", tags=["annotation-projects"])
 
@@ -104,35 +108,73 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
     # (`POST /projects/<id>/items`) answered 409 "annotation project does not exist".
     stored = await _create_actor(project.project_id).create(project.model_dump(mode="json"))
 
-    # REGISTER it in the tenant index — the actor `GET /projects` lists through. Synchronous and
-    # NOT best-effort: an unregistered project is invisible to the landing forever, and both halves
-    # are idempotent, so a failure here is answered by retrying the create, not by a repair job.
-    await _tenant_actor(payload.tenant).register({"project_id": project.project_id})
+    # THE OTHER TWO WRITES, COMPENSATED. Create is three writes in sequence and it used to protect
+    # none of them, on the stated grounds that "a failure here is answered by retrying the create,
+    # not by a repair job". That was false in the way that matters: `project_id` is minted per
+    # attempt (`default_factory=new_id`), so a retry creates a SECOND project and ORPHANS the first
+    # — as a document nothing lists and nobody may open, or (once the register landed) as a row on
+    # the landing page that denies every check for everyone, creator included.
+    #
+    # So a failure past this point undoes what it wrote, in reverse, and then fails. The
+    # compensations are idempotent and `discard` refuses anything but an empty draft, which is what
+    # keeps this a create saga rather than a delete door (open_python-audit ANN-10).
+    registered = False
+    try:
+        # REGISTER it in the tenant index — the actor `GET /projects` lists through. Synchronous and
+        # NOT best-effort: an unregistered project is invisible to the landing forever.
+        await _tenant_actor(payload.tenant).register({"project_id": project.project_id})
+        registered = True
 
-    # SEED OWNERSHIP. Two tuples, and both are load-bearing: `owner@user:<subject>` so the creator can
-    # manage what they made, and the `tenant` edge to `project:<tenant>` so `owner: … or admin from
-    # tenant` and `viewer: … or member from tenant` resolve. Without them every rung on this object is
-    # unreachable — including door 1 of the publish crossing, which would deny for everyone forever,
-    # creator included. The relation is `tenant`, NOT `parent`: this type spells its parent edge
-    # differently from every governed type, and writing `parent` yields a tuple no rule reads.
-    if fga_client is not None:
-        await fga.grant_on_create(
-            cast("OpenFgaClient", fga_client),
-            user_sub=subject,
-            resource="annotation_project",
-            obj_id=project.project_id,
-            actor=subject,
-            origin="annotator",
-            parent_object=f"project:{payload.tenant}",
-            parent_relation="tenant",
-        )
+        # SEED OWNERSHIP. Two tuples, and both are load-bearing: `owner@user:<subject>` so the creator
+        # can manage what they made, and the `tenant` edge to `project:<tenant>` so `owner: … or admin
+        # from tenant` and `viewer: … or member from tenant` resolve. Without them every rung on this
+        # object is unreachable — including door 1 of the publish crossing, which would deny for
+        # everyone forever, creator included. The relation is `tenant`, NOT `parent`: this type spells
+        # its parent edge differently from every governed type, and writing `parent` yields a tuple no
+        # rule reads.
+        if fga_client is not None:
+            await fga.grant_on_create(
+                cast("OpenFgaClient", fga_client),
+                user_sub=subject,
+                resource="annotation_project",
+                obj_id=project.project_id,
+                actor=subject,
+                origin="annotator",
+                parent_object=f"project:{payload.tenant}",
+                parent_relation="tenant",
+            )
+    except Exception:
+        await _undo_create(project.project_id, payload.tenant, registered=registered)
+        # `reason`, not `relation`: the create was AUTHORIZED — a later write in the sequence
+        # failed. Stamping the door here would read as a denial that never happened.
+        audit("annotation_project.create", FAILURE, subject=subject, resource=project.fga_object, reason="compensated")
+        raise
 
     audit("annotation_project.create", SUCCESS, subject=subject, resource=project.fga_object)
     return AnnotationProject.model_validate(stored)
 
 
+async def _undo_create(project_id: str, tenant: str, *, registered: bool) -> None:
+    """Roll the create's writes back, in reverse, leaving nothing behind.
+
+    Every step is best-effort and logged: this runs because something already failed, and the
+    ORIGINAL failure is the one the caller must see — a compensation that raises would replace the
+    real reason with a second-order one. What a failed compensation leaves is exactly the orphan
+    that existed before, now with a log line naming it.
+    """
+    if registered:
+        try:
+            await _tenant_actor(tenant).unregister({"project_id": project_id})
+        except Exception:
+            logger.exception("could not un-register project %s from tenant %s after a failed create — it will list without owner tuples", project_id, tenant)
+    try:
+        await _create_actor(project_id).discard({})
+    except Exception:
+        logger.exception("could not discard project %s after a failed create — its document is orphaned in the actor state store", project_id)
+
+
 @router.get("")
-async def list_projects(tenant: Annotated[str, Query(min_length=1)], checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def list_projects(tenant: Annotated[str, Query(min_length=1)], checker: CheckerDep, subject: CurrentSubject) -> ProjectListing:
     """The tenant's projects — A1's landing read.
 
     Gated on tenant MEMBERSHIP, and a refusal is a 403, never an empty 200: "you may not look"
@@ -151,11 +193,11 @@ async def list_projects(tenant: Annotated[str, Query(min_length=1)], checker: Ch
         doc = await _create_actor(str(project_id)).get()
         if doc is not None:
             projects.append(doc)
-    return {"projects": projects, "total": len(projects)}
+    return ProjectListing(projects=[AnnotationProject.model_validate(doc) for doc in projects], total=len(projects))
 
 
 @router.get("/{project_id}")
-async def get_project(project_id: ProjectId, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def get_project(project_id: ProjectId, checker: CheckerDep, subject: CurrentSubject) -> ProjectDetail:
     """One project plus its LEGAL EVENTS — the read A1's detail page renders.
 
     `legal_events` comes from `machines.legal_project_events`, i.e. from the transition tables
@@ -170,7 +212,7 @@ async def get_project(project_id: ProjectId, checker: CheckerDep, subject: Curre
     if doc is None:
         raise NotFoundError(f"annotation project {project_id} does not exist")
     project = AnnotationProject.model_validate(doc)
-    return {"project": doc, "legal_events": legal_project_events(project.state)}
+    return ProjectDetail(project=project, legal_events=[LegalEvent.model_validate(e) for e in legal_project_events(project.state)])
 
 
 class UpdateOntologyRequest(BaseModel):

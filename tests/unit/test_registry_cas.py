@@ -23,9 +23,9 @@ from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
-from catalog.services import warehouses
 from lance_namespace import NamespaceAlreadyExistsError
 
+from catalog.services import warehouses
 from service_kit.lakehouse import records
 
 

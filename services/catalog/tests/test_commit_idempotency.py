@@ -27,8 +27,9 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from catalog.services import dataplane
 from lance.fragment import write_fragments
+
+from catalog.services import dataplane
 
 
 SCHEMA = pa.schema([("id", pa.int64()), ("partition_key", pa.string())])

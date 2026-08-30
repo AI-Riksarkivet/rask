@@ -12,8 +12,9 @@ from __future__ import annotations
 import importlib
 import pkgutil
 
-import catalog.api.v1.endpoints as endpoints_pkg
 from pydantic import BaseModel
+
+import catalog.api.v1.endpoints as endpoints_pkg
 
 
 def _endpoint_modules() -> list:

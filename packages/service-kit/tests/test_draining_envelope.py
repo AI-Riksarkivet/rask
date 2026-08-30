@@ -84,28 +84,51 @@ def test_a_healthy_app_is_untouched() -> None:
 
 #: Every app that mounts `refuse_when_draining`. All are on the lance plane, which is why the
 #: `DomainError`-subclasses-`HTTPException` trap bit here specifically.
+#: The five lance-plane deployables, by importable module. They all assemble through
+#: `service_kit.lance_app.build_lance_service_app` since the DUP-12 collapse; before it, each hand-wrote
+#: the handler pair and this list was five file PATHS grepped for `register_handlers(app)`. A grep is
+#: the wrong instrument for the question — it passes on a mention in a comment and fails on a correct
+#: app that got its handlers from a factory — so it is now driven through the real apps.
 DRAINING_APPS = [
-    "services/medallion/src/medallion/producer.py",
-    "services/medallion/src/medallion/mover.py",
-    "services/lineage/src/lineage/main.py",
-    "services/maintenance/src/maintenance/service.py",
-    "services/catalog/src/catalog/main.py",
+    ("medallion-producer", "medallion.producer"),
+    ("medallion-mover", "medallion.mover"),
+    ("lineage", "lineage.main"),
+    ("maintenance", "maintenance.service"),
+    ("catalog", "catalog.main"),
 ]
 
 
-@pytest.mark.parametrize("path", DRAINING_APPS, ids=[p.split("/")[1] for p in DRAINING_APPS])
-def test_every_lance_app_maps_domain_errors_too(path: str) -> None:
+@pytest.mark.parametrize(("name", "module_path"), DRAINING_APPS, ids=[row[0] for row in DRAINING_APPS])
+def test_every_lance_app_maps_domain_errors_too(name: str, module_path: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The half a unit test on the dependency cannot cover.
 
     `DomainError` subclasses `HTTPException`, so an app with only the ns translator still ANSWERS —
     503, `Retry-After` intact — with a `{"detail": ...}` body. Raising the right class is therefore not
     sufficient; the app has to install `register_handlers` for the envelope to exist at all. These five
-    apps install only the translator until this finding, and every door using this dependency is on one
-    of them.
+    apps installed only the translator until this finding, and every door using this dependency is on
+    one of them.
     """
-    import pathlib as _p
+    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")  # `catalog.main` builds its settings at import
+    module = __import__(module_path, fromlist=["app"])
+    app = module.app
+    # The route comes OFF again: these are process-wide singletons, and a probe left on one changes
+    # what `tests/unit/test_openapi_contract.py` sees the live app serve.
+    routes_before = list(app.router.routes)
+    schema_before = app.openapi_schema
 
-    source = (_p.Path(__file__).resolve().parents[3] / path).read_text()
-    assert "register_handlers(app)" in source, (
-        f"{path} installs only the lance translator, so a DomainError renders through starlette's HTTPException fallback — status right, envelope absent"
-    )
+    @app.get("/_probe_draining", dependencies=[Depends(refuse_when_draining)])
+    async def _guarded() -> dict[str, str]:
+        return {"ok": "yes"}
+
+    app.state.shutting_down = True
+    try:
+        response = TestClient(app, raise_server_exceptions=False).get("/_probe_draining")
+    finally:
+        app.state.shutting_down = False
+        app.router.routes[:] = routes_before
+        app.openapi_schema = schema_before
+    assert response.status_code == 503, response.text
+    assert response.headers["content-type"].startswith(PROBLEM_JSON), dict(response.headers)
+    assert response.headers.get("Retry-After"), dict(response.headers)
+    body = response.json()
+    assert {"type", "title", "status", "detail"} <= set(body), body

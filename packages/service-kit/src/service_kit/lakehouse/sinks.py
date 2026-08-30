@@ -33,11 +33,16 @@ class LocalDirSink:
         return path.resolve().as_uri()
 
 
-class S3Sink:
+class S3FileSystemSink:
     """A :class:`SinkAdapter` writing into an S3/MinIO bucket prefix; returns the ``s3://`` URI.
 
     ``fs`` is a configured ``pyarrow.fs.S3FileSystem`` (endpoint + creds live there), so the same adapter
-    serves MinIO, RustFS, or AWS by swapping the filesystem.
+    serves MinIO, RustFS, or AWS by swapping the filesystem — which is what the name states.
+
+    Renamed from ``S3Sink`` 2026-08-30 for the reason given on
+    :class:`service_kit.lakehouse.sources.S3FileSystemSource`: it shadowed :class:`storage.S3Sink`, whose
+    contract (``write(key, data) -> None`` over a boto3 client, with its own ``content_type``) is not
+    this one's (``put(key, data) -> uri``).
     """
 
     def __init__(self, fs: pafs.S3FileSystem, bucket: str, prefix: str = "") -> None:

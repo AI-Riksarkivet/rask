@@ -20,9 +20,9 @@ import json
 
 import pyarrow as pa
 import pytest
+
 from annotator.projects.imports import IMPORT_SOURCE, shapes_from_ipc
 from annotator.projects.ontology import LabelClass, LabelOntology, RelationClass
-
 from service_kit.exceptions import ValidationError
 
 

@@ -6,8 +6,8 @@ from typing import cast
 
 import pyarrow as pa
 from lance import blob_field
-from medallion.schemas.events import build_run_event
 
+from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import schema
 
 

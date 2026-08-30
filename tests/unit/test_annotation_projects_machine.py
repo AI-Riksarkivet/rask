@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import NotRequired, TypedDict, cast
 
 import pytest
+
 from annotator.projects import (
     AnnotationProject,
     Draft,

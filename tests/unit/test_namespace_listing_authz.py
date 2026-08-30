@@ -24,10 +24,11 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from catalog.api.v1.endpoints import namespaces as ns_ep
-from catalog.core.config import Settings
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ListTablesResponse
+
+from catalog.api.v1.endpoints import namespaces as ns_ep
+from catalog.core.config import Settings
 
 
 class _Settings:

@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from search.api.v1 import router as router_mod
 from search.services.fuse import RRF_SCORE
-
 from service_kit.exceptions import ValidationError
 
 

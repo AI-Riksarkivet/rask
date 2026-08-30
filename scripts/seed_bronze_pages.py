@@ -39,8 +39,8 @@ import sys
 from collections.abc import Iterator
 
 import httpx
-from medallion.services.ingest import ingest_to_bronze
 
+from medallion.services.ingest import ingest_to_bronze
 from service_kit.lakehouse.sources import SourceObject
 
 

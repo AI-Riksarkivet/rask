@@ -25,9 +25,9 @@ import re
 import uuid
 
 import pytest
+
 from medallion.schemas.events import build_run_event
 from medallion.services.trigger_guards import SAFE_TOKEN_PATTERN
-
 from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
 from service_kit.openlineage import run_id_for
 

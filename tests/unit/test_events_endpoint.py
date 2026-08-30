@@ -15,7 +15,6 @@ from typing import Any, cast
 
 from catalog.api.v1.endpoints import events as ep
 from catalog.core.control_buffer import ControlEventBuffer
-
 from service_kit.control_events import CatalogControlEvent
 
 

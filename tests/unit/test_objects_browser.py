@@ -22,10 +22,10 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from viewer.api.v1.endpoints import objects as objects_module
-from viewer.api.v1.endpoints.objects import router as objects_router
 
 from service_kit.exceptions import register_handlers
+from viewer.api.v1.endpoints import objects as objects_module
+from viewer.api.v1.endpoints.objects import router as objects_router
 
 
 #: The DEPLOYMENT's store registry for this suite. Declared here because `service-kit` ships no

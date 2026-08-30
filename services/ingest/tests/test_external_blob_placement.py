@@ -22,6 +22,7 @@ from typing import Any
 
 import lance
 import pytest
+
 from ingest.adapters import register_builtin_sources
 from ingest.lander import create_empty
 from ingest.runtime import approved_external_base

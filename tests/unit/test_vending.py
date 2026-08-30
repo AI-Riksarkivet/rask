@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 import pytest
+
 from catalog.core.vending import (
     ModeBVendor,
     StaticPrefixVendor,

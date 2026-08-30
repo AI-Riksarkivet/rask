@@ -20,6 +20,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+
 from ingest import workflow as ingest_wf
 from medallion import workflow as medallion_wf
 

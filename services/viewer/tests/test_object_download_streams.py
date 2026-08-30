@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from starlette.responses import StreamingResponse
+
 from viewer.api.v1.endpoints import objects as objects_ep
 
 

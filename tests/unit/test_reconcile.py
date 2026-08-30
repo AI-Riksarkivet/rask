@@ -12,6 +12,7 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 import pytest
+
 from lineage.api.reconcile_cron import _on_cron
 from lineage.core.config import LineageSettings
 from lineage.core.reconcile import (
@@ -25,7 +26,6 @@ from lineage.core.reconcile import (
     reconcile_all,
 )
 from lineage.schemas import DatasetSummary, ReconcileState
-
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.schema import SchemaFields
 
@@ -392,6 +392,7 @@ def test_cron_runs_the_sweep_when_it_acquires_the_lock() -> None:
 
 def _cron_app(repo: _FakeRepo) -> Any:
     from fastapi import FastAPI
+
     from lineage.api.dependencies import get_repository
     from lineage.api.reconcile_cron import build_reconcile_cron_router
     from lineage.core.config import get_settings
@@ -474,6 +475,7 @@ def test_mount_reconcile_cron_production_gate() -> None:
     real app mounts it at all. No binding name → nothing mounts; a name → the route serves there."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from lineage.main import mount_reconcile_cron
 
     bare = FastAPI()

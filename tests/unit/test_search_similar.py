@@ -23,13 +23,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from search.services.similar import (
     SimilarSpec,
     drop_seed,
     key_predicate,
     seed_vector,
 )
-
 from service_kit.exceptions import NotFoundError, ValidationError
 from service_kit.lancekit.descriptor import Declared
 

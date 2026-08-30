@@ -26,8 +26,9 @@ validation at the boundary rather than a redesign.
 from __future__ import annotations
 
 import pytest
-from catalog.api.v1.endpoints import versions as versions_ep
 from fastapi.routing import APIRoute
+
+from catalog.api.v1.endpoints import versions as versions_ep
 
 
 def _limit_param():

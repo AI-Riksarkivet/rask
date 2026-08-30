@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+
 from annotator.projects.models import AnnotationProject, Draft, Shape, Task, TaskState
 from annotator.projects.ontology import LabelClass, LabelOntology
 from annotator.projects.publish import (
@@ -300,6 +301,7 @@ def test_the_plan_converts_to_arrow_under_the_declared_schema() -> None:
     catches a wrong TYPE — a str where a float32 is declared, a naive datetime where a tz-aware one
     is — which otherwise surfaces as an opaque conversion error at write time in a cluster."""
     import pyarrow as pa
+
     from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
 
     plan = _plan(
@@ -327,6 +329,7 @@ def test_an_all_sentinel_publish_still_produces_a_correctly_typed_table() -> Non
     task was skipped yields null-typed columns, and a consumer's `x > 0.5` fails against a table that
     is supposed to have the same shape as every other publish."""
     import pyarrow as pa
+
     from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
 
     plan = _plan([(_task("t0", TaskState.SKIPPED), None), (_task("t1", TaskState.SKIPPED), None)])

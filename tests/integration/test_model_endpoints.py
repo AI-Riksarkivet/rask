@@ -17,10 +17,10 @@ from unittest.mock import AsyncMock, MagicMock
 import lance
 import pyarrow as pa
 import pytest
-from catalog.api.dependencies import get_settings
-from catalog.core.config import Settings
 from fastapi.testclient import TestClient
 
+from catalog.api.dependencies import get_settings
+from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 

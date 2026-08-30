@@ -14,10 +14,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from lance_namespace import InvalidInputError, ServiceUnavailableError
+from openfga_sdk.client import OpenFgaClient
+
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from lance_namespace import InvalidInputError, ServiceUnavailableError
-
+from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE, SUCCESS, configure_audit
 from service_kit.governed.oidc import IDToken
 
@@ -46,11 +48,13 @@ def _run(
 
     monkeypatch.setattr(access.fga, "write_tuples", fake_write)
     monkeypatch.setattr(access.fga, "delete_tuples", fake_delete)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object())))
+    # The FGA client and the control emitter are INJECTED now (catalog-api-09) — the helper no longer
+    # digs either out of `request.app.state`, so the drive hands them over directly.
+    client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
     token = cast(IDToken, SimpleNamespace(sub="alice"))
     body = access.AccessGrantRequest(user=user, relation=relation)
-    resp = asyncio.run(access._access_mutate(cast(access.Request, request), settings, token, fga_type, ident, body, grant=grant))
+    resp = asyncio.run(access._access_mutate(client, NoopControlEmitter(), settings, token, fga_type, ident, body, grant=grant))
     return resp, captured
 
 
@@ -132,10 +136,10 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
         return tuples
 
     monkeypatch.setattr(access.fga, "read_object_tuples", fake_read)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object())))
+    client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
     token = cast(IDToken, SimpleNamespace(sub="alice"))
-    resp = asyncio.run(access._access_graph(cast(access.Request, request), settings, token, "table", "db1$t"))
+    resp = asyncio.run(access._access_graph(client, settings, token, "table", "db1$t"))
 
     assert resp.object == "table:db1$t"
     assert {n.id for n in resp.nodes} == {"table:db1$t", "user:alice", "role:eng#assignee", "namespace:db1"}

@@ -16,9 +16,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from annotator.api.v1.endpoints import members
 from openfga_sdk import OpenFgaClient
 
+from annotator.api.v1.endpoints import members
 from service_kit.exceptions import ConflictError
 
 

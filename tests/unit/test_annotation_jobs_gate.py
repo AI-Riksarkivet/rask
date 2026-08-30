@@ -22,10 +22,10 @@ from __future__ import annotations
 import logging
 
 import pytest
-from annotator.api.v1.endpoints import jobs as jobs_ep
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from annotator.api.v1.endpoints import jobs as jobs_ep
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 

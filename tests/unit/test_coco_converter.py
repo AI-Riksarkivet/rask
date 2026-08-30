@@ -13,9 +13,9 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.ontology import LabelClass, LabelOntology
-
 from service_kit.exceptions import ValidationError
 
 

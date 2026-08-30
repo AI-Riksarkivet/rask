@@ -22,8 +22,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from catalog.core.identifiers import parse_identifier
 
+from catalog.core.identifiers import parse_identifier
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
 
@@ -84,6 +84,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     three captures below would diverge.
     """
     from catalog.api.v1.endpoints import data
+    from catalog.services import table_create
 
     granted: dict[str, Any] = {}
     stamped: dict[str, Any] = {}
@@ -110,10 +111,10 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
         # location the old native stub did.
         return SimpleNamespace(version=1, location="s3://lakehouse/uuid_alpha.bronze.images")
 
-    monkeypatch.setattr(data.fga_deps, "seed_ownership", _seed)
-    monkeypatch.setattr(data, "build_lineage_metadata", _build_meta)
-    monkeypatch.setattr(data, "inject_into_arrow_stream", lambda payload, _meta: payload)  # no real Arrow
-    monkeypatch.setattr(data.dataplane, "create_table", _facade_create)
+    monkeypatch.setattr(table_create.fga_deps, "seed_ownership", _seed)
+    monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)
+    monkeypatch.setattr(table_create, "inject_into_arrow_stream", lambda payload, _meta: payload)  # no real Arrow
+    monkeypatch.setattr(table_create.dataplane, "create_table", _facade_create)
 
     emitter = _RecordingEmitter()
     asyncio.run(

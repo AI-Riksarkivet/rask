@@ -14,18 +14,26 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import project_events as ev
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import ProjectState
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from service_kit.exceptions import register_handlers
 from service_kit.media.deps import get_state
 
 
 SUBJECT = "henry"
+
+
+#: The fields `Task` requires and these doubles used to omit. The details fan-out publishes the
+#: `Task` model (ANN-07), so a document missing them describes a task the actor cannot store.
+_TASK_REQUIRED: dict[str, Any] = {
+    "source": {"kind": "chunks", "keys": ["t1"]},
+    "media": {"kind": "image", "image_url": "s3://bucket/t1.jpg"},
+}
 
 
 class _FakeProject:
@@ -43,7 +51,10 @@ class _FakeProject:
         if self.raise_on_fire:
             raise self.raise_on_fire
         self.fired.append(payload)
-        return {"state": "publishing", "project_id": "p1"}
+        # As the ACTOR answers: `tenant` and `slug` are required on `AnnotationProject`, and the
+        # route publishes that model now (open_python-audit ANN-07), so a document the actor could
+        # not have stored no longer passes through the route either.
+        return {"state": "publishing", "project_id": "p1", "tenant": "acme", "slug": "charters"}
 
     async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.sent.append(payload)
@@ -363,8 +374,8 @@ def test_details_listing_fans_out_and_carries_legal_events(wired: Any, monkeypat
     client, project, _t, _seen = wired({"can_view"})
     project.tasks = {"t1": "claimed", "t2": "in_review", "ghost": "claimed"}
     docs: dict[str, dict[str, Any]] = {
-        "t1": {"task_id": "t1", "project_id": "p1", "state": "claimed", "assignee": "gina", "lease_expires_at": "2026-07-31T12:00:00+00:00"},
-        "t2": {"task_id": "t2", "project_id": "p1", "state": "in_review", "assignee": None, "submitted_by": "gina"},
+        "t1": {**_TASK_REQUIRED, "task_id": "t1", "project_id": "p1", "state": "claimed", "assignee": "gina", "lease_expires_at": "2026-07-31T12:00:00+00:00"},
+        "t2": {**_TASK_REQUIRED, "task_id": "t2", "project_id": "p1", "state": "in_review", "assignee": None, "submitted_by": "gina"},
     }
 
     class _PerTask:
@@ -422,7 +433,7 @@ def test_details_on_a_frozen_project_carry_no_task_events(wired: Any, monkeypatc
     a published project."""
     client, project, _t, _seen = wired({"can_view"}, state=ProjectState.PUBLISHED)
     project.tasks = {"t1": "accepted"}
-    docs = {"t1": {"task_id": "t1", "project_id": "p1", "state": "accepted"}}
+    docs = {"t1": {**_TASK_REQUIRED, "task_id": "t1", "project_id": "p1", "state": "accepted"}}
 
     class _PerTask:
         def __init__(self, task_id: str) -> None:
@@ -500,7 +511,14 @@ def test_adjudicate_is_gated_on_can_manage_and_reaches_the_actor(wired: Any, mon
 
     async def _adjudicate(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
         picks.append(payload)
-        return {"project_id": "p1", "adjudications": {payload["group"]: {"task_id": payload["task_id"]}}}
+        # A whole `AnnotationProject`, as the actor answers — `tenant`/`slug` are required, and
+        # `Adjudication` carries `by`/`at` beside the pick.
+        return {
+            "project_id": "p1",
+            "tenant": "acme",
+            "slug": "charters",
+            "adjudications": {payload["group"]: {"task_id": payload["task_id"], "by": payload["actor"], "at": "2026-07-31T12:00:00+00:00"}},
+        }
 
     monkeypatch.setattr(_FakeProject, "adjudicate", _adjudicate, raising=False)
 
@@ -542,7 +560,7 @@ def test_clearing_an_adjudication_is_a_manager_gated_delete(wired: Any, monkeypa
 
     async def _adjudicate(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
         picks.append(payload)
-        return {"project_id": "p1", "adjudications": {}}
+        return {"project_id": "p1", "tenant": "acme", "slug": "charters", "adjudications": {}}
 
     monkeypatch.setattr(_FakeProject, "adjudicate", _adjudicate, raising=False)
 

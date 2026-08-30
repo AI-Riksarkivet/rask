@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from lineage_kit.consume import DatasetRef, LineageDoc
 from lineage_kit.schemas import RunEvent
-
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import UpstreamFacts

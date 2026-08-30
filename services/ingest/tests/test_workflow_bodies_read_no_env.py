@@ -26,6 +26,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+
 from ingest import workflow as wf_module
 from ingest.replay_guard import env_reads_in_workflow_bodies
 

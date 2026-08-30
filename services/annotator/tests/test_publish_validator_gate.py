@@ -21,8 +21,8 @@ string. That question is sound to answer by splitting, because the tier vocabula
 from __future__ import annotations
 
 import pytest
-from annotator.api.v1.endpoints.project_events import _authorize_publish
 
+from annotator.api.v1.endpoints.project_events import _authorize_publish
 from service_kit.exceptions import ForbiddenError
 
 

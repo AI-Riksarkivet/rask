@@ -24,9 +24,9 @@ import weakref
 from typing import Any
 
 import pytest
-from viewer.api.v1.endpoints import graph as graph_ep
 
 from service_kit.media.state import AppState
+from viewer.api.v1.endpoints import graph as graph_ep
 
 
 #: A cold build takes ~20 s in production; a test needs only "long enough that a serialized second

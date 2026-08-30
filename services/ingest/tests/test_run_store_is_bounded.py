@@ -13,6 +13,7 @@ never an answer.
 from __future__ import annotations
 
 import pytest
+
 from ingest.runs import InMemoryRunStore, RunRecord
 
 

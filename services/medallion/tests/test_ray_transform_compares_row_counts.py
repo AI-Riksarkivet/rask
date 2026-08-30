@@ -23,6 +23,7 @@ and then 200 -> 1000 both published without ever asking.
 from __future__ import annotations
 
 import pytest
+
 from medallion.services.promotion_band import FIRST_PROMOTION, ROW_DELTA, resolve_previous_row_count, review_reasons
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger
 

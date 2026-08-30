@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 
 import pytest
+
 from ingest.adapters import LOCAL_ROOT_ENV, confine_to_local_root
 from ingest.fetch import UriFetcher
 from ingest.sources import SourceSpec, build_source

@@ -261,13 +261,16 @@ async def _read_async[T](source: str, awaitable: Awaitable[T]) -> tuple[T | None
         return None, _reason(source, exc)
 
 
-async def _read_blocking[T](source: str, fn: Callable[..., T], *args: Any) -> tuple[T | None, str | None]:
+async def _read_blocking[T](source: str, fn: Callable[..., T], *args: Any, **kwargs: Any) -> tuple[T | None, str | None]:
     """The blocking twin of :func:`_read_async` — the registry/bucket listings are blocking IO, so they
-    run in the threadpool exactly like the sweep's."""
-    return await _read_async(source, run_in_threadpool(fn, *args))
+    run in the threadpool exactly like the sweep's.
+
+    Forwards keywords as well as positionals so the readers it drives can declare their ambiguous
+    parameters keyword-only (MAINT-16) instead of being forced positional by this seam."""
+    return await _read_async(source, run_in_threadpool(fn, *args, **kwargs))
 
 
-def _list_json_records(root: str, storage_options: StorageOptions, prefix: str, required: tuple[str, ...]) -> tuple[list[dict[str, str]], list[str]]:
+def _list_json_records(root: str, storage_options: StorageOptions, *, prefix: str, required: tuple[str, ...]) -> tuple[list[dict[str, str]], list[str]]:
     """Every readable JSON record directly under ``<root>/<prefix>``, plus a reason per record SKIPPED.
 
     Non-recursive, so ``_warehouses`` does not swallow ``_warehouses/bindings``. Per-record tolerance
@@ -294,7 +297,7 @@ def _list_json_records(root: str, storage_options: StorageOptions, prefix: str, 
     return records, skipped
 
 
-def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter: str) -> list[str]:
+def _top_level_namespaces(root: str, storage_options: StorageOptions, *, delimiter: str) -> list[str]:
     """The top-level namespaces recorded on ``root``, sorted.
 
     Read from the namespace MANIFEST (``<root>/__manifest``, the spec's own object index), not from
@@ -328,7 +331,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter:
     )
 
 
-def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions, *, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """``(namespace, root)`` pairs across EVERY root, plus the roots that could not be read (F3.3).
 
     The scan read exactly ONE root — the shared default bucket — while a warehouse-enabled estate puts
@@ -354,7 +357,7 @@ def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptio
         try:
             # `|=`, not `.update(...)`: the module's read-only AST guard bans any call named `update`
             # and cannot tell a set method from a store write. Augmented assignment is not a call.
-            found |= {(name, root) for name in _top_level_namespaces(root, storage_options, delimiter)}
+            found |= {(name, root) for name in _top_level_namespaces(root, storage_options, delimiter=delimiter)}
         except Exception as exc:  # noqa: BLE001 — one unreachable bucket must not blind the whole scan
             unreadable.append((root, f"{type(exc).__name__}: {exc}"))
     return sorted(found), unreadable
@@ -429,7 +432,7 @@ async def _scan_tuples(client: Any) -> tuple[TupleScan, str | None]:
 # --------------------------------------------------------------------------- #
 
 
-def _ghosts(kind: str, tuple_counts: Mapping[str, int], record_ids: set[str], exclude: set[str]) -> list[GhostObject]:
+def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str], exclude: set[str]) -> list[GhostObject]:
     """FGA objects of ``kind`` holding tuples that no registry record names."""
     return [
         GhostObject(kind=kind, id=obj_id, fga_object=f"{kind}:{obj_id}", tuples=count)
@@ -458,7 +461,7 @@ def _unbound_namespaces(namespaces: Iterable[tuple[str, str]], bound: set[str]) 
     return [UnboundNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in bound]
 
 
-def _orphan_buckets(buckets: Iterable[str], claimed: set[str], platform: set[str]) -> list[OrphanBucket]:
+def _orphan_buckets(buckets: Iterable[str], *, claimed: set[str], platform: set[str]) -> list[OrphanBucket]:
     """Buckets no warehouse record claims and no platform role explains.
 
     Over-reporting is the SAFE direction for a report: an unrecognised platform bucket shows up as a
@@ -541,14 +544,20 @@ async def _fga_source(sources: Sources, client: Any) -> tuple[TupleScan | None, 
 
 async def _registry_source(
     sources: Sources,
+    *,
     source_name: str,
     control_root: str,
     storage_options: StorageOptions,
     prefix: str,
     required: tuple[str, ...],
 ) -> tuple[list[dict[str, str]] | None, str | None]:
-    """One registry listing, folding its per-record skips into ``sources.incomplete``."""
-    listing, error = await _read_blocking(source_name, _list_json_records, control_root, storage_options, prefix, required)
+    """One registry listing, folding its per-record skips into ``sources.incomplete``.
+
+    Keyword-only past ``sources``: three of its five inputs are ``str`` and two of those are a ROOT and
+    a PREFIX, which a positional call site cannot distinguish and which silently list the wrong place
+    when swapped (MAINT-16).
+    """
+    listing, error = await _read_blocking(source_name, _list_json_records, control_root, storage_options, prefix=prefix, required=required)
     if listing is None:
         return None, error
     records, skipped = listing
@@ -594,9 +603,25 @@ async def load_sources(
         (sources.buckets, sources.buckets_error),
     ) = await asyncio.gather(
         _fga_source(sources, client),
-        _registry_source(sources, "registry:projects", control_root, storage_options, _PROJECTS_PREFIX, ("id",)),
-        _registry_source(sources, "registry:warehouses", control_root, storage_options, _WAREHOUSES_PREFIX, ("id", "bucket", "project")),
-        _registry_source(sources, "registry:bindings", control_root, storage_options, _BINDINGS_PREFIX, ("top_ns", "warehouse_id")),
+        _registry_source(
+            sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id",)
+        ),
+        _registry_source(
+            sources,
+            source_name="registry:warehouses",
+            control_root=control_root,
+            storage_options=storage_options,
+            prefix=_WAREHOUSES_PREFIX,
+            required=("id", "bucket", "project"),
+        ),
+        _registry_source(
+            sources,
+            source_name="registry:bindings",
+            control_root=control_root,
+            storage_options=storage_options,
+            prefix=_BINDINGS_PREFIX,
+            required=("top_ns", "warehouse_id"),
+        ),
         _bucket_source(sources, bucket_client),
     )
     # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
@@ -604,7 +629,9 @@ async def load_sources(
     # `dangling_bindings` was computed from.
     warehouse_roots = sorted({str(r["root_uri"]) for r in (sources.warehouse_records or []) if r.get("root_uri")})
     namespace_roots = [namespace_root, *(r for r in warehouse_roots if r != namespace_root)]
-    scanned, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options, delimiter)
+    scanned, sources.namespaces_error = await _read_blocking(
+        "catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options, delimiter=delimiter
+    )
     if scanned is not None:
         sources.namespaces, unreadable_roots = scanned
         sources.incomplete.extend(IncompleteScan(source=f"catalog:namespaces:{root}", reason=reason) for root, reason in unreadable_roots)
@@ -617,8 +644,43 @@ def _by_type(sources: Sources, object_type: str) -> dict[str, int]:
 
 
 def _first(*reasons: str | None) -> str | None:
-    """The first source failure among a category's inputs — the reason that category cannot be checked."""
+    """The first source failure among a category's inputs — the reason that category cannot be checked.
+
+    ORDER IS POLICY, not presentation. When two of a category's inputs are down at once this picks
+    which outage the report names, so two categories reading the SAME pair of sources must list that
+    pair in the SAME order or the report explains one outage two different ways depending on which
+    line the reader looks at (MAINT-10 — it did: `unreferenced_projects` listed the registry first
+    while `ghost_projects` and `orphaned_annotation_tasks` listed the tuple scan first). The shared
+    orders now live in the named tuples below rather than being retyped per category.
+    """
     return next((reason for reason in reasons if reason), None)
+
+
+def _run_category[Finding](
+    report: ReconcileReport,
+    category: str,
+    *,
+    inputs: tuple[str | None, ...],
+    detect: Callable[[], list[Finding]],
+) -> list[Finding]:
+    """Run ONE detector, or record why its inputs could not be read — the seven-times-repeated shape.
+
+    Every category in :func:`build_report` had this block written out in full: the `_first` guard, the
+    `CategoryUnavailable` append, the detector call, the assignment and the `counts` line. Five of the
+    seven differed only in the names, and the two that differed in anything else differed by MISTAKE
+    (see `_first`). Returning the findings rather than assigning them keeps each category's typed
+    field explicit at the call site — a `setattr` by category name would collapse the repetition and
+    the type checking with it.
+
+    UNAVAILABLE deliberately leaves the category OUT of ``counts``: a 0 there would read as "checked,
+    nothing found", which is the one thing this report must never print about a store it could not read.
+    """
+    if (reason := _first(*inputs)) is not None:
+        report.unavailable.append(CategoryUnavailable(category=category, reason=reason))
+        return []
+    findings = detect()
+    report.counts[category] = len(findings)
+    return findings
 
 
 def build_report(
@@ -633,55 +695,63 @@ def build_report(
     project_ids = {str(r["id"]) for r in sources.project_records or []}
     warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
     root_type, _, root_id = fga_root_object.partition(":")
+    # The shared input orders, named once. Three categories read the tuple scan and the project
+    # registry; two read the binding index and the warehouse registry. Naming them is what stops a
+    # fourth category from quietly introducing a fourth opinion about which outage to report.
+    tuples_and_projects = (sources.tuples_error, sources.project_records_error)
+    tuples_and_warehouses = (sources.tuples_error, sources.warehouse_records_error)
+    bindings_and_warehouses = (sources.bindings_error, sources.warehouse_records_error)
 
-    if (reason := _first(sources.tuples_error, sources.project_records_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="ghost_projects", reason=reason))
-    else:
-        report.ghost_projects = _ghosts("project", _by_type(sources, "project"), project_ids, {root_id} if root_type == "project" else set())
-        report.counts["ghost_projects"] = len(report.ghost_projects)
-
-    if (reason := _first(sources.tuples_error, sources.warehouse_records_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="ghost_warehouses", reason=reason))
-    else:
-        report.ghost_warehouses = _ghosts("warehouse", _by_type(sources, "warehouse"), warehouse_ids, {root_id} if root_type == "warehouse" else set())
-        report.counts["ghost_warehouses"] = len(report.ghost_warehouses)
-
-    if (reason := _first(sources.project_records_error, sources.tuples_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="unreferenced_projects", reason=reason))
-    else:
-        report.unreferenced_projects = _unreferenced_projects(project_ids, _by_type(sources, "project"))
-        report.counts["unreferenced_projects"] = len(report.unreferenced_projects)
+    report.ghost_projects = _run_category(
+        report,
+        "ghost_projects",
+        inputs=tuples_and_projects,
+        detect=lambda: _ghosts("project", _by_type(sources, "project"), record_ids=project_ids, exclude={root_id} if root_type == "project" else set()),
+    )
+    report.ghost_warehouses = _run_category(
+        report,
+        "ghost_warehouses",
+        inputs=tuples_and_warehouses,
+        detect=lambda: _ghosts("warehouse", _by_type(sources, "warehouse"), record_ids=warehouse_ids, exclude={root_id} if root_type == "warehouse" else set()),
+    )
+    report.unreferenced_projects = _run_category(
+        report,
+        "unreferenced_projects",
+        inputs=tuples_and_projects,
+        detect=lambda: _unreferenced_projects(project_ids, _by_type(sources, "project")),
+    )
 
     if not warehouses_enabled:
         report.skipped.append(CategorySkipped(category="unbound_namespaces", reason=_WAREHOUSES_OFF))
-    # `warehouse_records_error` joins the guard: that registry is what ENUMERATES the roots to scan,
-    # so without it the scan silently covers the shared root alone — which is the pre-F3.3 blind spot
-    # reappearing as a clean report rather than as an unavailable category.
-    elif (reason := _first(sources.namespaces_error, sources.bindings_error, sources.warehouse_records_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="unbound_namespaces", reason=reason))
     else:
-        bound = {str(b["top_ns"]) for b in sources.bindings or []}
-        report.unbound_namespaces = _unbound_namespaces(sources.namespaces or [], bound)
-        report.counts["unbound_namespaces"] = len(report.unbound_namespaces)
+        # `warehouse_records_error` joins the guard: that registry is what ENUMERATES the roots to
+        # scan, so without it the scan silently covers the shared root alone — which is the pre-F3.3
+        # blind spot reappearing as a clean report rather than as an unavailable category.
+        report.unbound_namespaces = _run_category(
+            report,
+            "unbound_namespaces",
+            inputs=(sources.namespaces_error, *bindings_and_warehouses),
+            detect=lambda: _unbound_namespaces(sources.namespaces or [], {str(b["top_ns"]) for b in sources.bindings or []}),
+        )
 
-    if (reason := _first(sources.buckets_error, sources.warehouse_records_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="orphan_buckets", reason=reason))
-    else:
-        claimed = {str(r["bucket"]) for r in sources.warehouse_records or []}
-        report.orphan_buckets = _orphan_buckets(sources.buckets or [], claimed, platform_buckets)
-        report.counts["orphan_buckets"] = len(report.orphan_buckets)
-
-    if (reason := _first(sources.bindings_error, sources.warehouse_records_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="dangling_bindings", reason=reason))
-    else:
-        report.dangling_bindings = _dangling_bindings(sources.bindings or [], warehouse_ids)
-        report.counts["dangling_bindings"] = len(report.dangling_bindings)
-
-    if (reason := _first(sources.tuples_error, sources.project_records_error)) is not None:
-        report.unavailable.append(CategoryUnavailable(category="orphaned_annotation_tasks", reason=reason))
-    else:
-        report.orphaned_annotation_tasks = _orphaned_annotation_tasks(sources.tuples.annotation_tenants if sources.tuples else [], project_ids)
-        report.counts["orphaned_annotation_tasks"] = len(report.orphaned_annotation_tasks)
+    report.orphan_buckets = _run_category(
+        report,
+        "orphan_buckets",
+        inputs=(sources.buckets_error, sources.warehouse_records_error),
+        detect=lambda: _orphan_buckets(sources.buckets or [], claimed={str(r["bucket"]) for r in sources.warehouse_records or []}, platform=platform_buckets),
+    )
+    report.dangling_bindings = _run_category(
+        report,
+        "dangling_bindings",
+        inputs=bindings_and_warehouses,
+        detect=lambda: _dangling_bindings(sources.bindings or [], warehouse_ids),
+    )
+    report.orphaned_annotation_tasks = _run_category(
+        report,
+        "orphaned_annotation_tasks",
+        inputs=tuples_and_projects,
+        detect=lambda: _orphaned_annotation_tasks(sources.tuples.annotation_tenants if sources.tuples else [], project_ids),
+    )
 
     # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still
     # reported. See `NON_GATING_CATEGORIES` for why these two are reported without gating.
@@ -745,7 +815,19 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         # a scan that never opened a dataset is the failure the report-first rule exists to prevent.
         report.skipped.append(CategorySkipped(category="orphan_files", reason=_ORPHAN_SCAN_OFF, coverage_gap=True))
         return
-    fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
+    # GUARDED, like every other source in this module. The three storage calls on this path — the
+    # filesystem construction here, `discover_datasets` per bucket, and `scan_datasets` below — used to
+    # be two-thirds unguarded, so a transient endpoint failure raised out of `reconcile()` and answered
+    # the cron tick 500, discarding a report whose seven store categories had already completed. That is
+    # exactly what this module's own docstring forbids: "a drift report that 500s on one bad store tells
+    # you nothing about the other six." UNAVAILABLE with the reason, which also blocks the #79 purge
+    # (`report_is_clean`) — a category nobody could look at must never read as clean.
+    try:
+        fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
+    except Exception as exc:  # noqa: BLE001 — any storage failure degrades ONE category, never the report
+        report.unavailable.append(CategoryUnavailable(category="orphan_files", reason=f"object storage unreachable: {exc}"))
+        report.incomplete.append(IncompleteScan(source="storage:datasets", reason=f"the unreferenced-file scan could not open object storage: {exc}"))
+        return
     datasets: list[tuple[str, str]] = []
     for bucket in _scannable_buckets(report, settings, sources):
         try:
@@ -759,7 +841,12 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         # gate the #79 purge waits on — must not certify an estate whose file layer we only partly saw.
         for prefix in found.truncated:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
-    scan = scan_datasets(fs, datasets, settings.storage_options())
+    try:
+        scan = scan_datasets(fs, datasets, settings.storage_options())
+    except Exception as exc:  # noqa: BLE001 — same rule as the filesystem guard above
+        report.unavailable.append(CategoryUnavailable(category="orphan_files", reason=f"the per-dataset file scan failed: {exc}"))
+        report.incomplete.append(IncompleteScan(source="storage:datasets", reason=f"the unreferenced-file scan aborted: {exc}"))
+        return
     report.orphan_files = scan.orphans
     report.counts["orphan_files"] = len(scan.orphans)
     report.total += len(scan.orphans)

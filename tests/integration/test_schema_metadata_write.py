@@ -17,8 +17,9 @@ import io
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
-from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
 from fastapi.testclient import TestClient
+
+from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

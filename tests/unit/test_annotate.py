@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING
 import lance
 import pyarrow as pa
 import pytest
+
 from annotator.annotations.save import build_delta, new_rows
 from annotator.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
 from annotator.annotations.tags import check_keys_arity, tag_id, tag_rows
-
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.descriptor import Declared
 
@@ -380,7 +380,6 @@ def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> N
 
 def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
     from annotator.annotations.versions import checkout
-
     from service_kit.exceptions import NotFoundError
 
     uri = str(tmp_path / "annotations.lance")

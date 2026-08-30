@@ -34,8 +34,9 @@ from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
 from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
+from annotator.api.v1.responses import DropReceipt, SendReceipt, TaskListing
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
-from annotator.projects.models import ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
+from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.control_emit import emit_control
@@ -209,7 +210,7 @@ async def _authorize_publish(checker: FgaChecker, subject: str, project_id: str,
 
 
 @router.post("/{project_id}/events", status_code=status.HTTP_200_OK)
-async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest, checker: CheckerDep, subject: CurrentSubject) -> AnnotationProject:
     """Drive one project transition.
 
     The permission comes from `PROJECT_EDGES`; `publish` additionally crosses the lakehouse doors.
@@ -251,7 +252,7 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
         raise ConflictError(str(exc)) from exc
 
     audit(f"project.{payload.event}", SUCCESS, subject=subject, resource=project_id)
-    return updated
+    return AnnotationProject.model_validate(updated)
 
 
 class AdjudicationRequest(BaseModel):
@@ -268,7 +269,7 @@ async def adjudicate_group(
     payload: AdjudicationRequest,
     checker: CheckerDep,
     subject: CurrentSubject,
-) -> dict[str, Any]:
+) -> AnnotationProject:
     """Consensus v1's merge step: name ONE accepted replica of the group canonical (a pick, never a
     blend — every replica's rows still publish; the facet carries the pick with attribution).
 
@@ -283,7 +284,7 @@ async def adjudicate_group(
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
     audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
-    return updated
+    return AnnotationProject.model_validate(updated)
 
 
 @router.delete("/{project_id}/adjudications/{group_id}", status_code=status.HTTP_200_OK)
@@ -292,7 +293,7 @@ async def clear_adjudication(
     group_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
     checker: CheckerDep,
     subject: CurrentSubject,
-) -> dict[str, Any]:
+) -> AnnotationProject:
     """Withdraw the pick for one group. Exists because a pick has no other exit: the publish
     refuses a stale or groupless pick (correctly), so without removal one wrong pick would wedge
     the publish permanently (audit finding). Idempotent — clearing an absent pick is a no-op —
@@ -303,7 +304,7 @@ async def clear_adjudication(
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
     audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
-    return updated
+    return AnnotationProject.model_validate(updated)
 
 
 #: A task may be dropped only while the project can still change what it will publish. Past
@@ -319,7 +320,7 @@ async def drop_task(
     checker: CheckerDep,
     subject: CurrentSubject,
     control: ControlEmitterDep,
-) -> dict[str, Any]:
+) -> DropReceipt:
     """Remove one item from a project.
 
     Exists because a send can put items into a project that can NEVER be completed. The case we hit
@@ -367,7 +368,7 @@ async def drop_task(
             actor=f"user:{subject}",
             extra={"subject": f"user:{holder}", "project": project_id, "event": "drop_task"},
         )
-    return result
+    return DropReceipt.model_validate(result)
 
 
 def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest) -> None:
@@ -450,7 +451,7 @@ def _validated_predictions(project: dict[str, Any], payload: SendItemsRequest) -
 
 
 @router.post("/{project_id}/items", status_code=status.HTTP_201_CREATED)
-async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> SendReceipt:
     """Send items into the project as tasks.
 
     Two phases, and the ORDER between them is the whole correctness argument: seed EVERY task actor
@@ -568,7 +569,7 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
     created = [str(row["task_id"]) for row in batch["results"] if row.get("created")]
 
     audit("project.send", SUCCESS, subject=subject, resource=project_id)
-    return {"sent": len(payload.items), "created": len(created), "task_ids": created}
+    return SendReceipt(sent=len(payload.items), created=len(created), task_ids=created)
 
 
 class TaskInclude(StrEnum):
@@ -583,7 +584,9 @@ class TaskInclude(StrEnum):
     DETAILS = "details"
 
 
-@router.get("/{project_id}/tasks")
+# `exclude_unset`: the plain listing publishes FIVE keys and the details listing publishes eight.
+# Emitting the extra three as `null` on the plain path would be a wire change — see `TaskListing`.
+@router.get("/{project_id}/tasks", response_model_exclude_unset=True)
 async def list_project_tasks(
     project_id: ProjectId,
     checker: CheckerDep,
@@ -606,7 +609,7 @@ async def list_project_tasks(
     # Keyset on the task id, which the handler already sorts — so the tail stays reachable rather than
     # merely slow. A limit with no cursor would hide the rest of the project behind the first page.
     cursor: Annotated[str | None, Query()] = None,
-) -> dict[str, Any]:
+) -> TaskListing:
     """The task index plus the publish precondition, computed from ONE snapshot.
 
     Returned together deliberately: a caller that read the index and then asked "may I publish?"
@@ -625,7 +628,7 @@ async def list_project_tasks(
     # worked, but comparing to a literal here would leave the enum decorative — a renamed member
     # would keep this branch silently correct against the old spelling.
     if include is not TaskInclude.DETAILS:
-        return listing
+        return TaskListing.model_validate(listing)
 
     # Rule 5 (§5.2): once the project is publishing/published/archived, EVERY task transition is
     # refused — so the details must not hand the UI actions that can only 409. The tasks' own
@@ -657,4 +660,4 @@ async def list_project_tasks(
             continue
         events = [] if project_frozen else legal_task_events(TaskState(doc["state"]))
         details.append({**doc, "legal_events": events})
-    return {**listing, "details": details, "missing": missing, "next_cursor": next_cursor}
+    return TaskListing.model_validate({**listing, "details": details, "missing": missing, "next_cursor": next_cursor})

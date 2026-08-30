@@ -13,12 +13,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from annotator.api.security import current_subject, get_checker, get_fga_client
-from annotator.api.v1.endpoints import projects as projects_ep
-from annotator.api.v1.endpoints.projects import CREATE_RELATION, router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from annotator.api.security import current_subject, get_checker, get_fga_client
+from annotator.api.v1.endpoints import projects as projects_ep
+from annotator.api.v1.endpoints.projects import CREATE_RELATION, router
 from service_kit.exceptions import register_handlers
 
 

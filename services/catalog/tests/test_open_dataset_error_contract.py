@@ -22,9 +22,10 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
+from lance_namespace import TableNotFoundError, connect
+
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table
-from lance_namespace import TableNotFoundError, connect
 
 
 TABLE_ID = ["pages"]

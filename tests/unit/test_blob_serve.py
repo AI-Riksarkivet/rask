@@ -14,10 +14,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from catalog.api.fga_deps import _action_relation
-from catalog.api.v1.endpoints.data import _parse_range
-from catalog.services import dataplane
-from catalog.services.dataplane import BlobStream, create_table, read_blob
 from lance import blob_array, blob_field
 from lance_namespace import (
     DeclareTableRequest,
@@ -27,6 +23,11 @@ from lance_namespace import (
     TableVersionNotFoundError,
     connect,
 )
+
+from catalog.api.fga_deps import _action_relation
+from catalog.api.v1.endpoints.data import _parse_range
+from catalog.services import dataplane
+from catalog.services.dataplane import BlobStream, create_table, read_blob
 
 
 def _blob_schema() -> pa.Schema:

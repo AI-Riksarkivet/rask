@@ -20,8 +20,9 @@ edited too and would then agree with whichever side was changed last.
 from __future__ import annotations
 
 import pytest
-from ingest.lineage import _output_datasets, _tenant_facet
 from openlineage.client.serde import Serde
+
+from ingest.lineage import _output_datasets, _tenant_facet
 
 
 pytest.importorskip("medallion", reason="the cascade head lives in the medallion service")

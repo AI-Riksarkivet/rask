@@ -20,8 +20,9 @@ import asyncio
 from typing import Any
 
 import pytest
-from catalog.api import fga_deps
 from lance_namespace import InvalidInputError, NamespaceNotFoundError
+
+from catalog.api import fga_deps
 
 
 class _RecordingNs:

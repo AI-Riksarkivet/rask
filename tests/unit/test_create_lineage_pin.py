@@ -14,8 +14,10 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from catalog.api.v1.endpoints import data as data_ep
 from lance_namespace import InvalidInputError
+
+from catalog.api.v1.endpoints import data as data_ep
+from catalog.services import table_create
 
 
 def _ipc(table: pa.Table) -> bytes:
@@ -58,13 +60,13 @@ class _Response:
 
 async def _create(monkeypatch: pytest.MonkeyPatch, emitter: _Emitter, **kwargs: Any) -> Any:
     """Drive the real handler with the write path faked out — dataplane commits are not under test."""
-    monkeypatch.setattr(data_ep.dataplane, "create_table", lambda *a, **k: _Response())
-    monkeypatch.setattr(data_ep.dataplane, "payload_schema_fields", lambda *a, **k: [])
+    monkeypatch.setattr(table_create.dataplane, "create_table", lambda *a, **k: _Response())
+    monkeypatch.setattr(table_create.dataplane, "payload_schema_fields", lambda *a, **k: [])
 
     async def _no_control(*a: Any, **k: Any) -> None:
         return None
 
-    monkeypatch.setattr(data_ep, "emit_control", _no_control)
+    monkeypatch.setattr(table_create, "emit_control", _no_control)
     body = _ipc(pa.table({"x": [1]}))
     return await data_ep.create_table(
         "silver$labels_1",
@@ -123,7 +125,7 @@ async def test_source_version_without_source_is_a_400_before_any_write(monkeypat
     is refused up front — never a committed create whose provenance silently dropped."""
     emitter = _Emitter()
     writes: list[Any] = []
-    monkeypatch.setattr(data_ep.dataplane, "create_table", lambda *a, **k: writes.append(a) or _Response())
+    monkeypatch.setattr(table_create.dataplane, "create_table", lambda *a, **k: writes.append(a) or _Response())
 
     with pytest.raises(InvalidInputError, match="source_version requires source"):
         await _create(monkeypatch, emitter, source_version=3)

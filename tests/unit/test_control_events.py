@@ -12,7 +12,6 @@ import asyncio
 from typing import Any, cast
 
 from catalog.core.control_buffer import ControlEventBuffer
-
 from service_kit.control_emit import (
     DaprControlEmitter,
     NoopControlEmitter,

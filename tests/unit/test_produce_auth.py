@@ -23,13 +23,13 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from lance_namespace import LanceNamespaceError, ServiceUnavailableError, UnauthenticatedError
+from openfga_sdk import OpenFgaClient
+
 from medallion.api import produce_auth
 from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.produce import router
 from medallion.api.train import router as train_router
 from medallion.core.config import MedallionSettings
-from openfga_sdk import OpenFgaClient
-
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.lakehouse.ns_errors import install_problem_handlers, status_for
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from ingest.cron import build_incremental_cron_router
 from ingest.runs import RunRecord
 

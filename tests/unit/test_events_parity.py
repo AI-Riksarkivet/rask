@@ -18,10 +18,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-import lineage_kit
 import pytest
-from medallion.schemas.events import build_run_event
 
+import lineage_kit
+from medallion.schemas.events import build_run_event
 from service_kit import openlineage as service_kit_ol
 from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,

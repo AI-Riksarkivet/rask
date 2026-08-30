@@ -12,8 +12,9 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from catalog.services import dataplane
 from lance_namespace import InvalidInputError
+
+from catalog.services import dataplane
 
 
 def _ipc(table: pa.Table) -> bytes:

@@ -11,6 +11,7 @@ producer (so a mixed queue has a visible order), and the save path keeps them.
 from __future__ import annotations
 
 import pyarrow as pa
+
 from annotator.annotations.save import new_rows
 from annotator.annotations.schema import EMPTY_SCHEMA, NewAnnotation
 from annotator.api.v1.endpoints.assist import AssistRequest, Region, _mock

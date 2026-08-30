@@ -272,7 +272,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`service_kit/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - The sweep covers EVERY warehouse bucket, not a static list (#81): `run_sweep` unions `s3_bucket`
   + `MAINTENANCE_S3_EXTRA_BUCKETS` with `warehouse_records.maintainable_buckets(registry)` and calls
-  `discover_dataset_uris` once per bucket — a bucket is created by an API CALL at runtime, so a
+  `discover_datasets` once per bucket — a bucket is created by an API CALL at runtime, so a
   config-time list goes stale by construction. The orphan scan reads the same registry
   (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
   unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).

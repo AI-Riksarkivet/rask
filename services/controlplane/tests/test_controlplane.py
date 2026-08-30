@@ -43,9 +43,12 @@ def test_to_dto_maps_all_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
     monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
 
+    from controlplane.schemas import ProjectCR
     from controlplane.service import to_dto
 
-    dto = to_dto(_cr("demo", team="team-archives", phase="Ready"), "")
+    # `to_dto` takes a VALIDATED CR since CP-CR-UNVALIDATED: the raw dict is turned into
+    # `ProjectCR` at the boundary (`list_project_dtos`), so the mapper never walks `.get()` chains.
+    dto = to_dto(ProjectCR.model_validate(_cr("demo", team="team-archives", phase="Ready")), "")
     assert dto.slug == "demo"
     assert dto.name == "demo"
     assert dto.team == "team-archives"
@@ -60,9 +63,10 @@ def test_to_dto_missing_status_defaults_pending(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
     monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
 
+    from controlplane.schemas import ProjectCR
     from controlplane.service import to_dto
 
-    dto = to_dto(_cr("fresh", phase=None), "")
+    dto = to_dto(ProjectCR.model_validate(_cr("fresh", phase=None)), "")
     assert dto.phase == "Pending"
     assert dto.namespace == ""
 
@@ -72,11 +76,12 @@ def test_to_dto_empty_phase_defaults_pending(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
     monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
 
+    from controlplane.schemas import ProjectCR
     from controlplane.service import to_dto
 
     cr = _cr("empty", phase="Ready")
     cr["status"]["phase"] = ""  # status present, phase empty string
-    dto = to_dto(cr, "")
+    dto = to_dto(ProjectCR.model_validate(cr), "")
     assert dto.phase == "Pending"
     assert dto.namespace == "project-empty"  # namespace still preserved
 
@@ -178,8 +183,9 @@ def test_list_projects_endpoint_503_when_kube_config_load_fails(client: TestClie
     inside its listing call rather than at construction time (construction happens during
     dependency resolution, before the route body runs).
     """
-    from controlplane.routes import get_reader
     from kubernetes import config as kube_config
+
+    from controlplane.routes import get_reader
 
     get_reader.cache_clear()
 

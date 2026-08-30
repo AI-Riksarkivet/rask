@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+
 from ingest.lineage import lineage_run_id
 from ingest.provenance import LineageProvenanceReader
 

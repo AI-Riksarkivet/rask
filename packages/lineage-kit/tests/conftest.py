@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from lineage_kit import RecordingEmitter, set_default_emitter
 from lineage_kit.config import lineage_settings
 from lineage_kit.context import CONTEXT_ENV_VAR

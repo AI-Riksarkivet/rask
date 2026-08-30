@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+
 from viewer.api.v1 import endpoints
 from viewer.api.v1.router import router as viewer_router
 

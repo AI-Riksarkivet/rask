@@ -23,11 +23,11 @@ import asyncio
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from viewer.api.v1.endpoints import objects as objects_ep
 
 from service_kit.exceptions import NotFoundError
 from service_kit.schemas.storage import StorageRole, Store
 from storage import BucketNotFoundError, ObjectNotFoundError
+from viewer.api.v1.endpoints import objects as objects_ep
 
 
 if TYPE_CHECKING:

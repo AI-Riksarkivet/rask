@@ -25,14 +25,15 @@ looks.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import APIRouter, Path, Request, status
+from fastapi import APIRouter, Path, status
 from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import SettingsDep, get_control_emitter
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
@@ -73,20 +74,23 @@ def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
     return [Member(user=t.user, relation=t.relation) for t in tuples if t.object == obj and t.relation in GRANTABLE]
 
 
-async def _client_or_conflict(request: Request, settings: Any) -> OpenFgaClient:
+def _client_or_conflict(client: OpenFgaClient | None, settings: Settings) -> OpenFgaClient:
     """The FGA client, or a clear refusal. Membership IS tuples — with authz off there is nothing to
-    write, and pretending otherwise would report a grant that never happened."""
-    client = getattr(request.app.state, "fga", None)
+    write, and pretending otherwise would report a grant that never happened.
+
+    Its own message rather than ``fga_deps.require_fga``'s pair: this door answers 503 for BOTH legs
+    (off and unwired) on purpose — see the note below — where the access surface answers 501 for off.
+    """
     if not settings.fga_enabled or client is None:
         # 503, not the 409 this used to be: membership IS tuples, so authz-off is the service being
         # UNAVAILABLE for the operation, not a conflict with anything — and access.py already answers
-        # 503 for the identical condition. Two doors, one status.
+        # a 5xx for the identical condition. Two doors, one status.
         raise ServiceUnavailableError("authorization is not configured on this deployment — tenant membership is unavailable")
-    return cast("OpenFgaClient", client)
+    return client
 
 
 @router.get("/{project_id}/members")
-async def list_members(project_id: ProjectId, request: Request, settings: SettingsDep, token: CurrentToken) -> MemberList:
+async def list_members(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MemberList:
     """Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
 
     DIRECT grants only. An admin who holds it through ``member from team`` is not listed, because they
@@ -94,18 +98,19 @@ async def list_members(project_id: ProjectId, request: Request, settings: Settin
     where that access lives and where it is removed.
     """
     obj = f"project:{project_id}"
-    client = getattr(request.app.state, "fga", None)
     await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
     if not settings.fga_enabled or client is None:
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
         # names here would put people in front of someone who never granted them.
         return MemberList(members=[])
-    tuples = await fga.read_object_tuples(cast("OpenFgaClient", client), obj)
+    tuples = await fga.read_object_tuples(client, obj)
     return MemberList(members=_direct_grants(tuples, obj))
 
 
 @router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
-async def grant_member(project_id: ProjectId, payload: GrantRequest, request: Request, settings: SettingsDep, token: CurrentToken) -> MemberList:
+async def grant_member(
+    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+) -> MemberList:
     """Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
 
     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
@@ -113,16 +118,16 @@ async def grant_member(project_id: ProjectId, payload: GrantRequest, request: Re
     on the second call.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(getattr(request.app.state, "fga", None), settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    client = await _client_or_conflict(request, settings)
+    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
     actor = token.sub if token else "system:catalog"
 
-    existing = await fga.read_object_tuples(client, obj)
+    existing = await fga.read_object_tuples(wired, obj)
     granted = not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing)
     if granted:
-        await fga.write_tuples(client, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
-        existing = await fga.read_object_tuples(client, obj)
+        await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
+        existing = await fga.read_object_tuples(wired, obj)
     audit("project.members.grant", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # TELL THE PERSON. `access.py` has announced every per-object grant it writes since the control lane
     # existed; this door — one rung UP, and strictly more consequential — wrote the same class of tuple
@@ -133,7 +138,7 @@ async def grant_member(project_id: ProjectId, payload: GrantRequest, request: Re
     # happen. After the audit, like every other emit — a change that did not commit is never announced.
     if granted:
         await emit_control(
-            get_control_emitter(request),
+            control,
             action="grant_added",
             object_type="grant",
             object_id=obj,
@@ -144,7 +149,9 @@ async def grant_member(project_id: ProjectId, payload: GrantRequest, request: Re
 
 
 @router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
-async def revoke_member(project_id: ProjectId, payload: GrantRequest, request: Request, settings: SettingsDep, token: CurrentToken) -> MemberList:
+async def revoke_member(
+    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+) -> MemberList:
     """Revoke one tenant rung — gated identically to granting it.
 
     REFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or
@@ -155,12 +162,12 @@ async def revoke_member(project_id: ProjectId, payload: GrantRequest, request: R
     state already holds.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(getattr(request.app.state, "fga", None), settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    client = await _client_or_conflict(request, settings)
+    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
     actor = token.sub if token else "system:catalog"
 
-    existing = await fga.read_object_tuples(client, obj)
+    existing = await fga.read_object_tuples(wired, obj)
     if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
         return MemberList(members=_direct_grants(existing, obj))
 
@@ -169,7 +176,7 @@ async def revoke_member(project_id: ProjectId, payload: GrantRequest, request: R
             f"{user} holds the only remaining admin on this project — grant another admin first, or nobody will be able to administer or delete it"
         )
 
-    await fga.delete_tuples(client, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
+    await fga.delete_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
     audit("project.members.revoke", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
     # feed could ever tell them — which is precisely why the control lane runs no visibility check and
@@ -179,11 +186,11 @@ async def revoke_member(project_id: ProjectId, payload: GrantRequest, request: R
     # Unconditional here because the no-op case already returned above: reaching this line means a
     # tuple really was deleted.
     await emit_control(
-        get_control_emitter(request),
+        control,
         action="grant_revoked",
         object_type="grant",
         object_id=obj,
         actor=f"user:{token.sub}" if token else None,
         extra={"relation": payload.relation, "subject": user},
     )
-    return MemberList(members=_direct_grants(await fga.read_object_tuples(client, obj), obj))
+    return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))

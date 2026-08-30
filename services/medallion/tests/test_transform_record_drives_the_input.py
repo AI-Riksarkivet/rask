@@ -23,8 +23,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from medallion.services.transform import resolve_stage_identity
 
+from medallion.services.transform import resolve_stage_identity
 from service_kit.lakehouse.transform_specs import TransformSpec
 
 

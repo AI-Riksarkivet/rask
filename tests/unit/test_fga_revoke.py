@@ -16,12 +16,12 @@ from typing import Any, cast
 
 import aiohttp
 import pytest
-from catalog.api import fga_deps
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
 
+from catalog.api import fga_deps
 from service_kit.governed import fga
 
 

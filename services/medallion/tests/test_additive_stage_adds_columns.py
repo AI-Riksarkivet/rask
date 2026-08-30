@@ -22,6 +22,7 @@ from pathlib import Path
 
 import lance
 import pyarrow as pa
+
 from medallion.services.compute import transform_stage
 
 

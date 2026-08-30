@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from service_kit.exceptions import UnprocessableEntityError
+
 
 #: A node's `output_text` is truncated to this many characters before it leaves the service.
 #: A run is a sandbox probe, not a transport: a model node can return a whole page of ALTO, and
@@ -164,19 +166,43 @@ class ValidateResponse(BaseModel):
     problems: list[str] = Field(default_factory=list)
 
 
+#: The RFC 9457 `type` a refused graph answers. One constant, spent by the exception that RAISES the
+#: refusal and by the model that DOCUMENTS it, so the wire and the OpenAPI cannot drift apart.
+FLOW_INVALID_TYPE = "about:blank#flow-invalid"
+
+
 class RunRefused(BaseModel):
     """The 422 body for a run whose graph does not validate — RFC 9457 problem+json plus the
     structured `problems` list (an extension member, which the RFC explicitly allows).
 
-    The list is the point: the builder highlights the offending nodes, and it cannot do that from a
-    single flattened `detail` string, which is all `service_kit.exceptions._problem` produces.
+    DOCUMENTATION ONLY: this is what `create_run` declares under `responses={422: ...}` so the
+    OpenAPI describes the refusal. The body itself is produced by the estate's one problem handler
+    from `RunRefusedError` below — the route used to build this model and return it as a
+    `JSONResponse`, which made this service the only one with a second error plane
+    (FLOWS-422-BYPASSES-HIERARCHY).
     """
 
-    type: str = "about:blank#flow-invalid"
+    type: str = FLOW_INVALID_TYPE
     title: str = "Unprocessable Entity"
     status: int = 422
     detail: str
     problems: list[str] = Field(default_factory=list)
+
+
+class RunRefusedError(UnprocessableEntityError):
+    """A graph that does not validate, RAISED rather than returned.
+
+    The reason this could not exist before is recorded in `service_kit.exceptions`: `_problem` built
+    four keys and dropped everything else, so the `problems` LIST — the whole substance of this
+    refusal, and what the studio builder highlights nodes from — had nowhere to ride. The hierarchy
+    now carries extension members, so the refusal is an exception like every other refusal in the
+    estate, and `create_run` declares one return type again.
+
+    Raise it as `RunRefusedError(f"{len(problems)} problem(s) in the graph", extensions={"problems":
+    problems})`.
+    """
+
+    problem_type = FLOW_INVALID_TYPE
 
 
 class RunRequest(BaseModel):

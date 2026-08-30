@@ -15,6 +15,7 @@ from __future__ import annotations
 import lance
 import pyarrow as pa
 import pytest
+
 from ingest.lander import Lander
 from ingest.runtime import BRONZE_SCHEMA
 

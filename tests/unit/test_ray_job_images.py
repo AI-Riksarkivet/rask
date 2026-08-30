@@ -26,6 +26,7 @@ import lance
 import lance_ray
 import pyarrow
 import pytest
+
 from medallion.core.config import MedallionSettings
 
 

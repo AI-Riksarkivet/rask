@@ -110,8 +110,9 @@ def test_the_trigger_REFUSES_an_absurd_duration_it_was_handed() -> None:
     """The trigger is untrusted input — it is re-parsed through the same guard as any bus arrival.
     A negative or absurd value must not reach the histogram, where it would poison the series."""
     import pytest
-    from medallion.services.trigger_guards import StageTrigger
     from pydantic import ValidationError
+
+    from medallion.services.trigger_guards import StageTrigger
 
     assert StageTrigger(ray_duration_seconds=42.0).ray_duration_seconds == 42.0
     for bad in (-1.0, 10_000_000.0):

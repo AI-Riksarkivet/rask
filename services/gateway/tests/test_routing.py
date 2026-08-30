@@ -152,9 +152,8 @@ def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypa
     deployment uses, which is its own way of being wrong.
     """
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    from ingest import create_app
-
     from gateway import _pick_route, _routes
+    from ingest import create_app
 
     served = set(create_app().openapi()["paths"])
 

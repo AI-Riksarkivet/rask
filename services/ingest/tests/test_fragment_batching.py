@@ -12,6 +12,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+
 from ingest.runtime import BRONZE_SCHEMA
 from ingest.worker import _is_permanent, units_to_table
 

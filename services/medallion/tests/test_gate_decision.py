@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
+
 from medallion.services.gate_decision import GateOutcome, gate_decision, promotion_status_for, refusal_message
 
 

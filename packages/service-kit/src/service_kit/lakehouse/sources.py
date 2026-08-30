@@ -71,7 +71,7 @@ class VersionedKeyedSourceAdapter(KeyedSourceAdapter, Protocol):
 class LocalDirSource:
     """A :class:`SourceAdapter` over a local directory tree — each file's bytes + its ``file://`` URI.
 
-    Recurses (``rglob``) and yields in sorted path order, matching :class:`S3Source` so the two adapters
+    Recurses (``rglob``) and yields in sorted path order, matching :class:`S3FileSystemSource` so the two adapters
     are interchangeable behind the Protocol and both produce a deterministic, reproducible ingest order.
     """
 
@@ -91,11 +91,18 @@ class LocalDirSource:
                 yield SourceObject(uri=path.resolve().as_uri(), data=path.read_bytes())
 
 
-class S3Source:
+class S3FileSystemSource:
     """A :class:`SourceAdapter` over an S3/MinIO bucket prefix — each object's bytes + its ``s3://`` URI.
 
     ``fs`` is a configured ``pyarrow.fs.S3FileSystem`` (endpoint + creds live there, not here), so the same
-    adapter serves MinIO, RustFS, or AWS by swapping the filesystem — the exact provider-agnostic seam.
+    adapter serves MinIO, RustFS, or AWS by swapping the filesystem — the exact provider-agnostic seam,
+    and what the name says: this adapter reaches S3 through a pyarrow FILESYSTEM.
+
+    **The long name is the point.** It was ``S3Source`` until 2026-08-30, which collided with
+    :class:`storage.S3Source` — a live, differently-shaped class (boto3 client, keyword-only,
+    ``keys()``/``read()``) that this one cannot be substituted for. ``services/medallion`` imported both
+    under that one name, in two modules of the same service, and a reader of either import line had no
+    way to tell which contract was in play.
     """
 
     def __init__(self, fs: pafs.S3FileSystem, bucket: str, prefix: str = "", client: Any | None = None) -> None:  # noqa: ANN401 — boto3 has no public stubs (same rule as storage.client)
@@ -140,13 +147,14 @@ class S3Source:
                 yield f"s3://{self._bucket}/{obj['Key']}", etag
 
     def iter_objects(self) -> Iterator[SourceObject]:
-        base = "/".join(part for part in (self._bucket, self._prefix) if part)
-        listing = self._fs.get_file_info(pafs.FileSelector(base, recursive=True))
-        # Sort by path: S3 listing order is unspecified, and the bronze `id` is positional, so a stable order
-        # is what makes the ingest reproducible (same objects -> same ids -> same rows every run).
-        for info in sorted(listing, key=lambda entry: entry.path):
-            if info.type != pafs.FileType.File:
-                continue  # skip the common-prefix "directory" entries a recursive listing returns
+        """The same objects :meth:`iter_keys` enumerates, with their bytes — through the SAME listing.
+
+        Both paths go via :meth:`_listing`, which is the point: this method used to re-derive the base
+        path, the recursive selector, the sort and the directory filter inline, so a change to what the
+        adapter considers enumerable had to be made twice and a subclass narrowing ``_listing`` was
+        honoured by the key path and silently ignored by the byte path.
+        """
+        for info in self._listing():
             try:
                 with self._fs.open_input_stream(info.path) as stream:
                     data = stream.readall()

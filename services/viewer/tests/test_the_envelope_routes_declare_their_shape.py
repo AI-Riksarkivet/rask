@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI
+
 from viewer.api.v1.router import router as viewer_router
 
 

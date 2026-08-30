@@ -20,10 +20,10 @@ from typing import TYPE_CHECKING
 import lance
 import pyarrow as pa
 import pytest
-from annotator.annotations.router import router as annotations_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from annotator.annotations.router import router as annotations_router
 from service_kit.exceptions import NotFoundError, register_handlers
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.reader import CatalogVersion
@@ -139,9 +139,14 @@ def test_catalog_mode_versions_listing_counts_and_header(catalog_harness) -> Non
     ]
     # ONE governed listing (settings-derived id, route limit) + one count PER version,
     # pinned at that version and filtered to THIS unit.
+    #
+    # Compared as a SET, not a sequence: the counts are issued through a bounded pool (ANN-08 —
+    # `limit` sequential round-trips to the catalog were the whole response time), so which one
+    # reaches the transport first is a race. What must hold is that each version is counted exactly
+    # once with this unit's filter; the ORDER that matters is the response body's, asserted above.
     assert ("list_versions", ("proj1", "annotations"), 20) in transport.calls
     counts = [call for call in transport.calls if call[0] == "count"]
-    assert [(call[3], call[2]) for call in counts] == [(2, _UNIT_FILTER), (1, _UNIT_FILTER)]
+    assert sorted((call[3], call[2]) for call in counts) == [(1, _UNIT_FILTER), (2, _UNIT_FILTER)]
 
 
 def test_catalog_mode_versions_listing_respects_limit(catalog_harness) -> None:

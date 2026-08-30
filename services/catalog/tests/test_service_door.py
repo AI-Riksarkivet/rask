@@ -26,11 +26,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from catalog.api import security
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
+from catalog.api import security
 from service_kit.governed import dapr_auth
 from service_kit.governed.oidc import IDToken
 

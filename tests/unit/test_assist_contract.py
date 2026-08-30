@@ -17,6 +17,7 @@ entry. So both are resolved once, server-side, where the task's captured ontolog
 from __future__ import annotations
 
 import pytest
+
 from annotator.api.v1.endpoints.assist import _CANONICAL_SHAPE, AssistShape, _task_ontology, _within_contract
 from annotator.projects.ontology import LabelClass, LabelOntology
 

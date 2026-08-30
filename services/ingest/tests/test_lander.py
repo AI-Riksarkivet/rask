@@ -17,6 +17,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
+
 from ingest.lander import CREATION_FLAGS, Lander, create_empty, write_unit_fragments
 
 

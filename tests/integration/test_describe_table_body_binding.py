@@ -17,11 +17,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
+from lance_namespace import DescribeTableResponse
+
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedCredentials
 from catalog.services import dataplane
-from fastapi.testclient import TestClient
-from lance_namespace import DescribeTableResponse
 
 
 _LOCATION = "s3://lance-catalog/db$t"

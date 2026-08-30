@@ -62,13 +62,13 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 from lance import blob_array, blob_field
+from pydantic import BaseModel
+
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
 from maintenance.services.optimize import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
 from maintenance.services.sweep import run_sweep, summarize
-from pydantic import BaseModel
-
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -405,8 +405,8 @@ def test_a_branch_is_refused_on_object_storage(estate: Estate, settings: Mainten
     result = orphans.scan_dataset(
         s3_filesystem(settings.storage_options()),
         estate.branch_uri,
-        f"{estate.ctl}/branched",
-        settings.storage_options(),
+        prefix=f"{estate.ctl}/branched",
+        storage_options=settings.storage_options(),
     )
     assert result.checked is False, "a branched dataset was SCANNED on S3 — the tree/ gate did not fire"
     assert result.orphans == []

@@ -1,12 +1,12 @@
 """Source adapters, registered — the concrete half of I1.
 
-Every adapter here already existed. `LocalDirSource` and `S3Source` have been in
+Every adapter here already existed. `LocalDirSource` and `S3FileSystemSource` have been in
 `service_kit.lakehouse.sources` all along, and were unreachable not because they were unfinished but
 because reaching them meant adding another head route, another settings block, another produce
 module. That is the cost I1 removes.
 
 `S3PrefixSource` in `medallion/services/s3_harvest.py` is NOT among them, and this docstring claimed
-it was. The `s3-prefix` kind registered below is built from `service_kit.lakehouse.sources.S3Source`;
+it was. The `s3-prefix` kind registered below is built from `service_kit.lakehouse.sources.S3FileSystemSource`;
 nothing outside that module's own unit test imports `S3PrefixSource`, so it remains unwired and its
 `s3_input()` lineage twin with it. Read the `register()` calls below as the list of what is actually
 reachable — a name in this prose is not a route.
@@ -250,7 +250,7 @@ def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
     same two-door rule `confine_to_local_root` follows.
     """
     from ingest.objectstore import resolve_source_connection, source_filesystem, source_s3_client
-    from service_kit.lakehouse.sources import S3Source
+    from service_kit.lakehouse.sources import S3FileSystemSource
 
     bucket = str(spec.options.get("bucket") or "")
     if not bucket:
@@ -259,7 +259,7 @@ def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
     # The storage client rides along for the VERSIONED listing (ETags): pyarrow FileInfo carries
     # no ETag, and the estate rule is storage.s3_client, never raw boto3. Built from the SAME
     # resolved connection as the filesystem, so the two views of the bucket cannot diverge.
-    return S3Source(source_filesystem(connection), bucket, str(spec.options.get("prefix") or ""), client=source_s3_client(connection))
+    return S3FileSystemSource(source_filesystem(connection), bucket, str(spec.options.get("prefix") or ""), client=source_s3_client(connection))
 
 
 def _s3_prefix_endpoint(spec: SourceSpec) -> str | None:

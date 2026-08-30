@@ -20,13 +20,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
-from catalog.api.v1.endpoints import transforms
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
+from catalog.api.security import CurrentToken
+from catalog.api.v1.endpoints import transforms
 from service_kit.lakehouse import transform_specs
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 

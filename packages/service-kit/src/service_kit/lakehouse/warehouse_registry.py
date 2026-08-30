@@ -10,20 +10,20 @@ stages out as ``<root_uri>/medallion/<namespace>``.
 Records are immutable except ``status``, so resolution accepts short staleness through a per-process TTL
 cache — positive hits only, meaning a freshly provisioned warehouse is visible immediately while a
 deactivation is honored within one TTL window (default 5s; ``WAREHOUSE_REGISTRY_TTL_SECONDS``
-overrides). All IO is blocking; callers threadpool it.
+overrides). That cache is BOUNDED and self-evicting (:class:`_TtlCache`, ``MAX_CACHE_ENTRIES``): its
+key is composed from caller-supplied strings, so an unbounded per-process map would grow for the life
+of a pod. All IO is blocking; callers threadpool it.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import time
 
-import pyarrow.fs as pafs
-
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lakehouse.record_store import list_records
 from service_kit.schemas.storage import GOVERNED_TIERS
 
 
@@ -44,10 +44,65 @@ _TTL_ENV_VAR = "WAREHOUSE_REGISTRY_TTL_SECONDS"
 #: Small by design: the cache only ever serves stale POSITIVES, and the harm of one (routing a tenant
 #: into a warehouse an admin just deactivated) outweighs the saved registry listing.
 _DEFAULT_TTL_SECONDS = 5.0
+#: The ceiling on resident cache entries. Bounded because the key is caller-supplied
+#: (``control_root`` and ``project`` both arrive on a request/trigger), and a per-process dict with no
+#: ceiling grows for the life of a service pod. Generous relative to any real estate — the estate's
+#: tenants number in the tens — so eviction is the safety net, not the steady state.
+MAX_CACHE_ENTRIES = 512
+
+
+class _TtlCache:
+    """A bounded, self-evicting TTL map — the resolver's positive cache.
+
+    It was a bare module-level ``dict`` with no bound and no eviction: an entry was only ever
+    overwritten by a lookup of the SAME key, so anything resolved once and never asked for again stayed
+    resident for the life of the process. Three behaviours make that safe here:
+
+    * **Expired entries are dropped on write**, not merely ignored on read. A read already refused a
+      stale entry, but nothing ever freed it.
+    * **A non-positive TTL is not stored at all.** :func:`project_root` documents ``ttl_seconds=0`` as
+      "re-read the registry on every call"; it nevertheless wrote an entry that was stale the instant it
+      landed, so the documented way to opt OUT of caching was the one that leaked fastest.
+    * **Over the ceiling, the soonest-to-expire entry goes.** Evicting the entry closest to needing a
+      re-read costs the least: it was about to be re-resolved anyway.
+
+    Not a ``BaseModel``: this is a mutable per-process cache, not a validated value object crossing a
+    boundary.
+    """
+
+    def __init__(self, max_entries: int) -> None:
+        self._max_entries = max_entries
+        self._entries: dict[tuple[str, str, str], tuple[float, str]] = {}
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def get(self, key: tuple[str, str, str], *, now: float) -> str | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        if now >= entry[0]:
+            del self._entries[key]
+            return None
+        return entry[1]
+
+    def set(self, key: tuple[str, str, str], value: str, *, now: float, ttl_seconds: float) -> None:
+        if ttl_seconds <= 0:
+            self._entries.pop(key, None)
+            return
+        self._entries = {held: entry for held, entry in self._entries.items() if entry[0] > now}
+        self._entries[key] = (now + ttl_seconds, value)
+        while len(self._entries) > self._max_entries:
+            del self._entries[min(self._entries, key=lambda held: self._entries[held][0])]
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
 #: ``(control_root, project, serving) → (expires_at_monotonic, root_uri)`` — positive resolutions only.
 #: ``serving`` partitions the cache by warehouse class (``""`` = work, ``"gold"`` = serving), so a cached
 #: work root can never answer a gold lookup or vice versa.
-_cache: dict[tuple[str, str, str], tuple[float, str]] = {}
+_cache = _TtlCache(MAX_CACHE_ENTRIES)
 
 
 def _default_ttl_seconds() -> float:
@@ -198,23 +253,15 @@ def _resolve_root(
     if ttl_seconds is None:
         ttl_seconds = _default_ttl_seconds()
     key = (control_root, project, serving)
-    cached = _cache.get(key)
-    if cached is not None and time.monotonic() < cached[0]:
-        return cached[1]
-    fs, base = fs_and_base(control_root, storage_options)
+    now = time.monotonic()
+    cached = _cache.get(key, now=now)
+    if cached is not None:
+        return cached
     matches: list[tuple[str, str]] = []
-    selector = pafs.FileSelector(f"{base}/{_REGISTRY_PREFIX}", allow_not_found=True, recursive=False)
-    for info in fs.get_file_info(selector):
-        # bindings/ + any state prefixes are subdirectories — the non-recursive listing skips them.
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
-        try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except Exception as exc:
-            log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
-            continue
-        if not isinstance(record, dict) or record.get("project") != project:
+    # `list_records` is the shared registry primitive: non-recursive (so `bindings/` and any state
+    # prefixes are skipped), one unreadable record warned and skipped rather than voiding the answer.
+    for record in list_records(control_root, storage_options, _REGISTRY_PREFIX, event="warehouse_record"):
+        if record.get("project") != project:
             continue
         if (record.get("status") or "active") != "active":
             continue
@@ -231,7 +278,7 @@ def _resolve_root(
             extra={"project": project, "serving": serving, "count": len(matches)},
         )
     root = min(matches)[1]
-    _cache[key] = (time.monotonic() + ttl_seconds, root)
+    _cache.set(key, root, now=now, ttl_seconds=ttl_seconds)
     return root
 
 

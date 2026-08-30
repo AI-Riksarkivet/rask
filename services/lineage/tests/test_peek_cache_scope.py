@@ -16,6 +16,7 @@ import lance
 import pyarrow as pa
 import pytest
 from fastapi import FastAPI, Request
+
 from lineage.api.v1.endpoints import demo
 
 

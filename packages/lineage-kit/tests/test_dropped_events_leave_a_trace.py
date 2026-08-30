@@ -21,8 +21,9 @@ import logging
 from typing import Any, cast
 
 import pytest
-from lineage_kit import ClientEmitter, Job, Run, RunEvent, RunState
 from openlineage.client import OpenLineageClient
+
+from lineage_kit import ClientEmitter, Job, Run, RunEvent, RunState
 
 
 def _reader() -> Any:

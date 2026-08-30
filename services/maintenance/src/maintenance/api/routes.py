@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
-from maintenance.core.config import get_settings
+from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import reconcile
 from maintenance.services.sweep import emit_sweep_lineage, run_sweep, summarize
@@ -35,8 +35,6 @@ from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)
-
-router = APIRouter()
 
 # Single-flight guard: the sweep is unbounded (it discovers + compacts EVERY dataset), so a slow sweep can
 # outlast the cron interval. Without this, the next tick starts a SECOND concurrent sweep and the two race
@@ -66,9 +64,10 @@ async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep) -> dict[str
 
     Single-flight: if a prior tick's sweep is still running, SKIP this one (it would only re-cover the same
     datasets and race the running sweep). The blocking discover + compact/GC runs in the threadpool; then
-    each materially-compacted dataset records a maintenance run on the lineage graph (#7b) — awaited inline
-    so the publish reaches the durable Dapr/JetStream transport before we return, and best-effort so it never
-    fails the sweep.
+    each materially-compacted dataset records a maintenance run on the lineage graph (#7b). The emit phase
+    is awaited as one bounded, concurrent batch — per-dataset serial awaits were the MAINT-04 defect — so
+    every publish reaches the durable Dapr/JetStream transport before we return, and it is best-effort
+    throughout, so a publish failure never fails the sweep.
     """
     if _sweep_lock.locked():
         log.warning("maintenance_sweep_skipped", extra={"reason": "previous sweep still running"})
@@ -164,28 +163,30 @@ async def ack_reconcile_binding() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# Register the cron route at the exact binding name the sidecar delivers to: POST runs the sweep, OPTIONS
-# acks Dapr's binding-discovery pre-flight (else it 405s and Dapr logs the app as not consuming it).
-_settings = get_settings()
-_binding_name = _settings.binding_name
-router.add_api_route(
-    f"/{_binding_name}",
-    on_cron,
-    methods=["POST"],
-    tags=["maintenance"],
-    dependencies=[Depends(require_dapr_token)],  # only the sidecar's cron tick may trigger a sweep
-)
-router.add_api_route(f"/{_binding_name}", ack_binding, methods=["OPTIONS"], include_in_schema=False)
+def build_router(settings: MaintenanceSettings) -> APIRouter:
+    """The two cron routes, at the exact binding names the sidecar delivers to.
 
-# The reconcile binding, same shape and the same token gate. It reads every tenant's registry records
-# and tuple counts, so an unauthenticated trigger would be an estate-wide disclosure, not just a wasted
-# scan — the gate is load-bearing here even though the pass mutates nothing.
-_reconcile_binding_name = _settings.reconcile_binding_name
-router.add_api_route(
-    f"/{_reconcile_binding_name}",
-    on_reconcile_cron,
-    methods=["POST"],
-    tags=["maintenance"],
-    dependencies=[Depends(require_dapr_token)],
-)
-router.add_api_route(f"/{_reconcile_binding_name}", ack_reconcile_binding, methods=["OPTIONS"], include_in_schema=False)
+    A FACTORY, not a module-level router, and the difference is not cosmetic (MAINT-13). This module
+    used to call `get_settings()` and `add_api_route` at import time, so the binding names were frozen
+    by whatever environment the first import saw — `MAINTENANCE_BINDING_NAME` was a setting nothing
+    could actually drive, and an app assembled from different settings than the module had cached
+    would serve paths Dapr never POSTs to, with no error anywhere. Taking the settings as an argument
+    makes the route topology a function of its input, which is also the only way a test can assert it.
+
+    Each binding gets a POST (the work) and an OPTIONS (Dapr's binding-discovery pre-flight — without
+    the 2xx it 405s and Dapr logs the app as not consuming the binding). Both POSTs carry
+    `require_dapr_token`: only the sidecar's cron tick may trigger a sweep, and the reconcile pass
+    reads every tenant's registry records and tuple counts, so an unauthenticated trigger there would
+    be an estate-wide disclosure rather than just a wasted scan — the gate is load-bearing even though
+    that pass mutates nothing.
+
+    The tag is declared ONCE, on the router that owns both routes, rather than repeated per route.
+    """
+    router = APIRouter(tags=["maintenance"])
+    for name, on_post, on_options in (
+        (settings.binding_name, on_cron, ack_binding),
+        (settings.reconcile_binding_name, on_reconcile_cron, ack_reconcile_binding),
+    ):
+        router.add_api_route(f"/{name}", on_post, methods=["POST"], dependencies=[Depends(require_dapr_token)])
+        router.add_api_route(f"/{name}", on_options, methods=["OPTIONS"], include_in_schema=False)
+    return router

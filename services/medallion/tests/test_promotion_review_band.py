@@ -27,6 +27,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from medallion.services.promotion_band import FIRST_PROMOTION, ROW_DELTA, review_reasons
 
 

@@ -77,7 +77,6 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     from catalog.api import fga_deps, security
     from catalog.core.config import get_settings
     from catalog.core.lineage_emit import _BaseLineageEmitter
-
     from service_kit.governed import fga
     from service_kit.governed.oidc import IDToken
 
@@ -252,7 +251,6 @@ async def _ingest_media_once(catalog: Any, tmp_path: Path, monkeypatch: pytest.M
     from medallion.core.config import MedallionSettings
     from medallion.services import media_produce as media_module
     from medallion.services.ingest import IngestResult, ingest_to_bronze
-
     from service_kit.lakehouse.sources import LocalDirSource
 
     source = tmp_path / "media-src"

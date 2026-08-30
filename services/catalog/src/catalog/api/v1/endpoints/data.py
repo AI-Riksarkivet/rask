@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Body, Header, Query
 from fastapi.concurrency import run_in_threadpool
@@ -19,16 +18,13 @@ from lance_namespace import (
     DeleteFromTableResponse,
     DescribeTableRequest,
     DescribeTableResponse,
-    DropTableRequest,
     ExplainTableQueryPlanRequest,
     InsertIntoTableRequest,
     InsertIntoTableResponse,
     InvalidInputError,
-    LanceNamespace,
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     QueryTableRequest,
-    TableNotFoundError,
     UpdateTableRequest,
     UpdateTableResponse,
 )
@@ -44,14 +40,11 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
-from catalog.core.identifiers import parse_identifier, reconcile_body_id, require_safe_segments
-from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, InputPin, InputRef, shape_run_facets
-from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
+from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.serialization import dump
 from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
-from catalog.services import dataplane, native
-from service_kit.control_emit import emit_control
-from service_kit.governed import fga
+from catalog.services import dataplane, native, table_create
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
@@ -60,35 +53,7 @@ log = logging.getLogger(__name__)
 
 ARROW_FILE = "application/vnd.apache.arrow.file"
 
-# Cap on the create payload we'll decode→re-encode in-process to stamp lineage metadata (#21). Above
-# this we skip the stamp (the graph still gets the create run); keeps a large create off a ~3x-memory
-# re-encode on the request path. (#22 audit)
-_MAX_INJECT_BYTES = 64 * 1024 * 1024
-
 router = APIRouter(prefix="/v1/table", tags=["data"])
-
-
-def _compensation_allowed(mode: str | None, overwrote_existing: bool) -> bool:
-    """Whether a failed owner grant may compensate by DROPPING the table — only for a FRESH id.
-
-    Never for ExistOk (it may have KEPT a pre-existing table this request never wrote) and never for
-    an Overwrite that REPLACED an existing table (the id still holds the prior incarnation's
-    time-travel history; dropping would escalate a transient FGA blip into irreversible data loss —
-    review 2026-07-10). Pure so the Overwrite arm is unit-testable (it needs FGA on, unreachable in
-    the moto harness).
-    """
-    return (mode or "").lower() not in ("existok", "exist_ok") and not overwrote_existing
-
-
-def _table_exists(ns: LanceNamespace, segments: list[str]) -> bool:
-    """True if a table already lives at ``segments`` (declared-only counts — it already holds an owner
-    grant). Used to decide whether a create ``mode=Overwrite`` is destroying an EXISTING table (which then
-    needs an owner-tier gate) vs creating a fresh one. Blocking native call → run in a threadpool."""
-    try:
-        native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
-        return True
-    except TableNotFoundError:
-        return False
 
 
 # The LANCE-ONLY guard now lives in `catalog.core.formats` — four other doors take the same
@@ -132,198 +97,24 @@ async def create_table(
     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
     could carry provenance.
     """
-    # A wildcard (`*`/`?`) in a segment would flow verbatim from the table's derived prefix into the
-    # vended STS session policy and widen credentials to siblings — refused at SHAPE, before any write.
-    require_safe_segments(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
-    # #118: this door had NO parent guard at all — require_parent lives in tables.py and this route
-    # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
-    # live owner grant and no parent edge. Checked BEFORE the write: a refusal leaves nothing.
-    await fga_deps.require_parent_exists(ns, "table", parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
-    # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
-    # its grants, so creating here would hand the new table the dead one's readers and writers.
-    await fga_deps.require_no_live_trash(settings, parse_identifier(id, settings.delimiter))
-
-    # #3-B governance (the security crux): validate BEFORE any write. An off-allowlist base is a client
-    # error (400), never a silent write to an unapproved bucket.
-    if data_base:
-        approved = set(settings.multibase_data_base_list)
-        rogue = [b for b in data_base if b not in approved]
-        if rogue:
-            raise InvalidInputError(f"data_base(s) not in the LANCE_MULTIBASE_DATA_BASES allowlist: {rogue}")
-    parsed_properties = None
-    if properties:
-        try:
-            parsed_properties = json.loads(properties)
-        except json.JSONDecodeError as exc:
-            raise InvalidInputError(f"table properties is not valid JSON: {exc}") from exc
-    # #78 format honesty: reject a client that tries to select another file format (see the helper).
-    reject_unsupported_format(parsed_properties)
-    # S4: validate the optional lineage metadata BEFORE the write — a malformed pin/facet is a 4xx,
-    # not a committed create whose provenance then silently drops. Same order, same helpers, same
-    # forge-guard as merge_insert: a caller who cannot READ the named source must not be able to
-    # stamp a cross-tenant DERIVED_FROM edge (or a phantom vertex) into trusted lineage.
-    source_pin = _merge_source_pin(source, source_version, settings.delimiter)
-    extra_run_facets = _parse_run_facets(run_facets_json)
-    if source_pin is not None:
-        await fga_deps.require_can_get_metadata(client, settings, token, segments=source_pin.segments)
-    segments = parse_identifier(id, settings.delimiter)
-    table_id = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    namespace = fga.parent_namespace_id(segments, delimiter=settings.delimiter) or ""
-    created_by = token.sub if token is not None else None
-    run_id = str(uuid.uuid4())
-    # #21: stamp the lineage coordinates into the Lance file's schema metadata so the data is
-    # self-describing (reconcilable to the graph without the catalog). Best-effort — a payload we
-    # can't re-encode must never fail the create over metadata; fall back to the original bytes.
-    # Gated on lineage being enabled (the inject is a full Arrow decode→re-encode, ~3x the payload
-    # in memory) and a size ceiling (don't re-encode an arbitrarily large body in-process); when off
-    # or oversized we don't stamp a create_run_id the graph never receives. (#22 audit)
-    if settings.lineage_emit_enabled and len(data) <= _MAX_INJECT_BYTES:
-        try:
-            data = await run_in_threadpool(
-                inject_into_arrow_stream,
-                data,
-                build_lineage_metadata(table_id=table_id, namespace=namespace, run_id=run_id),
-            )
-        except Exception as exc:
-            log.warning("lineage_metadata_inject_failed", extra={"table": table_id, "error": str(exc)})
-    # mode=Overwrite is spec-defined as "the existing table is DROPPED and a new table created" (lance
-    # namespace.md). ``authorize`` only gated this create at writer-tier can_create_table on the PARENT — but
-    # a DROP needs owner-tier can_drop. So if an Overwrite is about to DESTROY an existing table, require
-    # owner-tier on it FIRST (before the irreversible write) — else a mere namespace writer could overwrite
-    # and, via the ownership reset below, seize another user's table. Fresh-id Overwrite creates nothing to
-    # gate. FGA-off skips it (no ACL to protect).
-    # Pre-existence (declared-only counts — it already holds an owner grant), computed BEFORE the write and
-    # only when FGA is on (the ACLs it protects exist only then). It feeds TWO owner-tier guards:
-    #   · Overwrite of an EXISTING table is a DROP → needs owner-tier can_drop first, else a namespace writer
-    #     could overwrite and, via the ownership reset below, SEIZE another user's table.
-    #   · ExistOk that KEEPS an existing table wrote NOTHING — so seeding the caller `owner` would let ANY
-    #     authenticated user (or namespace-writer) SEIZE ownership of an already-owned table via a no-op
-    #     create (audit: CRITICAL). We must never grant owner on a table this request did not create.
-    # The describe (_table_exists) runs only for Overwrite/ExistOk with FGA on.
-    _mode = (mode or "").lower()
-    pre_existed = (
-        _mode in ("overwrite", "existok", "exist_ok") and settings.fga_enabled and client is not None and await run_in_threadpool(_table_exists, ns, segments)
-    )
-    overwrote_existing = pre_existed and _mode == "overwrite"
-    existok_kept_existing = pre_existed and _mode in ("existok", "exist_ok")
-    if overwrote_existing:
-        await fga_deps.require_can_drop_table(client, settings, token, segments=segments)
-    # ``dataplane.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
-    # file format 2.2 (native create pins 2.1 and rejects it) → a direct 2.2 write; else → native create. (§9)
-    response: CreateTableResponse = await run_in_threadpool(
-        dataplane.create_table,
-        ns,
-        so,
-        segments,
-        data,
+    return await table_create.create_governed_table(
+        id=id,
+        ns=ns,
+        settings=settings,
+        token=token,
+        client=client,
+        emitter=emitter,
+        control=control,
+        so=so,
+        data=data,
         mode=mode,
-        properties=parsed_properties,
-        allow_external_blobs=settings.allow_external_blobs,
-        external_blob_bases=settings.external_blob_base_list,
-        data_bases=data_base or None,
-    )
-    # An Overwrite that replaced an EXISTING table (owner-authorized above) resets its ACL: revoke the prior
-    # incarnation's grants (any reader/writer/validator that must not survive onto the reused id) before
-    # re-seeding the overwriter. Only when we actually overwrote — a fresh create has nothing to revoke, and
-    # revoking on a non-owner path is what the audit flagged as an eviction vector (now gated out).
-    if overwrote_existing:
-        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
-    # Make the caller owner + link the new table to its parent so it inherits the cascade.
-    # COMPENSATION (§4 dual-write): if the grant fails here (FGA outage → 503), the table exists on
-    # storage but has NO owner tuple — the client's retry would hit "already exists", stranding it
-    # forever. Best-effort delete what THIS request wrote so the retry starts clean — but ONLY for a
-    # FRESH id (review 2026-07-10): never for ExistOk (it may have KEPT a pre-existing table this
-    # request never wrote) and never when Overwrite REPLACED an existing table (the id still holds the
-    # prior incarnation's time-travel history — a compensating drop would escalate a transient FGA
-    # blip into irreversible loss; stranded-but-admin-recoverable beats destroyed). The compensation
-    # also REVOKES any tuples that did land (a grant can commit server-side while its response is
-    # lost; a stale owner tuple on a freed id silently grants its holder the NEXT table created there
-    # — the reused-id privilege bleed the real drop path also guards).
-    # Residual (documented): a process CRASH between the write and the grant still strands the table
-    # (no in-process compensation can cover it); the deeper fix is a declare→grant→write reorder.
-    # Seed ownership ONLY for a table THIS request actually created. An ExistOk that KEPT an already-existing
-    # table wrote nothing, so granting the caller `owner` would seize another user's table (audit: CRITICAL) —
-    # the existing owner (or the /declare-r of a declared-only table) keeps ownership. Skipping the seed also
-    # skips the compensation (there is nothing this request wrote to compensate).
-    if not existok_kept_existing:
-
-        async def _undo_create() -> None:
-            await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
-
-        # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
-        # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists
-        # for, it raised and the native drop never ran. Now they are independent best-effort steps and
-        # the drop — which needs no FGA — always gets its turn.
-        await fga_deps.seed_ownership_or_compensate(
-            client,
-            settings,
-            token,
-            resource="table",
-            segments=segments,
-            undo=_undo_create if _compensation_allowed(mode, overwrote_existing) else None,
-        )
-    # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
-    # (after the response, best-effort) so the lineage service can never block/fail a create. The
-    # canonical id keeps the lineage Dataset == the OpenFGA object id == the catalog table id; the
-    # caller's bearer is forwarded so ingest accepts it when the lineage service has OIDC on; the
-    # ``run_id`` is the same one stamped into the Lance file above (#21).
-    # Inline-await (NOT BackgroundTasks — no retry, dies with the worker; fastapi anti-pattern) so the event
-    # reaches the durable Dapr/JetStream transport before the response. emit_create is best-effort internally,
-    # so it never fails the create; JetStream + the consumer's idempotent MERGE-on-run_id give durability.
-    # The per-version column schema (blob/vector-aware) for the WROTE edge (#24). A create/Overwrite writes
-    # exactly the request bytes, so the payload schema IS the table's schema — parsed in memory, no
-    # describe + dataset reopen round trip. ExistOk is the exception: it may have KEPT an existing table
-    # (nothing written, response.version = the existing version), so the payload schema could belong to a
-    # table that was never created — read the true schema back PINNED at that version instead. Best-effort
-    # either way (failure → []).
-    if (mode or "").lower() in ("existok", "exist_ok"):
-        _, schema_fields = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version)
-    else:
-        schema_fields = await run_in_threadpool(dataplane.payload_schema_fields, data, segments)
-    # S4: the pin resolves to a version-pinned INPUT exactly as `emit_write_event` resolves a merge's
-    # (canonical ids, so the lineage Dataset == the OpenFGA object); the facets ride verbatim.
-    input_refs = (
-        [
-            InputRef(
-                fga.parent_namespace_id(source_pin.segments, delimiter=settings.delimiter) or "",
-                fga.canonical_object_id(source_pin.segments, delimiter=settings.delimiter),
-                source_pin.version,
-            )
-        ]
-        if source_pin is not None
-        else None
-    )
-    await emitter.emit_create(
-        table_id=table_id,
-        namespace=namespace,
-        author=created_by,
-        version=response.version or 1,
-        run_id=run_id,
+        properties=properties,
+        data_base=data_base,
+        source=source,
+        source_version=source_version,
+        run_facets_json=run_facets_json,
         authorization=authorization,
-        source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
-        schema_fields=schema_fields,
-        inputs=input_refs,
-        extra_run_facets=extra_run_facets,
     )
-    # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
-    # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a
-    # spurious event announcing a creation-by-caller that never happened. A fresh create + an Overwrite
-    # (drop+recreate) still emit.
-    if not existok_kept_existing:
-        await emit_control(
-            control,
-            action="table_created",
-            object_type="table",
-            object_id=f"table:{table_id}",
-            actor=f"user:{token.sub}" if token is not None else None,
-            extra={
-                "namespace": namespace,
-                "version": response.version or 1,
-                "mode": mode,
-                "location": response.location,
-            },
-        )
-    return response
 
 
 @router.post("/{id}/commit", response_model_exclude_none=True)
@@ -404,48 +195,6 @@ async def insert_into_table(
     return response
 
 
-def _merge_source_pin(source: str | None, source_version: int | None, delimiter: str) -> InputPin | None:
-    """The optional version-pinned source dataset a merge DERIVED FROM → an ``InputPin`` (or ``None``).
-
-    A blank/absent ``source`` yields no pin; a ``source_version`` with no ``source`` is meaningless (there
-    is nothing to pin) → a fail-fast 4xx, not a silently dropped pin. An empty/delimiter-only ``source`` is
-    rejected too — otherwise it would forge a nameless input vertex (or, on the HTTP transport, drop the
-    whole event). The pin makes the merge reproducible: its provenance names the exact source version
-    consumed, surfaced on the lineage READ edge (``input_version``)."""
-    if not source or not source.strip():
-        if source_version is not None:
-            raise InvalidInputError("source_version requires source")
-        return None
-    segments = parse_identifier(source, delimiter)
-    if not segments or any(not segment for segment in segments):
-        raise InvalidInputError(f"source is not a valid dataset id: {source!r}")
-    return InputPin(segments=segments, version=source_version)
-
-
-def _parse_run_facets(raw_json: str | None) -> dict[str, Any] | None:
-    """Parse + spec-shape the optional ``X-Lance-Run-Facets`` header (a JSON object ``{facet: {payload}}``).
-
-    The Arrow-IPC body carries the merge data, so a producer's run metadata (e.g. training ``params``)
-    rides this header instead. The catalog stays un-opinionated about the payload (:func:`shape_run_facets`
-    only stamps each facet spec-legal + rejects reserved facet names); malformed JSON, a non-object shape,
-    or a reserved name/key fail-fast as a 4xx (never a 500)."""
-    if not raw_json:
-        return None
-    try:
-        parsed = json.loads(raw_json)
-    except (ValueError, RecursionError) as exc:
-        # JSONDecodeError ⊂ ValueError, but json.loads also raises a BARE ValueError for an integer literal
-        # past the 4300-digit int-string-conversion limit, and RecursionError for a deeply-nested payload —
-        # both a malformed producer header (a 4xx, never a 500). (Phase 2 re-audit, 2026-07-21.)
-        raise InvalidInputError("X-Lance-Run-Facets must be valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise InvalidInputError("X-Lance-Run-Facets must be a JSON object of {facet: {payload}}")
-    try:
-        return shape_run_facets(parsed)
-    except (ValueError, TypeError) as exc:  # TypeError: belt-and-suspenders for a payload kwarg collision
-        raise InvalidInputError(str(exc)) from exc
-
-
 @router.post("/{id}/merge_insert", response_model_exclude_none=True)
 async def merge_insert_into_table(
     id: str,
@@ -490,8 +239,8 @@ async def merge_insert_into_table(
     segments = parse_identifier(id, settings.delimiter)
     # Validate the optional lineage metadata BEFORE the write — a malformed pin/facet is a 4xx, not a
     # committed merge whose provenance then silently drops.
-    source_pin = _merge_source_pin(source, source_version, settings.delimiter)
-    extra_run_facets = _parse_run_facets(run_facets_json)
+    source_pin = merge_source_pin(source, source_version, settings.delimiter)
+    extra_run_facets = parse_run_facets(run_facets_json)
     if source_pin is not None:
         # The caller named a source to record as a merge INPUT. The catalog is the TRUSTED stamper on the
         # Dapr transport (the lineage ingest input-authz guard runs only on the HTTP path), so a named source

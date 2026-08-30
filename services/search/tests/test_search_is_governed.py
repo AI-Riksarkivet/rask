@@ -26,7 +26,6 @@ from __future__ import annotations
 import inspect
 
 from search.core.config import SearchSettings
-
 from service_kit.governed.settings import GovernedAuthSettings
 
 
@@ -53,6 +52,7 @@ def test_every_search_route_resolves_a_verified_subject() -> None:
     """Deny-by-default, the shape the viewer's gate uses: walk the route signatures rather than
     trusting a grep, so a fourth entry point cannot land ungated."""
     from fastapi.routing import APIRoute
+
     from search.api import security
     from search.api.v1.router import router
 
@@ -105,11 +105,11 @@ def test_a_caller_with_no_grant_is_REFUSED_a_named_corpus(monkeypatch) -> None:
     )
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from search.api import security
     from search.api.dependencies import StateDep
     from search.api.v1.router import router
     from search.core.config import SearchSettings, get_search_settings
-
     from service_kit.exceptions import register_handlers
 
     async def deny(*, user: str, relation: str, obj: str) -> bool:

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pyarrow.fs as pafs
+
 from maintenance.services.optimize import DatasetResult, discover_datasets
 from maintenance.services.sweep import summarize
 
@@ -123,6 +124,7 @@ def test_a_tick_aborted_before_the_loop_still_counts_as_started(monkeypatch: Any
     fire before anything abortable — here the policy-registry read, whose failure aborts the tick by
     design — so started-minus-completed is a real lost-pass count."""
     import pytest
+
     from maintenance.core.config import MaintenanceSettings
     from maintenance.services import sweep as sweep_mod
 

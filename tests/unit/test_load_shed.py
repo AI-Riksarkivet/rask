@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
-from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from starlette.types import Message, Receive, Scope, Send
+
+from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 
 
 _ARROW = b"application/vnd.apache.arrow.stream"

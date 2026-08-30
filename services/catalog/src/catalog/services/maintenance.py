@@ -14,8 +14,9 @@ that refuses what the cron performs unattended protects nothing.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow.fs as pafs
 from lance_namespace import UnsupportedOperationError
@@ -23,6 +24,8 @@ from lance_namespace import UnsupportedOperationError
 from service_kit.lakehouse.base_refs import BaseRefs, protected_roots
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
+    FragmentCarrier,
+    ManifestCarrier,
     describe_compaction_unsupported_flags,
     describe_gc_unsupported_flags,
     gather_compaction_bases,
@@ -38,7 +41,59 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def require_compactable(ds: Any, storage_options: StorageOptions, protected: BaseRefs | None = None) -> None:
+# --------------------------------------------------------------------------- #
+# The dataset surface these doors need, stated (CAT-CORE-15). Structural, not nominal
+# `lance.LanceDataset`: the module docstring promises these are "pure over a Lance dataset handle, so
+# both are unit-testable with a fake ``ds``", and a nominal type would make that promise unkeepable.
+# Split per verb, mirroring `service_kit.lakehouse.features`' ManifestCarrier/FragmentCarrier: a door
+# that only previews must not claim it can reclaim.
+#
+# `uri` is deliberately ABSENT from all of them and still read through `getattr(ds, "uri", "")`. A
+# handle that cannot say where it lives is a case `_refuse_a_referring_datasets_source` REFUSES on
+# purpose; declaring the attribute would type that branch out of existence.
+# --------------------------------------------------------------------------- #
+
+
+class TagIndex(Protocol):
+    """``ds.tags`` — the pinned-version index. Values are pylance ``Tag`` TypedDicts at runtime."""
+
+    def list(self) -> Mapping[str, object]: ...
+
+
+class VersionedDataset(Protocol):
+    """What the GC PREVIEW reads: the current version, the version list, and the tag pins. Read-only."""
+
+    @property
+    def version(self) -> int: ...
+
+    @property
+    def tags(self) -> TagIndex: ...
+
+    def versions(self) -> Sequence[Mapping[str, Any]]: ...
+
+
+class ReclaimableDataset(VersionedDataset, ManifestCarrier, Protocol):
+    """The preview surface PLUS the destructive reclaim — and the manifest the gate reads first."""
+
+    def cleanup_old_versions(self, *, older_than: timedelta, retain_versions: int | None, error_if_tagged_old_versions: bool) -> Any: ...  # noqa: ANN401 — pylance returns an untyped stats object
+
+
+class Optimizer(Protocol):
+    """``ds.optimize`` — the compaction/index maintenance handle."""
+
+    def compact_files(self, **kwargs: Any) -> Any: ...  # noqa: ANN401 — pylance returns an untyped metrics object
+
+    def optimize_indices(self) -> None: ...
+
+
+class CompactableDataset(FragmentCarrier, Protocol):
+    """What COMPACTION needs: the optimizer, plus the manifest + fragment walk its gate weighs."""
+
+    @property
+    def optimize(self) -> Optimizer: ...
+
+
+def require_compactable(ds: CompactableDataset, storage_options: StorageOptions, protected: BaseRefs | None = None) -> None:
     """#121 + #114 for the COMPACT door: refuse a dataset this button must not rewrite.
 
     **THE GATE IS THE SWEEP'S, per verb — not a stricter one.** It asks
@@ -87,7 +142,7 @@ def require_compactable(ds: Any, storage_options: StorageOptions, protected: Bas
     _refuse_a_referring_datasets_source(ds, protected)
 
 
-def require_reclaimable(ds: Any, protected: BaseRefs | None = None) -> None:
+def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) -> None:
     """#121 + #114 for the GC door: refuse a dataset whose versions this button must not reclaim.
 
     **THE GATE IS THE SWEEP'S, per verb** — :func:`~service_kit.lakehouse.features.describe_gc_unsupported_flags`,
@@ -110,7 +165,7 @@ def require_reclaimable(ds: Any, protected: BaseRefs | None = None) -> None:
     _refuse_a_referring_datasets_source(ds, protected)
 
 
-def _refuse_a_referring_datasets_source(ds: Any, protected: BaseRefs | None) -> None:
+def _refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) -> None:
     """#114: refuse a dataset ANOTHER one resolves its files through — the half no flag check can see.
 
     Flag 16 marks the dataset that SPANS bases — the CLONE. The dataset in danger here is the SOURCE,
@@ -169,7 +224,7 @@ def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRef
     return protected_roots(siblings, storage_options)
 
 
-def _as_utc(ts: Any) -> datetime:
+def _as_utc(ts: object) -> datetime:
     """Coerce a version timestamp to an aware UTC datetime; an unknown shape is treated as 'now' so it is
     never eligible for collection (fail-safe — GC must not remove a version whose age it can't read).
 
@@ -184,7 +239,7 @@ def _as_utc(ts: Any) -> datetime:
     return datetime.now(UTC)
 
 
-def _tag_versions(ds: Any) -> dict[str, int]:
+def _tag_versions(ds: VersionedDataset) -> dict[str, int]:
     """``{tag: version}`` — the pinned versions, exempt from GC (pylance's Tag is a TypedDict at runtime)."""
     out: dict[str, int] = {}
     for name, tag in ds.tags.list().items():
@@ -195,7 +250,7 @@ def _tag_versions(ds: Any) -> dict[str, int]:
     return out
 
 
-def preview_gc(ds: Any, *, retention_days: int | None, retain_versions: int | None) -> dict[str, Any]:
+def preview_gc(ds: VersionedDataset, *, retention_days: int | None, retain_versions: int | None) -> dict[str, Any]:
     """Dry-run the old-version cleanup — the versions GC would reclaim, and the tags protecting others."""
     current = int(ds.version)
     tags = _tag_versions(ds)
@@ -222,7 +277,7 @@ def preview_gc(ds: Any, *, retention_days: int | None, retain_versions: int | No
     }
 
 
-def run_gc(ds: Any, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None) -> dict[str, Any]:
+def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None) -> dict[str, Any]:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, exactly like the compaction sweep.
 
     THE STEP THAT ACTUALLY DELETES, which is why ``protected`` matters most here: measured, compaction
@@ -241,7 +296,9 @@ def run_gc(ds: Any, *, retention_days: int | None, retain_versions: int | None, 
     }
 
 
-def compact_now(ds: Any, *, target_rows_per_fragment: int | None, storage_options: StorageOptions, protected: BaseRefs | None = None) -> dict[str, Any]:
+def compact_now(
+    ds: CompactableDataset, *, target_rows_per_fragment: int | None, storage_options: StorageOptions, protected: BaseRefs | None = None
+) -> dict[str, Any]:
     """#76 on-demand compaction — merge small fragments now (the operator's manual 'compact now', the analog
     of the sweep's per-table pass). Plain (non-deferred) compaction: a single on-demand pass isn't racing a
     concurrent index build, so it needs no defer_index_remap. Then keep the indices covering the new

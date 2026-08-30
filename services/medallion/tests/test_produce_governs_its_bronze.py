@@ -28,6 +28,7 @@ from typing import Any, cast
 import pytest
 import respx
 from httpx import Response
+
 from medallion.core.config import MedallionSettings
 from medallion.services import ingest_trigger
 from medallion.services import produce as produce_module

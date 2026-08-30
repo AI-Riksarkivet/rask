@@ -25,14 +25,14 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import project_events as ev
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, ProjectState, Task, TaskState
 from annotator.projects.project_actor import DROPPED_KEY, INDEX_KEY, AnnotationProjectActor
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from service_kit.exceptions import register_handlers
 from service_kit.media.deps import get_state
 

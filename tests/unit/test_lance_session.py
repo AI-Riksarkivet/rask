@@ -13,8 +13,8 @@ from pathlib import Path
 
 import lance
 import pyarrow as pa
-from maintenance.services import optimize, orphans
 
+from maintenance.services import optimize, orphans
 from service_kit.lakehouse.lance_session import lance_session
 
 

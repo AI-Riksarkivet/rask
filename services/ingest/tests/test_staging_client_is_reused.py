@@ -66,9 +66,8 @@ def _clear_client_cache() -> Iterator[None]:
 
 @pytest.mark.usefixtures("_clear_client_cache")
 def test_a_read_and_purge_cycle_builds_one_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ingest import staging
-
     import storage
+    from ingest import staging
 
     monkeypatch.setenv("RASK_S3_ENDPOINT_URL", "http://staging-reuse-13:9000")
     built: list[_FakeClient] = []

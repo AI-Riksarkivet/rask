@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from catalog.api.dependencies import get_vendor
-from catalog.core.vending import Tier, VendedCredentials
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
+
+from catalog.api.dependencies import get_vendor
+from catalog.core.vending import Tier, VendedCredentials
 
 
 def _described(location: str | None) -> DescribeTableResponse:

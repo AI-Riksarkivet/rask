@@ -22,10 +22,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+
 from search.services import frames, service, similar, vector
 from search.services.spec import SearchSpec
 from search.services.target import SearchTarget
-
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import FtsBinding, VectorBinding
 

@@ -28,14 +28,19 @@ What that settles, so nobody reopens it as a feature request:
 from __future__ import annotations
 
 import ast
+import contextlib
+import importlib
+import inspect
+import types
 from pathlib import Path
 
 import pytest
-from catalog.api.v1.endpoints import data as catalog_data
-from catalog.core.formats import reject_unsupported_format
 from lance_namespace import InvalidInputError
 from lance_namespace_urllib3_client import models as ns_models
 from pydantic import BaseModel
+
+from catalog.api.v1.endpoints import data as catalog_data
+from catalog.core.formats import reject_unsupported_format
 
 
 @pytest.mark.parametrize(
@@ -105,19 +110,38 @@ def _doors_accepting_properties() -> list[tuple[str, str]]:
     return doors
 
 
+def _guarded_source(filename: str, handler: str) -> str:
+    """The handler's source PLUS the source of anything under ``catalog.`` it delegates to (one hop).
+
+    A door may route rather than orchestrate — ``create_table``'s governed sequence lives in
+    ``catalog.services.table_create`` (catalog-api-03) — and a gate that only read the handler's own
+    body would call that door unguarded while the guard is very much there. Following one hop keeps the
+    invariant WATCHED across the move; a guard deleted from either side still reds this test.
+    """
+    tree = ast.parse((_ENDPOINTS / filename).read_text())
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef) and n.name == handler)
+    module = importlib.import_module(f"catalog.api.v1.endpoints.{filename.removesuffix('.py')}")
+    sources = [ast.unparse(node)]
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute) or not isinstance(call.func.value, ast.Name):
+            continue
+        owner = getattr(module, call.func.value.id, None)
+        if not isinstance(owner, types.ModuleType) or not owner.__name__.startswith("catalog."):
+            continue
+        target = getattr(owner, call.func.attr, None)
+        if callable(target):
+            with contextlib.suppress(OSError, TypeError):
+                sources.append(inspect.getsource(target))
+    return "\n".join(sources)
+
+
 def test_every_door_that_accepts_properties_calls_the_format_guard() -> None:
     doors = _doors_accepting_properties()
     assert doors, "no routed handler takes a properties-bearing request model — the scan moved and this gate is vacuous"
 
     unguarded = []
     for loc, handler in doors:
-        src = ast.unparse(
-            next(
-                n
-                for n in ast.walk(ast.parse((_ENDPOINTS / loc.split(":")[0]).read_text()))
-                if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef) and n.name == handler
-            )
-        )
+        src = _guarded_source(loc.split(":")[0], handler)
         if _GUARD not in src:
             unguarded.append(f"{loc} {handler}()")
 

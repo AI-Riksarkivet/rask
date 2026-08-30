@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import Self
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.objectfs import lance_storage_options
@@ -156,9 +156,15 @@ class LineageSettings(BaseSettings):
     # --- Secret consumption from the Dapr secret store (OpenBao) — the audit's 'wired but never read' /
     # 'plaintext still ships' fix, symmetric with the catalog. When on, the S3 secret (reconcile reads the
     # real Lance file with it) and the AGE DB password come from the store at boot, NOT plaintext env: the
-    # chart omits both from pod env. apply_dapr_secrets() splices them in and fails closed on the S3 secret.
+    # chart omits both from pod env. apply_lineage_secrets() splices them in (over the shared
+    # service_kit.governed.secrets.apply_dapr_secrets seam) and fails closed on the S3 secret.
     secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
-    dapr_secret_store: str = Field(default="lance-secrets", alias="LINEAGE_DAPR_SECRET_STORE")
+    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
+    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
+    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: still be moved on its own.
+    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LINEAGE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
     dapr_secret_db_field: str = Field(default="postgres-password", alias="LINEAGE_DAPR_SECRET_DB_FIELD")
@@ -222,19 +228,22 @@ def _with_db_password(url: str, password: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
-def apply_dapr_secrets(settings: LineageSettings) -> None:
-    """Consume sensitive values (S3 secret, AGE DB password) from the Dapr secret store and splice them
-    into ``settings`` in place. When ``secrets_from_dapr`` is on the store is the STRICT sole source for
-    the S3 secret: a store miss FAILS CLOSED (raises), never falling back to a plaintext env value (the
-    chart ships none). The DB password is spliced only when present (the chart ships a password-less URL,
-    so a missing password leaves an unusable DSN that pool.open() rejects → still fail-closed). No-op when
-    off. Imported lazily so the catalog dep isn't pulled in dev/tests."""
-    if not settings.secrets_from_dapr:
-        return
-    from service_kit.governed.secrets import fetch_required_secrets
+def apply_lineage_secrets(settings: LineageSettings) -> None:
+    """The shared store consumption PLUS the one field only lineage needs: the AGE DB password.
 
-    bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
-    settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
+    The S3 half is ``service_kit.governed.secrets.apply_dapr_secrets`` — the estate's one
+    implementation (DUP-09) — and this reads the DB password off the SAME bundle rather than issuing a
+    second fetch. Named for the service rather than sharing the seam's name so a reader can tell at the
+    call site which one they are looking at.
+
+    The DB password is spliced only when present: the chart ships a password-less URL, so a missing
+    password leaves an unusable DSN that ``pool.open()`` rejects — still fail-closed. Both halves are
+    no-ops when ``secrets_from_dapr`` is off, and the import is lazy so dev/tests never pull the
+    dependency in.
+    """
+    from service_kit.governed.secrets import apply_dapr_secrets
+
+    bundle = apply_dapr_secrets(settings)
     db_password = bundle.get(settings.dapr_secret_db_field)
     if db_password:
         settings.database_url = _with_db_password(settings.database_url, db_password)

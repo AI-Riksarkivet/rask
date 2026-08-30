@@ -11,6 +11,9 @@ The mixin is additive and every field defaults OFF, so a stack that sets none of
 as before this file existed.
 """
 
+from typing import Literal
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import GovernedAuthSettings
@@ -31,3 +34,14 @@ class ControlplaneSettings(GovernedAuthSettings, BaseSettings):
         populate_by_name=True,
         env_prefix="LANCE_",
     )
+
+    #: The scheme of each project's entry URL — `f"{scheme}://{host}/overview"`, which the home
+    #: zone's gallery renders as the link into a tenant.
+    #:
+    #: It was `os.environ.get("RASK_PROJECT_URL_SCHEME", "http")` inside the route body, read on
+    #: every request and validated by nothing (FLEET-ENV-SCATTER). A value that reaches a rendered
+    #: link is not free text: `Literal` makes the only two answers the only two answers, so a typo is
+    #: a startup error naming the variable instead of an estate-wide gallery of links nobody can
+    #: follow. Explicit alias, because the mixin's `env_prefix="LANCE_"` would otherwise namespace it
+    #: away from the `RASK_` name every deployment already uses.
+    project_url_scheme: Literal["http", "https"] = Field(default="http", alias="RASK_PROJECT_URL_SCHEME")

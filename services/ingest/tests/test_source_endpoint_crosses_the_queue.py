@@ -81,9 +81,8 @@ def registry(monkeypatch: pytest.MonkeyPatch, estate_env: None) -> None:
 @pytest.fixture
 def calls(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
     """Every `storage.s3_client` construction, with the endpoint and credentials it was given."""
-    from ingest import objectstore
-
     import storage
+    from ingest import objectstore
 
     recorded: list[dict[str, Any]] = []
 

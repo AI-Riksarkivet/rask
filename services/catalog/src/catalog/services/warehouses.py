@@ -23,6 +23,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
+from catalog.services.control_records import BindingRecord, WarehouseRecord, read_json, validated, write_json
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -80,24 +81,6 @@ def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
         log.info("warehouse_bucket_exists", extra={"bucket": bucket})
 
 
-def _write_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, str]) -> None:
-    fs, base = fs_and_base(root_uri, storage_options)
-    parent = f"{base}/{key}".rsplit("/", 1)[0]
-    fs.create_dir(parent, recursive=True)  # local FS needs the parent dir; an S3 prefix marker is harmless
-    with fs.open_output_stream(f"{base}/{key}") as stream:
-        stream.write(json.dumps(record).encode("utf-8"))
-
-
-def _read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[str, str] | None:
-    fs, base = fs_and_base(root_uri, storage_options)
-    try:
-        stream = fs.open_input_stream(f"{base}/{key}")
-    except FileNotFoundError:
-        return None
-    with stream:
-        return json.loads(stream.readall().decode("utf-8"))
-
-
 def _warehouse_key(warehouse_id: str) -> str:
     """The registry key for one warehouse. One definition because three call sites now build it —
     and a conditional write that targeted a different key from the read would silently do nothing."""
@@ -120,7 +103,7 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 
     The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic).
     """
-    _write_json(control_root, storage_options, _warehouse_key(record["id"]), record)
+    write_json(control_root, storage_options, _warehouse_key(record["id"]), record)
 
 
 #: The fields an idempotent re-create OWNS. Everything else on the live record belongs to the
@@ -202,7 +185,7 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
     """The warehouse record, or ``None`` if unregistered."""
-    return _read_json(control_root, storage_options, _warehouse_key(warehouse_id))
+    return read_json(control_root, storage_options, _warehouse_key(warehouse_id))
 
 
 def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
@@ -224,10 +207,11 @@ def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[
         except Exception as exc:
             log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
             continue
-        if isinstance(record, dict) and record.get("id") and record.get("bucket") and record.get("project"):
-            out.append(record)
-        else:  # missing the identity fields every consumer keys on (id/bucket/project) → skip, don't 500
-            log.warning("warehouse_record_malformed", extra={"path": info.path})
+        # Validated against the DECLARED shape, not eyeballed with `.get()` truthiness: a record whose
+        # `bucket` is a list is present, non-empty and structurally useless — it would be reported as
+        # live and then match no bucket claim, which is the one direction the claim guard must not fail.
+        if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is not None:
+            out.append(valid)
     return out
 
 
@@ -253,7 +237,7 @@ def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: s
     try:
         create_json(control_root, storage_options, key, payload)
     except RecordExistsError:
-        existing = _read_json(control_root, storage_options, key)
+        existing = read_json(control_root, storage_options, key)
         if existing is not None and existing.get("warehouse_id") == warehouse_id and existing.get("root_uri") == root_uri:
             return  # the retry converging on its own earlier write
         raise NamespaceAlreadyExistsError(f"namespace {top_ns!r} is already bound to another warehouse") from None
@@ -262,7 +246,7 @@ def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: s
 def warehouse_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
     """The physical ``root_uri`` for top-level namespace ``top_ns``, or ``None`` when unbound (→ default
     root). This is the routing lookup on the request hot path; callers cache the (immutable) result."""
-    record = _read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
+    record = read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
     return record.get("root_uri") if record else None
 
 
@@ -270,7 +254,7 @@ def binding_for_namespace(control_root: str, storage_options: StorageOptions, to
     """The FULL binding record (``{top_ns, warehouse_id, root_uri}``) for a top-level namespace, or ``None``
     when unbound. The resolver needs ``warehouse_id`` (not just ``root_uri``) to check the warehouse's
     lifecycle status; the binding itself is immutable, so the record is safe to cache."""
-    return _read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
+    return read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
 
 
 def project_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
@@ -372,10 +356,9 @@ def read_bindings(control_root: str, storage_options: StorageOptions) -> tuple[l
             log.warning("binding_record_unreadable", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
             continue
-        if isinstance(record, dict) and record.get("top_ns") and record.get("warehouse_id"):
-            out.append(record)
+        if (valid := validated(record, BindingRecord, event="binding_record_malformed", path=info.path)) is not None:
+            out.append(valid)
         else:
-            log.warning("binding_record_malformed", extra={"path": info.path})
             skipped.append(info.path)
     return out, skipped
 

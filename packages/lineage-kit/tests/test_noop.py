@@ -6,6 +6,7 @@ import logging
 from typing import cast
 
 import pytest
+
 from lineage_kit import ClientEmitter, NoopEmitter, RunState, default_emitter, job_run, stage
 from lineage_kit.schemas import Job, Run, RunEvent
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import pytest
 from lance_namespace import PermissionDeniedError
+
 from lineage.api.fga_deps import enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent

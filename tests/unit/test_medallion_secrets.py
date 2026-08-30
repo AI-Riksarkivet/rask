@@ -13,7 +13,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from medallion.core.config import MedallionSettings, apply_dapr_secrets
+
+from medallion.core.config import MedallionSettings
+from service_kit.governed.secrets import apply_dapr_secrets
 
 
 def _settings(**overrides: Any) -> MedallionSettings:

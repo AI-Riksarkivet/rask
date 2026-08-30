@@ -9,10 +9,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from catalog.core.config import Settings, get_settings
 from fastapi.testclient import TestClient
 from lance_namespace import ListTablesResponse, UnauthenticatedError
 
+from catalog.core.config import Settings, get_settings
 from service_kit.governed.oidc import IDToken
 
 

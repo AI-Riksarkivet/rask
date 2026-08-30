@@ -163,17 +163,16 @@ async def submit_train_request(
     # person: a service-triggered run has none, and `""` is not an identity.
     if originator:
         payload["originator"] = originator
-    try:
-        await dapr_publish.publish_event(
-            dapr,
-            timeout_seconds=settings.publish_timeout_seconds,
-            pubsub_name=settings.pubsub,
-            topic_name=settings.train_topic,
-            data=json.dumps(payload),
-            data_content_type="application/json",
-        )
-    except Exception as exc:
-        log.warning("train_publish_failed", extra={"token": token, "error": str(exc)})
+    landed = await dapr_publish.publish_json(
+        dapr,
+        pubsub_name=settings.pubsub,
+        topic_name=settings.train_topic,
+        payload=payload,
+        timeout_seconds=settings.publish_timeout_seconds,
+        failure_event="train_publish_failed",
+        context={"token": token, "model": model},
+    )
+    if not landed:
         return {"status": "publish_failed", "token": token}
     log.info("train_requested", extra={"token": token, "model": model, "features": pinned})
     return {"token": token, "model": model, "features": pinned}

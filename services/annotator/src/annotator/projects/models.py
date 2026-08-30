@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Final, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -97,7 +97,14 @@ class ItemSource(BaseModel):
 
 
 class Transition(BaseModel):
-    """Append-only audit row. The FSM is insert-only: a transition is never edited or removed."""
+    """One audit row. The FSM is insert-only: a transition is never EDITED.
+
+    It can be shed, though, and that is not the same thing: past :data:`MAX_TRANSITIONS` the OLDEST
+    rows fall off the task document and `Task.transitions_dropped` counts them, because the document
+    is rewritten whole on every write and an unbounded trail makes each event cost more than the
+    last. The durable record of a transition is the audit/lineage plane; this list is the task's own
+    recent history.
+    """
 
     at: datetime
     by: str
@@ -113,7 +120,12 @@ class Transition(BaseModel):
 
 
 class ReviewNote(BaseModel):
-    """Append-only reviewer feedback (§4.2)."""
+    """Reviewer feedback (§4.2), appended and never edited — bounded like `Transition`.
+
+    Past :data:`MAX_REVIEW_NOTES` the oldest notes fall off and `Task.review_notes_dropped` counts
+    them; what a returning annotator needs is the latest request, and the document is rewritten
+    whole on every write.
+    """
 
     by: str
     at: datetime
@@ -217,6 +229,20 @@ class PublishRecord(BaseModel):
     published_by: str
 
 
+#: The bound on a task's two append-only histories.
+#:
+#: They used to have none, and the whole document is re-serialised on every write — so the cost of
+#: an event was proportional to how many events preceded it, with the ceiling set by how long the
+#: task lived. `claim`/`release` is a legal loop with nothing rate-limiting it above, and a review
+#: can request changes and be re-submitted any number of times.
+#:
+#: The trail is kept, not discarded: the NEWEST rows survive (that is what a reader is asking for),
+#: and what falls off the end is counted in `transitions_dropped` / `review_notes_dropped`. The
+#: durable audit record of a transition is the lineage/audit plane, not this document.
+MAX_TRANSITIONS: Final = 200
+MAX_REVIEW_NOTES: Final = 50
+
+
 class Task(BaseModel):
     """§4.2. `lease_expires_at is None` while CLAIMED means manager-pinned — it never expires."""
 
@@ -263,8 +289,28 @@ class Task(BaseModel):
     review_action: ReviewAction | None = None
     review_notes: list[ReviewNote] = Field(default_factory=list)
     transitions: list[Transition] = Field(default_factory=list)
+    #: How many of each the document has ALREADY shed to :data:`MAX_TRANSITIONS` /
+    #: :data:`MAX_REVIEW_NOTES`. A bounded trail that does not say it is bounded is a trail that
+    #: lies: a reader seeing 200 transitions cannot otherwise tell "this task moved 200 times" from
+    #: "this task moved 8000 times and you are looking at the last 200".
+    transitions_dropped: int = 0
+    review_notes_dropped: int = 0
     lead_time_seconds: float = 0.0
     skipped_reason: str | None = None
+
+    def trim_history(self) -> None:
+        """Shed the oldest history past the caps, counting what went.
+
+        Called from the actor's single `_store` seam rather than at each `append`, so a future
+        append site inherits the bound instead of having to remember it — the same reason the
+        project actor's `_store` derives its counts rather than letting callers increment them.
+        """
+        if len(self.transitions) > MAX_TRANSITIONS:
+            self.transitions_dropped += len(self.transitions) - MAX_TRANSITIONS
+            self.transitions = self.transitions[-MAX_TRANSITIONS:]
+        if len(self.review_notes) > MAX_REVIEW_NOTES:
+            self.review_notes_dropped += len(self.review_notes) - MAX_REVIEW_NOTES
+            self.review_notes = self.review_notes[-MAX_REVIEW_NOTES:]
 
 
 class AnnotationProject(BaseModel):

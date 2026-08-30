@@ -20,8 +20,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from catalog.core.config import Settings
-from catalog.services import warehouses
 from lance_namespace import (
     InvalidInputError,
     NamespaceNotEmptyError,
@@ -29,6 +27,8 @@ from lance_namespace import (
     TableNotFoundError,
 )
 
+from catalog.core.config import Settings
+from catalog.services import warehouses
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken

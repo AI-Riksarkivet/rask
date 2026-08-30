@@ -21,7 +21,7 @@ import logging
 
 import pyarrow.fs as pafs
 
-from catalog.services.warehouses import _read_json, _write_json
+from catalog.services.control_records import ProjectRecord, read_json, validated, write_json
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import create_json, mutate_json
 
@@ -43,7 +43,7 @@ def put_project(control_root: str, storage_options: StorageOptions, record: dict
     What is left is fixture setup, which has no concurrency to lose to. Do not reach for it in service
     or endpoint code; there is a conditional door for every real mutation.
     """
-    _write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
+    write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
 
 
 #: The fields an idempotent re-POST OWNS. Everything else belongs to the record's own lifecycle and
@@ -97,7 +97,7 @@ def create_project_record(control_root: str, storage_options: StorageOptions, re
 
 def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
     """The project record, or ``None`` if the tenant does not exist."""
-    return _read_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json")
+    return read_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json")
 
 
 def delete_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> None:
@@ -129,8 +129,6 @@ def list_projects(control_root: str, storage_options: StorageOptions) -> list[di
         except Exception as exc:
             log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
             continue
-        if isinstance(record, dict) and record.get("id"):
-            out.append(record)
-        else:
-            log.warning("project_record_malformed", extra={"path": info.path})
+        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None:
+            out.append(valid)
     return out

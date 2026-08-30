@@ -37,3 +37,36 @@ class ComputeSettings(GovernedAuthSettings, Settings):
         "caps the reconstruction storm to one try per interval; the client still self-heals once Ray "
         "comes up.",
     )
+
+    # --- job retention, the `compute-prune-jobs-cron` binding's policy -------------------------
+    #
+    # These three lived in `pruner.py` as `os.environ.get()` at module import, two of them wrapped in
+    # a bare `int()` — so a typo answered `ValueError: invalid literal for int()` from inside an
+    # import, naming neither the field nor the variable, while every other knob in this service
+    # answers a pydantic validation error that names both (FLEET-ENV-SCATTER).
+
+    prune_binding: str = Field(
+        default="compute-prune-jobs-cron",
+        alias="RASK_PRUNE_BINDING",
+        description="The Dapr cron binding's name, which IS the route path it is delivered to. Must "
+        "match the Component's `metadata.name` (chart/templates/compute-prune-cron.yaml) — a value "
+        "that does not is a route Dapr never posts to.",
+    )
+    prune_keep_jobs: int = Field(
+        default=500,
+        ge=0,
+        alias="RASK_PRUNE_KEEP_JOBS",
+        description="Newest terminal Ray submissions to keep. 500 because the jobs board pages and no "
+        "surface renders more than a screenful; Ray's own history is unbounded and reached 81,155 live.",
+    )
+    prune_keep_failed_jobs: int = Field(
+        default=100,
+        ge=0,
+        alias="RASK_PRUNE_KEEP_FAILED_JOBS",
+        description="A FLOOR under the failures, independent of the recency window above. Ray writes "
+        "job-driver output to a file inside the container that nothing ships, so the job row IS the "
+        "post-mortem — and recency alone lets a busy afternoon of successful jobs evict every failure, "
+        "bounding post-mortem by submission VOLUME rather than by time. Deliberately far smaller than "
+        "`prune_keep_jobs`: failures are rare in a healthy estate, and this is a safety net, not a "
+        "second retention policy.",
+    )

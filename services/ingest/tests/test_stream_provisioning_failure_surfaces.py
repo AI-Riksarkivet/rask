@@ -16,9 +16,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from ingest.queue import WorkQueue
 from nats.js import api as jsapi
 from nats.js.errors import BadRequestError, ServiceUnavailableError
+
+from ingest.queue import WorkQueue
 
 
 if TYPE_CHECKING:

@@ -36,12 +36,12 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from lance_namespace import NamespaceAlreadyExistsError, TableAlreadyExistsError
+
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import namespaces as ns_endpoint
 from catalog.api.v1.endpoints import warehouses as wh_endpoint
 from catalog.core.config import Settings
-from lance_namespace import NamespaceAlreadyExistsError, TableAlreadyExistsError
-
 from service_kit.lakehouse import trash
 
 

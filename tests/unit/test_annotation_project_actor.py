@@ -16,6 +16,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, ProjectState, Task, TaskState
 from annotator.projects.project_actor import INDEX_KEY, PUBLISH_REMINDER, AnnotationProjectActor

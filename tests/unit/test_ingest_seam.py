@@ -10,12 +10,12 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
-from medallion.services import ingest as ingest_module
-from medallion.services.ingest import ExtraColumns, ingest_to_bronze
 from PIL import Image
 
-from service_kit.lakehouse.sinks import LocalDirSink, S3Sink
-from service_kit.lakehouse.sources import LocalDirSource, S3Source, SourceObject
+from medallion.services import ingest as ingest_module
+from medallion.services.ingest import ExtraColumns, ingest_to_bronze
+from service_kit.lakehouse.sinks import LocalDirSink, S3FileSystemSink
+from service_kit.lakehouse.sources import LocalDirSource, S3FileSystemSource, SourceObject
 
 
 def _write_png(path: Path, color: tuple[int, int, int]) -> None:
@@ -212,7 +212,7 @@ class _FakeFs:
         base = selector.base_dir.rstrip("/") + "/"
         infos: list[pafs.FileInfo] = []
         seen_dirs: set[str] = set()
-        # Iterate in dict (insertion) order — deliberately NOT sorted, so the test proves S3Source sorts.
+        # Iterate in dict (insertion) order — deliberately NOT sorted, so the test proves S3FileSystemSource sorts.
         for path in self.files:
             if not path.startswith(base):
                 continue
@@ -244,7 +244,7 @@ def test_s3_source_yields_files_sorted_recursive_prefix_scoped() -> None:
             "bucket/other/d.png": b"DDD",  # outside the prefix — must not be yielded
         }
     )
-    source = S3Source(cast(pafs.S3FileSystem, fs), "bucket", "prefix")
+    source = S3FileSystemSource(cast(pafs.S3FileSystem, fs), "bucket", "prefix")
 
     objects = list(source.iter_objects())
 
@@ -259,7 +259,7 @@ def test_s3_source_yields_files_sorted_recursive_prefix_scoped() -> None:
 
 def test_s3_sink_writes_key_under_prefix_and_returns_s3_uri() -> None:
     fs = _FakeFs({})
-    uri = S3Sink(cast(pafs.S3FileSystem, fs), "bucket", "prefix").put("out/gold.arrow", b"BYTES")
+    uri = S3FileSystemSink(cast(pafs.S3FileSystem, fs), "bucket", "prefix").put("out/gold.arrow", b"BYTES")
 
     assert uri == "s3://bucket/prefix/out/gold.arrow"
     assert fs.files["bucket/prefix/out/gold.arrow"] == b"BYTES"
@@ -267,7 +267,7 @@ def test_s3_sink_writes_key_under_prefix_and_returns_s3_uri() -> None:
 
 def test_s3_sink_empty_prefix_has_no_double_slash() -> None:
     # an unset prefix must not leave a `bucket//key` seam (the reason the old .replace("//","/") existed)
-    uri = S3Sink(cast(pafs.S3FileSystem, _FakeFs({})), "bucket", "").put("gold.arrow", b"X")
+    uri = S3FileSystemSink(cast(pafs.S3FileSystem, _FakeFs({})), "bucket", "").put("gold.arrow", b"X")
 
     assert uri == "s3://bucket/gold.arrow"
 

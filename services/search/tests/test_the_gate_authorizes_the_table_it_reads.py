@@ -30,12 +30,12 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+import service_kit.media.state as state_mod
 from search.api import security
 from search.api.dependencies import StateDep
 from search.api.v1 import router as router_module
 from search.core.config import SearchSettings, get_search_settings
-
-import service_kit.media.state as state_mod
 from service_kit.exceptions import register_handlers
 from service_kit.lancekit.descriptor import Declared
 from service_kit.media.authz import corpus_object

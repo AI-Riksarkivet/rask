@@ -17,6 +17,7 @@ import json
 import httpx
 import pytest
 import respx
+
 from medallion.services.catalog_register import PublishOutcome, publish_stage_output
 
 

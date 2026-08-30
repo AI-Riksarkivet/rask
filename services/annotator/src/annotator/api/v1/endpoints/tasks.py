@@ -33,6 +33,7 @@ from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
 from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
+from annotator.api.v1.responses import DraftImport
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.machines import (
@@ -43,7 +44,7 @@ from annotator.projects.machines import (
     identity_violation,
     task_transition,
 )
-from annotator.projects.models import Link, ProjectState, Shape, TaskState
+from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState
 from annotator.projects.ontology import LabelOntology
 from service_kit.control_emit import emit_control
 from service_kit.control_events import ControlAction
@@ -338,22 +339,26 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
                 actor=f"user:{subject}",
                 extra={"subject": f"user:{told}", "project": project_id, "event": payload.event},
             )
+    # NOT `Task.model_validate(updated)`. The actor returns a PARTIAL document — it carries the
+    # transition it just made, not `source`/`media`, which live on the task record the actor does not
+    # reload. ANN-07 changed this to validate and left three integration tests RED; typing the return
+    # honestly needs the actor to return a whole Task, which is a bigger change than the finding scoped.
     return updated
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def get_task(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject) -> Task:
     """Read one task. The task is fetched FIRST to learn which project to authorize against, then the
     check runs before anything is returned — the fetch is not the disclosure, the return is."""
     task = await _proxy(task_id).get()
     if task is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
     await _authorize(checker, subject, "can_view", str(task["project_id"]), "task.view")
-    return task
+    return Task.model_validate(task)
 
 
 @router.put("/{task_id}/draft", status_code=status.HTTP_200_OK)
-async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: CheckerDep, subject: CurrentSubject) -> Draft:
     """Replace the whole shape set in one keyed write. `base_revision` is the etag — a mismatch is a
     409, which is how two tabs of one annotator are stopped from silently clobbering each other."""
     actor = _proxy(task_id)
@@ -394,11 +399,11 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
         raise ConflictError(str(exc)) from exc
 
     audit("task.save_draft", SUCCESS, subject=subject, resource=task_id)
-    return draft
+    return Draft.model_validate(draft)
 
 
 @router.post("/{task_id}/import", status_code=status.HTTP_200_OK)
-async def import_annotations(task_id: TaskId, request: Request, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def import_annotations(task_id: TaskId, request: Request, checker: CheckerDep, subject: CurrentSubject) -> DraftImport:
     """Import annotations made elsewhere into this task's draft, as Arrow IPC.
 
     ONE format — the canonical annotations schema — because the estate already has one and three
@@ -479,11 +484,11 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
         raise ConflictError(str(exc)) from exc
 
     audit("task.import", SUCCESS, subject=subject, resource=task_id)
-    return {"imported": len(shapes), "links": len(links), "draft": draft}
+    return DraftImport(imported=len(shapes), links=len(links), draft=Draft.model_validate(draft))
 
 
 @router.get("/{task_id}/draft")
-async def get_draft(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def get_draft(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject) -> Draft:
     actor = _proxy(task_id)
     task = await actor.get()
     if task is None:
@@ -492,4 +497,4 @@ async def get_draft(task_id: TaskId, checker: CheckerDep, subject: CurrentSubjec
     draft = await actor.get_draft()
     if draft is None:
         raise NotFoundError(f"task {task_id} has no draft")
-    return draft
+    return Draft.model_validate(draft)

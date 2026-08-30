@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
+from pydantic import SecretStr
 from tenacity import (
     Retrying,
     before_sleep_log,
@@ -124,4 +125,49 @@ def fetch_required_secrets(store: str, key: str, *, require: str) -> dict[str, s
     bundle = fetch_dapr_secret(store, key)
     if not bundle.get(require):
         raise RuntimeError(f"secret {require!r} unavailable from Dapr store {store!r}/{key!r} — failing closed (store is the sole source)")
+    return bundle
+
+
+class SupportsDaprSecrets(Protocol):
+    """The settings shape every store-consuming service already declares.
+
+    A PROTOCOL rather than a shared base class: the four settings objects are independent
+    ``BaseSettings`` subclasses with their own env prefixes and their own required fields, and giving
+    them a common ancestor would drag one service's validators into the others. What they genuinely
+    share is these five attributes, which is exactly what this names.
+    """
+
+    secrets_from_dapr: bool
+    dapr_secret_store: str
+    dapr_secret_key: str
+    dapr_secret_s3_field: str
+    s3_secret_access_key: SecretStr
+
+
+def apply_dapr_secrets(settings: SupportsDaprSecrets) -> dict[str, str]:
+    """Consume the S3 secret from the Dapr secret store and splice it into ``settings`` IN PLACE.
+
+    THE ONE IMPLEMENTATION. This was written four times — ``lineage.core.config``,
+    ``medallion.core.config``, ``maintenance.core.config`` and, inline in a lifespan,
+    ``catalog.main`` — which is open_python-audit DUP-09, and the copies had already drifted: only the
+    catalog's logged that the store had been consumed, and only the catalog's failed closed when the
+    flag was OFF and no plaintext key was configured either.
+
+    When ``secrets_from_dapr`` is on the store is the STRICT sole source: a store miss FAILS CLOSED
+    (``fetch_required_secrets`` raises), never falling back to a plaintext env value — the chart ships
+    none, and silently using one would contradict "OpenBao is the sole source". No-op (and no fetch)
+    when off.
+
+    Returns the whole bundle, so a service that needs a SECOND field from the same secret reads it off
+    THIS fetch instead of issuing another one — that is how lineage's AGE password reaches
+    ``apply_lineage_secrets`` (see ``lineage.core.config``). Empty dict when the flag is off.
+
+    SYNC by design (the fetch retries while the store seeds, ~80s worst case), so async lifespans call
+    it through ``run_in_threadpool``.
+    """
+    if not settings.secrets_from_dapr:
+        return {}
+    bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
+    settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
+    log.info("secret_from_dapr_store", extra={"store": settings.dapr_secret_store, "field": settings.dapr_secret_s3_field})
     return bundle

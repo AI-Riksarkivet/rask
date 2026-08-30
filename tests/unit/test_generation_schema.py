@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import jsonschema
 import pytest
+
 from annotator.projects.generation_schema import generation_schema
 from annotator.projects.ontology import LabelClass, LabelOntology, OutputAttr
 
@@ -136,7 +137,6 @@ def test_the_schema_rides_the_remote_wire() -> None:
     from typing import Any
 
     from annotator.api.v1.endpoints.assist import AssistRequest, _remote
-
     from service_kit.media.state import AppState
 
     captured: dict[str, Any] = {}

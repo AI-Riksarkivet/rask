@@ -26,6 +26,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 from lance import blob_array, blob_field
+
 from maintenance.services.orphans import _kind_of, scan_dataset, scan_datasets
 
 
@@ -58,7 +59,7 @@ def blob_dataset(tmp_path: Path) -> str:
 
 
 def _scan(uri: str) -> list[str]:
-    result = scan_dataset(pafs.LocalFileSystem(), uri, uri)
+    result = scan_dataset(pafs.LocalFileSystem(), uri, prefix=uri)
     assert result.checked, f"the dataset was unreadable: {result.reason}"
     return sorted(o.path for o in result.orphans)
 
@@ -109,14 +110,14 @@ class TestItStillFindsRealGarbage:
 
     def test_the_finding_is_classified_by_AREA(self, dataset: str) -> None:
         _plant(dataset, "data/stray-0000.lance")
-        result = scan_dataset(pafs.LocalFileSystem(), dataset, dataset)
+        result = scan_dataset(pafs.LocalFileSystem(), dataset, prefix=dataset)
 
         assert [(o.path, o.kind) for o in result.orphans if o.path.startswith("data/")] == [("data/stray-0000.lance", "data")]
 
     def test_the_reported_size_is_the_real_one(self, dataset: str) -> None:
         """A reclamation report whose sizes are wrong cannot be used to decide what to reclaim."""
         _plant(dataset, "data/stray-0000.lance", b"z" * 4096)
-        result = scan_dataset(pafs.LocalFileSystem(), dataset, dataset)
+        result = scan_dataset(pafs.LocalFileSystem(), dataset, prefix=dataset)
 
         assert [o.size_bytes for o in result.orphans if o.path == "data/stray-0000.lance"] == [4096]
 
@@ -143,7 +144,7 @@ class TestUnreadableIsNotClean:
     def test_an_unreadable_dataset_reports_checked_FALSE_with_no_orphans(self, tmp_path: Path) -> None:
         """ "We could not look" and "there was nothing there" are different answers, and only one of
         them is safe to act on."""
-        result = scan_dataset(pafs.LocalFileSystem(), str(tmp_path / "nope.lance"), str(tmp_path / "nope.lance"))
+        result = scan_dataset(pafs.LocalFileSystem(), str(tmp_path / "nope.lance"), prefix=str(tmp_path / "nope.lance"))
 
         assert result.checked is False
         assert result.orphans == []
@@ -185,7 +186,7 @@ class TestAnUncertifiableLayoutIsNotClean:
         # under test without being a real (C-extension, unsubclassable) pyarrow FileSystem.
         fs = cast(pafs.FileSystem, _RaisesOnLayoutProbe(pafs.LocalFileSystem(), f"{dataset}/tree"))
 
-        result = scan_dataset(fs, dataset, dataset)
+        result = scan_dataset(fs, dataset, prefix=dataset)
 
         assert result.checked is False
         assert result.orphans == []

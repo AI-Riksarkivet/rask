@@ -23,8 +23,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from ingest.lineage import LineageRecorder, _output_datasets
 from openlineage.client.serde import Serde
+
+from ingest.lineage import LineageRecorder, _output_datasets
 
 
 def _output(project: str = "bind86", dataset: str = "pages", version: int | None = 7, rows: int = 1204) -> dict[str, Any]:
@@ -202,6 +203,7 @@ def test_the_terminal_emit_is_a_checkpointed_ACTIVITY_not_an_inline_call() -> No
     import inspect
 
     from dapr.ext.workflow import WorkflowActivityContext
+
     from ingest.workflow import emit_terminal
 
     first = next(iter(inspect.signature(emit_terminal).parameters.values()))
@@ -284,7 +286,6 @@ def test_the_originator_survives_into_what_notifications_actually_reads() -> Non
     Driven through notifications' own parser, exactly as the cross-service tests for the assignment
     lane are: what matters is that the plane which reads this wire JSON finds the person."""
     from ingest.lineage import _tenant_facet
-
     from notifications.api.lineage_events import LineageRunEvent, originator_subject
 
     event = {

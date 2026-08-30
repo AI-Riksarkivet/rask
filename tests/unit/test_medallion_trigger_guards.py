@@ -29,15 +29,15 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-import medallion.services.transform as mover
 import pytest
 from dapr.aio.clients import DaprClient
+
+import medallion.services.transform as mover
 from medallion.core.config import MedallionSettings
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.train import _safe_name as _train_safe_name
 from medallion.services.transform import handle_stage
 from medallion.services.trigger_guards import SAFE_TOKEN_PATTERN, StageTrigger, parse_stage_trigger, safe_token, uri_within
-
 from service_kit.lakehouse import warehouse_registry
 
 

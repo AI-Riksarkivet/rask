@@ -22,11 +22,11 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from viewer.api.v1.endpoints.system import router as system_router
 
 from service_kit.exceptions import register_handlers
 from service_kit.media.deps import get_state
 from service_kit.media.state import AppState
+from viewer.api.v1.endpoints.system import router as system_router
 
 
 class _NoDatasetRegistry:

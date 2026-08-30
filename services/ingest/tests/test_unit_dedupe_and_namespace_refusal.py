@@ -22,6 +22,7 @@ import httpx
 import pyarrow as pa
 import pytest
 import respx
+
 from ingest.catalog_service import CatalogError, CatalogServiceClient
 from ingest.queue import UnitTask, _dedupe_id
 

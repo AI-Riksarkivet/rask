@@ -18,10 +18,10 @@ import threading
 from typing import Any, cast
 
 import pytest
-from viewer.core.config import ViewerSettings
 
 from service_kit.media import config as media_config
 from service_kit.media.state import AppState
+from viewer.core.config import ViewerSettings
 
 
 @pytest.fixture(autouse=True)

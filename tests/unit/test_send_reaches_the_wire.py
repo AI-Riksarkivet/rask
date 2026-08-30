@@ -20,14 +20,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import project_events as ev
 from annotator.projects.actor import AnnotationTaskActor, AnnotationTaskActorInterface
 from annotator.projects.project_actor import AnnotationProjectActor, AnnotationProjectActorInterface
 from annotator.projects.proxies import TypedActorProxy
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from service_kit.exceptions import register_handlers
 from service_kit.media.deps import get_state
 

@@ -24,6 +24,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
+
 from ingest import runtime
 from ingest.runtime import BRONZE_SCHEMA, finalize_run
 from ingest.workflow import RunSpec

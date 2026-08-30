@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from dapr.ext.workflow.workflow_state import WorkflowStatus
 from lance_namespace import PermissionDeniedError, TableNotFoundError
+
 from medallion.api.promotions import decide_promotion, handle_promotion_held, instance_for
 
 

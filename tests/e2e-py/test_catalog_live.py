@@ -26,9 +26,9 @@ import httpx
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+
 from annotator.annotations.commit import check_base_version_value
 from annotator.annotations.schema import EMPTY_SCHEMA
-
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from service_kit.lancekit.writer import CatalogTableWriter, RestCatalogWriteTransport

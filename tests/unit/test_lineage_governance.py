@@ -21,13 +21,13 @@ from lance_namespace import (
     TableNotFoundError,
     UnauthenticatedError,
 )
+
 from lineage.api import fga_deps
 from lineage.api.v1.endpoints.governance import add_tag, get_governance, remove_tag, set_description
 from lineage.core.config import LineageSettings
 from lineage.schemas import DatasetGovernance, DescriptionUpdate
 from lineage.services import repository as repository_module
 from lineage.services.repository import LineageRepository
-
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 

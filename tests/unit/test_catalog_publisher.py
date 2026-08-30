@@ -18,6 +18,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+
 from annotator.projects.lakehouse import RUN_FACETS_HEADER, CatalogPublisher
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan
 
@@ -32,6 +33,32 @@ def _plan(rows: int = 1) -> PublishPlan:
             for i in range(rows)
         ],
     )
+
+
+class _StubClient:
+    """A pooled-client stand-in for the publish transport's `publish_client` factory.
+
+    The transport moved from module-level `httpx.post` (a throwaway client, and therefore a
+    connection, per call) to ONE pooled retrying client — ANN-14. These tests intercept at the new
+    seam; every assertion about the request itself is unchanged.
+    """
+
+    def __init__(self, post: Any) -> None:
+        self._post = post
+        self.closed = False
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        return self._post(url, **kwargs)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __enter__(self) -> _StubClient:
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        self.close()
+        return False
 
 
 class _Create:
@@ -209,7 +236,7 @@ class _Resp:
 
 
 def test_the_http_create_api_sends_the_pin_params_the_arrow_type_and_quotes_the_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
+    from annotator.projects import lakehouse
     from annotator.projects.lakehouse import _HttpCreateApi
 
     seen: dict[str, Any] = {}
@@ -218,7 +245,7 @@ def test_the_http_create_api_sends_the_pin_params_the_arrow_type_and_quotes_the_
         seen.update(url=url, params=params, content=content, headers=headers)
         return _Resp(200, {"version": 7})
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
     api = _HttpCreateApi("http://catalog:2333/")
 
     resp = api.create_table(
@@ -237,7 +264,7 @@ def test_the_http_create_api_sends_the_pin_params_the_arrow_type_and_quotes_the_
 
 
 def test_the_http_create_api_omits_the_pin_params_when_there_is_no_pin(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
+    from annotator.projects import lakehouse
     from annotator.projects.lakehouse import _HttpCreateApi
 
     seen: dict[str, Any] = {}
@@ -246,7 +273,7 @@ def test_the_http_create_api_omits_the_pin_params_when_there_is_no_pin(monkeypat
         seen.update(params=params)
         return _Resp(200, {"version": 3})
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
     _HttpCreateApi("http://catalog:2333").create_table("silver$t", b"A", mode="exist_ok")
 
     assert "source" not in seen["params"] and "source_version" not in seen["params"], "an absent pin must stay absent on the wire (§7.2 — never fabricate)"
@@ -255,11 +282,12 @@ def test_the_http_create_api_omits_the_pin_params_when_there_is_no_pin(monkeypat
 def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """>=400 becomes the SDK's ApiException, so `translate_catalog_errors` maps it exactly like an
     SDK failure — the saga's retry semantics see ONE error surface regardless of transport."""
-    import httpx
-    from annotator.projects.lakehouse import _HttpCreateApi
     from lance_namespace_urllib3_client.exceptions import ApiException
 
-    monkeypatch.setattr(httpx, "post", lambda url, **kw: _Resp(502, text="upstream unreachable"))
+    from annotator.projects import lakehouse
+    from annotator.projects.lakehouse import _HttpCreateApi
+
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(lambda url, **kw: _Resp(502, text="upstream unreachable")))
 
     with pytest.raises(ApiException) as err:
         _HttpCreateApi("http://catalog:2333").create_table("silver$t", b"A")
@@ -297,9 +325,7 @@ class _TokenSettings:
 def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytest.MonkeyPatch) -> None:
     """The password comes from the Dapr secret store (fail-closed, sole source) and the grant carries
     the service account — a FRESH token per publish, so nothing stored can ever go stale."""
-    import httpx
     from annotator.projects import lakehouse
-
     from service_kit.governed import secrets as sk_secrets
 
     settings = _TokenSettings()
@@ -317,12 +343,12 @@ def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytes
 
     posted: dict[str, Any] = {}
 
-    def fake_post(url: str, *, data: dict[str, str], auth: Any, timeout: float) -> Any:
+    def fake_post(url: str, *, data: dict[str, str], auth: Any) -> Any:
         posted.update(url=url, data=data, auth=auth)
         return _Resp(200, {"id_token": "minted-token"})
 
     monkeypatch.setattr(sk_secrets, "fetch_required_secrets", fake_fetch)
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
 
     assert lakehouse.publish_token(settings) == "minted-token"
     assert fetched == [("lance-secrets", "lance")]
@@ -342,9 +368,7 @@ def test_unconfigured_identity_is_none_not_an_error() -> None:
 def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     """A wrong password or sealed store is an OPERATOR's problem — it must surface as publish_failed
     with the IdP's words, never a stranded `publishing`."""
-    import httpx
     from annotator.projects import lakehouse
-
     from service_kit.governed import secrets as sk_secrets
 
     settings = _TokenSettings()
@@ -352,7 +376,7 @@ def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) 
     settings.publish_username = "publisher@rask.internal"
 
     monkeypatch.setattr(sk_secrets, "fetch_required_secrets", lambda *a, **k: {"publisher-oidc-password": "wrong"})
-    monkeypatch.setattr(httpx, "post", lambda url, **kw: _Resp(401, text="invalid credentials"))
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(lambda url, **kw: _Resp(401, text="invalid credentials")))
 
     with pytest.raises(RuntimeError, match="401"):
         lakehouse.publish_token(settings)

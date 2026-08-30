@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from medallion.core.config import MedallionSettings
 from medallion.services import produce as produce_module
 
@@ -186,8 +187,9 @@ def _media_settings() -> MedallionSettings:
 @pytest.mark.asyncio
 async def test_the_media_head_span_goes_ERROR_when_its_emit_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same defect, same span-names-the-operation argument, on the multimodal head."""
-    from medallion.services import media_produce as media_module
     from opentelemetry.trace import StatusCode
+
+    from medallion.services import media_produce as media_module
 
     assert media_module.media_head_enabled(_media_settings()), (
         "the fixture does not enable the media head, so this test would assert nothing — "

@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import lance
 import pytest
-from catalog.services import models
 from lance_namespace import ServiceUnavailableError, TableNotFoundError, TableVersionNotFoundError
+
+from catalog.services import models
 
 
 def test_a_store_outage_is_a_503_not_a_404(monkeypatch: pytest.MonkeyPatch) -> None:

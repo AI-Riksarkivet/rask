@@ -15,9 +15,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from medallion.services import gate as gate_svc
 from pydantic import ValidationError
 
+from medallion.services import gate as gate_svc
 from service_kit.lakehouse import gate_specs
 from service_kit.lakehouse.gate_specs import GateSpec
 

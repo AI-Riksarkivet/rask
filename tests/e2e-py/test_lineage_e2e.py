@@ -146,9 +146,10 @@ def test_ensure_graph_bootstraps_and_is_idempotent_against_age(dsn: str) -> None
     import uuid
     from contextlib import suppress
 
+    from psycopg import sql
+
     from lineage.core.age import make_pool
     from lineage.services.repository import LineageRepository
-    from psycopg import sql
 
     gname = f"e2e_ensure_{uuid.uuid4().hex[:8]}"
 
@@ -241,12 +242,12 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
     """
     import lance
     import pyarrow as pa
+
     from lineage.core.age import make_pool, run_cypher
     from lineage.core.reconcile import read_storage_version, reconcile_all
     from lineage.models import RunEvent
     from lineage.schemas import ReconcileState
     from lineage.services.repository import LineageRepository
-
     from service_kit.openlineage import run_id_for
 
     # The back-fill run id is now a deterministic UUID (spec fix), not the readable seed string.

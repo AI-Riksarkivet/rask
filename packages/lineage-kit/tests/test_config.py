@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from lineage_kit import ClientEmitter, LineageSettings, NoopEmitter, build_emitter
 
 

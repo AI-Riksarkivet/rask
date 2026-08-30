@@ -136,11 +136,12 @@ def test_the_catalog_native_seam_opens_a_span_per_operation() -> None:
 
 def test_the_native_seam_names_the_operation_and_really_emits() -> None:
     """A span named for the method, proven against a real exporter rather than by grep."""
-    from catalog.services import native
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from catalog.services import native
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()

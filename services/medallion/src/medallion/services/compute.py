@@ -26,9 +26,9 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 from lance.indices.builder import IndexConfig
-from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
 from pydantic import BaseModel, Field
 
+from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
 from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
 from service_kit.lakehouse import blobs, schema
 

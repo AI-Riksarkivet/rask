@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
+
 from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
 
 

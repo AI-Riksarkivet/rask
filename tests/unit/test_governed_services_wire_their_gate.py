@@ -41,10 +41,29 @@ import pathlib
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SERVICES = REPO / "services"
 
-#: Any of these, anywhere in the service's source, means the wire is connected. Both are the shared
-#: bootstrap: `attach_auth` assigns onto `app.state`, `build_fga_client` returns the client for the one
-#: consumer (`maintenance`) that lives outside a lifespan.
-_WIRES = ("attach_auth", "build_fga_client")
+#: Any of these, anywhere in the service's source, means the wire is connected. All three reach the
+#: shared bootstrap: `attach_auth` assigns onto `app.state`; `build_fga_client` returns the client for
+#: the one consumer (`maintenance`) that lives outside a lifespan; `make_media_lifespan` composes the
+#: media plane's ONE lifespan, which calls `attach_auth` itself.
+#:
+#: The third was added when viewer/search/annotator collapsed their three copied lifespans onto that
+#: one (open_python-audit DUP-16) and two of them stopped containing the string `attach_auth` — a
+#: source-level guard reporting an unwired door on services that had just become MORE certain to be
+#: wired. `test_the_shared_media_lifespan_is_what_it_claims` below keeps it from being a magic word.
+_WIRES = ("attach_auth", "build_fga_client", "make_media_lifespan")
+
+#: Where that third wire actually lives.
+_MEDIA_LIFESPAN = REPO / "packages/service-kit/src/service_kit/media/lifespan.py"
+
+
+def test_the_shared_media_lifespan_is_what_it_claims() -> None:
+    """`make_media_lifespan` counts as a wire only because that module calls `attach_auth`.
+
+    Without this, accepting the name would let a service satisfy the gate by importing a lifespan that
+    had quietly stopped attaching auth — the gate passing on the exact regression it exists for.
+    """
+    source = _MEDIA_LIFESPAN.read_text()
+    assert "attach_auth(" in source, f"{_MEDIA_LIFESPAN} no longer calls attach_auth, so composing it wires nothing"
 
 
 def _service_sources(service: pathlib.Path) -> list[pathlib.Path]:

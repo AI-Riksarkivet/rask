@@ -11,17 +11,24 @@ The frontend's Vite proxy targets `:8888` (the gateway) for `compute`/`studio`/`
 does NOT start) and `explorer`/`annotator` have no `/api` proxy at all — they reach
 `:8101`/`:8102`/`:8103` through their own BFF. See `rask-frontend`.
 
-## Five HTTP entrypoints are thin shells over `make_service_app`
+## Twelve HTTP entrypoints are thin shells over one of three factories
 
 `compute`, `controlplane`, `flows`, `ingest` and `notifications` import routers (+ maybe a
 lifespan) from a domain package and call `service_kit.make_service_app` — no business logic in
 the entrypoint. Count by CALL SITE, not by import: `gateway` names the factory in three comments
 and calls it nowhere. `gateway` builds `FastAPI(...)` itself (it is a proxy, not a router host),
 though it does call `service_kit.setup_otel` directly, so it is on the shared telemetry path
-even while it is off the shared app-factory path, and the seven
-lance-plane services (`catalog`, `lineage`, `medallion` ×2 apps, `maintenance`, `viewer`,
-`search`, `annotator`) build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`mover.py`
-over their own `core/config.py` settings. See rask-architecture's "Two layouts are sanctioned".
+even while it is off the shared app-factory path.
+
+THE OTHER SEVEN ALSO COME OUT OF A FACTORY NOW, and this paragraph used to say they did not —
+that they "build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`mover.py`". They did, all
+seven, each repeating the same five-step boot in copied comments (open_python-audit DUP-12), until
+the mover was found to have lost its request-id layer in the copying. Today: `viewer`, `search` and
+`annotator` build through `service_kit.media.app.build_media_app` over one shared
+`service_kit.media.lifespan`; `catalog`, `lineage`, the two `medallion` apps and `maintenance` build
+through `service_kit.lance_app.build_lance_service_app`. Both still read their own
+`core/config.py` settings and keep the `api/v1/endpoints/` layout — the factory owns the boot, not
+the layout. See rask-architecture's "Three factories are sanctioned".
 
 | Service | Port | Composes package(s) | Lifespan | DB? | Notes |
 |---|---|---|---|---|---|

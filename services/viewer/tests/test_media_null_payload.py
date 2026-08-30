@@ -35,9 +35,9 @@ import lance
 import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
-from viewer.api.v1.endpoints import media as media_ep
 
 from service_kit.exceptions import NotFoundError
+from viewer.api.v1.endpoints import media as media_ep
 
 
 def _dataset(tmp_path: Path, payload: bytes | None) -> lance.LanceDataset:

@@ -34,6 +34,7 @@ broken production stage as the same thing.
 from __future__ import annotations
 
 import pytest
+
 from medallion.services.gate_decision import GateOutcome, gate_decision
 
 

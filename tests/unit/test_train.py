@@ -18,11 +18,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
+
 from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.train import router
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit, train
-
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 

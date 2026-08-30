@@ -15,6 +15,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
 from annotator.api.v1.endpoints.assist import enforced_shape_types, producer_listing, returns_for
 
 

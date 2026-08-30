@@ -26,9 +26,10 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+from lance import blob_array, blob_field
+
 from ingest.lander import CREATION_FLAGS
 from ingest.runtime import BRONZE_SCHEMA
-from lance import blob_array, blob_field
 
 
 #: Big enough to slice meaningfully, small enough to keep the test fast. Placement tier is NOT the

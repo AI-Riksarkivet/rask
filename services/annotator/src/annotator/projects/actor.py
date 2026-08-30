@@ -123,6 +123,11 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         return Task.model_validate(json.loads(raw)) if has and raw else None
 
     async def _store(self, task: Task) -> None:
+        # BOUND THE HISTORY HERE, at the one seam every write goes through, rather than at each
+        # `append`: the whole document is re-serialised on every write, so an unbounded trail makes
+        # the cost of an event track how many events preceded it. `trim_history` counts what it
+        # sheds, so the document never claims a trail it does not carry (open_python-audit ANN-11).
+        task.trim_history()
         await self._state_manager.set_state(TASK_KEY, task.model_dump_json())
         await self._state_manager.save_state()
 
@@ -279,7 +284,12 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             task.assignee, task.lease_expires_at = None, None
         elif event in {"accept", "fix_and_accept", "request_changes"}:
             task.reviewed_by, task.reviewed_at = actor, now
-            task.review_action = "accepted" if event == "accept" else event  # type: ignore[assignment]
+            # NO SUPPRESSION HERE, and none is needed. This line carried a mypy-shaped ignore
+            # comment, which is both the wrong checker's syntax for this estate and unnecessary:
+            # the branch is reached only for the three edges of `SELF_REVIEW_FORBIDDEN`, whose names
+            # ARE the `ReviewAction` literals once `accept` is spelled `accepted`, and `ty` narrows
+            # to exactly that. A `cast` here reports as redundant.
+            task.review_action = "accepted" if event == "accept" else event
             # §5.2: `request_changes` APPENDS a ReviewNote. Without it the reviewer's reason is lost
             # and the annotator is handed the task back with no statement of what to change — which
             # makes the whole changes_requested loop useless in practice.

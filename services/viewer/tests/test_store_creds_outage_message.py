@@ -16,9 +16,9 @@ only that the credentials could not be read.
 from __future__ import annotations
 
 import pytest
-from viewer.api.v1.endpoints import objects as objects_ep
 
 from service_kit.exceptions import ServiceUnavailableError
+from viewer.api.v1.endpoints import objects as objects_ep
 
 
 @pytest.fixture(autouse=True)

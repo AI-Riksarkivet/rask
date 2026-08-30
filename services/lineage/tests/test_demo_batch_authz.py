@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+
 from lineage.api import fga_deps
 from lineage.api.fga_deps import DatasetFilter
 from lineage.api.security import authenticate

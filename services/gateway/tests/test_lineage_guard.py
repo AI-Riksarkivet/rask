@@ -64,14 +64,32 @@ def test_other_lineage_routes_pass_through(gw, proxied) -> None:
     assert str(captured[-1].url) == "http://127.0.0.1:8000/runs"
 
 
-def test_blocklist_env_overridable(gw, proxied, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_blocklist_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
     """The chart renders the one-source list into RASK_LINEAGE_SIDECAR_ONLY_ROUTES
-    (e.g. a renamed reconcile binding); the middleware reads it per-request."""
+    (e.g. a renamed reconcile binding); the middleware honours it.
+
+    The override is applied BEFORE the app boots, which is the only moment it can arrive in a
+    deployment — the chart writes it into the pod's environment. It used to be re-parsed on every
+    request that reached this middleware, probes included; it is now read once, with the rest of the
+    gateway's configuration, and served off `app.state.settings` (FLEET-ENV-SCATTER).
+    """
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
     monkeypatch.setenv("RASK_LINEAGE_SIDECAR_ONLY_ROUTES", "lineage-events,custom-cron")
-    client, captured = proxied
-    assert client.post("/api/lineage/custom-cron").status_code == 403
-    assert client.get("/api/lineage/lineage-reconcile-cron").status_code == 200  # no longer listed
-    assert str(captured[-1].url) == "http://127.0.0.1:8000/lineage-reconcile-cron"
+    import gateway
+
+    gw = importlib.reload(gateway)
+
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, stream=httpx.ByteStream(b'{"ok": true}'), headers={"content-type": "application/json"})
+
+    with TestClient(gw.app) as client:
+        gw.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        assert client.post("/api/lineage/custom-cron").status_code == 403
+        assert client.get("/api/lineage/lineage-reconcile-cron").status_code == 200  # no longer listed
+        assert str(captured[-1].url) == "http://127.0.0.1:8000/lineage-reconcile-cron"
 
 
 def test_normalization_defeats_dot_segment_variants(gw) -> None:

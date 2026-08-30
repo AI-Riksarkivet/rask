@@ -9,7 +9,11 @@ dependencies = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "uvicorn>=0.30",
-    "python-dotenv>=1.0",
+    # `gateway.config` — the front door's own settings model. `python-dotenv` was here for the
+    # `load_dotenv()` that `_routes()` used to call; pydantic-settings reads `.env` itself, so the
+    # direct dependency went with the call (FLEET-ENV-SCATTER).
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
 ]
 
 [build-system]

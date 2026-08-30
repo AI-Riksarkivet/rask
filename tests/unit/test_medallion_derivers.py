@@ -14,10 +14,10 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
-from medallion.services.compute import transform_stage
-from medallion.services.derivers import derive_artifacts
 from PIL import Image
 
+from medallion.services.compute import transform_stage
+from medallion.services.derivers import derive_artifacts
 from service_kit.lakehouse import media
 
 

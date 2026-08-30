@@ -18,10 +18,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from catalog.api.v1.endpoints import versions as ver
-from catalog.core.config import Settings
 from lance_namespace import BatchCommitTablesRequest, ServiceUnavailableError
 
+from catalog.api.v1.endpoints import versions as ver
+from catalog.core.config import Settings
 from service_kit.governed.oidc import IDToken
 
 

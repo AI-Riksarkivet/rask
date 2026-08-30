@@ -15,7 +15,7 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -149,7 +149,12 @@ class MediaSettings(BaseSettings):
     # below: coordinates are config, the secret is not. `rustfs-secret-key` is already seeded in the
     # `lance` bundle by the chart's infra-credentials plane. MEDIA_S3_SECRET_ACCESS_KEY exists for
     # tests and sidecar-less dev only; the chart never sets it.
-    s3_secret_store: str = Field(default="lance-secrets", alias="MEDIA_S3_SECRET_STORE")
+    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
+    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
+    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: still be moved on its own.
+    s3_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MEDIA_S3_SECRET_STORE", "RASK_SECRET_STORE"))
     s3_secret_key: str = Field(default="lance", alias="MEDIA_S3_SECRET_KEY")
     s3_secret_field: str = Field(default="rustfs-secret-key", alias="MEDIA_S3_SECRET_FIELD")
     s3_region: str = Field(default="us-east-1", alias="MEDIA_S3_REGION")
@@ -176,7 +181,9 @@ class MediaSettings(BaseSettings):
     publish_client_id: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_ID")
     publish_client_secret: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_SECRET")
     publish_username: str | None = Field(default=None, alias="MEDIA_PUBLISH_USERNAME")
-    publish_secret_store: str = Field(default="lance-secrets", alias="MEDIA_PUBLISH_SECRET_STORE")
+    publish_secret_store: str = Field(
+        default="lance-secrets", validation_alias=AliasChoices("MEDIA_PUBLISH_SECRET_STORE", "RASK_SECRET_STORE")
+    )  # the one store; see s3_secret_store
     publish_secret_key: str = Field(default="lance", alias="MEDIA_PUBLISH_SECRET_KEY")
     # The catalog namespace annotation tables live under; unset → the dataset id.
     catalog_namespace: str | None = Field(default=None, alias="MEDIA_CATALOG_NAMESPACE")

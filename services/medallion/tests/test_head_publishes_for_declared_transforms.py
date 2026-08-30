@@ -21,7 +21,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from medallion.services.ingest_trigger import _bronze_write_dataset
-
 from service_kit.lakehouse import transform_specs
 from service_kit.lakehouse.transform_specs import TransformSpec
 

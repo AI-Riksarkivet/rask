@@ -19,9 +19,10 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from catalog.services import warehouses as wh_svc
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, connect
+
+from catalog.services import warehouses as wh_svc
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -157,8 +158,9 @@ def test_binding_collides_with_existing_default_namespace_409(
     # namespace made before that rule landed is exactly this shape — so the guard below must hold.
     # Going through the native API (not mkdir) is what makes the namespace VISIBLE to the existence
     # probe the guard uses; a bare directory is not a namespace to it.
-    from catalog.services import native
     from lance_namespace import CreateNamespaceRequest
+
+    from catalog.services import native
 
     native.call(client.app.state.namespace, "create_namespace", CreateNamespaceRequest(id=["shared"]))
 

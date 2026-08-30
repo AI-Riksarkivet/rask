@@ -45,7 +45,7 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api.dependencies import SettingsDep
+from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
@@ -479,6 +479,37 @@ async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: o
     raise PermissionDeniedError(f"a grant may not raise your own access: you do not hold {relation} on {obj}")
 
 
+def require_wired(client: OpenFgaClient | None) -> OpenFgaClient:
+    """Fail CLOSED on an authz layer that is enabled but unwired — the 503 half of the estate gate.
+
+    One body for one message (catalog-api-09). Eleven handlers carried their own copy of
+    ``if client is None: raise ServiceUnavailableError(...)``, which is how two of them ended up
+    disagreeing about whether an absent client is 503 or 409.
+    """
+    if client is None:
+        raise ServiceUnavailableError("authorization service is not available")
+    return client
+
+
+def require_fga(settings: Settings, client: OpenFgaClient | None, *, feature: str) -> OpenFgaClient:
+    """The estate gate every FGA-BACKED door opens with, and the client it needs, in one call.
+
+    Two refusals, and the distinction is deliberate: with FGA OFF the deployment genuinely does not
+    implement the feature (501 ``UnsupportedOperation`` — there are no tuples to review, simulate or
+    grant), while ENABLED-but-unwired is a fault the caller should retry against (503, fail-closed —
+    never a silent allow, never an empty grant list that reads as "nobody has access").
+
+    ``feature`` names what is unavailable, so the 501 still says which door refused.
+
+    Doors that answer an FGA-off stack with DATA rather than a refusal (``_read_managed_access``
+    reports ``managed_access=False``; ``list_members`` reports an empty list) do not use this — for
+    them "off" is an answer, not a refusal.
+    """
+    if not settings.fga_enabled:
+        raise UnsupportedOperationError(f"{feature} requires OpenFGA (this stack runs auth-off)")
+    return require_wired(client)
+
+
 async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Settings, *, user: str) -> None:
     """Authorize body-keyed batch routes (no ``{id}`` path param); tables named in the body.
 
@@ -541,24 +572,29 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Se
         for obj in objs:
             audit("can_create_table", ALLOW if allowed.get(obj) else DENY, subject=user, resource=obj)
         denied += [o for o in objs if not allowed.get(o)]
-    for obj, relation in owner_checks:  # rare; per-object keeps the per-op relation exact
-        ok = await fga.check(client, user=user, relation=relation, obj=obj)
-        audit(relation, ALLOW if ok else DENY, subject=user, resource=obj)
-        if not ok:
-            denied.append(obj)
+    # ONE round trip per DISTINCT owner relation, not per object (catalog-api-12). Grouping keeps what
+    # the per-object loop was written for — the relation stays exact per operation — while `operations`
+    # is client-supplied and unbounded, so the loop cost N sequential authorization round trips before
+    # any work was authorized. `_BATCH_OWNER_OPS` has one entry today; the loop was O(objects), not
+    # O(relations), so "rare" described the mapping table rather than the request.
+    for relation in sorted({r for _, r in owner_checks}):
+        objs = sorted({obj for obj, r in owner_checks if r == relation})
+        allowed = await fga.batch_check(client, user=user, relation=relation, objects=objs)
+        for obj in objs:
+            audit(relation, ALLOW if allowed.get(obj) else DENY, subject=user, resource=obj)
+        denied += [o for o in objs if not allowed.get(o)]
     if denied:
         log.info("access_denied", extra={"sub": user, "objects": sorted(denied)})
         raise PermissionDeniedError(f"permission denied on {', '.join(sorted(denied))}")
 
 
-async def authorize(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
+async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep) -> None:
     """Enforce the caller's OpenFGA permission for this route (no-op when FGA is off)."""
     if not settings.fga_enabled:
         return
-    # Fail closed: enabled but unwired authz must never silently allow the request.
-    client = getattr(request.app.state, "fga", None)
-    if client is None:
-        raise ServiceUnavailableError("authorization service is not available")
+    # Fail closed: enabled but unwired authz must never silently allow the request. The client is
+    # INJECTED (`FgaClientDep`) rather than read off `app.state` here — one place knows where it lives.
+    client = require_wired(injected)
     if token is None:
         raise UnauthenticatedError("authentication required")
 

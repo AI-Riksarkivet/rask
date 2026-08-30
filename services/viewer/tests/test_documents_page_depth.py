@@ -37,10 +37,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     `get_state` is overridden rather than monkeypatched because it is a real FastAPI dependency;
     `dataset_handle` is a plain call inside the body, so it is patched at the module that calls it.
     """
-    from viewer.api.v1.endpoints import system
-
     from service_kit.exceptions import register_handlers
     from service_kit.media.deps import get_state
+    from viewer.api.v1.endpoints import system
 
     class _Declared:
         document = None

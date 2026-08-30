@@ -26,6 +26,7 @@ and they are evidence rather than assumption — a JPEG really does start `FF D8
 from __future__ import annotations
 
 import pytest
+
 from viewer.api.v1.endpoints import pages as pages_ep
 
 

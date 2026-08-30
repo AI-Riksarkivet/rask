@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+
 from annotator.projects.actor import DRAFT_KEY, LEASE_REMINDER, TASK_KEY, AnnotationTaskActor
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import ProjectState, Task, TaskState

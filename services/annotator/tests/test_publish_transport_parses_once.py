@@ -34,6 +34,27 @@ class _CountingResp:
         return dict(self._body)
 
 
+class _StubClient:
+    """A stand-in for `lakehouse.publish_client`, the ONE pooled retrying client the publish
+    transport's direct-HTTP calls now share (ANN-14). It replaced module-level `httpx.post`, which
+    built and discarded a client — and a connection — per call."""
+
+    def __init__(self, post: Any) -> None:
+        self._post = post
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        return self._post(url, **kwargs)
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self) -> _StubClient:
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        return False
+
+
 def _token_settings() -> SimpleNamespace:
     return SimpleNamespace(
         publish_token_url="http://dex:5556/dex/token",
@@ -46,26 +67,24 @@ def _token_settings() -> SimpleNamespace:
 
 
 def test_the_token_mint_parses_the_idp_response_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
     from annotator.projects import lakehouse
-
     from service_kit.governed import secrets as sk_secrets
 
     monkeypatch.setattr(sk_secrets, "fetch_required_secrets", lambda *a, **k: {"publisher-oidc-password": "pw"})
     # `access_token` only — the arm that forced the SECOND parse when `id_token` came back empty.
     resp = _CountingResp({"access_token": "minted"})
-    monkeypatch.setattr(httpx, "post", lambda url, **kw: resp)
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(lambda url, **kw: resp))
 
     assert lakehouse.publish_token(_token_settings()) == "minted"
     assert resp.json_calls == 1, f"the token response was parsed {resp.json_calls} times — the body must be read once into a local"
 
 
 def test_the_create_result_is_a_typed_model_parsed_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
+    from annotator.projects import lakehouse
     from annotator.projects.lakehouse import CreateTableResult, _HttpCreateApi
 
     resp = _CountingResp({"version": 7})
-    monkeypatch.setattr(httpx, "post", lambda url, **kw: resp)
+    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(lambda url, **kw: resp))
 
     result = _HttpCreateApi("http://catalog:2333").create_table("silver$t", b"A", mode="exist_ok")
 

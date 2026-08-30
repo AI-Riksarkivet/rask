@@ -21,6 +21,7 @@ import json
 from typing import Any
 
 import pytest
+
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.publication_trigger import handle_publication

@@ -30,9 +30,9 @@ from collections.abc import Iterator
 
 import pytest
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+
 from lineage.api.security import _service_principal
 from lineage.core.config import LineageSettings
-
 from service_kit.governed import dapr_auth
 
 

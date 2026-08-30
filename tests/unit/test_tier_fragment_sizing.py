@@ -34,6 +34,7 @@ presented as tuned.
 from __future__ import annotations
 
 import pytest
+
 from maintenance.services.tiers import GOLD_TARGET_ROWS, SILVER_TARGET_ROWS, target_rows_for, tier_of
 
 

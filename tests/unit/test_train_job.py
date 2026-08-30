@@ -25,8 +25,8 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from lineage.models import RunEvent
 
+from lineage.models import RunEvent
 from service_kit import openlineage as common_ol
 
 

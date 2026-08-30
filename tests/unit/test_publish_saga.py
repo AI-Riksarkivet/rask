@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+
 from annotator.projects.models import AnnotationProject, ProjectState, Task, TaskState
 from annotator.projects.publish import PublishRefusal
 from annotator.projects.saga import run_publish, table_id_for

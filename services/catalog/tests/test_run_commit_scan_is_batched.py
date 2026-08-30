@@ -17,8 +17,9 @@ import threading
 from typing import Any
 
 import pytest
-from catalog.services import dataplane
 from lance_namespace import ServiceUnavailableError
+
+from catalog.services import dataplane
 
 
 class _Transaction:

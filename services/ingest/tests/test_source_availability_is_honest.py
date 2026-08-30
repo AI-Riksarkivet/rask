@@ -26,6 +26,7 @@ later cannot reintroduce the asymmetry by forgetting the same field.
 from __future__ import annotations
 
 import pytest
+
 from ingest import sources
 from ingest.adapters import LANCE_ROOT_ENV, LOCAL_ROOT_ENV
 

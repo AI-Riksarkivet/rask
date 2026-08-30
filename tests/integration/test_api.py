@@ -456,8 +456,9 @@ def test_merge_insert_authz_checks_the_source_before_recording_it(client: TestCl
 
 def test_merge_insert_denies_when_source_not_readable(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     # Fail-closed: a source the caller can't read is a 403 BEFORE the merge — never a silent forged edge.
-    from catalog.api import fga_deps
     from lance_namespace import PermissionDeniedError
+
+    from catalog.api import fga_deps
 
     async def _deny(*_a, **_k):
         raise PermissionDeniedError("can_get_metadata required")
@@ -917,7 +918,6 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     # warehouses, two table policies, one bucket each — the rival's record must never cross.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
-
     from service_kit.lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
@@ -940,7 +940,6 @@ def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: 
     # would miss it AND hand it to whoever owns the default bucket; scoping by the BINDING finds it.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
-
     from service_kit.lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
@@ -963,7 +962,6 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     # operator is looking for at exactly the moment they are offboarding.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
-
     from service_kit.lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
@@ -983,7 +981,6 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     # surface another tenant's project policy inside acme's view.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
-
     from service_kit.lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)

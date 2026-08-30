@@ -256,7 +256,7 @@ def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[s
     return referenced, len(versions), note
 
 
-def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str], ds: lance.LanceDataset) -> str | None:
+def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: str, referenced: set[str]) -> str | None:
     """Why this dataset CANNOT be scanned safely, or ``None`` if it can.
 
     Layouts that make the "list the prefix, subtract the referenced set" method produce false
@@ -315,7 +315,26 @@ def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str], 
 
     # A referenced path that is not here means the dataset spans roots (base_paths / shallow clone).
     # Checked against the exact-match entries only; the trailing-slash entries are sidecar DIRECTORIES.
-    missing = [rel for rel in sorted(referenced) if not rel.endswith("/") and fs.get_file_info(f"{prefix}/{rel}").type != pafs.FileType.File]
+    #
+    # ONE BATCHED CALL, not one round trip per referenced path. This was a comprehension issuing
+    # `get_file_info(path)` per entry, sequentially — and the referenced set holds one entry per data
+    # file, deletion file, index and transaction across every live version, so a dataset with history
+    # paid a burst of serial HEADs, on every dataset in every warehouse bucket, on every reconcile
+    # tick, before a single orphan had been found. `get_file_info` takes a LIST and the filesystem
+    # answers it as a batch (pyarrow's S3 implementation fans the batch out over its IO pool rather
+    # than issuing them one behind the other). It also removes the question of short-circuiting: one
+    # call cannot be cut short, and the full answer is what the message below reports.
+    #
+    # Guarded on the SAME rule as the two directory probes above, which it did not share: a raise here
+    # left the whole orphan scan (and, through `reconcile`, the whole tick) — one dataset's transient
+    # HeadObject failure taking down a report about the entire estate. Fail CLOSED for the same reason:
+    # a layout we could not determine is one we must not certify as scannable.
+    exact = [rel for rel in sorted(referenced) if not rel.endswith("/")]
+    try:
+        present = fs.get_file_info([f"{prefix}/{rel}" for rel in exact])
+    except Exception as exc:
+        return f"{prefix}: base-path presence probe failed ({type(exc).__name__}: {exc}) — cannot certify the dataset is scannable"
+    missing = [rel for rel, info in zip(exact, present, strict=True) if info.type != pafs.FileType.File]
     if missing:
         return (
             f"{prefix}: {len(missing)} referenced file(s) do not live under this prefix (e.g. {missing[0]}) — "
@@ -324,11 +343,13 @@ def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str], 
     return None
 
 
-def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_options: dict[str, str] | None = None) -> DatasetOrphanScan:
+def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: dict[str, str] | None = None) -> DatasetOrphanScan:
     """List one dataset's files and subtract what any live version references.
 
     ``prefix`` is the dataset's path as the filesystem sees it (no scheme), because pyarrow lists by
-    path while Lance opens by URI.
+    path while Lance opens by URI — and it is KEYWORD-ONLY because it is a second `str` beside
+    ``dataset_uri`` that very often carries the SAME value, which is precisely the pair a call site
+    cannot self-check (MAINT-16).
 
     A dataset that cannot be READ yields ``checked=False`` and NO orphans. That distinction is the
     whole safety property: "we could not determine the referenced set" must never render as "none of
@@ -353,7 +374,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_opt
     # that failed. Ordering mattered from pylance 10.0.0, which panics on `get_transactions()` for a
     # shallow clone: the note then fired first and shadowed the base_paths refusal, so the operator was
     # told the least useful of the two true things.
-    if (unscannable := _unscannable_reason(fs, prefix, referenced, ds)) is not None:
+    if (unscannable := _unscannable_reason(ds, fs=fs, prefix=prefix, referenced=referenced)) is not None:
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable)
 
@@ -367,6 +388,10 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_opt
         log.warning("orphan_listing_failed", extra={"dataset": dataset_uri, "error": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=f"listing failed: {exc}")
 
+    # Materialized ONCE, outside the loop. The sidecar test used to re-filter the whole referenced set
+    # for every listed file that was not an exact match — O(files x referenced) Python-level work per
+    # dataset, on the same hot path as the probe batching above (the audit's HOUSE-RULE-16 addendum).
+    sidecar_dirs = tuple(d for d in referenced if d.endswith("/"))
     for info in entries:
         if info.type != pafs.FileType.File:
             continue
@@ -374,7 +399,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_opt
         if rel in referenced:
             continue
         # ...or it sits under a referenced data file's blob-sidecar directory.
-        if any(rel.startswith(d) for d in referenced if d.endswith("/")):
+        if rel.startswith(sidecar_dirs):
             continue
         # Manifests and the hint are the VERSION INDEX itself, not payload: a manifest is what makes a
         # version live, so it can never be "unreferenced" while it is present, and the hint is
@@ -395,7 +420,7 @@ def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_
     """
     report = OrphanReport()
     for dataset_uri, prefix in datasets:
-        result = scan_dataset(fs, dataset_uri, prefix, storage_options)
+        result = scan_dataset(fs, dataset_uri, prefix=prefix, storage_options=storage_options)
         if not result.checked:
             report.datasets_unreadable += 1
             report.incomplete.append(result.reason or f"{dataset_uri}: unreadable")

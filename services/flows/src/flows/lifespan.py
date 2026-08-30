@@ -8,7 +8,10 @@ for. With it, `make dev-micro` is silent and in-cluster runs are durable — one
 the environment that can actually answer the question.
 
 The import of `flows.workflow` is INSIDE that branch on purpose (see `runtime.py`): importing it is
-what registers the workflow and its activity, and what pays for grpc.
+what registers the workflow and its activity, and what pays for grpc. It is NOT inside a try, also on
+purpose — a module that will not import is a broken build, and swallowing that into "the sidecar is
+unavailable" is how a pod boots green and runs every flow inline forever. Only `wfr.start()` is
+guarded, and only against the connection-shaped errors an absent sidecar produces.
 
 `DaprFlowScheduler` at the bottom is the other half, and it is deliberately more than one `await`:
 its three outcomes (created / unconfirmed / refused) are what let the route degrade to the inline
@@ -28,6 +31,7 @@ from fastapi import FastAPI
 
 from flows.config import build_flows_settings
 from flows.dependencies import FlowRunReader, FlowScheduler, ScheduleUnconfirmed
+from flows.metrics import DURABLE, INLINE, record_lane
 from service_kit.config import Settings
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
@@ -72,15 +76,49 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.workflow_scheduler = None
         app.state.workflow_reader = None
 
+        # Which lane this PROCESS settled on, decided once and published two ways: on `app.state` for
+        # anything in-process that needs to branch on it, and as the `flows.durable_lane` gauge so
+        # "this deployment asked for durable and is running inline" is visible without reading logs.
+        # The PER-REQUEST lane is still decided by whether a scheduler is present
+        # (`routes.create_run`); this is the startup fact that explains it.
         runtime = None
+        app.state.workflow_lane = INLINE
+        # THE ONE RAW `os.environ` READ IN THIS SERVICE, and it stays raw deliberately (the
+        # FLEET-ENV-SCATTER drain moved every other one in the fleet into a settings model). This
+        # variable is the DAPR INJECTOR'S, not the estate's: its whole value as a signal is that only
+        # a sidecar sets it. `FlowsSettings` carries `env_file=".env"`, so binding it there would let
+        # a stale developer `.env` claim a sidecar that is not there — the service would build a gRPC
+        # worker aimed at nothing and every `make dev-micro` run would fill with connection errors
+        # about a lane nobody asked for, which is exactly what this branch exists to prevent.
         if os.environ.get("DAPR_GRPC_PORT"):
-            try:
-                # Importing the module IS the registration (@wfr.workflow / @wfr.activity).
-                import flows.workflow  # noqa: F401  — imported for its registration side effect
-                from flows.runtime import wfr
+            # UNGUARDED, and that is the fix. Importing the module IS the registration
+            # (@wfr.workflow / @wfr.activity), so everything that can go wrong here — a NameError, a
+            # bad activity signature, a Pydantic model error, a transitive dependency the image does
+            # not ship — is a BUILD DEFECT, not an absent sidecar. Inside the guard below it was
+            # reported as "dapr workflow runtime unavailable" at WARNING, and the pod went on to
+            # serve every flow inline forever with nothing else naming the cause; the chart's
+            # `waitFor: []` lets it crash-loop instead, which is the honest report and the one an
+            # operator can act on. `grpc` is imported here for the same reason `flows.workflow` is:
+            # nothing outside this branch may pay grpc's import cost (see `runtime.py`).
+            import grpc
 
+            import flows.workflow  # noqa: F401  — imported for its registration side effect
+            from flows.runtime import wfr
+
+            try:
                 # start() spawns the worker's own threads; it does not block the event loop.
+                # NARROW, to the connection-shaped failures reaching a sidecar can actually produce.
+                # Deliberately non-fatal, and the reason is the same one `ingest` records: a service
+                # that refuses to start because its sidecar is not up YET turns an ordering blip into
+                # a CrashLoopBackOff. Runs fall back to the inline lane, which works.
                 wfr.start()
+            except (grpc.RpcError, OSError):
+                # ERROR, not WARNING: `DAPR_GRPC_PORT` is set, so this deployment ASKED for the
+                # durable lane and did not get it. "Durable expected, inline actual" is an incident,
+                # and the lane it settled on is on `app.state.workflow_lane` for anything that wants
+                # to read the outcome rather than grep for this line.
+                log.error("dapr workflow runtime unreachable — runs execute inline", exc_info=True)
+            else:
                 runtime = wfr
                 app.state.workflow_runtime = wfr
                 app.state.workflow_scheduler = DaprFlowScheduler()
@@ -88,21 +126,18 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
                 # READ back, and a lane that schedules without a reader reports every run as
                 # "running" forever. They are set together so they cannot drift apart.
                 app.state.workflow_reader = DaprFlowRunReader()
+                app.state.workflow_lane = DURABLE
                 log.info("dapr workflow runtime started — runs are durable")
                 # Everything above is PROCESS-LOCAL and cannot fail for a missing actor state
                 # store: registration never touches the sidecar, so this reports success while
                 # every actor call still refuses. Ask the sidecar what it can actually see.
                 await probe_actor_state_store(capability="the studio flow-builder's durable lane cannot run")
-            except Exception:
-                # Deliberately non-fatal, and the reason is the same one `ingest` records: a service
-                # that refuses to start because its sidecar is not up YET turns an ordering blip into
-                # a CrashLoopBackOff. Runs fall back to the inline lane, which works.
-                log.warning("dapr workflow runtime unavailable — runs execute inline", exc_info=True)
         else:
             # Once per process, at INFO: the absence of the durable lane is a fact about the
             # deployment, not a problem, and it is the first thing to check when a run is not durable.
             log.info("no dapr sidecar (DAPR_GRPC_PORT unset) — runs execute inline")
 
+        record_lane(app.state.workflow_lane)
         log.info("startup_complete")
         try:
             yield

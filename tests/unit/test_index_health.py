@@ -34,6 +34,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+
 from maintenance.services import index_health
 from maintenance.services.index_health import inspect_indices
 

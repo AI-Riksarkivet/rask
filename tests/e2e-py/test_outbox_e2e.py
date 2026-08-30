@@ -17,8 +17,8 @@ import os
 
 import pytest
 import requests
-from medallion.schemas.events import build_run_event
 
+from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
 
 

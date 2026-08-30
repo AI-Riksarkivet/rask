@@ -40,11 +40,11 @@ from lance_namespace import (
     ServiceUnavailableError,
     connect,
 )
+from pydantic import SecretStr
+
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
-from pydantic import SecretStr
-
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
 from service_kit.lakehouse import trash

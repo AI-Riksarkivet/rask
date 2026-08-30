@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 import pytest
+
 from medallion.services.compute import existing_row_count
 from medallion.services.promotion_band import previous_row_count
 

@@ -23,6 +23,9 @@ from fastapi import Request
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+from openfga_sdk import OpenFgaClient
+from pydantic import ValidationError
+
 from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
@@ -47,9 +50,6 @@ from lineage.schemas import (
     SchemaField,
 )
 from lineage.services.repository import LineageRepository
-from openfga_sdk import OpenFgaClient
-from pydantic import ValidationError
-
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 

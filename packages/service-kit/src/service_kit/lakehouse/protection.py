@@ -19,37 +19,27 @@ metadata:
 
 Same store shape as ``maintenance_policies`` (one JSON per object, hashed key — ids are
 user-shaped and contain ``$``), own ``_protection/`` prefix so neither plane can misread the
-other's records.
+other's records. That shape is now WRITTEN ONCE, in :mod:`service_kit.lakehouse.record_store`; this
+module is the protection vocabulary over it, and no longer a fourth copy of the store mechanics.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import logging
 from typing import Any
 
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lakehouse.record_store import delete_record, get_record, put_record, record_key
 
-
-log = logging.getLogger(__name__)
 
 _PROTECTION_PREFIX = "_protection"
 
-
-def _key(kind: str, canonical_id: str) -> str:
-    """A collision-free record key: the id is user-shaped (contains ``$``), so hash it."""
-    digest = hashlib.sha256(f"{kind}:{canonical_id}".encode()).hexdigest()[:24]
-    return f"{_PROTECTION_PREFIX}/{kind}-{digest}.json"
+#: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
+_EVENT = "protection_record"
 
 
 def set_protection(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
     """Persist one protection record (overwrite — setting is idempotent)."""
-    fs, base = fs_and_base(control_root, storage_options)
-    key = _key(str(record["kind"]), str(record["id"]))
-    fs.create_dir(f"{base}/{_PROTECTION_PREFIX}", recursive=True)
-    with fs.open_output_stream(f"{base}/{key}") as stream:
-        stream.write(json.dumps(record).encode())
+    put_record(control_root, storage_options, record_key(_PROTECTION_PREFIX, str(record["kind"]), str(record["id"])), record)
 
 
 def get_protection(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> dict[str, Any] | None:
@@ -57,23 +47,9 @@ def get_protection(control_root: str, storage_options: StorageOptions, kind: str
     correct fail-open direction for this flag: protection is an opt-in the owner set, not a default
     the store's availability grants. (A store OUTAGE surfaces as an exception from pyarrow, not as
     None — the caller lets that propagate rather than treating it as unprotected.)"""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        with fs.open_input_stream(f"{base}/{_key(kind, canonical_id)}") as stream:
-            loaded: Any = json.loads(stream.read().decode())
-    except FileNotFoundError:
-        return None
-    if not isinstance(loaded, dict):
-        log.warning("protection_record_malformed", extra={"kind": kind, "id": canonical_id})
-        return None
-    return loaded
+    return get_record(control_root, storage_options, record_key(_PROTECTION_PREFIX, kind, canonical_id), event=_EVENT)
 
 
 def clear_protection(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> bool:
     """Remove one protection record; ``True`` if one existed."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{_key(kind, canonical_id)}")
-    except FileNotFoundError:
-        return False
-    return True
+    return delete_record(control_root, storage_options, record_key(_PROTECTION_PREFIX, kind, canonical_id))

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from annotator.projects.tenant_actor import PROJECTS_KEY, TenantProjectsActor
 
 

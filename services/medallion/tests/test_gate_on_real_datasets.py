@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
-from medallion.services.gate_decision import GateOutcome, gate_decision
 
+from medallion.services.gate_decision import GateOutcome, gate_decision
 from service_kit.lakehouse.quality import assert_quality
 
 

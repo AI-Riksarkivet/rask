@@ -30,9 +30,9 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
+
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.optimize import Discovery
-
 from service_kit.lakehouse import trash
 
 
@@ -138,7 +138,6 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     needs a Lance feature this suite does not otherwise depend on.
     """
     from maintenance.services import sweep as sweep_mod
-
     from service_kit.lakehouse import base_refs
 
     source = _dataset(tmp_path / "source.lance")

@@ -31,10 +31,11 @@ from typing import Any, cast
 import httpx
 import pytest
 from fastapi import Request
+from openfga_sdk import OpenFgaClient
+
 from medallion.api import produce_auth
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit, train
-from openfga_sdk import OpenFgaClient
 
 
 _JOB_PATH = Path(__file__).parents[2] / "scripts" / "ray_train_job.py"

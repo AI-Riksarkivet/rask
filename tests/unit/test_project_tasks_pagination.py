@@ -29,8 +29,9 @@ precondition would be a far worse bug than the one being fixed.
 from __future__ import annotations
 
 import pytest
-from annotator.api.v1.endpoints import project_events as ep
 from fastapi.routing import APIRoute
+
+from annotator.api.v1.endpoints import project_events as ep
 
 
 def _param(name: str):
@@ -92,7 +93,10 @@ async def test_the_page_bounds_the_ACTOR_ROUND_TRIPS_not_just_the_response(monke
 
     class _ProjectActor:
         async def list_tasks(self) -> dict[str, object]:
-            return {"tasks": {f"t{i:04d}": "claimed" for i in range(total)}, "may_publish": True, "total": total}
+            # As the actor answers: `counts` and `terminal` ride with the index (the publish
+            # precondition is computed from ONE snapshot), and the route publishes that shape now.
+            index = {f"t{i:04d}": "claimed" for i in range(total)}
+            return {"tasks": index, "counts": {"claimed": total}, "total": total, "terminal": 0, "may_publish": True}
 
         async def get(self) -> dict[str, object]:
             return {"state": "labeling"}
@@ -103,7 +107,14 @@ async def test_the_page_bounds_the_ACTOR_ROUND_TRIPS_not_just_the_response(monke
 
         async def get(self) -> dict[str, object]:
             calls.append(self._id)
-            return {"task_id": self._id, "state": "claimed"}
+            # `source`/`media` are required on `Task`, which the details listing publishes.
+            return {
+                "task_id": self._id,
+                "project_id": "p1",
+                "state": "claimed",
+                "source": {"kind": "chunks", "keys": [self._id]},
+                "media": {"kind": "image", "image_url": f"s3://bucket/{self._id}.jpg"},
+            }
 
     monkeypatch.setattr(ep, "_project_proxy", lambda _p: _ProjectActor())
     monkeypatch.setattr(ep, "_task_proxy", _TaskActor)
@@ -116,13 +127,13 @@ async def test_the_page_bounds_the_ACTOR_ROUND_TRIPS_not_just_the_response(monke
     result = await ep.list_project_tasks(project_id="p1", checker=_allow, subject="gina", include=ep.TaskInclude.DETAILS, limit=100, cursor=None)
 
     assert len(calls) == 100, f"the handler made {len(calls)} actor round trips for a 100-row page"
-    assert len(result["details"]) == 100
-    assert result["next_cursor"] == "t0099"
+    assert len(result.details) == 100
+    assert result.next_cursor == "t0099"
 
     # THE PRECONDITION MUST NOT MOVE WITH THE PAGE. `may_publish` is computed by the actor from the
     # full index; a page that changed it would be a far worse bug than the one being fixed.
-    assert result["may_publish"] is True
-    assert result["total"] == total
+    assert result.may_publish is True
+    assert result.total == total
 
 
 @pytest.mark.asyncio
@@ -131,7 +142,8 @@ async def test_the_cursor_reaches_the_tail(monkeypatch: pytest.MonkeyPatch) -> N
 
     class _ProjectActor:
         async def list_tasks(self) -> dict[str, object]:
-            return {"tasks": {f"t{i:04d}": "claimed" for i in range(5)}, "may_publish": False}
+            index = {f"t{i:04d}": "claimed" for i in range(5)}
+            return {"tasks": index, "counts": {"claimed": 5}, "total": 5, "terminal": 0, "may_publish": False}
 
         async def get(self) -> dict[str, object]:
             return {"state": "labeling"}
@@ -141,7 +153,14 @@ async def test_the_cursor_reaches_the_tail(monkeypatch: pytest.MonkeyPatch) -> N
             self._id = task_id
 
         async def get(self) -> dict[str, object]:
-            return {"task_id": self._id, "state": "claimed"}
+            # `source`/`media` are required on `Task`, which the details listing publishes.
+            return {
+                "task_id": self._id,
+                "project_id": "p1",
+                "state": "claimed",
+                "source": {"kind": "chunks", "keys": [self._id]},
+                "media": {"kind": "image", "image_url": f"s3://bucket/{self._id}.jpg"},
+            }
 
     monkeypatch.setattr(ep, "_project_proxy", lambda _p: _ProjectActor())
     monkeypatch.setattr(ep, "_task_proxy", _TaskActor)
@@ -150,11 +169,11 @@ async def test_the_cursor_reaches_the_tail(monkeypatch: pytest.MonkeyPatch) -> N
         return True
 
     first = await ep.list_project_tasks(project_id="p", checker=_allow, subject="g", include=ep.TaskInclude.DETAILS, limit=2, cursor=None)
-    assert [d["task_id"] for d in first["details"]] == ["t0000", "t0001"]
+    assert [d.task_id for d in first.details] == ["t0000", "t0001"]
 
-    second = await ep.list_project_tasks(project_id="p", checker=_allow, subject="g", include=ep.TaskInclude.DETAILS, limit=2, cursor=first["next_cursor"])
-    assert [d["task_id"] for d in second["details"]] == ["t0002", "t0003"]
+    second = await ep.list_project_tasks(project_id="p", checker=_allow, subject="g", include=ep.TaskInclude.DETAILS, limit=2, cursor=first.next_cursor)
+    assert [d.task_id for d in second.details] == ["t0002", "t0003"]
 
-    last = await ep.list_project_tasks(project_id="p", checker=_allow, subject="g", include=ep.TaskInclude.DETAILS, limit=2, cursor=second["next_cursor"])
-    assert [d["task_id"] for d in last["details"]] == ["t0004"]
-    assert last["next_cursor"] is None, "the final page must not advertise another"
+    last = await ep.list_project_tasks(project_id="p", checker=_allow, subject="g", include=ep.TaskInclude.DETAILS, limit=2, cursor=second.next_cursor)
+    assert [d.task_id for d in last.details] == ["t0004"]
+    assert last.next_cursor is None, "the final page must not advertise another"

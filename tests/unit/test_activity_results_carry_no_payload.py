@@ -26,9 +26,10 @@ import re
 import typing
 
 import pytest
+from pydantic import BaseModel
+
 from ingest import workflow as ingest_wf
 from medallion import workflow as medallion_wf
-from pydantic import BaseModel
 
 
 MODULES = [("medallion", medallion_wf), ("ingest", ingest_wf)]

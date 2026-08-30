@@ -4,7 +4,7 @@ open_fastapi-audit. Three separate things, all the same shape — a cap in the w
 
 1. **No ceiling on the media trio.** `service_kit.middleware.register_middleware` grew a body cap,
    but viewer / search / annotator do not use it — they build through
-   `service_kit.media.middleware.register_middleware`, which registered CORS and nothing else. The
+   `service_kit.media.middleware.register_media_middleware`, which registered CORS and nothing else. The
    apps that actually accept multipart uploads were the ones without a cap.
 
 2. **The existing cap is in the handler, not at the door.** `await file.read(MAX_UPLOAD_BYTES + 1)`
@@ -27,13 +27,13 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from service_kit.media.config import Settings as MediaSettings
-from service_kit.media.middleware import register_middleware
+from service_kit.media.middleware import register_media_middleware
 
 
 def test_the_media_factory_applies_a_body_cap() -> None:
     """The apps that accept uploads were the ones without a ceiling."""
     app = FastAPI()
-    register_middleware(app, MediaSettings())
+    register_media_middleware(app, MediaSettings())
 
     names = [getattr(m.cls, "__name__", repr(m.cls)) for m in app.user_middleware]
     assert "BodySizeLimitMiddleware" in names, (

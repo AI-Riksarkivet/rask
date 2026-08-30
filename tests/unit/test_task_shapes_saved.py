@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import lance
 import pyarrow as pa
 import pytest
+
 from annotator.annotations.save import new_rows
 from annotator.annotations.schema import EMPTY_SCHEMA, NewAnnotation
 from annotator.api.v1.endpoints.assist import _CANONICAL_SHAPE, AssistShape, _within_contract

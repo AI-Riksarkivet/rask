@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import FastAPI
+
 from search.core.config import SearchSettings
 
 
@@ -51,9 +52,14 @@ def _governed_settings() -> SearchSettings:
 def hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the lifespan off S3 and off the network; the auth wiring is what is under test."""
     from search import main as main_mod
+    from service_kit.media import lifespan as media_lifespan_mod
 
+    # `search.main._settings` resolves `get_search_settings` from this module's globals at LIFESPAN
+    # time, so the patch reaches the real lifespan rather than a value captured at import.
     monkeypatch.setattr(main_mod, "get_search_settings", _governed_settings)
-    monkeypatch.setattr(main_mod, "dataset_handle", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no dataset in this test")))
+    # `dataset_handle` moved with the lifespan itself (DUP-16): the three media services share one
+    # implementation in `service_kit.media.lifespan`, which is where the open now happens.
+    monkeypatch.setattr(media_lifespan_mod, "dataset_handle", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no dataset in this test")))
 
 
 @pytest.mark.asyncio
@@ -75,7 +81,6 @@ async def test_the_gate_decides_rather_than_503s(hermetic: None, monkeypatch: py
     """What the wiring is FOR: a real checker resolved from real app state, reaching a real verdict."""
     from search.api import security
     from search.main import lifespan
-
     from service_kit.governed import fga as fga_mod
 
     async def check(_client: object, *, user: str, relation: str, obj: str) -> bool:

@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform
 
+from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform
 from service_kit.lakehouse import transform_specs
 from service_kit.lakehouse.transform_specs import TransformSpec
 

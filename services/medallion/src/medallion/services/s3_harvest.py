@@ -7,7 +7,7 @@ with NO ROUTE WIRED for months — precisely because reaching it meant adding an
 
 STILL UNWIRED, and this docstring claimed otherwise. It said "It is registered by ``ingest.adapters``
 now", which is not what happened: the ingest plane's ``s3-prefix`` adapter registers
-``service_kit.lakehouse.sources.S3Source`` directly (``ingest/adapters.py``), reaching this module
+``service_kit.lakehouse.sources.S3FileSystemSource`` directly (``ingest/adapters.py``), reaching this module
 only in prose. Nothing imports ``S3PrefixSource`` outside ``tests/unit/test_s3_harvest.py``, so the
 "registered now" sentence turned a still-open gap into a closed one on paper — the exact failure mode
 the module's own history is about. Either point the registry entry here or delete the module; leaving

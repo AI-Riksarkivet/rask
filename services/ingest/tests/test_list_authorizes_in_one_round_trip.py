@@ -15,9 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
+from lance_namespace import ServiceUnavailableError
+
 from ingest import create_app
 from ingest.runs import RunRecord
-from lance_namespace import ServiceUnavailableError
 
 
 if TYPE_CHECKING:

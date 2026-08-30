@@ -25,8 +25,9 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from ingest.runtime import BLOB_DEDICATED_SIZE_THRESHOLD, BLOB_INLINE_SIZE_THRESHOLD, BRONZE_SCHEMA
 from lance import blob_array, blob_field
+
+from ingest.runtime import BLOB_DEDICATED_SIZE_THRESHOLD, BLOB_INLINE_SIZE_THRESHOLD, BRONZE_SCHEMA
 
 
 #: The descriptor's `kind`, measured rather than assumed — the numbering is not documented and is not

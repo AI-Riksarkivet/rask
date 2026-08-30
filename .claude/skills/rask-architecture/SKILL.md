@@ -38,11 +38,30 @@ Current JS packages: `api`, `config`, `dockview`, `engine`, `explorer-api`, `flo
 Current zones (7, verified against `frontend/microfrontends/` 2026-08-09): `home` (catch-all, base `''`), `annotator`, `compute`, `lakehouse`, `explorer`, `studio`, `models` — each based at a bare `/<zone>`. **`models` REPLACED `train`** (on train's port 5178); a leftover `microfrontends/train/` on a dev host is untracked build residue, not a zone. `overview`/`discover`/`storage` are **retired**; `/storage` and `/data` are routes *inside* `lakehouse`.
 Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `gateway`, `compute` (R22 — `compute` on every surface), `controlplane`, `ingest`, `notifications`, `runner`, `assist-runner` — plus the one parametrized `frontend.dockerfile` built per zone (images tagged `web-<zone>:<tag>`), `ray-cluster.dockerfile` (the Ray head/Serve image) and `rest-catalog.dockerfile`, which is ONE image for **seven** lance services (`catalog`, `lineage`, `medallion` ×2 apps, `maintenance`, `viewer`, `search`, `annotator`) run with different commands. NB `make k3s-build`'s `COMPOSE_IMAGES` is still only `gateway compute controlplane` — `ingest` has a dockerfile and a chart Deployment (`:8830`) but is not in that build loop yet.
 
-## The composition seam: `make_service_app` + injectable lifespan
+## The composition seam: three app factories, one per plane
 
 `service_kit.make_service_app(*, title, routers, proxy_router=None, lifespan=None)` builds the FastAPI app with shared config/handlers/middleware. The **lifespan is injectable**: stateless services get the minimal `default_lifespan` (settings only); stateful ones pass a `LifespanFactory` (Lance/Ray/S3). Routers mount under `settings.api_prefix`; `proxy_router` mounts at root.
 
-⚠️ **Two layouts are sanctioned — know which one you are in.** `make_service_app` is used by **5 of 13** services: `compute`, `controlplane`, `flows`, `ingest` and `notifications` (verified by call site, not by import — `gateway` mentions it in three comments and calls it nowhere). `gateway` is in neither camp — it builds `FastAPI(...)` itself, because it is a proxy, not a router host. The other seven (`annotator`, `catalog`, `lineage`, `maintenance`, `medallion` ×2 apps, `search`, `viewer`) construct `FastAPI(...)` directly with bespoke lifespans and their own `core/config.py::get_settings()`, following the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout rather than the fleet's flat-module layout. Match the service you are editing; unifying one into the other is a decision, not a cleanup.
+⚠️ **THREE FACTORIES ARE SANCTIONED — know which plane you are in.** This section used to say two
+layouts, and that the seven non-fleet services "construct `FastAPI(...)` directly with bespoke
+lifespans"; that was true and is not any more. Twelve of the thirteen services now come out of a
+factory, and which one is decided by the plane, not by taste:
+
+| Plane | Factory | Services | Routers mount |
+| --- | --- | --- | --- |
+| fleet | `service_kit.make_service_app` | `compute`, `controlplane`, `flows`, `ingest`, `notifications` | under `settings.api_prefix` |
+| media | `service_kit.media.app.build_media_app` | `viewer`, `search`, `annotator` | at the root; `MediaSettings`; CORS exposes the Range headers |
+| lance | `service_kit.lance_app.build_lance_service_app` | `catalog`, `lineage`, `medallion` ×2 apps, `maintenance` | at the root; each service's own `core/config.py::get_settings()` |
+
+`gateway` is in none of them — it builds `FastAPI(...)` itself, because it is a proxy, not a router
+host. The media three also share ONE lifespan (`service_kit.media.lifespan.make_media_lifespan`),
+with `setup`/`teardown` hooks for what is genuinely per-service (the annotator's actor plane).
+
+The non-fleet services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout
+rather than the fleet's flat-module layout — that half of the old paragraph still holds. What changed
+is the ENTRYPOINT: a `main.py` that opens its own `app = FastAPI(...)` is now the exception to
+justify, not the norm (open_python-audit DUP-12 counted eight of them repeating one boot, and the
+copies had drifted — the medallion mover had lost its request-id layer entirely).
 
 A thin fleet-layout entrypoint is **~20 lines** — import routers + a lifespan from the domain package, call the factory. `compute/__init__.py`:
 
@@ -68,7 +87,7 @@ app = make_service_app(
 - **Workspace membership is globbed — and that is only safe because every globbed dir is single-language.** Root `pyproject.toml` has `[tool.uv.workspace] members = ["packages/*", "services/*"]`; `frontend/package.json` has `workspaces = ["microfrontends/*", "packages/*"]` (paths relative to `frontend/`). Drop a directory in the right plane and it is a member — **no manifest edit**. The safety condition is the language purity, and the two toolchains fail **asymmetrically** when it breaks: a dir under a uv glob without a `pyproject.toml` is a **hard error** (`Workspace member … is missing a pyproject.toml`), fixable only by an `exclude` list (enumeration by another name); a dir under a bun glob without a `package.json` is **SILENTLY skipped** — bun prints "Done!" and the package is simply never installed, built, linted or tested, and nothing says so. So: **never put a JS package under root `packages/`/`services/`, and never put a Python package under `frontend/`.** (The root manifest also notes `runners/*` is deliberately matched by *no* glob — sealed model envs whose heavy pins must never enter the fleet's resolution.) See `references/adding-a-package.md`.
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every fleet docker image resolve from it (`uv sync --frozen --package <name>`). The sealed `runners/htr` project carries its **own** lock and is invoked via `uv run --project runners/htr runner` (in-cluster the ray image ships the console script on PATH).
 - **`service-kit` keeps a light base.** Base deps are `storage`, `fastapi`, `pydantic`, `pydantic-settings`, `python-dotenv`, **`dapr>=1.18.1`, and 8 OpenTelemetry packages** — the SDK, the OTLP/HTTP exporter, and instrumentors for fastapi, httpx, logging, requests, grpc and aiohttp-client. The last three landed 2026-08-23: the fleet runs bare `uvicorn` with no `opentelemetry-instrument` launcher, so whatever `setup_otel` names is ALL the instrumentation it gets, and without grpc + aiohttp the app→sidecar hop carried no `traceparent` and every Dapr span rooted a new trace. The heavy Lance/Ray deps live behind the `[governed]` / `[lakehouse]` / `[lancekit]` extras — keep them there. **Never** add `lancedb`, `ray`, or `sqlmodel` to the base: service-kit is shared by every service including the storeless ones (`gateway` via `setup_otel`, `compute`).
-- **`known-first-party` is stale and is silently drifting.** Root `pyproject.toml:143` lists 7 names; **18** first-party modules exist (7 packages + 11 services). Missing: `annotator, catalog, controlplane, ingest, lineage, lineage_kit, maintenance, medallion, search, viewer`. Step 4 of `references/adding-a-package.md` is being skipped on every lance-service landing — add the name when you add the member, and ruff's import sorting stays correct.
+- **`known-first-party` is COMPLETE — keep it that way.** This bullet used to read "stale and silently drifting": the list held 9 of the 19 real first-party import names, so ten modules sorted into the THIRD-PARTY block. Closed 2026-08-30 (open_python-audit X3) as one pass — every name added, then `uvx ruff check --select I --fix`, which re-sorted 391 files. All 19 are listed now (6 code-shipping packages + 13 services). Step 4 of `references/adding-a-package.md` is the step that was being skipped on every landing: add the import name in the SAME change that adds the member. One name at a time is cheap; letting ten accumulate is a repo-wide re-sort again.
 - **Membership is globbed; TEST ENROLMENT IS NOT — and the asymmetry is where suites go missing.** A
   directory dropped into `packages/`/`services/` is a workspace member with no manifest edit, but
   `[tool.pytest.ini_options] testpaths` is an EXPLICIT list. So a new member's `tests/` runs nowhere until

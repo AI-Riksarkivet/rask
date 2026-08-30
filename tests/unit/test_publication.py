@@ -19,14 +19,6 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from catalog.core.namespace import open_dataset
-from catalog.services.dataplane import create_table
-from catalog.services.publication import (
-    PUBLISHED_TAG,
-    PUBLISHING_TAG,
-    publish,
-    published_version,
-)
 from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
@@ -35,6 +27,14 @@ from lance_namespace import (
     connect,
 )
 
+from catalog.core.namespace import open_dataset
+from catalog.services.dataplane import create_table
+from catalog.services.publication import (
+    PUBLISHED_TAG,
+    PUBLISHING_TAG,
+    publish,
+    published_version,
+)
 from service_kit.lakehouse.quality import Assertion
 
 

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+
 from catalog.core.lineage_emit import (
     CREATE_TABLE,
     DECLARE_TABLE,

@@ -15,8 +15,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from catalog.api.v1.endpoints import projects as ep
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TableNotFoundError
+
+from catalog.api.v1.endpoints import projects as ep
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:

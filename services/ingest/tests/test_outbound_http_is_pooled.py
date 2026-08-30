@@ -63,6 +63,7 @@ def test_two_http_unit_fetches_share_one_client(monkeypatch: pytest.MonkeyPatch)
 def test_the_catalog_client_reuses_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     """`ensure` alone makes up to four catalog calls; a client per call is four handshakes."""
     import pyarrow as pa
+
     from ingest.catalog_service import CatalogServiceClient
     from ingest.http import shared_client
 

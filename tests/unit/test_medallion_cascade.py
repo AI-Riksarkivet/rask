@@ -28,13 +28,13 @@ from typing import Any, cast
 import lance
 import pytest
 from dapr.aio.clients import DaprClient
+
 from lineage.models import Dataset, RunEvent
 from medallion.core.config import MedallionSettings
 from medallion.services.compute import seed_bronze
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
-
 from service_kit.lakehouse import warehouse_registry
 from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 

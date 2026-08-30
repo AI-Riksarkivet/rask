@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 from lance_namespace import PermissionDeniedError
-from lineage.core.config import LineageSettings
 
+from lineage.core.config import LineageSettings
 from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
 from service_kit.lakehouse.ns_errors import problem_detail
 

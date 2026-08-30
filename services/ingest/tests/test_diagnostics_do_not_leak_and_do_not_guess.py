@@ -20,6 +20,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from ingest.queue_health import router
 
 

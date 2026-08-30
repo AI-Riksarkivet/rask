@@ -13,8 +13,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, cast
 
-from catalog.api.v1.endpoints.tables import _collect_tables
 from lance_namespace import LanceNamespace
+
+from catalog.api.v1.endpoints.tables import _collect_tables
 
 
 class _DirLikeNamespace:

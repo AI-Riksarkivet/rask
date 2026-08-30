@@ -83,6 +83,11 @@ _SETTINGS: list[tuple[str, str, str]] = [
     # `ControlplaneSettings` is a bare BaseSettings + the mixin, since it reads none of it.
     ("services/compute", "compute.config", "ComputeSettings"),
     ("services/controlplane", "controlplane.config", "ControlplaneSettings"),
+    # The FRONT DOOR, which had no settings class at all until FLEET-ENV-SCATTER: sixteen raw
+    # `os.environ.get` reads, several of them per request. Neither `populate_by_name` nor
+    # `env_prefix` — every field carries the deployed variable's full name as an explicit alias, so
+    # the alias half of this gate is the whole of its declaration.
+    ("services/gateway", "gateway.config", "GatewaySettings"),
     # Subclasses of service_kit.media.config.Settings. None declares `populate_by_name`, and
     # GovernedAuthSettings is a plain mixin rather than a BaseSettings, so none inherited it.
     ("services/search", "search.core.config", "SearchSettings"),

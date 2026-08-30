@@ -14,14 +14,14 @@ from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
-import lineage.services.repository as repo_mod
 import pytest
 from fastapi import Request
+
+import lineage.services.repository as repo_mod
 from lineage.api import fga_deps
 from lineage.api.v1.endpoints.discovery import list_datasets, list_jobs, list_namespaces
 from lineage.core.config import LineageSettings
 from lineage.schemas import DatasetSummary, JobSummary
-
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 

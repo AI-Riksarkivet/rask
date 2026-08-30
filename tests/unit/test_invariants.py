@@ -146,7 +146,11 @@ _TRANSPORT_MODULES: Final[frozenset[str]] = frozenset(
     }
 )
 
-_PUBLISH_CALL = re.compile(r"\bpublish_event\(")
+#: Both spellings of a publish. `publish_json` is `dapr_publish`'s serialize-and-report wrapper over
+#: `publish_event` (open_python-audit DUP-18): the five medallion trigger sites call it now, and a
+#: pattern that knew only `publish_event` stopped seeing every one of them — the registry going quiet
+#: about five real publishers, which is this guard's own failure mode arriving through the scan.
+_PUBLISH_CALL = re.compile(r"\bpublish_(event|json)\(")
 _TOPIC_KWARG = re.compile(r"topic_name=([A-Za-z_][A-Za-z_0-9\.\[\]]*)")
 
 
@@ -646,8 +650,9 @@ def test_catalog_authz_primitive_fails_closed_on_openfga_outage(monkeypatch: pyt
     import asyncio
     from unittest.mock import MagicMock
 
-    from catalog.api import fga_deps as cat_fga
     from lance_namespace import ServiceUnavailableError
+
+    from catalog.api import fga_deps as cat_fga
 
     async def _outage(*_a: object, **_k: object) -> bool:
         raise ServiceUnavailableError("openfga down")
@@ -5781,6 +5786,7 @@ def test_the_media_head_can_register_the_bronze_it_lands() -> None:
     producer uses, so this asserts registerability rather than a string resemblance.
     """
     import yaml
+
     from medallion.services.catalog_register import RegisterError, relative_location
 
     for review in ("false", "true"):

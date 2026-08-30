@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 import lance
 import pytest
 from dapr.ext.workflow import WorkflowActivityContext
+
 from ingest import lineage as lineage_mod
 from ingest.adapters import register_builtin_sources
 from ingest.workflow import ChunkResult, ChunkSpec, EnumerateChunksInput, RunOutcome, RunSpec, TerminalInput, emit_start, emit_terminal, enumerate_chunks

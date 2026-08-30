@@ -20,13 +20,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from annotator.api.security import current_subject, get_checker
-from annotator.api.v1.endpoints import tasks as tasks_ep
-from annotator.projects.models import ProjectState, TaskState
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 
+from annotator.api.security import current_subject, get_checker
+from annotator.api.v1.endpoints import tasks as tasks_ep
+from annotator.projects.models import ProjectState, TaskState
 from service_kit.exceptions import ServiceUnavailableError, register_handlers
 
 
@@ -55,10 +55,20 @@ class _LiveTask:
     """A reachable task actor, for proving the gate is invisible when the plane is up."""
 
     async def get(self) -> dict[str, Any]:
-        return {"state": TaskState.CLAIMED, "assignee": SUBJECT, "submitted_by": None, "task_id": "t1", "project_id": PROJECT_ID}
+        # A task document as the ACTOR stores one — `source`/`media` are required on `Task`, and
+        # the task routes publish that model now (open_python-audit ANN-07).
+        return {
+            "state": TaskState.CLAIMED,
+            "assignee": SUBJECT,
+            "submitted_by": None,
+            "task_id": "t1",
+            "project_id": PROJECT_ID,
+            "source": {"kind": "chunks", "keys": ["t1"]},
+            "media": {"kind": "image", "image_url": "s3://bucket/t1.jpg"},
+        }
 
     async def get_draft(self) -> dict[str, Any]:
-        return {"revision": 1, "shapes": [], "links": []}
+        return {"revision": 1, "shapes": [], "links": [], "task_id": "t1", "project_id": PROJECT_ID, "author": SUBJECT}
 
 
 def _app(actors_registered: bool | None) -> FastAPI:
@@ -165,7 +175,6 @@ async def test_readyz_reports_the_actor_plane_as_a_component_of_a_200() -> None:
     take the read plane down with the task plane — the exact coupling the non-fatal registration
     avoids. The probe REPORTS; the task routes are what refuse."""
     from annotator.main import _actor_plane_ready
-
     from service_kit.schemas.health import ReadinessStatus
 
     down = await _actor_plane_ready(_req(actors_registered=False))
@@ -227,9 +236,10 @@ async def test_registering_an_actor_type_proves_nothing_about_a_SIDECAR(monkeypa
     prove that handshake blocks the event loop, and a global patch would delete the estate's only
     evidence of a live production defect.
     """
-    from annotator.projects.actor import AnnotationTaskActor
     from dapr.actor.runtime.runtime import ActorRuntime
     from dapr.clients.health import DaprHealth
+
+    from annotator.projects.actor import AnnotationTaskActor
 
     monkeypatch.setattr(DaprHealth, "wait_for_sidecar", staticmethod(lambda *_a, **_k: None))
 

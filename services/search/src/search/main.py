@@ -1,34 +1,26 @@
 """Search service entry — the lance-ns thin-``main.py`` template.
 
-Module-level ``app``; ALL construction in ``lifespan`` onto ``app.state``
-(importing this module does zero I/O). Problem+json handlers, CORS middleware,
-``/livez`` + ``/readyz`` gated on ``startup_complete``/``shutting_down``.
+Module-level ``app``; ALL construction in the lifespan onto ``app.state`` (importing this module does
+zero I/O). The lifespan and the assembly are both SHARED — ``service_kit.media.lifespan`` and
+``service_kit.media.app`` — because viewer, search and annotator are three deployments of one shape
+and used to hand-write it three times (open_python-audit DUP-16 / X12 / DUP-20).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
-import httpx
 from fastapi import FastAPI
-from starlette.concurrency import run_in_threadpool
 
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
 from search.core.rate_limit import limiter
 from service_kit import setup_logging
-from service_kit.draining import arm_drain_on_sigterm
-from service_kit.exceptions import register_handlers
-from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.media.config import get_settings
-from service_kit.media.middleware import register_middleware
-from service_kit.media.state import AppState, dataset_handle
+from service_kit.media.app import build_media_app
+from service_kit.media.config import MediaSettings, get_settings
+from service_kit.media.lifespan import make_media_lifespan
+from service_kit.media.state import AppState
 from service_kit.obs import configure_app_logging
-from service_kit.probes import router as probes_router
 from service_kit.rate_limit import register_rate_limiting
 
 
@@ -36,87 +28,57 @@ logger = logging.getLogger(__name__)
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_search_settings()
-    state = AppState(settings=settings, http=httpx.Client())
-    app.state.resources = state
-    try:
-        # OFF THE STARTUP LOOP: building the default handle reads `settings.storage_options()`,
-        # a blocking Dapr secret fetch on the cold path. Threadpooled here so the lifespan does
-        # not block the event loop, and — because `_store_secret` is cached — this WARMS the
-        # secret before serving, so every request-path read is a pure dict build.
-        handle = await run_in_threadpool(dataset_handle, state)  # fail-fast open of the default descriptor
-        logger.info("search: default dataset %s ready (%d tables)", handle.id, len(handle.descriptor.tables))
-    except Exception:
-        # /livez stays green; per-request resolution surfaces the problem as a domain 404.
-        logger.exception("search: default dataset failed to open — serving degraded")
-    # THE LINE THAT MAKES THE GATE FUNCTION. `api/security.py` builds the deps and every route
-    # declares them, but `make_auth_deps.get_checker` is fail-CLOSED: FGA enabled with no client on
-    # `app.state` is a 503, not a permissive fallback. Without this the whole X6 seam — settings
-    # mixin, gated routes, chart env — resolved to "Authorization is enabled but unavailable" on
-    # every request, which is safe and is also the service doing nothing.
-    #
-    # `services/compute/src/compute/lifespan.py` carries the same call and the same warning, six days
-    # older, because compute and controlplane shipped exactly this and it was measured on the live
-    # estate. Third time; hence `tests/unit/test_governed_services_wire_their_gate.py`.
-    await attach_auth(app, settings, service="search")
-    app.state.startup_complete = True
-    app.state.shutting_down = False
-    # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
-    # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
-    # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM
-    # at the START of termination, and that window is exactly when the sidecar is still
-    # delivering. Owner ruling 2026-08-25.
-    _disarm_drain = arm_drain_on_sigterm(app)
-    try:
-        yield
-    finally:
-        # IN A `finally`, because the bare `yield` this replaces meant an exception past it skipped
-        # every close below — the http client, the embedder, the reranker, all leaked on exactly the
-        # path where leaking matters.
-        _disarm_drain()
-        app.state.shutting_down = True
-        await fga_dispose(app)
-        for resource in (state.http, state.embedder, state.reranker):
-            close = getattr(resource, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except Exception:
-                    logger.warning("error closing %s on shutdown", type(resource).__name__)
-
-
 # Application logging, before the app exists — every module here uses getLogger(__name__), and
 # without this they propagate to a root logger with no handlers and are DISCARDED
 # (see service_kit.setup_logging).
 setup_logging()
 
-# Docs are OPT-IN (`MEDIA_DOCS`). This constructor used to set none of the three, so FastAPI's
-# defaults stood and /docs, /redoc and /openapi.json were all served — see
-# `service_kit.media.config.Settings.docs_enabled`.
-_docs = get_settings().docs_enabled
-app = FastAPI(
-    title="lance-media search",
-    lifespan=lifespan,
-    docs_url="/docs" if _docs else None,
-    redoc_url="/redoc" if _docs else None,
-    openapi_url="/openapi.json" if _docs else None,
+
+def _settings() -> MediaSettings:
+    """Read the settings AT LIFESPAN TIME, never at import.
+
+    A named indirection rather than passing `get_search_settings` itself: resolving the module global on
+    each call is what lets a test drive the real lifespan against its own settings, and what keeps
+    the process's configuration from being decided by this module's import order.
+    """
+    return get_search_settings()
+
+
+#: `attach_auth` inside the shared lifespan IS THE LINE THAT MAKES THE GATE FUNCTION. `api/security.py`
+#: builds the deps and every route declares them, but `make_auth_deps.get_checker` is fail-CLOSED: FGA
+#: enabled with no client on `app.state` is a 503, not a permissive fallback. Without it the whole X6
+#: seam — settings mixin, gated routes, chart env — resolves to "Authorization is enabled but
+#: unavailable" on every request, which is safe and is also the service doing nothing. It shipped that
+#: way three times (compute, controlplane, search); hence
+#: `tests/unit/test_governed_services_wire_their_gate.py`, and hence one lifespan rather than three.
+lifespan = make_media_lifespan(
+    _settings,
+    service="search",
+    closes=lambda state: (state.http, state.embedder, state.reranker),
 )
-register_handlers(app)
-# `register_handlers` maps `DomainError` only. The OIDC verifier raises `lance_namespace`'s
-# `UnauthenticatedError` (a `LanceNamespaceError`), so an expired or wrong-audience bearer escaped
-# unmapped and FastAPI answered 500 — which a zone renders as "unreachable", sending everyone to look
-# at networking for what is really "sign in again". Same installer the catalog has always used.
-install_problem_handlers(app, logger)
-register_middleware(app, get_search_settings())
-# PER-ROUTE rate limiting for the GPU surfaces (see search.core.rate_limit). Registered here because
-# slowapi reads `app.state.limiter` by that exact name for its header injection, and the problem+json
-# 429 replaces slowapi's default so a refusal is shaped like every other error in the estate.
-register_rate_limiting(app, limiter)
-app.include_router(probes_router)
-app.include_router(api_router)
+
+
+def _with_rate_limiting(app: FastAPI) -> FastAPI:
+    """PER-ROUTE rate limiting for the GPU surfaces (see search.core.rate_limit).
+
+    Applied here rather than inside `build_media_app` because it is the search plane's alone: slowapi
+    reads `app.state.limiter` by that exact name for its header injection, and the problem+json 429
+    replaces slowapi's default so a refusal is shaped like every other error in the estate. It runs
+    AFTER the shared handlers for the same reason it always did — its 429 handler is the last word on
+    that status.
+    """
+    register_rate_limiting(app, limiter)
+    return app
+
+
+app = _with_rate_limiting(
+    build_media_app(
+        title="lance-media search",
+        settings=get_search_settings(),
+        routers=[api_router],
+        lifespan=lifespan,
+    )
+)
 
 
 def run() -> None:
@@ -126,10 +88,15 @@ def run() -> None:
     uvicorn.run("search.main:app", host=s.host, port=s.service_port)
 
 
-def create_search_app(state: AppState) -> FastAPI:
-    """Search app around externally-opened state — the test/composition seam."""
-    test_app = FastAPI(title="search api")
+def create_search_app(state: AppState, settings: MediaSettings | None = None) -> FastAPI:
+    """Search app around externally-opened state — the test/composition seam.
+
+    THE SAME BUILDER production uses (X12). This used to construct a bare ``FastAPI`` with
+    ``register_handlers`` and nothing else — no ``install_problem_handlers``, no middleware, no body
+    cap, no probes — so an app built here could not reproduce the one regression the deployed app's
+    comments are about (an ``UnauthenticatedError`` answering 500 instead of 401), and its 429s were
+    shaped differently too. No lifespan, because the caller supplies the state this app runs over.
+    """
+    test_app = _with_rate_limiting(build_media_app(title="search api", settings=settings or get_settings(), routers=[api_router]))
     test_app.state.resources = state
-    register_handlers(test_app)
-    test_app.include_router(api_router)
     return test_app

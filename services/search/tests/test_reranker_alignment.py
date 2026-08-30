@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from search.services.encoders.base import RerankResponse, RerankResult
 from search.services.encoders.reranker import VLLMReranker
 

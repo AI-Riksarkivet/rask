@@ -32,13 +32,15 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkable
 
 import httpx
 from dapr.aio.clients import DaprClient
+from lance_namespace import InvalidInputError
 from opentelemetry import metrics
 from pydantic import BaseModel
 
+from catalog.core.identifiers import parse_identifier
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.schema import SchemaFields
@@ -107,7 +109,7 @@ PROMOTE_MODEL = "promote_model"
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required,
 #: and what a Marquez-style consumer records as the event source).
-_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/services/catalog/core/lineage_emit.py"
+_PRODUCER = "https://github.com/Borg93/rask/tree/main/services/catalog/src/catalog/core/lineage_emit.py"
 
 #: OpenLineage standard ``DatasetVersionDatasetFacet`` schema URL. The output dataset carries this
 #: facet so the lineage service records the Lance version on the ``WROTE`` edge
@@ -327,6 +329,94 @@ def shape_run_facets(raw: dict[str, Any]) -> dict[str, Any]:
 type ProjectResolver = Callable[[str], Awaitable[str | None]]
 
 
+def merge_source_pin(source: str | None, source_version: int | None, delimiter: str) -> InputPin | None:
+    """The optional version-pinned source dataset a derived write DERIVED FROM → an ``InputPin`` (or ``None``).
+
+    A blank/absent ``source`` yields no pin; a ``source_version`` with no ``source`` is meaningless (there
+    is nothing to pin) → a fail-fast 4xx, not a silently dropped pin. An empty/delimiter-only ``source`` is
+    rejected too — otherwise it would forge a nameless input vertex (or, on the HTTP transport, drop the
+    whole event). The pin makes the write reproducible: its provenance names the exact source version
+    consumed, surfaced on the lineage READ edge (``input_version``).
+
+    Here rather than in an endpoint module because BOTH the create door and ``merge_insert`` take it, and
+    the create door's orchestration moved to ``catalog.services.table_create`` (catalog-api-03) — a copy
+    on each side is the duplication that keeps producing divergent validation.
+    """
+    if not source or not source.strip():
+        if source_version is not None:
+            raise InvalidInputError("source_version requires source")
+        return None
+    segments = parse_identifier(source, delimiter)
+    if not segments or any(not segment for segment in segments):
+        raise InvalidInputError(f"source is not a valid dataset id: {source!r}")
+    return InputPin(segments=segments, version=source_version)
+
+
+def parse_run_facets(raw_json: str | None) -> dict[str, Any] | None:
+    """Parse + spec-shape the optional ``X-Lance-Run-Facets`` header (a JSON object ``{facet: {payload}}``).
+
+    The Arrow-IPC body carries the write's data, so a producer's run metadata (e.g. training ``params``)
+    rides this header instead. The catalog stays un-opinionated about the payload (:func:`shape_run_facets`
+    only stamps each facet spec-legal + rejects reserved facet names); malformed JSON, a non-object shape,
+    or a reserved name/key fail-fast as a 4xx (never a 500). Shared by the create door and ``merge_insert``
+    for the same reason as :func:`merge_source_pin`.
+    """
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except (ValueError, RecursionError) as exc:
+        # JSONDecodeError ⊂ ValueError, but json.loads also raises a BARE ValueError for an integer literal
+        # past the 4300-digit int-string-conversion limit, and RecursionError for a deeply-nested payload —
+        # both a malformed producer header (a 4xx, never a 500). (Phase 2 re-audit, 2026-07-21.)
+        raise InvalidInputError("X-Lance-Run-Facets must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise InvalidInputError("X-Lance-Run-Facets must be a JSON object of {facet: {payload}}")
+    try:
+        return shape_run_facets(parsed)
+    except (ValueError, TypeError) as exc:  # TypeError: belt-and-suspenders for a payload kwarg collision
+        raise InvalidInputError(str(exc)) from exc
+
+
+class EmitFields(TypedDict, total=False):
+    """The OPTIONAL metadata every emit accepts, declared ONCE (CAT-CORE-07).
+
+    This block was spelled out in full on all eight emitter methods — the Protocol's two, and
+    ``OriginatorBoundEmitter``'s, ``NoopEmitter``'s and ``_BaseLineageEmitter``'s pairs — and it had
+    already grown twice while copied (``project`` and ``originator`` were added to every one of the
+    eight in a single commit; the block went from eleven keywords to twelve).
+
+    That is not a tidiness problem. A copy that misses a keyword does not fail to type: it silently
+    DROPS the field. ``project`` is WATCH targeting's only key, so dropping it means an event nobody
+    watching the tenant is told about; ``originator`` names the person a service wrote FOR, so dropping
+    it puts the row in the wrong inbox. Both were live defects on this exact seam.
+
+    PEP 692 ``Unpack``, so every caller keeps the identical keyword call syntax — nothing at any call
+    site changes — while each implementation names the bundle instead of restating it.
+
+    The REQUIRED arguments (``table_id``, ``namespace``, ``author``, ``version``, and ``operation`` on
+    the write side) stay explicit: they differ between ``emit_create`` and ``emit_write``, and a
+    required field in a ``total=False`` bundle would be an optional one.
+    """
+
+    #: For a create, the run id stamped into the Lance file (#21); otherwise a fresh id per write.
+    run_id: str | None
+    #: The caller's bearer, forwarded so lineage ingest accepts it when the lineage service has OIDC on.
+    authorization: str | None
+    #: The physical Lance URI → the standard ``dataSource`` facet, which #23 reconcile reads.
+    source_uri: str | None
+    #: The per-version column schema for the ``WROTE`` edge (#24).
+    schema_fields: SchemaFields | None
+    #: The version-pinned source dataset(s) this write DERIVES FROM.
+    inputs: list[InputRef] | None
+    #: Producer-supplied run facets (e.g. training ``params``), threaded verbatim.
+    extra_run_facets: dict[str, Any] | None
+    #: The TENANT owning the namespace — WATCH targeting's only key.
+    project: str | None
+    #: The person a SERVICE made this write for, when ``author`` is the service.
+    originator: str | None
+
+
 @runtime_checkable
 class LineageEmitter(Protocol):
     """Emits catalog write events to the lineage service (best-effort)."""
@@ -342,14 +432,7 @@ class LineageEmitter(Protocol):
         namespace: str,
         author: str | None,
         version: int,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None: ...
 
     async def emit_write(
@@ -360,14 +443,7 @@ class LineageEmitter(Protocol):
         author: str | None,
         version: int | None,
         operation: str,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None: ...
 
 
@@ -392,6 +468,14 @@ class OriginatorBoundEmitter:
     inner: LineageEmitter
     originator: str | None
 
+    def _bind(self, fields: EmitFields) -> EmitFields:
+        """This request's ORIGINATOR claim, applied only where the producer supplied none.
+
+        An explicitly passed ``originator`` still wins: a producer that resolved a better answer than
+        the header is not overruled by the door.
+        """
+        return {**fields, "originator": fields.get("originator") or self.originator}
+
     async def project_for(self, top_ns: str) -> str | None:
         return await self.inner.project_for(top_ns)
 
@@ -402,29 +486,9 @@ class OriginatorBoundEmitter:
         namespace: str,
         author: str | None,
         version: int,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None:
-        await self.inner.emit_create(
-            table_id=table_id,
-            namespace=namespace,
-            author=author,
-            version=version,
-            run_id=run_id,
-            authorization=authorization,
-            source_uri=source_uri,
-            schema_fields=schema_fields,
-            inputs=inputs,
-            extra_run_facets=extra_run_facets,
-            project=project,
-            originator=originator or self.originator,
-        )
+        await self.inner.emit_create(table_id=table_id, namespace=namespace, author=author, version=version, **self._bind(fields))
 
     async def emit_write(
         self,
@@ -434,30 +498,9 @@ class OriginatorBoundEmitter:
         author: str | None,
         version: int | None,
         operation: str,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None:
-        await self.inner.emit_write(
-            table_id=table_id,
-            namespace=namespace,
-            author=author,
-            version=version,
-            operation=operation,
-            run_id=run_id,
-            authorization=authorization,
-            source_uri=source_uri,
-            schema_fields=schema_fields,
-            inputs=inputs,
-            extra_run_facets=extra_run_facets,
-            project=project,
-            originator=originator or self.originator,
-        )
+        await self.inner.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=operation, **self._bind(fields))
 
 
 class NoopEmitter:
@@ -473,14 +516,7 @@ class NoopEmitter:
         namespace: str,
         author: str | None,
         version: int,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None:
         return None
 
@@ -492,14 +528,7 @@ class NoopEmitter:
         author: str | None,
         version: int | None,
         operation: str,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None:
         return None
 
@@ -535,34 +564,14 @@ class _BaseLineageEmitter:
         namespace: str,
         author: str | None,
         version: int,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None:
-        await self.emit_write(
-            table_id=table_id,
-            namespace=namespace,
-            author=author,
-            version=version,
-            operation=CREATE_TABLE,
-            run_id=run_id,
-            authorization=authorization,
-            source_uri=source_uri,
-            schema_fields=schema_fields,
-            # S4: a create can DERIVE FROM a version-pinned source (an annotation publish, a Ray
-            # job's first write) and carry producer run facets — the same optional metadata
-            # merge_insert has always accepted, threaded verbatim.
-            inputs=inputs,
-            extra_run_facets=extra_run_facets,
-            # Declared and silently dropped until 2026-08-18 — the kwarg existing is what hid it.
-            project=project,
-            originator=originator,
-        )
+        # The whole optional bundle rides through verbatim: a create can DERIVE FROM a version-pinned
+        # source (an annotation publish, a Ray job's first write) and carry producer run facets, the
+        # same metadata merge_insert has always accepted. `project`/`originator` were declared and
+        # silently dropped here until 2026-08-18 — the kwarg existing per-copy is what hid it, and the
+        # shared bundle is what stops it recurring.
+        await self.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=CREATE_TABLE, **fields)
 
     async def emit_write(
         self,
@@ -572,19 +581,12 @@ class _BaseLineageEmitter:
         author: str | None,
         version: int | None,
         operation: str,
-        run_id: str | None = None,
-        authorization: str | None = None,
-        source_uri: str | None = None,
-        schema_fields: SchemaFields | None = None,
-        inputs: list[InputRef] | None = None,
-        extra_run_facets: dict[str, Any] | None = None,
-        project: str | None = None,
-        originator: str | None = None,
+        **fields: Unpack[EmitFields],
     ) -> None:
         # Resolved here rather than per call site: the mapping is mechanical, and a per-caller kwarg
         # is a rule every future endpoint eventually forgets (none ever passed one). Best-effort —
         # this runs on a committed write, so an unresolvable tenant costs a notification, not a request.
-        resolved_project = project or await self.project_for(namespace)
+        resolved_project = fields.get("project") or await self.project_for(namespace)
         event = build_write_event(
             table_id=table_id,
             namespace=namespace,
@@ -593,17 +595,17 @@ class _BaseLineageEmitter:
             operation=operation,
             # For a create this is the run id stamped into the Lance file (#21); for other writes a
             # fresh id. Generate one only when the caller didn't supply it.
-            run_id=run_id or str(uuid.uuid4()),
+            run_id=fields.get("run_id") or str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
             job_namespace=self._job_namespace,
-            source_uri=source_uri,
-            schema_fields=schema_fields,
-            inputs=inputs,
-            extra_run_facets=extra_run_facets,
+            source_uri=fields.get("source_uri"),
+            schema_fields=fields.get("schema_fields"),
+            inputs=fields.get("inputs"),
+            extra_run_facets=fields.get("extra_run_facets"),
             project=resolved_project,
-            originator=originator,
+            originator=fields.get("originator"),
         )
-        await self._send(event, operation=operation, table_id=table_id, authorization=authorization)
+        await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:  # pragma: no cover — abstract
         raise NotImplementedError

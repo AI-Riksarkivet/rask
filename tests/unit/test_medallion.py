@@ -16,16 +16,16 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+import pytest
+
 import medallion.services.ray_submit as ray_submit
 import medallion.services.transform as mover
-import pytest
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
-
 from service_kit.openlineage import run_id_for
 
 

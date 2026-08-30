@@ -32,7 +32,6 @@ from typing import Any
 
 from lineage_kit.runs import run_id_for
 from lineage_kit.schemas import Dataset, Job, OutputDataset, Run, RunEvent, RunFacets, RunState
-
 from service_kit.lakehouse.schema import SchemaFields
 from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,

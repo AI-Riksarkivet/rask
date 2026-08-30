@@ -28,8 +28,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from search.services import frames
 
+from search.services import frames
 from service_kit.exceptions import ServiceUnavailableError
 
 

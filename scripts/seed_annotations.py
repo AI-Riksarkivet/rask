@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 
 import lance
 import pyarrow as pa
+
 from annotator.annotations.schema import EMPTY_SCHEMA
 
 

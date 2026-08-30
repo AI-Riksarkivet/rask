@@ -111,9 +111,8 @@ def _output_datasets(project: str, dataset: str, version: int | None, rows: int)
     what an operator reconstructing the damage needs. `version=None` means nothing was committed, and
     then no version facet is written at all — a facet claiming version 0 would be a fact we do not have.
     """
-    from lineage_kit.schemas import DatasetFacets, DatasetVersionFacet, OutputDataset, OutputDatasetFacets, OutputStatisticsFacet
-
     from ingest.naming import bronze_namespace_for, bronze_table_id
+    from lineage_kit.schemas import DatasetFacets, DatasetVersionFacet, OutputDataset, OutputDatasetFacets, OutputStatisticsFacet
 
     if not dataset:
         return []
@@ -212,10 +211,9 @@ def _tenant_facet(
     An unsafe value yields NO facet, which degrades to exactly the single-tenant pair the output name
     also degrades to.
     """
+    from ingest.naming import tenant
     from lineage_kit.consume import LANCE_RUN_FACET
     from lineage_kit.schemas import custom_facet
-
-    from ingest.naming import tenant
 
     safe = tenant(project)
     fields: dict[str, Any] = {}

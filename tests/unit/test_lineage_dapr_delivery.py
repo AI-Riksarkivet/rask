@@ -37,8 +37,8 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lineage.models import RunEvent
 
+from lineage.models import RunEvent
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 

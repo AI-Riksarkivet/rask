@@ -18,9 +18,9 @@ from typing import Annotated, Any
 import pytest
 from fastapi import FastAPI, Header, Request
 from fastapi.testclient import TestClient
-from ingest.auth import AuthSettingsDep, IngestAuthSettings, authorize_ingest, get_auth_settings
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
+from ingest.auth import AuthSettingsDep, IngestAuthSettings, authorize_ingest, get_auth_settings
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 

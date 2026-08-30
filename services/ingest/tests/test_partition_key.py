@@ -17,6 +17,7 @@ So these tests pin the column and its PROVENANCE (the adapter, never the worker)
 from __future__ import annotations
 
 import pytest
+
 from ingest.sources import SourceSpec, partition_key_for
 
 

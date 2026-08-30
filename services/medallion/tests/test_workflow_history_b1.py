@@ -21,6 +21,7 @@ import json
 from typing import Any
 
 import pytest
+
 from medallion.workflow import MAX_POLLS, POLL_INTERVAL_SECONDS, StageJobOutcome, StageJobSpec
 
 

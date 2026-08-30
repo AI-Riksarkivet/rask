@@ -31,6 +31,7 @@ from itertools import combinations
 from pathlib import Path
 
 import pytest
+
 from ingest import staging
 from ingest.staging import StagingCoverAbandoned, StagingOverlapError, discover_staged, stage_fragments
 

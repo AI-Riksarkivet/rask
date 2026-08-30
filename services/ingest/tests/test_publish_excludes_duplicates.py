@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+
 from ingest.queue import UnitTask, WorkQueue, _dedupe_id
 
 

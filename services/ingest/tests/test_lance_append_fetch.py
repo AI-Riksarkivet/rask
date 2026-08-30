@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
+
 from ingest.adapters import register_builtin_sources
 from ingest.sources import fetcher_for
 
@@ -76,7 +77,6 @@ async def test_every_enumerated_key_is_fetchable(dataset: str) -> None:
     counts sum to the dataset) is what a per-half test could not: both halves passed alone.
     """
     from ingest.sources import iter_unit_keys
-
     from service_kit.lakehouse.sources import LanceFragmentSource
 
     fetcher = fetcher_for("lance-append")

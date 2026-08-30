@@ -12,7 +12,6 @@ unusual (ask) or clean. Deciding it in two places is how the two answers drift a
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -89,21 +88,16 @@ async def publish_hold(dapr: Any, settings: MedallionSettings, spec: PromotionSp
     lineage, so a broker blip must degrade to the old permanent BLOCK — which is safe — not unwind a
     completed write or retry the whole transform.
     """
-    try:
-        await dapr_publish.publish_event(
-            dapr,
-            timeout_seconds=settings.publish_timeout_seconds,
-            pubsub_name=settings.pubsub,
-            topic_name=settings.promotion_topic,
-            data=json.dumps(spec.model_dump()),
-            data_content_type="application/json",
-        )
-    except Exception:
-        log.warning(
-            "medallion_promotion_hold_not_published",
-            extra={"token": spec.token, "dataset": spec.to_dataset, "topic": settings.promotion_topic},
-            exc_info=True,
-        )
+    landed = await dapr_publish.publish_json(
+        dapr,
+        pubsub_name=settings.pubsub,
+        topic_name=settings.promotion_topic,
+        payload=spec.model_dump(),
+        timeout_seconds=settings.publish_timeout_seconds,
+        failure_event="medallion_promotion_hold_not_published",
+        context={"token": spec.token, "dataset": spec.to_dataset},
+    )
+    if not landed:
         return False
     log.info(
         "medallion_promotion_held_for_review",

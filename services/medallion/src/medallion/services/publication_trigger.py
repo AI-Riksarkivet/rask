@@ -26,7 +26,6 @@ cascade "ran" and moved nothing.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -172,17 +171,18 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     if originator:
         trigger["originator"] = originator
 
-    try:
-        await dapr_publish.publish_event(
-            dapr,
-            timeout_seconds=settings.publish_timeout_seconds,
-            pubsub_name=settings.pubsub,
-            topic_name=topic,
-            data=json.dumps(trigger),
-            data_content_type="application/json",
-        )
-    except Exception as exc:  # noqa: BLE001 — a publish outage is retryable; nothing else here is
-        log.warning("medallion_publication_trigger_failed", extra={"object_id": data.get("object_id"), "error": str(exc)})
+    landed = await dapr_publish.publish_json(
+        dapr,
+        pubsub_name=settings.pubsub,
+        topic_name=topic,
+        payload=trigger,
+        timeout_seconds=settings.publish_timeout_seconds,
+        failure_event="medallion_publication_trigger_failed",
+        # The TOKEN, which this site used to omit: `object_id` names the catalog object and cannot be
+        # used to find the run, so a failed publication trigger could not be joined to its cascade.
+        context={"token": trigger["token"], "object_id": data.get("object_id")},
+    )
+    if not landed:  # a publish outage is retryable; nothing else here is
         return _RETRY
 
     log.info(

@@ -18,7 +18,6 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from catalog.services.dataplane import add_columns, create_table, drop_columns
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableDropColumnsRequest,
@@ -26,6 +25,8 @@ from lance_namespace import (
     LanceNamespaceError,
     connect,
 )
+
+from catalog.services.dataplane import add_columns, create_table, drop_columns
 
 
 def _ipc(table: pa.Table) -> bytes:

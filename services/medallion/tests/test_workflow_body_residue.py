@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from medallion.workflow import MAX_LINEAGE_JSON_BYTES, StageJobSpec, TrainJobOutcome, TrainJobSpec, TrainReport, report_train_outcome
 
 

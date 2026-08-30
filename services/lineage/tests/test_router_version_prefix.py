@@ -12,6 +12,7 @@ producer (lineage-kit, Airflow, Spark, dbt) relies on.
 from __future__ import annotations
 
 from fastapi import FastAPI
+
 from lineage.api.v1.endpoints import (
     columns,
     datasets,

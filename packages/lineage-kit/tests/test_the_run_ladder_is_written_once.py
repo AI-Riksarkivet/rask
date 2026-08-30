@@ -13,6 +13,7 @@ pipeline, so that is per unit of work, for a value that cannot change inside a p
 from __future__ import annotations
 
 import pytest
+
 from lineage_kit import LineageContext, RecordingEmitter, job_run, stage, use_context
 from lineage_kit.context import child_job_name, resolve_namespace
 

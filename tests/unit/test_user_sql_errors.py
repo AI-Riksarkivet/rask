@@ -23,7 +23,6 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from catalog.services.dataplane import create_table, delete_from_table, update_table
 from lance_namespace import (
     DeleteFromTableRequest,
     InvalidInputError,
@@ -31,6 +30,8 @@ from lance_namespace import (
     UpdateTableRequest,
     connect,
 )
+
+from catalog.services.dataplane import create_table, delete_from_table, update_table
 
 
 def _ipc(table: pa.Table) -> bytes:

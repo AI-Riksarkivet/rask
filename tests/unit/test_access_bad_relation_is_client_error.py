@@ -15,20 +15,23 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
-from catalog.api.v1.endpoints import access
-from catalog.core.config import Settings
 from lance_namespace import InvalidInputError
 from lance_namespace.errors import ErrorCode
 
+from catalog.api.v1.endpoints import access
+from catalog.core.config import Settings
+from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.ns_errors import status_for
 
 
-def _request() -> access.Request:
-    return cast(access.Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object()))))
+def _client() -> Any:
+    """The injected OpenFGA client — these doors take it as a dependency now (catalog-api-09) rather
+    than digging it out of ``request.app.state``. Never used: both cases refuse before any call."""
+    return object()
 
 
 def _settings() -> Settings:
@@ -44,7 +47,7 @@ def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(access, "_can_relations", lambda fga_type: ("can_get_metadata", "can_read_data"))
     body = access.AccessCheckRequest(user="gina", relation="not_a_real_relation")
     with pytest.raises(InvalidInputError) as exc:
-        asyncio.run(access._access_check(_request(), _settings(), _token(), "table", "db1$users", body))
+        asyncio.run(access._access_check(_client(), _settings(), _token(), "table", "db1$users", body))
     assert status_for(int(exc.value.code)) == 400, "a client-supplied bad relation must surface as the client's error"
 
 
@@ -53,7 +56,7 @@ def test_grant_with_an_unknown_rung_is_a_400(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(access, "_grantable_relations", lambda fga_type: ("owner", "writer", "reader"))
     body = access.AccessGrantRequest(user="gina", relation="not_a_real_rung")
     with pytest.raises(InvalidInputError) as exc:
-        asyncio.run(access._access_mutate(_request(), _settings(), _token(), "table", "db1$users", body, grant=True))
+        asyncio.run(access._access_mutate(_client(), NoopControlEmitter(), _settings(), _token(), "table", "db1$users", body, grant=True))
     assert status_for(int(exc.value.code)) == 400
 
 
@@ -64,5 +67,5 @@ def test_the_auth_off_answer_stays_a_501() -> None:
     settings = cast(Settings, SimpleNamespace(fga_enabled=False, delimiter="$"))
     body = access.AccessCheckRequest(user="gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
-        asyncio.run(access._access_check(_request(), settings, _token(), "table", "db1$users", body))
+        asyncio.run(access._access_check(_client(), settings, _token(), "table", "db1$users", body))
     assert status_for(int(getattr(exc.value, "code", ErrorCode.UNSUPPORTED))) == 501

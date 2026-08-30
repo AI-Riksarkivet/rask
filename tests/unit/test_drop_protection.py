@@ -21,10 +21,10 @@ import asyncio
 from typing import Any
 
 import pytest
-from catalog.api import fga_deps
-from catalog.core.config import Settings
 from lance_namespace import NamespaceNotEmptyError, TableNotFoundError
 
+from catalog.api import fga_deps
+from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.lakehouse import protection
 
@@ -373,13 +373,12 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
 
 def test_undrop_re_registers_from_the_trash_record_and_clears_it(tmp_path: Any) -> None:
     from catalog.api.v1.endpoints import tables as t_ep
-
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     _drop_table(settings, ns)
-    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
     assert "register_table:pages.lance" in ns.calls, "the RELATIVE form register_table accepts"
     assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
 
@@ -392,7 +391,7 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     with pytest.raises(TableNotFoundError, match="no recoverable drop"):
-        asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+        asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
 
 
 def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
@@ -401,9 +400,9 @@ def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
-    assert asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings, token=None)) == []
+    assert asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings)) == []
     _drop_table(settings, ns)
-    tasks = asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings, token=None))
+    tasks = asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings))
     assert len(tasks) == 1 and tasks[0].location == "s3://bkt/bronze/pages.lance" and tasks[0].expires_at
 
 
@@ -462,7 +461,7 @@ def test_undrop_registers_a_RELATIVE_location(tmp_path: Any) -> None:
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     _drop_table(settings, ns)
-    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
     registered = [c for c in ns.calls if c.startswith("register_table:")]
     assert registered == ["register_table:pages.lance"], registered
     assert "://" not in registered[0], "an absolute URI reached register_table — the live 400"
@@ -473,8 +472,9 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
     protected table under a cascade-dropped namespace died silently while the docstring claimed
     otherwise. The refusal must NAME the protected descendant: "something in here is protected" is
     not an answer anyone can act on."""
-    from catalog.api.v1.endpoints import namespaces as n_ep
     from lance_namespace import DropNamespaceRequest
+
+    from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path)
     _protect(settings, "table", "bronze$pages")
@@ -496,8 +496,9 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
 
 def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
     """The negative twin — force turns the protection lock on the subtree exactly as at the named rung."""
-    from catalog.api.v1.endpoints import namespaces as n_ep
     from lance_namespace import DropNamespaceRequest
+
+    from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path)
     _protect(settings, "table", "bronze$pages")
@@ -554,8 +555,9 @@ class _CascadableNamespace(_TrashableNamespace):
 
 
 def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False, purge: bool = False) -> Any:
-    from catalog.api.v1.endpoints import namespaces as n_ep
     from lance_namespace import DropNamespaceRequest
+
+    from catalog.api.v1.endpoints import namespaces as n_ep
 
     return asyncio.run(
         n_ep.drop_namespace(
@@ -656,7 +658,6 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
     """The plural undrop: namespaces shallowest-first, then every table re-registered at its old id
     from the RELATIVE location form (#75's dir-backend lesson), and the records cleared."""
     from catalog.api.v1.endpoints import namespaces as n_ep
-
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
@@ -664,7 +665,7 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
     _drop_namespace_cascade(settings, ns)
     ns.calls.clear()
 
-    asyncio.run(n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+    asyncio.run(n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
 
     creates = [c for c in ns.calls if c.startswith("create_namespace:")]
     assert creates == ["create_namespace:bronze:exist_ok", "create_namespace:bronze$inner:exist_ok"], "parents must exist before children"
@@ -675,15 +676,14 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
 
 
 def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
-    from catalog.api.v1.endpoints import namespaces as n_ep
     from lance_namespace import NamespaceNotFoundError
+
+    from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()  # structural stand-in, same as every door test here
     with pytest.raises(NamespaceNotFoundError, match="no recoverable drop"):
-        asyncio.run(
-            n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter())
-        )
+        asyncio.run(n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
 
 
 def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any) -> None:
@@ -691,9 +691,9 @@ def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any) -> None:
     from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path, grace_days=7)
-    assert asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, token=None)) == []
+    assert asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings)) == []
     _drop_namespace_cascade(settings, _CascadableNamespace())
-    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, token=None))
+    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings))
     assert len(entries) == 1 and entries[0].expires_at, "the undrop deadline is invisible"
 
 
@@ -746,7 +746,6 @@ def test_a_RECOVERABLE_cascade_UNBINDS_and_records_the_binding_for_the_undrop(tm
     it moved onto the record that already had to survive for the undrop to work at all.
     """
     from catalog.services import warehouses
-
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)

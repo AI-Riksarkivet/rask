@@ -21,6 +21,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 from lance.dataset import DatasetBasePath
+
 from maintenance.services import orphans
 
 
@@ -55,7 +56,7 @@ def test_a_healthy_dataset_reports_no_data_or_deletion_orphans(tmp_path: pathlib
     for a bug in the detector.
     """
     uri, prefix = _dataset(tmp_path)
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked
     dangerous = [o.path for o in result.orphans if o.kind in ("data", "deletions", "indices")]
     assert dangerous == [], f"a healthy dataset must have no reclaimable data, got {dangerous}"
@@ -89,7 +90,7 @@ def test_a_deletion_vector_is_referenced_not_orphaned(tmp_path: pathlib.Path) ->
     deletions = sorted(p.name for p in (tmp_path / "t.lance" / "_deletions").iterdir())
     assert deletions, "fixture must actually produce a deletion vector"
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked
     assert [o.path for o in result.orphans if o.kind == "deletions"] == []
 
@@ -106,7 +107,7 @@ def test_a_stray_data_file_is_reported(tmp_path: pathlib.Path) -> None:
     stray = tmp_path / "t.lance" / "data" / "00000000000000000000000000deadbeef.lance"
     stray.write_bytes(b"fragments from a write whose commit never landed")
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     found = {o.path: o for o in result.orphans}
     assert "data/00000000000000000000000000deadbeef.lance" in found
     assert found["data/00000000000000000000000000deadbeef.lance"].kind == "data"
@@ -135,7 +136,7 @@ def test_transaction_files_are_reported_because_they_accumulate_by_design(tmp_pa
     orphaned = txn_dir / "999-00000000-0000-0000-0000-0000deadbeef.txn"
     orphaned.write_bytes(b"a commit attempt that never became a version")
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     reported = {o.path for o in result.orphans if o.kind == "transactions"}
     assert reported == {f"_transactions/{orphaned.name}"}, (
         "only the UNREFERENCED txn is garbage — a txn belonging to a live version is the provenance "
@@ -151,7 +152,7 @@ def test_manifests_and_the_version_hint_are_never_reported(tmp_path: pathlib.Pat
     hint = tmp_path / "t.lance" / "_versions" / "latest_version_hint.json"
     assert hint.exists(), "fixture must actually have the hint file"
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert [o.path for o in result.orphans if o.kind == "versions"] == []
 
 
@@ -164,7 +165,7 @@ def test_an_unreadable_dataset_yields_no_orphans_and_says_why(tmp_path: pathlib.
     """ "We could not determine the referenced set" must never render as "none of these files are
     referenced" — that shape is what deletes a live table. `checked=False` with a reason, and the
     orphan list EMPTY BY CONSTRUCTION."""
-    result = orphans.scan_dataset(_fs(), str(tmp_path / "not-a-dataset"), str(tmp_path / "not-a-dataset"))
+    result = orphans.scan_dataset(_fs(), str(tmp_path / "not-a-dataset"), prefix=str(tmp_path / "not-a-dataset"))
     assert result.checked is False
     assert result.orphans == []
     assert result.reason
@@ -259,7 +260,7 @@ def test_a_tag_is_never_reported_as_an_orphan(tmp_path: pathlib.Path) -> None:
     tags = list((tmp_path / "t.lance" / "_refs" / "tags").iterdir())
     assert tags, "fixture must actually write a tag file"
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     named = {o.path for o in result.orphans}
     assert not any(p.startswith("_refs/") for p in named), f"a tag was reported as an orphan: {named}"
 
@@ -269,7 +270,7 @@ def test_the_reserved_marker_is_never_reported(tmp_path: pathlib.Path) -> None:
     manifest — so a naive scan reports it once per dataset, every run, forever."""
     uri, prefix = _dataset(tmp_path)
     (tmp_path / "t.lance" / ".lance-reserved").write_bytes(b"")
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert ".lance-reserved" not in {o.path for o in result.orphans}
 
 
@@ -297,7 +298,7 @@ def test_a_blob_sidecar_of_a_referenced_data_file_is_not_an_orphan(tmp_path: pat
     dead_sidecar.mkdir(parents=True, exist_ok=True)
     (dead_sidecar / "10000000000000000000000000000000.blob").write_bytes(b"left by a reclaimed version")
 
-    named = {o.path for o in orphans.scan_dataset(_fs(), uri, prefix).orphans}
+    named = {o.path for o in orphans.scan_dataset(_fs(), uri, prefix=prefix).orphans}
     assert f"data/{stems[0]}/10000000000000000000000000000000.blob" not in named, "a LIVE blob sidecar was named as an orphan"
     assert f"data/{'f' * 50}/10000000000000000000000000000000.blob" in named, "a sidecar with no live parent must still be reported"
 
@@ -324,7 +325,7 @@ def test_a_branched_dataset_is_refused_not_scanned(tmp_path: pathlib.Path) -> No
     lance.write_dataset(_table(2), branch, mode="append")
     assert (tmp_path / "branched.lance" / "tree" / "feature-a").exists(), "fixture must really branch"
 
-    result = orphans.scan_dataset(_fs(), uri, uri)
+    result = orphans.scan_dataset(_fs(), uri, prefix=uri)
     assert result.checked is False, "a branched dataset must be refused, not scanned"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
@@ -342,7 +343,7 @@ def test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere(tmp_path: p
     clone = str(tmp_path / "clone.lance")
     ds.shallow_clone(clone, reference=1)
 
-    result = orphans.scan_dataset(_fs(), clone, clone)
+    result = orphans.scan_dataset(_fs(), clone, prefix=clone)
     assert result.checked is False, "a dataset spanning base_paths must be refused"
     assert result.orphans == []
     assert "base_paths" in (result.reason or "")
@@ -352,7 +353,7 @@ def test_an_ordinary_dataset_is_still_scanned(tmp_path: pathlib.Path) -> None:
     """The gate must refuse only the two hazardous layouts. A gate that refuses everything is a
     detector that does nothing, and would pass both tests above."""
     uri, prefix = _dataset(tmp_path)
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked is True
     assert result.reason is None
 
@@ -387,7 +388,7 @@ def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
     shard.mkdir(parents=True)
     (shard / "1010000000000000000000000000000000000000000000000000000000000000.arrow").write_bytes(b"wal")
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked is False
     assert result.orphans == []
     assert "_mem_wal/" in (result.reason or "")
@@ -433,7 +434,7 @@ def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tm
 
     monkeypatch.setattr(orphans.lance, "dataset", lambda *a, **k: _DatasetWithOverlay(real))
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked is False, "a dataset using overlays must be refused, not scanned"
     assert result.orphans == []
     assert "overlay" in (result.reason or "").lower()
@@ -467,7 +468,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     referenced, _versions, _note = orphans.referenced_paths(uri)
     assert all((tmp_path / "based.lance" / rel).exists() for rel in referenced if not rel.endswith("/"))
 
-    result = orphans.scan_dataset(_fs(), uri, uri)
+    result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is False, "a multi-base dataset must be refused — a prefix listing cannot be subtracted"
     assert result.orphans == []
@@ -485,7 +486,7 @@ def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib
     """
     uri = overlay_dataset(tmp_path)
 
-    result = orphans.scan_dataset(_fs(), uri, uri)
+    result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is False, "an overlay dataset must be refused, not scanned"
     assert result.orphans == []
@@ -500,7 +501,7 @@ def test_an_ordinary_dataset_is_not_refused_by_the_flag_gate(tmp_path: pathlib.P
     lance.write_dataset(_table(), uri, enable_stable_row_ids=True)
     lance.dataset(uri).delete("id = 1")
 
-    result = orphans.scan_dataset(_fs(), uri, uri)
+    result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is True, result.reason
     assert result.reason is None
@@ -524,7 +525,7 @@ def test_the_transaction_of_a_LIVE_version_is_not_an_orphan(tmp_path: pathlib.Pa
     # A second commit, so there are two live versions and two transaction files.
     lance.write_dataset(pa.table({"v": [9, 9]}), uri, mode="overwrite")
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
 
     assert result.checked
     txn_orphans = [o.path for o in result.orphans if o.kind == "transactions"]
@@ -543,7 +544,7 @@ def test_a_STALE_transaction_is_still_reported(tmp_path: pathlib.Path) -> None:
     stale.parent.mkdir(parents=True, exist_ok=True)
     stale.write_bytes(b"not a live commit")
 
-    result = orphans.scan_dataset(_fs(), uri, prefix)
+    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
 
     txn_orphans = [o.path for o in result.orphans if o.kind == "transactions"]
     assert any("999-deadbeef" in p for p in txn_orphans), f"a stale transaction must still be reported, got {txn_orphans}"

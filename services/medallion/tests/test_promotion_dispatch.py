@@ -14,6 +14,7 @@ import json
 from typing import Any
 
 import pytest
+
 from medallion.core.config import MedallionSettings
 from medallion.services.promotion_hold import hold_spec, publish_hold
 

@@ -299,9 +299,9 @@ def test_the_ingest_request_docstring_matches_the_naming_module() -> None:
 
 
 def test_the_s3_harvest_docstring_does_not_claim_a_registration_that_is_not_there() -> None:
-    """`ingest.adapters` registers `service_kit.lakehouse.sources.S3Source`, never `S3PrefixSource`."""
+    """`ingest.adapters` registers `service_kit.lakehouse.sources.S3FileSystemSource`, never `S3PrefixSource`."""
     adapters = _read(INGEST_ADAPTERS)
-    assert "from service_kit.lakehouse.sources import S3Source" in adapters
+    assert "from service_kit.lakehouse.sources import S3FileSystemSource" in adapters
     assert "from medallion.services.s3_harvest import" not in adapters
 
     assert _retracted(" ".join(_module_docstring(S3_HARVEST).split()), "registered by ``ingest.adapters`` now"), (

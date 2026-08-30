@@ -36,10 +36,9 @@ with contextlib.suppress(NameError):  # NameError => run from stdin; services/ a
 
 from medallion.schemas.events import build_run_event
 from medallion.services.ingest import ingest_to_bronze
-
 from service_kit.lakehouse import blobs, media, schema
-from service_kit.lakehouse.sinks import S3Sink
-from service_kit.lakehouse.sources import S3Source
+from service_kit.lakehouse.sinks import S3FileSystemSink
+from service_kit.lakehouse.sources import S3FileSystemSource
 
 
 RUN = os.environ["RUN"]
@@ -57,7 +56,7 @@ SO = {
 }
 BRONZE, SILVER, GOLD = (f"s3://{LAKE}/mp3-{RUN}/{s}" for s in ("bronze", "silver", "gold"))
 # Run-scoped prefixes standing in for the external source/sink (a real deployment points these at a
-# separate HCP/GCS/S3 bucket — the S3Source/S3Sink adapters are identical; only the filesystem changes).
+# separate HCP/GCS/S3 bucket — the S3FileSystemSource/S3FileSystemSink adapters are identical; only the filesystem changes).
 SRC_PREFIX = f"external-src-{RUN}/batch"
 SINK_PREFIX = f"external-sink-{RUN}"
 
@@ -155,14 +154,14 @@ def _egress(fs: pafs.S3FileSystem) -> str:
     buffer = io.BytesIO()  # the curated artifact as one Arrow-IPC object
     with pa.ipc.new_stream(buffer, gold.schema) as writer:
         writer.write_table(gold)
-    return S3Sink(fs, SINK_BUCKET, SINK_PREFIX).put("gold.arrow", buffer.getvalue())
+    return S3FileSystemSink(fs, SINK_BUCKET, SINK_PREFIX).put("gold.arrow", buffer.getvalue())
 
 
 def main() -> None:
     fs = _fs()
     _seed_source(fs)
 
-    result = ingest_to_bronze(S3Source(fs, SRC_BUCKET, SRC_PREFIX), BRONZE, SO)
+    result = ingest_to_bronze(S3FileSystemSource(fs, SRC_BUCKET, SRC_PREFIX), BRONZE, SO)
     _emit(
         inputs=[("source", uri) for uri in result.source_uris],
         out_ns="bronze",

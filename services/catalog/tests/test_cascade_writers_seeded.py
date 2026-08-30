@@ -25,9 +25,9 @@ import inspect
 from typing import TYPE_CHECKING, cast, get_args
 
 import pytest
+
 from catalog.api import fga_deps
 from catalog.core.config import Settings
-
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 

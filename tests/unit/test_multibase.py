@@ -14,9 +14,10 @@ from unittest.mock import MagicMock, patch
 import lance
 import pyarrow as pa
 import pytest
+from lance_namespace import InvalidInputError
+
 from catalog.core.config import Settings
 from catalog.services import dataplane
-from lance_namespace import InvalidInputError
 
 
 def _table() -> pa.Table:

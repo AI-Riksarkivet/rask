@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import pyarrow.fs as pafs
 import pytest
-from catalog.services import dataplane
 from lance_namespace import InvalidInputError
+
+from catalog.services import dataplane
 
 
 class _CountingFS:

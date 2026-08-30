@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from annotator.projects.proxies import TypedActorProxy

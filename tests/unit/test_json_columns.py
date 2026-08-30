@@ -19,6 +19,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+
 from annotator.annotations.schema import EMPTY_SCHEMA
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
 

@@ -34,8 +34,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from catalog.api.v1.endpoints.access import _can_relations as _model_can_relations
-from catalog.core.config import Settings, get_settings
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceResponse,
@@ -50,6 +48,8 @@ from lance_namespace import (
     ServiceUnavailableError,
 )
 
+from catalog.api.v1.endpoints.access import _can_relations as _model_can_relations
+from catalog.core.config import Settings, get_settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 
@@ -95,6 +95,22 @@ def _fake_check(captured: list[dict], *, allow: bool):
         return allow
 
     return fake_check
+
+
+def _fake_batch_check(captured: list[dict], *, allow: bool):
+    """The batch twin of :func:`_fake_check`, recording ONE entry per object in the same shape.
+
+    The owner-tier lane of `_authorize_batch` batches by relation now (catalog-api-12) instead of
+    looping single checks, so the recorder has to follow the transport. The shape is deliberately
+    identical, because what the tests assert — WHICH relation was asked on WHICH object — is the same
+    question either way.
+    """
+
+    async def fake_batch_check(_client: object, *, user: str, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
+        captured.extend({"user": user, "relation": relation, "obj": obj} for obj in objects)
+        return dict.fromkeys(objects, allow)
+
+    return fake_batch_check
 
 
 def _stub_create(monkeypatch, *, response: object = None, error: BaseException | None = None) -> None:
@@ -714,7 +730,7 @@ def test_batch_commit_deregister_requires_owner_tier(client: TestClient, fake_ns
     OWNER tier via ``can_deregister`` — closing the writer back-door the audit flagged."""
     _wire(client)
     captured: list[dict] = []
-    monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
+    monkeypatch.setattr(fga_module, "batch_check", _fake_batch_check(captured, allow=False))
 
     body = {"operations": [{"deregister_table": {"id": ["db1", "a"]}}]}
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})

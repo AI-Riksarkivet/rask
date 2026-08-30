@@ -16,12 +16,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import lance
+import pytest
+
 # Populates the source registry by import-time side effect — the same trap that made an in-cluster
 # probe pass while the real emit failed: a bare interpreter has NO kinds registered, and a test
 # that forgets this asserts against an empty registry, not the plane.
 import ingest.adapters  # noqa: F401
-import lance
-import pytest
 from ingest.identity import unit_id
 from ingest.lander import CREATION_FLAGS
 from ingest.worker import units_to_table
@@ -82,9 +83,9 @@ class _StubClient:
 
 
 def test_s3_versioned_listing_yields_uri_and_UNQUOTED_etag() -> None:
-    from service_kit.lakehouse.sources import S3Source
+    from service_kit.lakehouse.sources import S3FileSystemSource
 
-    source = S3Source(
+    source = S3FileSystemSource(
         fs=None,
         bucket="b",
         prefix="p/",
@@ -103,7 +104,6 @@ def test_a_clientless_s3_source_degrades_to_SNAPSHOT_not_an_error(tmp_path: Path
     """The documented contract: no client -> (key, None) over the pyarrow listing. Local-dir takes
     the same fallback through `iter_versioned_unit_keys`."""
     from ingest.sources import iter_versioned_unit_keys
-
     from service_kit.lakehouse.sources import LocalDirSource
 
     (tmp_path / "a.tif").write_bytes(b"II*\x00a")

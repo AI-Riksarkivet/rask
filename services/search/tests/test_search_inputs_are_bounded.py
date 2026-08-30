@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
+
 from search.services.result_cache import query_hash
 from search.services.spec import MAX_QUERY_CHARS, SearchSpec
 

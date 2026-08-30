@@ -32,12 +32,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from catalog.api import fga_deps
-from catalog.api.v1.endpoints import access
-from catalog.core.config import Settings
 from fastapi import Request
 from openfga_sdk import OpenFgaClient
 
+from catalog.api import fga_deps
+from catalog.api.v1.endpoints import access
+from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 

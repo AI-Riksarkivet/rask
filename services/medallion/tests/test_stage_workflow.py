@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+
 from medallion.workflow import (
     MAX_POLLS,
     PollInput,
@@ -315,7 +316,6 @@ def test_a_FAILED_job_carries_RAYS_OWN_REASON_into_the_graph(monkeypatch: pytest
     common way a stage dies and the one an operator can act on immediately.
     """
     from medallion.workflow import report_stage_outcome
-
     from ray_kit.schemas import RayJobFailure
 
     published: list[dict[str, Any]] = []
@@ -346,7 +346,6 @@ def test_the_failure_reason_is_BOUNDED_so_a_traceback_cannot_size_a_lineage_even
     past 900 KiB (`service_kit/dapr_publish.py`). An unbounded upstream string must not be able to
     decide the size of a governed event, so it is truncated here rather than at the broker."""
     from medallion.workflow import _STAGE_FAIL_MESSAGE_CAP, report_stage_outcome
-
     from ray_kit.schemas import RayJobFailure
 
     published: list[dict[str, Any]] = []
@@ -535,6 +534,7 @@ def test_submit_returns_the_posted_id_when_a_CODE_VERSION_is_set(monkeypatch: py
     import json
 
     import httpx
+
     from medallion.core.config import MedallionSettings
     from medallion.services import ray_submit
     from medallion.workflow import submit_stage
@@ -834,11 +834,12 @@ def test_the_stage_outcome_span_carries_the_CASCADE_identity_and_the_verdict(mon
     this one RETURNS its outcome, so nothing is ever ERROR. Measured estate-wide: every activity span
     STATUS_CODE_UNSET, including the four the sidecar's own metric labels `failed`.
     """
-    from medallion.workflow import report_stage_outcome
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from opentelemetry.trace import StatusCode
+
+    from medallion.workflow import report_stage_outcome
 
     monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda _e, _s: None)
     exporter = InMemorySpanExporter()

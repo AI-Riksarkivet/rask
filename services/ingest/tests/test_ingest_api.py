@@ -24,6 +24,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from ingest import create_app
 from ingest.api import router
 from ingest.runs import (
@@ -604,8 +605,9 @@ def test_only_a_refusal_filters_a_row(
     client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ingest import api as api_mod
     from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+
+    from ingest import api as api_mod
 
     _c, _starter, store = client
     _seeded(store)
@@ -641,8 +643,9 @@ def test_an_authz_outage_is_never_rendered_as_an_empty_list(
     """The sharpest shape of the bug: EVERY project unreadable because the store is down. Before, that
     was a 200 with `{"runs": []}` — indistinguishable from a caller who has never ingested anything,
     and the one rendering an operator cannot act on."""
-    from ingest import api as api_mod
     from lance_namespace import ServiceUnavailableError
+
+    from ingest import api as api_mod
 
     _c, _starter, store = client
     _seeded(store)

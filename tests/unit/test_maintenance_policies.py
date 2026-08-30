@@ -15,10 +15,10 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
+
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.optimize import Discovery, compact_one
 from maintenance.services.sweep import _policy_skip_reason
-
 from service_kit.lakehouse import maintenance_policies as mp
 
 
@@ -201,7 +201,7 @@ def test_sweep_consumes_a_project_policy_via_the_same_resolution_call(tmp_path: 
     uri = "s3://acme-wh/medallion/silver/events"  # medallion-nested: table_id_from_uri yields no id
     policy = mp.resolve_policy(records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
     assert policy is not None and policy["kind"] == "project"
-    assert _policy_skip_reason(policy, settings, {}, now, uri) == "policy_disabled"
+    assert _policy_skip_reason(policy, settings=settings, options={}, now=now, uri=uri) == "policy_disabled"
 
     outside = "s3://other-wh/u1_db$t"
     assert mp.resolve_policy(records, outside, logical_id=table_id_from_uri(outside)) is None
@@ -253,17 +253,17 @@ def test_skip_reasons_disabled_and_interval(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     uri = "s3://bkt/u1_db$t"
 
-    assert _policy_skip_reason(_policy(compact_enabled=False), settings, {}, now, uri) == "policy_disabled"
+    assert _policy_skip_reason(_policy(compact_enabled=False), settings=settings, options={}, now=now, uri=uri) == "policy_disabled"
 
     cadenced = _policy(compact_interval_hours=6)
     mp.put_policy(str(tmp_path), {}, cadenced)
     # No stamp yet → maintain (an absent/lost stamp must never silence maintenance).
-    assert _policy_skip_reason(cadenced, settings, {}, now, uri) is None
+    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
     # Fresh stamp → skip; stale stamp → maintain.
     mp.write_state(str(tmp_path), {}, cadenced, uri, (now - timedelta(hours=1)).isoformat())
-    assert _policy_skip_reason(cadenced, settings, {}, now, uri) == "policy_interval"
+    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) == "policy_interval"
     mp.write_state(str(tmp_path), {}, cadenced, uri, (now - timedelta(hours=7)).isoformat())
-    assert _policy_skip_reason(cadenced, settings, {}, now, uri) is None
+    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
 
 
 def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path) -> None:
@@ -274,9 +274,9 @@ def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path)
     uri = "s3://bkt/u1_db$t"
     cadenced = _policy(compact_interval_hours=6)
     mp.write_state(str(tmp_path), {}, cadenced, uri, datetime.now().isoformat())
-    assert _policy_skip_reason(cadenced, settings, {}, now, uri) is None
+    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
     mp.write_state(str(tmp_path), {}, cadenced, uri, "not-a-timestamp")
-    assert _policy_skip_reason(cadenced, settings, {}, now, uri) is None
+    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
 
 
 def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> None:

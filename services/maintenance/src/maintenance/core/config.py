@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -212,7 +212,12 @@ class MaintenanceSettings(BaseSettings):
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage.
     # When on, the S3 secret comes from the store at boot (NOT plaintext env); fails closed if absent.
     secrets_from_dapr: bool = Field(default=False, alias="MAINTENANCE_SECRETS_FROM_DAPR")
-    dapr_secret_store: str = Field(default="lance-secrets", alias="MAINTENANCE_DAPR_SECRET_STORE")
+    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
+    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
+    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: still be moved on its own.
+    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="MAINTENANCE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
 
@@ -261,17 +266,3 @@ def shared_lance_session() -> lance.Session:
 def get_settings() -> MaintenanceSettings:
     """The process-wide compaction settings (read once from env)."""
     return MaintenanceSettings()
-
-
-def apply_dapr_secrets(settings: MaintenanceSettings) -> None:
-    """Consume the S3 secret from the Dapr secret store (OpenBao) and set it on ``settings`` in place. When
-    ``secrets_from_dapr`` is on the store is the STRICT sole source: a store miss FAILS CLOSED (raises),
-    never falling back to a plaintext env value — the chart ships none, and silently using one would
-    contradict 'OpenBao is the sole source'. No-op (and no Dapr import) when off. Symmetric with
-    lineage.config.apply_dapr_secrets / the catalog lifespan."""
-    if not settings.secrets_from_dapr:
-        return
-    from service_kit.governed.secrets import fetch_required_secrets
-
-    bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
-    settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])

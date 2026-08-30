@@ -23,8 +23,8 @@ oversight.
 from __future__ import annotations
 
 import pytest
-from annotator.annotations.commit import check_base_version_value
 
+from annotator.annotations.commit import check_base_version_value
 from service_kit.exceptions import ConflictError
 
 

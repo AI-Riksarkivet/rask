@@ -28,8 +28,8 @@ import pytest
 from dapr.ext.workflow.workflow_state import WorkflowStatus
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from medallion.api import mover_ops, stage_ops
 
+from medallion.api import mover_ops, stage_ops
 from service_kit.exceptions import register_handlers
 
 

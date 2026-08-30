@@ -13,9 +13,10 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from lance_namespace import InvalidInputError
+
 from catalog.core.identifiers import require_safe_segments
 from catalog.core.vending import build_session_policy
-from lance_namespace import InvalidInputError
 
 
 def test_policy_builder_refuses_a_wildcard_prefix_rather_than_widen_the_grant() -> None:

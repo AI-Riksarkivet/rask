@@ -13,10 +13,11 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from catalog.core.config import Settings, get_settings
-from catalog.services import dataplane
 from fastapi.testclient import TestClient
 from lance_namespace import CreateTableResponse
+
+from catalog.core.config import Settings, get_settings
+from catalog.services import dataplane
 
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"

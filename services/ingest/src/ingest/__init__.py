@@ -21,7 +21,7 @@ from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.lakehouse.ns_errors import PROBLEM_JSON, install_problem_handlers
+from service_kit.lakehouse.ns_errors import PROBLEM_JSON
 
 
 if TYPE_CHECKING:
@@ -72,13 +72,14 @@ def create_app() -> FastAPI:
     # fetches discovery, which must never happen merely because something built the app object.
     app.state.fga = None
     app.state.oidc = None
-    # A DENIAL MUST BE A 403, NOT A 500. `make_service_app` carries the fleet's own handlers, which do
-    # not know the `lance_namespace` typed errors the auth door raises — so without this an
-    # unauthorized ingest answered "Internal Server Error", which tells the caller nothing, tells
-    # monitoring the wrong thing, and would have had someone debugging a crash that was the gate
-    # working. The same handler every governed service installs; the estate's rule is that endpoints
-    # raise typed errors and ONE translator maps all 22 codes.
-    install_problem_handlers(app, logger)
+    # A DENIAL MUST BE A 403, NOT A 500 — and `make_service_app` now carries that itself. This used to
+    # call `install_problem_handlers(app, logger)` here, because the factory only knew the fleet's own
+    # handlers and not the `lance_namespace` typed errors the auth door raises, so an unauthorized
+    # ingest answered "Internal Server Error". The factory installs the Lance translator for EVERY app
+    # it builds (`service_kit/app.py::_install_ns_problem_handlers`, whose comment records that doing
+    # it there rather than here is also what settles open_python-audit X11 — ingest's 422 differing
+    # from its fleet siblings — by making all of them one shape). A second registration of the same
+    # three handlers is dead, so it is gone; only the HTTPException envelope below is ingest's own.
     _install_http_exception_handler(app)
     return app
 

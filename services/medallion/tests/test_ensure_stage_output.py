@@ -21,6 +21,7 @@ import httpx
 import pyarrow as pa
 import pytest
 import respx
+
 from medallion.services.catalog_register import RegisterError, ensure_stage_output
 
 

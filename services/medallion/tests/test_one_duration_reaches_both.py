@@ -24,14 +24,27 @@ monotonic clock". Measuring correctly and then emitting a different value is the
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 from medallion.services import transform
 
 
+_MODULE = Path(inspect.getfile(transform))
+
+#: The duration used to be derived and spent inside one 900-line `handle_stage`. MED-004 split that
+#: handler into seams, so the number now crosses a boundary: `_build_stage_event` DERIVES it and
+#: returns it beside the run event, `handle_stage` carries it, and `_report_success` SPENDS it on the
+#: metric. That boundary is exactly where the two could drift apart again, so these read the whole
+#: module rather than one function — a search scoped to the deriver would pass while the metric read
+#: a different number.
+_BUILD = inspect.getsource(transform._build_stage_event)
+_REPORT = inspect.getsource(transform._report_success)
+_HANDLER = inspect.getsource(transform.handle_stage)
+
+
 class TestTheDurationIsResolvedBeforeItIsEmitted:
     def test_the_run_event_does_not_take_the_wake_up_duration(self) -> None:
-        source = inspect.getsource(transform.handle_stage)
-        assert "duration_seconds=elapsed_seconds" not in source, (
+        assert "duration_seconds=elapsed_seconds" not in _MODULE.read_text(), (
             "the lineage facet is built from this handler's own wall time. On the Ray lane pass 2 is "
             "the measure-and-emit wake-up, so the graph records seconds for a stage that ran hours"
         )
@@ -39,38 +52,40 @@ class TestTheDurationIsResolvedBeforeItIsEmitted:
     def test_the_run_event_takes_the_resolved_stage_duration(self) -> None:
         """Scoped to the `build_run_event` call, not the whole function — the metric call carries the
         same keyword, so a whole-body search passes while the facet stays wrong."""
-        source = inspect.getsource(transform.handle_stage)
-        _, _, after = source.partition("run_event = build_run_event(")
-        call, _, _ = after.partition("\n        )")
+        _, _, after = _BUILD.partition("run_event = build_run_event(")
+        call, _, _ = after.partition("\n    )")
         assert "duration_seconds=stage_seconds" in call, f"the emitted duration is not the resolved one: {call[-400:]}"
 
     def test_the_resolution_happens_before_the_emit(self) -> None:
         """Ordering IS the fix: the value existed already and was computed after the event that
         needed it. A later re-derivation would leave the two able to drift apart again."""
-        source = inspect.getsource(transform.handle_stage)
-        assert source.index("stage_seconds =") < source.index("duration_seconds=stage_seconds")
+        assert _BUILD.index("stage_seconds =") < _BUILD.index("duration_seconds=stage_seconds")
 
 
 class TestTheRayWatchersSpanWins:
     def test_a_completed_ray_job_uses_the_watchers_measurement(self) -> None:
-        source = inspect.getsource(transform.handle_stage)
-        assert "trigger.ray_duration_seconds" in source
-        assert "trigger.ray_job_done" in source, (
+        assert "trigger.ray_duration_seconds" in _BUILD
+        assert "trigger.ray_job_done" in _BUILD, (
             "the preference must be gated on the job actually having completed — a duration carried on a dispatch trigger measures nothing"
         )
 
     def test_the_in_process_lane_still_uses_its_own_clock(self) -> None:
         """The non-Ray path has no watcher, so `elapsed_seconds` IS the stage's real span there. The
         fix must not replace a correct number with an absent one."""
-        source = inspect.getsource(transform.handle_stage)
-        assert "else elapsed_seconds" in source
+        assert "else elapsed_seconds" in _BUILD
 
 
 class TestOneNumberNotTwo:
     def test_the_metric_and_the_facet_read_the_same_variable(self) -> None:
         """Asserted structurally rather than by driving both paths, because the property is that
         there is ONE value — two expressions that agree today are what produced this defect."""
-        source = inspect.getsource(transform.handle_stage)
-        assert source.count("stage_seconds =") == 1, "the duration is derived in more than one place"
-        assert "duration_seconds=stage_seconds" in source
-        assert "duration_seconds=stage_seconds," in source or "duration_seconds=stage_seconds\n" in source
+        assert _MODULE.read_text().count("stage_seconds =") == 1, "the duration is derived in more than one place"
+        assert "duration_seconds=stage_seconds" in _BUILD
+
+    def test_the_metric_spends_the_number_the_facet_was_given(self) -> None:
+        """The seam MED-004 introduced: the deriver hands the number back and the handler carries it
+        to the metric. A `_report_success` that re-measured — or took a different argument — would
+        recreate the exact defect this file exists for, one function boundary further along."""
+        assert "duration_seconds=stage_seconds" in _REPORT, "the metric no longer spends the resolved duration"
+        assert "stage_seconds, run_event = _build_stage_event(" in _HANDLER, "the handler no longer takes the duration from the deriver"
+        assert "stage_seconds=stage_seconds" in _HANDLER, "the handler no longer hands the resolved duration to the metric"

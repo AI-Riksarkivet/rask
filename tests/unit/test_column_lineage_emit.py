@@ -21,16 +21,16 @@ import json
 from typing import Any, cast
 
 import lance
-import medallion.services.transform as mover
 import pyarrow as pa
 import pytest
 from dapr.aio.clients import DaprClient
+
+import medallion.services.transform as mover
 from lineage.models import Dataset
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import _column_map, measure_stage, seed_bronze, transform_stage
 from medallion.services.transform import handle_stage
-
 from service_kit.openlineage import column_lineage_facet
 
 

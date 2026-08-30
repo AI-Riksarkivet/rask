@@ -28,9 +28,14 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
 #: Every lifespan that builds an FGA client. All of them call one factory; only notifications closed it.
+#:
+#: The media trio (viewer, search, annotator) is ONE entry, not three: their three copied lifespans
+#: collapsed onto `service_kit.media.lifespan` (open_python-audit DUP-16), so that module is now the
+#: single place their `attach_auth` client is opened and disposed. Listing the three mains here after
+#: the collapse would assert the word "dispose" appears in three files that no longer build a client —
+#: which a passing prose mention would satisfy, and a real regression would not fail.
 LIFESPANS = [
-    "services/annotator/src/annotator/main.py",
-    "services/viewer/src/viewer/main.py",
+    "packages/service-kit/src/service_kit/media/lifespan.py",
     "services/flows/src/flows/lifespan.py",
     "services/maintenance/src/maintenance/service.py",
     "services/notifications/src/notifications/lifespan.py",
@@ -84,7 +89,7 @@ async def test_a_failing_close_does_not_stop_the_teardown() -> None:
     await dispose(app)  # must not raise
 
 
-@pytest.mark.parametrize("path", LIFESPANS, ids=[p.split("/")[1] for p in LIFESPANS])
+@pytest.mark.parametrize("path", LIFESPANS, ids=[p.rsplit("/", 2)[-2] for p in LIFESPANS])
 def test_every_lifespan_disposes_its_client(path: str) -> None:
     """Five lifespans, one factory, one disposer — not five copies of a block that four forgot."""
     source = (REPO / path).read_text()

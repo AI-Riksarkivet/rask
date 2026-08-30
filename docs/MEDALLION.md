@@ -175,11 +175,11 @@ provider SDK leaks into the pipeline:
 
 | Edge | Contract | Adapters (concrete) | Provenance |
 | ---- | -------- | ------------------- | ---------- |
-| **Ingest** (source → bronze) | `SourceAdapter.iter_objects() -> SourceObject{uri, data}` (`packages/service-kit/src/service_kit/lakehouse/sources.py`) | `LocalDirSource`, `S3Source` | each object's **source URI** is stamped as a `source_uri` column and emitted as the bronze `DERIVED_FROM` input |
-| **Egress** (gold → sink) | `SinkAdapter.put(key, data) -> uri` (`packages/service-kit/src/service_kit/lakehouse/sinks.py`) | `LocalDirSink`, `S3Sink` | the returned sink URI is the **terminal** lineage output |
+| **Ingest** (source → bronze) | `SourceAdapter.iter_objects() -> SourceObject{uri, data}` (`packages/service-kit/src/service_kit/lakehouse/sources.py`) | `LocalDirSource`, `S3FileSystemSource` | each object's **source URI** is stamped as a `source_uri` column and emitted as the bronze `DERIVED_FROM` input |
+| **Egress** (gold → sink) | `SinkAdapter.put(key, data) -> uri` (`packages/service-kit/src/service_kit/lakehouse/sinks.py`) | `LocalDirSink`, `S3FileSystemSink` | the returned sink URI is the **terminal** lineage output |
 
 Real providers (IIIF / GCS / HuggingFace / HCP / any S3) are **plugins outside the lakehouse** that
-implement the `SourceAdapter`/`SinkAdapter` Protocol — the `S3Source`/`S3Sink` take a configured
+implement the `SourceAdapter`/`SinkAdapter` Protocol — the `S3FileSystemSource`/`S3FileSystemSink` take a configured
 `pyarrow.fs.S3FileSystem`, so MinIO, RustFS, or AWS is just a different filesystem, not different code.
 
 `services/medallion/services/ingest.py::ingest_to_bronze(source, bronze_uri, so)` is the ingest head: it

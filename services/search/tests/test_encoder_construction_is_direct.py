@@ -17,9 +17,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+
 from search.services import clients
 from search.services.encoders import embedding, reranker
-
 from service_kit.exceptions import ServiceUnavailableError
 
 

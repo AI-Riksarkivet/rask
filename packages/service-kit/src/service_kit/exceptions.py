@@ -19,7 +19,11 @@ domain class names.
 Construct as ``ValidationError("stable detail msg")``; the message becomes ``exc.detail`` AND
 ``str(exc)`` (both the bare string — ``__str__`` is overridden so it is NOT Starlette's
 ``"400: msg"``). Keep the message STABLE; never interpolate a raw upstream exception into it
-(log that instead).
+(log that instead). A refusal whose substance does not fit one string carries it as RFC 9457 §3.2
+EXTENSION MEMBERS — ``raise Refused("2 problem(s)", extensions={"problems": [...]})`` — and a
+subclass that wants to NAME its failure sets ``problem_type``. Both exist so a domain never has to
+build a problem body beside this module: that is what one route doing it cost
+(``FLOWS-422-BYPASSES-HIERARCHY``).
 
 The lakehouse services (catalog, lineage, medallion, compaction) deliberately use a DIFFERENT
 taxonomy — the ``lance_namespace`` error hierarchy via
@@ -28,7 +32,9 @@ REST spec pins a numeric ``code`` in the error body. That is an external contrac
 """
 
 import logging
+from collections.abc import Mapping
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -45,7 +51,21 @@ class DomainError(HTTPException):
     status_code: int = HTTPStatus.INTERNAL_SERVER_ERROR
     title: str = "Internal Server Error"
 
-    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+    #: The RFC 9457 `type` URI. `None` means "derive it from the class name", which is what every
+    #: refusal in the estate answered before this attribute existed. A subclass sets it when the
+    #: DOMAIN has a better name for the failure than the generic status class does — a flow whose
+    #: graph does not validate is `about:blank#flow-invalid`, not `#unprocessableentityerror`, and a
+    #: client dispatching on `type` wants the specific one. Naming the failure is the taxonomy
+    #: working, not a departure from it.
+    problem_type: str | None = None
+
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        extensions: Mapping[str, Any] | None = None,
+    ) -> None:
         # Use the class-level status_code (subclasses override it) and the stable message;
         # default the detail to the title so an argument-less raise still yields a
         # meaningful, stable problem body.
@@ -57,7 +77,16 @@ class DomainError(HTTPException):
         # became a 500. Invisible until the refusal path runs, which for a saturation refusal is
         # precisely when nobody is watching. Keyword-only and optional, so every existing raise site
         # is unchanged.
+        #
+        # `extensions` are RFC 9457 §3.2 EXTENSION MEMBERS — additional keys on the problem body,
+        # which the spec explicitly allows and tells consumers to ignore when unrecognised. Without
+        # them a refusal whose substance is STRUCTURED had no way to use this hierarchy at all:
+        # `_problem` flattened everything to one `detail` string, so `flows.create_run` hand-built
+        # its own body and declared `-> RunState | JSONResponse`, an escape hatch around the estate's
+        # single error plane (FLOWS-422-BYPASSES-HIERARCHY). They can never shadow a standard member
+        # — see `_problem`.
         super().__init__(status_code=self.status_code, detail=detail or self.title, headers=headers)
+        self.extensions: dict[str, Any] = dict(extensions or {})
 
     def __str__(self) -> str:
         # Starlette's default __str__ is "<status>: <detail>"; we want the bare stable
@@ -100,13 +129,20 @@ class ServiceUnavailableError(DomainError):
     title = "Service Unavailable"
 
 
-def _problem(exc: DomainError) -> dict[str, str | int]:
-    return {
-        "type": f"about:blank#{exc.__class__.__name__.lower()}",
+def _problem(exc: DomainError) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "type": exc.problem_type or f"about:blank#{exc.__class__.__name__.lower()}",
         "title": exc.title,
         "status": exc.status_code,
         "detail": str(exc) or exc.title,
     }
+    # STANDARD MEMBERS FIRST, and extensions may not overwrite them. `type`, `title`, `status` and
+    # `detail` are the four keys every client in the estate parses; an extension that could replace
+    # one would let a refusal claim a status it does not have. RFC 9457 §3.2 permits the additional
+    # members, not a redefinition of the ones it standardises.
+    for key, value in exc.extensions.items():
+        body.setdefault(key, value)
+    return body
 
 
 def register_handlers(app: FastAPI) -> None:

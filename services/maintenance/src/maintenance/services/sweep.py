@@ -13,12 +13,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
+from pydantic import BaseModel
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
@@ -48,7 +51,22 @@ log = logging.getLogger(__name__)
 #: discovery listing order is deterministic, so a fixed head-slice would re-drop the SAME datasets every
 #: tick and their FAIL would never emit — shuffling gets every failing dataset through within a few ticks,
 #: converging on its deterministic run id (review 2026-07-10).
+#:
+#: THE CAP APPLIES TO THE FAIL LANE ONLY, and that asymmetry is now a decision rather than an accident
+#: (MAINT-04). A FAIL condition persists: a dataset that failed this tick fails the next one too, so a
+#: dropped FAIL emit is re-attempted in ~2 minutes and converges on its own deterministic run id. A
+#: COMPLETE emit has no second chance — the material work it reports happened ONCE, and next tick that
+#: dataset has nothing left to reclaim and produces no event at all. Capping it would not delay a
+#: maintenance run in the lineage graph, it would erase it. So the COMPLETE lane is bounded by
+#: CONCURRENCY (below) instead of by count: same protection against a fan-out of publishes, no loss.
 _MAX_FAIL_EMITS_PER_TICK = 25
+
+#: How many publishes may be in flight at once, in EITHER lane. The lanes used to disagree about this
+#: too: FAIL gathered its whole (capped) batch while COMPLETE was awaited one dataset at a time inside
+#: the discovery loop, so an estate where every dataset reclaimed something paid the emitter's 5s
+#: timeout serially, once per dataset. Bounded rather than unbounded because a whole-estate gather is a
+#: fan-out of HTTP publishes at one sidecar, which is the hazard the FAIL cap was reaching for.
+_MAX_CONCURRENT_EMITS = 25
 
 # Each compact+GC is blocking Lance/S3 work invisible to auto-instrumentation — a per-dataset INTERNAL
 # span lets a slow or failing compaction be localized in the trace instead of hiding in the cron handler.
@@ -62,12 +80,17 @@ def _s3fs(settings: MaintenanceSettings) -> pafs.S3FileSystem:
 
 def _policy_skip_reason(
     policy: dict[str, object],
+    *,
     settings: MaintenanceSettings,
     options: dict[str, str],
     now: datetime,
     uri: str,
 ) -> str | None:
     """Why the policy says to skip this dataset this tick, or ``None`` to maintain it.
+
+    Keyword-only past the policy it is deciding about: five positional parameters, two of them a
+    ``dict`` each and two of them describing the same dataset from different angles, is a call site
+    nobody can check by reading it (MAINT-16).
 
     ``compact_enabled=False`` opts the target out entirely; ``compact_interval_hours`` skips until the
     interval has elapsed since the sweep's own per-dataset ``last_maintained_at`` stamp (an unreadable,
@@ -100,32 +123,14 @@ def _policy_skip_reason(
     return None
 
 
-def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
-    """Discover every dataset in EVERY swept bucket and compact + GC each; record what was reclaimed.
+def _load_policies(settings: MaintenanceSettings, options: dict[str, str]) -> list[dict[str, Any]]:
+    """The #50 maintenance policies, loaded once per tick; a policy-less dataset keeps the global defaults.
 
-    #50/#84 policies: a per-table/namespace/project record from the catalog's ``_policies/`` registry can
-    disable a dataset's maintenance, re-pace it (cadence stamp per dataset), or override its old-version
-    retention (a table record beats a namespace record beats a project record); everything else keeps the
-    global defaults.
-
-    MULTI-BUCKET (audit 2026-07-14). This used to sweep exactly ONE bucket, so every #3-A per-warehouse
-    bucket and #3-B multi-base data bucket was invisible to GC — their tables accumulated superseded
-    manifest versions and small fragments FOREVER. A storage leak created by the very features that
-    introduce new buckets. A bucket that does not exist (or is unreadable) is skipped, not fatal: one
-    missing tenant bucket must not stop the sweep for everyone else.
+    A registry we cannot read at all ABORTS the tick (fail toward not deleting, audit 2026-07-16):
+    policies are the protective surface (retention extensions, opt-outs), so sweeping without them would
+    GC version history an owner explicitly kept. The next cron fire retries; one bad record inside a
+    readable registry is skipped-with-warning by ``list_policies``, not fatal.
     """
-    # BEFORE discovery, not after the loop like `record_run()`: a pass killed at dataset 400 of 900
-    # was observationally identical to a tick that never arrived. started minus
-    # completed is the lost-pass count.
-    record_run_started()
-    older_than = timedelta(days=settings.older_than_days)
-    options = settings.storage_options()
-    fs = _s3fs(settings)
-    # #50 maintenance policies — loaded once per tick; a policy-less dataset keeps the global defaults.
-    # A registry we cannot read at all ABORTS the tick (fail toward not deleting, audit 2026-07-16):
-    # policies are the protective surface (retention extensions, opt-outs), so sweeping without them
-    # would GC version history an owner explicitly kept. The next cron fire retries; one bad record
-    # inside a readable registry is skipped-with-warning by list_policies, not fatal.
     try:
         policy_records = maintenance_policies.list_policies(settings.resolved_policy_root, options)
     except Exception:
@@ -134,14 +139,22 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # The count distinguishes "no policies set" from "policies invisible" (e.g. the catalog's control
     # root moved without MAINTENANCE_POLICY_ROOT following — a wrong root lists cleanly as empty).
     log.info("compaction_policies_loaded", extra={"policies": len(policy_records)})
-    # #81 EVERY warehouse the registry knows, not just the configured list. `sweep_buckets` is the
-    # primary bucket plus a static env var — but a per-warehouse bucket is created by an API CALL at
-    # runtime, so every tenant provisioned since the last config edit was invisible to maintenance and
-    # its tables accumulated superseded versions and small fragments forever. A storage leak created
-    # by the very feature that introduces new buckets, and silent: the sweep reported success over the
-    # buckets it did know. An unreadable registry is NOT fatal here (unlike the policy registry, whose
-    # absence would mean sweeping without protective retention overrides) — it degrades to the
-    # configured list, which is exactly the old behaviour, and says so.
+    return policy_records
+
+
+def _buckets_to_sweep(settings: MaintenanceSettings, options: dict[str, str]) -> list[str]:
+    """#81 EVERY warehouse the registry knows, not just the configured list.
+
+    ``sweep_buckets`` is the primary bucket plus a static env var — but a per-warehouse bucket is created
+    by an API CALL at runtime, so every tenant provisioned since the last config edit was invisible to
+    maintenance and its tables accumulated superseded versions and small fragments forever. A storage
+    leak created by the very feature that introduces new buckets, and silent: the sweep reported success
+    over the buckets it did know.
+
+    An unreadable registry is NOT fatal here (unlike the policy registry, whose absence would mean
+    sweeping without protective retention overrides) — it degrades to the configured list, which is
+    exactly the old behaviour, and says so.
+    """
     buckets = list(settings.sweep_buckets)
     try:
         registry = warehouse_records.list_warehouse_records(settings.resolved_control_root, options)
@@ -150,12 +163,27 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         log.info("sweep_registry_buckets", extra={"configured": len(settings.sweep_buckets), "from_registry": len(discovered)})
     except Exception as exc:  # noqa: BLE001 — a missing registry must not stop maintaining what we know
         log.warning("sweep_registry_unreadable", extra={"error": str(exc)})
+    return buckets
+
+
+def _discover_all(fs: pafs.FileSystem, buckets: list[str]) -> list[str]:
+    """Every dataset URI across every swept bucket, reporting the prefixes the walk could not reach.
+
+    A bucket that does not exist (or is unreadable) is skipped, not fatal: one missing tenant bucket
+    must not stop the sweep for everyone else.
+
+    The truncation set is accumulated AND CONSUMED, which it was not: it was collected here and read by
+    nothing, so ``Discovery``'s own docstring — "the sweep counts it, the reconciler files an
+    IncompleteScan" — was true of the reconciler and false of the sweep. A tick that never walked a
+    prefix was indistinguishable from one that walked everything, which is exactly the "0 that means we
+    did not look" this module's docstrings forbid elsewhere.
+    """
     uris: list[str] = []
     truncated: list[str] = []
     for bucket in buckets:
         try:
             found = discover_datasets(fs, bucket)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — one unreadable bucket must not stop the whole sweep
             log.warning("compaction_bucket_skipped", extra={"bucket": bucket, "error": str(exc)})
             continue
         log.info(
@@ -163,48 +191,45 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             extra={"bucket": bucket, "datasets": len(found.uris), "truncated": len(found.truncated)},
         )
         uris.extend(found.uris)
-        # A prefix the walk could not reach is UNMAINTAINED, and saying so is the whole point: a
-        # silent depth bound made "we maintained everything" and "we maintained what we could see"
-        # the same summary line.
         truncated.extend(found.truncated)
-    # …and CONSUMED, which it was not. `truncated` was accumulated here and read by nothing (AST: the
-    # only load site was the `.extend` above), so `Discovery`'s own docstring — "the sweep counts it,
-    # the reconciler files an IncompleteScan" — was true of the reconciler and false of the sweep. A
-    # tick that never walked a prefix was indistinguishable from one that walked everything, which is
-    # exactly the "0 that means we did not look" this module's docstrings forbid elsewhere.
     if truncated:
         log.warning(
             "maintenance_discovery_truncated",
             extra={"prefixes": len(truncated), "examples": sorted(truncated)[:5], "max_depth": 3},
         )
-    # #75 trash expiry — REPORT ONLY **in the sweep**, permanently. #79's purge lives on the RECONCILE
-    # tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
-    # by first proving the report runs clean, and the sweep does not produce that report. So the sweep
-    # keeps naming which recoverable drops are past their deadline and keeps deleting NOTHING.
-    # ONE read of the trash index per tick, TWO consumers (F6(d)). The CONTROL root, not the policy
-    # root: the catalog writes `_trash/` under its registry root (LANCE_CONTROL_ROOT). These default to
-    # the same bucket, so a mismatch is invisible.
-    #
-    # THE POSTURE CHANGED HERE, deliberately. This block used to be except-wrapped with "the trash
-    # report must never abort a maintenance tick" — correct while the only consumer was a log line. It
-    # is not correct now that the same read decides WHICH DATASETS THIS TICK MAY REWRITE. An unreadable
-    # trash index would silently restore the exact defect this exclusion exists to close: the sweep
-    # compacting and version-cleaning datasets an owner was told are frozen and recoverable.
-    #
-    # So it follows the policy registry's rule verbatim (`compaction_policies_unreadable_tick_aborted`,
-    # ~40 lines above, audit 2026-07-16): a PROTECTIVE registry we cannot read at all ABORTS the tick,
-    # failing toward not-rewriting. The trash index is exactly that — an owner's explicit "keep this"
-    # — and the alternative fails toward destroying it. The next cron fire retries; one unparseable
-    # record inside a readable index is already skipped-with-warning by `trash.list_all`, not fatal.
+    return uris
+
+
+def _trash_exclusions(settings: MaintenanceSettings, options: dict[str, str]) -> dict[str, str]:
+    """``{normalised path: why}`` for every dataset in the trash — the datasets this tick may NOT rewrite.
+
+    #75 trash expiry is REPORT ONLY **in the sweep**, permanently. #79's purge lives on the RECONCILE
+    tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
+    by first proving the report runs clean, and the sweep does not produce that report. So the sweep
+    keeps naming which recoverable drops are past their deadline and keeps deleting NOTHING.
+
+    ONE read of the trash index per tick, TWO consumers (F6(d)). The CONTROL root, not the policy root:
+    the catalog writes ``_trash/`` under its registry root (``LANCE_CONTROL_ROOT``). These default to the
+    same bucket, so a mismatch is invisible.
+
+    THE POSTURE HERE IS DELIBERATE. This read used to be except-wrapped with "the trash report must never
+    abort a maintenance tick" — correct while the only consumer was a log line. It is not correct now
+    that the same read decides WHICH DATASETS THIS TICK MAY REWRITE. An unreadable trash index would
+    silently restore the exact defect this exclusion exists to close: the sweep compacting and
+    version-cleaning datasets an owner was told are frozen and recoverable. So it follows the policy
+    registry's rule verbatim: a PROTECTIVE registry we cannot read at all ABORTS the tick, failing toward
+    not-rewriting. The next cron fire retries; one unparseable record inside a readable index is already
+    skipped-with-warning by ``trash.list_all``, not fatal.
+
+    EVERY record, not just the expired ones. An expired-but-unpurged record is still frozen data:
+    ``undrop`` deliberately does not consult the clock, so a passed deadline is not permission to
+    rewrite — it only means the purge is entitled to reclaim it, and until it has, the bytes stand.
+    """
     try:
         trash_records = trash.list_all(settings.resolved_control_root, options)
     except Exception:
         log.error("compaction_trash_index_unreadable_tick_aborted")
         raise
-    # EVERY record, not just the expired ones. An expired-but-unpurged record is still frozen data:
-    # `undrop` deliberately does not consult the clock, so a passed deadline is not permission to
-    # rewrite — it only means the purge is entitled to reclaim it, and until it has, the bytes stand.
-    #
     # Guarded against the empty location: a trashed NAMESPACE record and a declared-only table both
     # carry `location=""`, and `normalise("")` is `""`, which is a prefix of everything.
     trashed_by_path: dict[str, str] = {}
@@ -213,27 +238,32 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         if not location:
             continue
         trashed_by_path[base_refs.normalise(location)] = f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
-    # Selection goes through `purge.due_records` so ONE rule decides what "expired" means: the set this
+    # Selection goes through `purge.due_from` so ONE rule decides what "expired" means: the set this
     # logs and the set the purge deletes cannot be two different answers. Fed from the records already
     # in hand — a second `list_all` here would double the index read for nothing.
-    due = purge.due_from(trash_records)
-    if due:
+    if due := purge.due_from(trash_records):
         log.info(
             "trash_expiry_due_report_only",
             extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]},
         )
-    # #128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before a single one is
-    # compacted. It has to be whole-estate and it has to be first: a shallow clone in bucket B is the
-    # only thing that knows bucket A's dataset must not be touched, so a per-bucket or per-dataset
-    # check cannot see it. The SOURCE carries no feature flag and no `base_paths` of its own
-    # (measured), which is why the flag gate inside `compact_one` misses this entirely.
-    #
-    # Cost is one manifest read per dataset and no data file is opened — the same order as discovery
-    # itself, paid once per tick.
-    # The SERVICE's session, not one minted per call: `MAINTENANCE_LANCE_METADATA_CACHE_MB` /
-    # `_INDEX_CACHE_MB` are the operator's cap, and this pre-pass is the one loop that opens EVERY
-    # dataset in the estate. Omitting it let base_refs mint its own default-sized session, so a
-    # tuned-down cap silently did not apply here and a second session competed with the tick's.
+    return trashed_by_path
+
+
+def _protected_roots(uris: list[str], options: dict[str, str]) -> base_refs.BaseRefs:
+    """#128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before one is compacted.
+
+    It has to be whole-estate and it has to be first: a shallow clone in bucket B is the only thing that
+    knows bucket A's dataset must not be touched, so a per-bucket or per-dataset check cannot see it. The
+    SOURCE carries no feature flag and no ``base_paths`` of its own (measured), which is why the flag
+    gate inside ``compact_one`` misses this entirely.
+
+    Cost is one manifest read per dataset and no data file is opened — the same order as discovery
+    itself, paid once per tick. The SERVICE's session, not one minted per call:
+    ``MAINTENANCE_LANCE_METADATA_CACHE_MB`` / ``_INDEX_CACHE_MB`` are the operator's cap, and this
+    pre-pass is the one loop that opens EVERY dataset in the estate. Omitting it let base_refs mint its
+    own default-sized session, so a tuned-down cap silently did not apply here and a second session
+    competed with the tick's.
+    """
     protected = base_refs.protected_roots(uris, options, session=shared_lance_session())
     if protected.protected:
         log.info("maintenance_protected_bases", extra={"count": len(protected.protected), "roots": sorted(protected.protected)[:20]})
@@ -246,39 +276,266 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             "maintenance_base_refs_incomplete",
             extra={"count": len(protected.unreadable), "datasets": [uri for uri, _ in protected.unreadable][:20]},
         )
-    results: list[DatasetResult] = []
-    now = datetime.now(UTC)
-    # F6(d) THE TRASH EXCLUSION, and its POSITION is the load-bearing part.
-    #
-    # A recoverable drop deregisters the table's `__manifest` row and files a trash record. It moves no
-    # byte: the dataset directory keeps its `_versions/` child, which is the ONLY thing
-    # `discover_datasets` consults to decide "this is a Lance dataset". So a dropped table was
-    # rediscovered on the very next tick, indistinguishable from a live one, and compacted +
-    # index-remapped + `cleanup_old_versions`'d every 30 minutes for its whole grace window — silently
-    # rewriting the history the window promises, and counting it as a successful maintenance pass.
-    #
-    # AFTER `base_refs.protected_roots` (above) and BEFORE the loop, never inside `discover_datasets`:
-    #
-    #  * The pre-pass must keep the FULL discovered list. A trashed shallow CLONE's manifest base_paths
-    #    are the only evidence protecting its LIVE source from compaction (#114/#128d). Filtering
-    #    before the pre-pass would re-open that data-loss defect from the trash side.
-    #  * `discover_datasets` has three other callers — the orphan scan (`reconcile.py`), the purge's
-    #    `_estate_base_refs`, and this sweep. Excluding there would be a silent coverage reduction in
-    #    the first and would remove the same protection evidence from the second.
+    return protected
+
+
+def _exclude_trashed(uris: list[str], trashed_by_path: dict[str, str]) -> tuple[list[str], list[DatasetResult]]:
+    """Split the discovered URIs into the ones this tick may rewrite and a result per excluded dataset.
+
+    F6(d) THE TRASH EXCLUSION, and its POSITION is the load-bearing part.
+
+    A recoverable drop deregisters the table's ``__manifest`` row and files a trash record. It moves no
+    byte: the dataset directory keeps its ``_versions/`` child, which is the ONLY thing
+    ``discover_datasets`` consults to decide "this is a Lance dataset". So a dropped table was
+    rediscovered on the very next tick, indistinguishable from a live one, and compacted +
+    index-remapped + ``cleanup_old_versions``'d every 30 minutes for its whole grace window — silently
+    rewriting the history the window promises, and counting it as a successful maintenance pass.
+
+    AFTER :func:`_protected_roots` and BEFORE the maintenance loop, never inside ``discover_datasets``:
+
+     * The pre-pass must keep the FULL discovered list. A trashed shallow CLONE's manifest base_paths
+       are the only evidence protecting its LIVE source from compaction (#114/#128d). Filtering before
+       the pre-pass would re-open that data-loss defect from the trash side.
+     * ``discover_datasets`` has three other callers — the orphan scan (``reconcile.py``), the purge's
+       ``_estate_base_refs``, and this sweep. Excluding there would be a silent coverage reduction in
+       the first and would remove the same protection evidence from the second.
+
+    COUNTED, never silently dropped — a tick that maintains 40 of 42 datasets has to say what happened
+    to the other two, and at cron frequency with nobody watching, a bare count is not actionable. Each
+    result carries the record id and its deadline, so an exclusion that has outlived its deadline (a
+    record the purge keeps refusing) reads as permanent rather than transient.
+    """
     skipped_trashed = [(uri, trashed_by_path[base_refs.normalise(uri)]) for uri in uris if base_refs.normalise(uri) in trashed_by_path]
-    if skipped_trashed:
-        uris = [uri for uri in uris if base_refs.normalise(uri) not in trashed_by_path]
-        # COUNTED, never silently dropped — a tick that maintains 40 of 42 datasets has to say what
-        # happened to the other two, and at cron frequency with nobody watching, a bare count is not
-        # actionable. Each result carries the record id and its deadline, so an exclusion that has
-        # outlived its deadline (a record the purge keeps refusing) reads as permanent rather than
-        # transient.
-        results.extend(DatasetResult(uri=uri, trashed=reason) for uri, reason in skipped_trashed)
-        log.info(
-            "maintenance_trashed_excluded",
-            extra={"count": len(skipped_trashed), "datasets": [uri for uri, _ in skipped_trashed][:20]},
-        )
     record_trashed_skipped(len(skipped_trashed))
+    if not skipped_trashed:
+        return uris, []
+    log.info(
+        "maintenance_trashed_excluded",
+        extra={"count": len(skipped_trashed), "datasets": [uri for uri, _ in skipped_trashed][:20]},
+    )
+    return (
+        [uri for uri in uris if base_refs.normalise(uri) not in trashed_by_path],
+        [DatasetResult(uri=uri, trashed=reason) for uri, reason in skipped_trashed],
+    )
+
+
+class DatasetPlan(BaseModel):
+    """What the resolved #50/#84 policy says to do with ONE dataset this tick.
+
+    Extracted from ``run_sweep``'s body (MAINT-09), where thirty lines of per-dataset resolution sat
+    between the tracing span and the call it configures. ``skipped`` set means the dataset is not
+    maintained at all this tick and every other field is irrelevant.
+    """
+
+    #: ``policy_disabled`` / ``policy_interval``, or ``None`` to maintain.
+    skipped: str | None = None
+    #: The matched policy record, or ``None`` when no record applies (or one could not be read).
+    policy: dict[str, Any] | None = None
+    older_than: timedelta | None = None
+    retain_versions: int | None = None
+    target_rows_per_fragment: int | None = None
+    scan_batch_size: int = 0
+    auto_cleanup_interval_commits: int | None = None
+    index_columns: list[str] | None = None
+    cleanup_enabled: bool = True
+    optimize_indices_enabled: bool = True
+
+
+def _resolve_plan(
+    uri: str,
+    *,
+    policy_records: list[dict[str, Any]],
+    settings: MaintenanceSettings,
+    options: dict[str, str],
+    now: datetime,
+    older_than: timedelta,
+) -> DatasetPlan:
+    """Resolve this dataset's tier default, then its #50/#84 policy record, into one plan.
+
+    #61 per-TIER default, before any policy is read. One row count cannot serve a ~1.8 MB bronze
+    page-image row and a ~2 KB gold row: the same number is a ~1.8 GB fragment in one and a few MB in
+    the other. A #50 policy record still overrides it, so retuning a tier stays a config change. ``None``
+    for a URI whose tier cannot be read — deferring to Lance beats inventing a number that is then
+    applied silently forever.
+
+    ``scan_batch_size`` starts at the SETTINGS default (#93) rather than ``None``, so an estate with no
+    policy anywhere is still bounded; a policy that names the field overrides it.
+
+    #60 ``index_columns`` — the columns this target's queries depend on being indexed. Reporting only,
+    and unreachable until a policy could name them: ``compact_one`` has accepted this argument all along
+    and no caller ever supplied one, so the dropped-index check was dead code.
+
+    A policy that cannot be resolved or parsed falls back to the GLOBAL defaults, including the settings
+    batch size — not ``None``: a malformed policy must not be the one path that hands compaction Lance's
+    unbounded 8192-row read (#93). "We could not read the tuning" is the worst moment to become unbounded.
+    """
+    plan = DatasetPlan(older_than=older_than, target_rows_per_fragment=target_rows_for(uri), scan_batch_size=settings.scan_batch_size)
+    # ONE guard over the whole resolution, exactly as the inlined version had it: resolving the record,
+    # asking the cadence and parsing the fields are all "reading the tuning", and any of them failing
+    # means this dataset is maintained on the GLOBAL defaults rather than not maintained at all.
+    try:
+        policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
+        if policy is None:
+            return plan
+        if skipped := _policy_skip_reason(policy, settings=settings, options=options, now=now, uri=uri):
+            return DatasetPlan(skipped=skipped, policy=policy)
+        plan.policy = policy
+        if policy.get("retain_versions"):
+            plan.retain_versions = int(str(policy["retain_versions"]))
+        if policy.get("retention_days"):
+            plan.older_than = timedelta(days=int(str(policy["retention_days"])))
+        elif plan.retain_versions is not None:
+            # "retain_versions: N" alone means exactly keep-last-N — an age bound on top would silently
+            # keep everything younger than the global default and make the policy a no-op on fresh
+            # datasets. Tag-pinned versions stay exempt either way.
+            plan.older_than = None
+        if policy.get("target_rows_per_fragment"):
+            plan.target_rows_per_fragment = int(str(policy["target_rows_per_fragment"]))
+        if policy.get("scan_batch_size"):
+            plan.scan_batch_size = int(str(policy["scan_batch_size"]))
+        if policy.get("auto_cleanup_interval_commits"):
+            plan.auto_cleanup_interval_commits = int(str(policy["auto_cleanup_interval_commits"]))
+        if policy.get("index_columns"):
+            declared = policy["index_columns"]
+            plan.index_columns = [str(c) for c in declared] if isinstance(declared, list) else None
+        # Per-STEP opt-outs from the resolved policy. Winner-takes-all, like every other field: the
+        # record that matched supplies these, and a record that leaves them unset gets the default (on)
+        # rather than inheriting from the record it shadowed.
+        plan.cleanup_enabled = bool(policy.get("cleanup_enabled", True))
+        plan.optimize_indices_enabled = bool(policy.get("optimize_indices_enabled", True))
+    except Exception as exc:  # noqa: BLE001 — unreadable tuning maintains on the defaults, never unbounded
+        log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
+        # Back to the SETTINGS batch size, not None: a malformed policy must not be the one path that
+        # hands compaction Lance's unbounded 8192-row read (#93).
+        return DatasetPlan(older_than=older_than, scan_batch_size=settings.scan_batch_size)
+    return plan
+
+
+def _stamp_cadence(uri: str, plan: DatasetPlan, result: DatasetResult, *, settings: MaintenanceSettings, options: dict[str, str], now: datetime) -> None:
+    """Record this dataset's ``last_maintained_at`` — only after a pass that could actually DO something.
+
+    ``refused is None`` is load-bearing and was missing. A refusal carries ``error=None`` by construction
+    (``optimize.py`` returns ``DatasetResult(uri=…, refused=…)`` with no error), so a dataset the sweep
+    can never maintain was stamped as freshly maintained — and for the whole ``compact_interval_hours``
+    window it then reported as a transient ``policy_interval`` skip rather than a standing refusal. A
+    permanent condition wearing a temporary label, on the one surface an operator would use to notice it.
+
+    Deliberately NOT extended to policy skips: those are the cadence working as intended.
+    """
+    policy = plan.policy
+    # `plan.skipped` FIRST: a `policy_interval` skip carries the very record whose cadence produced it,
+    # and re-stamping there would push the next maintenance out by another full interval on every tick —
+    # a dataset frozen forever by the mechanism that exists to pace it. In the inlined version this was
+    # implicit (the skip `continue`d past the stamp); extracted, it has to be said.
+    if plan.skipped is not None or policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None:
+        return
+    try:
+        maintenance_policies.write_state(settings.resolved_policy_root, options, policy, uri, now.isoformat())
+    except Exception as exc:  # noqa: BLE001 — a lost stamp re-paces one dataset; it must not fail the tick
+        log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
+
+
+def _maintain_one(
+    uri: str,
+    plan: DatasetPlan,
+    *,
+    settings: MaintenanceSettings,
+    options: dict[str, str],
+    protected: base_refs.BaseRefs,
+) -> DatasetResult:
+    """One dataset's compact + index-optimize + GC pass, inside its own span.
+
+    Each compact+GC is blocking Lance/S3 work invisible to auto-instrumentation — a per-dataset INTERNAL
+    span lets a slow or failing compaction be localized in the trace instead of hiding in the cron
+    handler. ``compact_one`` never raises (it captures the per-dataset error), so a failure and a refusal
+    are both reflected on the span explicitly; otherwise a failed dataset looks identical to a clean one
+    in the trace, and a refusal (#64) would be invisible there entirely.
+    """
+    with tracer.start_as_current_span("compaction.compact") as span:
+        span.set_attribute("lance.maintenance.dataset_uri", uri)
+        if plan.skipped:
+            span.set_attribute("lance.maintenance.policy_skipped", plan.skipped)
+            return DatasetResult(uri=uri, skipped=plan.skipped)
+        result = compact_one(
+            uri,
+            options,
+            plan.older_than,
+            retain_versions=plan.retain_versions,
+            target_rows_per_fragment=plan.target_rows_per_fragment,
+            cleanup_enabled=plan.cleanup_enabled,
+            optimize_indices_enabled=plan.optimize_indices_enabled,
+            scan_batch_size=plan.scan_batch_size,
+            compact_threads=settings.compact_threads,
+            protected=protected,
+            auto_cleanup_interval_commits=plan.auto_cleanup_interval_commits,
+            index_columns=plan.index_columns,
+        )
+        if result.refused is not None:
+            span.set_attribute("lance.maintenance.refused", result.refused)
+        if result.error is not None:
+            span.set_status(StatusCode.ERROR, result.error)
+            if result.error_type:  # error.type: stable class name so error spans aggregate
+                span.set_attribute("error.type", result.error_type)
+        return result
+
+
+def _record_sweep_metrics(results: list[DatasetResult]) -> None:
+    """The tick's counters. Every one is recorded including 0 — the ``record_reclaimed`` rule.
+
+    On ``record_refused`` the zero carries the most weight of any counter in this service: ``SUPPORTED``
+    is a whitelist, so a rising refusal count after a pylance upgrade is the ONLY signal that maintenance
+    quietly stopped covering the estate.
+
+    The FAILURE series (T5) is keyed by the STABLE error class, never the message, which carries URIs and
+    would make the series unbounded. Without it a dataset failing on every tick forever was
+    indistinguishable from a healthy estate on every surface that can raise an alarm — the error reached
+    OTel as a span status and one aggregate log line, and vmalert evaluates PromQL, so neither can page.
+    """
+    record_run()
+    record_reclaimed(
+        fragments_removed=sum(r.fragments_removed for r in results),
+        versions_removed=sum(r.old_versions_removed for r in results),
+        indices_optimized=sum(r.indices_optimized for r in results),
+    )
+    record_refused(sum(1 for r in results if r.refused))
+    failures: dict[str, int] = {}
+    for result in results:
+        if result.error is not None:
+            failures[result.error_type or "Unknown"] = failures.get(result.error_type or "Unknown", 0) + 1
+    record_failed(failures)
+
+
+def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
+    """Discover every dataset in EVERY swept bucket and compact + GC each; record what was reclaimed.
+
+    The tick's PHASES, each its own function above and each ordered for a reason the extracted helper
+    states: read the protective registries (:func:`_load_policies`, :func:`_trash_exclusions` — either
+    one unreadable ABORTS the tick), enumerate the buckets (:func:`_buckets_to_sweep`), discover
+    (:func:`_discover_all`), take the whole-estate base-reference pre-pass (:func:`_protected_roots`),
+    remove what the trash freezes (:func:`_exclude_trashed`), then maintain what is left.
+
+    #50/#84 policies: a per-table/namespace/project record from the catalog's ``_policies/`` registry can
+    disable a dataset's maintenance, re-pace it (cadence stamp per dataset), or override its old-version
+    retention (a table record beats a namespace record beats a project record); everything else keeps the
+    global defaults.
+
+    MULTI-BUCKET (audit 2026-07-14). This used to sweep exactly ONE bucket, so every #3-A per-warehouse
+    bucket and #3-B multi-base data bucket was invisible to GC — their tables accumulated superseded
+    manifest versions and small fragments FOREVER. A storage leak created by the very features that
+    introduce new buckets.
+    """
+    # BEFORE discovery, not after the loop like `record_run()`: a pass killed at dataset 400 of 900
+    # was observationally identical to a tick that never arrived. started minus
+    # completed is the lost-pass count.
+    record_run_started()
+    options = settings.storage_options()
+    older_than = timedelta(days=settings.older_than_days)
+    policy_records = _load_policies(settings, options)
+    trashed_by_path = _trash_exclusions(settings, options)
+    uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options))
+    protected = _protected_roots(uris, options)
+    uris, results = _exclude_trashed(uris, trashed_by_path)
+    now = datetime.now(UTC)
     # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
     # discovery listing order is deterministic across ticks, so a pass that consistently dies at
     # dataset N never maintained anything after N — silently, forever. Shuffling
@@ -287,125 +544,11 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     random.shuffle(uris)
     for uri in uris:
         record_dataset_swept()
-        with tracer.start_as_current_span("compaction.compact") as span:
-            span.set_attribute("lance.maintenance.dataset_uri", uri)
-            effective_older_than: timedelta | None = older_than
-            retain_versions: int | None = None
-            # #61 per-TIER default, before any policy is read. One row count cannot serve a ~1.8 MB
-            # bronze page-image row and a ~2 KB gold row: the same number is a ~1.8 GB fragment in one
-            # and a few MB in the other. A #50 policy record still overrides it below, so retuning a
-            # tier stays a config change. `None` for a URI whose tier cannot be read — deferring to
-            # Lance beats inventing a number that is then applied silently forever.
-            target_rows: int | None = target_rows_for(uri)
-            # The sweep's READ batch — rows are not a unit of memory. Starts at the SETTINGS default
-            # (#93) rather than None, so an estate with no policy anywhere is still bounded; a policy
-            # that names the field overrides it below, which is the point of per-tier tuning.
-            batch_size: int = settings.scan_batch_size
-            auto_cleanup_interval: int | None = None  # #58 — set means the DATASET owns version cleanup
-            # #60 — the columns this target's queries depend on being indexed. Reporting only, and
-            # unreachable until a policy could name them: `compact_one` has accepted this argument all
-            # along and no caller ever supplied one, so the dropped-index check was dead code.
-            index_columns: list[str] | None = None
-            policy: dict[str, Any] | None
-            try:
-                policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
-                skipped = _policy_skip_reason(policy, settings, options, now, uri) if policy else None
-                if skipped:
-                    span.set_attribute("lance.maintenance.policy_skipped", skipped)
-                    results.append(DatasetResult(uri=uri, skipped=skipped))
-                    continue
-                if policy is not None:
-                    if policy.get("retain_versions"):
-                        retain_versions = int(str(policy["retain_versions"]))
-                    if policy.get("retention_days"):
-                        effective_older_than = timedelta(days=int(str(policy["retention_days"])))
-                    elif retain_versions is not None:
-                        # "retain_versions: N" alone means exactly keep-last-N — an age bound on top would
-                        # silently keep everything younger than the global default and make the policy a
-                        # no-op on fresh datasets. Tag-pinned versions stay exempt either way.
-                        effective_older_than = None
-                    if policy.get("target_rows_per_fragment"):
-                        target_rows = int(str(policy["target_rows_per_fragment"]))
-                    if policy.get("scan_batch_size"):
-                        batch_size = int(str(policy["scan_batch_size"]))
-                    if policy.get("auto_cleanup_interval_commits"):
-                        auto_cleanup_interval = int(str(policy["auto_cleanup_interval_commits"]))
-                    if policy.get("index_columns"):
-                        declared = policy["index_columns"]
-                        index_columns = [str(c) for c in declared] if isinstance(declared, list) else None
-            except Exception as exc:
-                log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
-                effective_older_than, retain_versions, target_rows, policy = older_than, None, None, None
-                # Back to the SETTINGS default, not None: a malformed policy must not be the one path
-                # that hands compaction Lance's unbounded 8192-row read (#93). "We could not read the
-                # tuning" is the worst moment to become unbounded.
-                batch_size, auto_cleanup_interval = settings.scan_batch_size, None
-            result = compact_one(
-                uri,
-                options,
-                effective_older_than,
-                retain_versions=retain_versions,
-                target_rows_per_fragment=target_rows,
-                # Per-STEP opt-outs from the resolved policy. Winner-takes-all, like every other
-                # field: the record that matched supplies these, and a record that leaves them unset
-                # gets the default (on) rather than inheriting from the record it shadowed.
-                cleanup_enabled=bool((policy or {}).get("cleanup_enabled", True)),
-                optimize_indices_enabled=bool((policy or {}).get("optimize_indices_enabled", True)),
-                scan_batch_size=batch_size,
-                compact_threads=settings.compact_threads,
-                protected=protected,
-                auto_cleanup_interval_commits=auto_cleanup_interval,
-                index_columns=index_columns,
-            )
-            if policy is not None and policy.get("compact_interval_hours") and result.error is None and result.refused is None:
-                # Stamp cadence state only after a pass that could actually DO something, so a failed
-                # tick retries next tick.
-                #
-                # `refused is None` is load-bearing and was missing. A refusal carries `error=None` by
-                # construction (optimize.py returns `DatasetResult(uri=…, refused=…)` with no error),
-                # so a dataset the sweep can never maintain was stamped as freshly maintained — and for
-                # the whole `compact_interval_hours` window it then reported as a transient
-                # `policy_interval` skip rather than a standing refusal. A permanent condition wearing
-                # a temporary label, on the one surface an operator would use to notice it.
-                #
-                # Deliberately NOT extended to policy skips: those are the cadence working as intended.
-                try:
-                    maintenance_policies.write_state(settings.resolved_policy_root, options, policy, uri, now.isoformat())
-                except Exception as exc:
-                    log.warning(
-                        "compaction_policy_stamp_failed",
-                        extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)},
-                    )
-            results.append(result)
-            # #64 — a refusal is not an error, so it would otherwise be invisible in the trace too.
-            if result.refused is not None:
-                span.set_attribute("lance.maintenance.refused", result.refused)
-            # compact_one never raises (it captures the per-dataset error), so reflect a failure on the
-            # span explicitly — else a failed dataset looks identical to a clean one in the trace.
-            if result.error is not None:
-                span.set_status(StatusCode.ERROR, result.error)
-                if result.error_type:  # error.type: stable class name so error spans aggregate
-                    span.set_attribute("error.type", result.error_type)
-    record_run()
-    record_reclaimed(
-        fragments_removed=sum(r.fragments_removed for r in results),
-        versions_removed=sum(r.old_versions_removed for r in results),
-        indices_optimized=sum(r.indices_optimized for r in results),
-    )
-    # Always recorded, including 0 — the `record_reclaimed` rule. Here the zero carries the most
-    # weight of any counter in this service: `SUPPORTED` is a whitelist, so a rising refusal count
-    # after a pylance upgrade is the ONLY signal that maintenance quietly stopped covering the estate.
-    record_refused(sum(1 for r in results if r.refused))
-    # The FAILURE series (T5). Everything above counts what the pass achieved; without this a dataset
-    # failing on every tick forever was indistinguishable from a healthy estate on every surface that
-    # can raise an alarm — the error reached OTel as a span status and one aggregate log line, and
-    # vmalert evaluates PromQL, so neither can page. Keyed by the STABLE error class, never the
-    # message, which carries URIs and would make the series unbounded.
-    failures: dict[str, int] = {}
-    for result in results:
-        if result.error is not None:
-            failures[result.error_type or "Unknown"] = failures.get(result.error_type or "Unknown", 0) + 1
-    record_failed(failures)
+        plan = _resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than)
+        result = _maintain_one(uri, plan, settings=settings, options=options, protected=protected)
+        _stamp_cadence(uri, plan, result, settings=settings, options=options, now=now)
+        results.append(result)
+    _record_sweep_metrics(results)
     return results
 
 
@@ -416,6 +559,52 @@ def _did_material_work(result: DatasetResult) -> bool:
     dataset on each tick would otherwise flood the lineage graph with no-op compaction runs.
     """
     return bool(result.fragments_removed or result.old_versions_removed)
+
+
+async def _emit_complete(emitter: MaintenanceEmitter, *, table_id: str, namespace: str) -> None:
+    """The COMPLETE publish, as a coroutine function so the attribute lookup happens INSIDE the guard.
+
+    Not `partial(emitter.emit_maintenance, …)`: that resolves the method eagerly, at the point the job
+    list is built, which is outside :func:`_publish_all`'s try — so an emitter that predates one half of
+    the protocol raised an `AttributeError` straight into the cron handler, which is the exact failure
+    the guardrail exists to make impossible.
+    """
+    await emitter.emit_maintenance(table_id=table_id, namespace=namespace)
+
+
+async def _emit_failed(emitter: MaintenanceEmitter, *, table_id: str, namespace: str, error: str) -> None:
+    """The FAIL publish — same late-binding rule as :func:`_emit_complete`."""
+    await emitter.emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error)
+
+
+async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[None]]]]) -> None:
+    """Run every publish in ``jobs`` concurrently, at most ``_MAX_CONCURRENT_EMITS`` in flight.
+
+    ONE helper for both lanes, because the guarantee has to be the same for both and it was not: the
+    FAIL lane was raise-proof "by construction, not by convention" while the COMPLETE lane awaited each
+    publish bare inside the discovery loop, so one mis-wired publish (an ``AttributeError`` building the
+    coro, a raise inside it) aborted the emit phase — taking every COMPLETE emit queued behind it AND
+    the entire FAIL batch with it, and answering the cron tick 500. Each job is ``(table_id, factory)``;
+    the factory is called inside the limiter so nothing is constructed until it may run.
+    """
+    if not jobs:
+        return
+    limiter = asyncio.Semaphore(_MAX_CONCURRENT_EMITS)
+
+    async def _one(factory: Callable[[], Awaitable[None]]) -> None:
+        async with limiter:
+            await factory()
+
+    try:
+        outcomes = await asyncio.gather(*(_one(factory) for _table_id, factory in jobs), return_exceptions=True)
+    except Exception as exc:
+        # The gather itself failing (rather than one publish inside it) is not something a publish
+        # guardrail should ever surface to the cron handler either.
+        log.warning(f"maintenance_{kind}_emit_error", extra={"error": str(exc)})
+        return
+    for (table_id, _factory), outcome in zip(jobs, outcomes, strict=True):
+        if isinstance(outcome, BaseException):
+            log.warning(f"maintenance_{kind}_emit_error", extra={"table": table_id, "error": str(outcome)})
 
 
 async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetResult], *, delimiter: str) -> None:
@@ -439,13 +628,14 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
       catalog id to reconstruct — a URI→id map is out of proportion here).
 
     The parent namespace is derived via :func:`service_kit.governed.fga.parent_namespace_id` so events land on the SAME
-    ``(:Dataset)`` the catalog created. COMPLETE emits stay awaited inline (unchanged semantics); the FAIL
-    batch is gathered CONCURRENTLY (each publish already bounded by the emitter's 5s timeout) and capped
-    at ``_MAX_FAIL_EMITS_PER_TICK`` so a bucket of failing datasets can't push the cron handler past the
-    30s Dapr ack window. Every emit is best-effort internally, so nothing here raises into the sweep.
+    ``(:Dataset)`` the catalog created. BOTH lanes are then published through :func:`_publish_all`:
+    gathered, bounded at ``_MAX_CONCURRENT_EMITS`` in flight, and raise-proof per publish. Only the FAIL
+    lane is additionally CAPPED at ``_MAX_FAIL_EMITS_PER_TICK`` — see that constant for why capping the
+    COMPLETE lane would erase a maintenance run rather than delay it. Nothing here raises into the sweep.
     """
     # One pass derives (table_id, namespace) for BOTH branches — the cap below then counts actual emits
     # (an unparseable maintain:-errored URI must not consume a cap slot while emitting nothing).
+    complete: list[tuple[str, str]] = []  # (table_id, namespace)
     failed: list[tuple[str, str, str]] = []  # (table_id, namespace, error)
     for result in results:
         # The DECLARED name wins over the URI derivation. Without this the read half of T6 was dead
@@ -462,7 +652,7 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
             continue
         if not _did_material_work(result):
             continue
-        await emitter.emit_maintenance(table_id=table_id, namespace=namespace)
+        complete.append((table_id, namespace))
 
     if len(failed) > _MAX_FAIL_EMITS_PER_TICK:
         log.warning(
@@ -471,20 +661,8 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
         )
         random.shuffle(failed)  # fairness under a mass incident — see the cap constant's comment
         failed = failed[:_MAX_FAIL_EMITS_PER_TICK]
-    # Raise-proof by construction, not by convention: the emitters swallow internally, but the guardrail
-    # ("a publish failure must never fail the sweep") must hold even for a mis-wired emitter — an
-    # AttributeError building a coro or a raise inside one is logged per dataset and never reaches the
-    # cron handler.
-    try:
-        outcomes = await asyncio.gather(
-            *(emitter.emit_maintenance_failed(table_id=t, namespace=ns, error=err) for t, ns, err in failed),
-            return_exceptions=True,
-        )
-        for (table_id, _ns, _err), outcome in zip(failed, outcomes, strict=True):
-            if isinstance(outcome, BaseException):
-                log.warning("maintenance_fail_emit_error", extra={"table": table_id, "error": str(outcome)})
-    except Exception as exc:
-        log.warning("maintenance_fail_emit_error", extra={"error": str(exc)})
+    await _publish_all("complete", [(t, partial(_emit_complete, emitter, table_id=t, namespace=ns)) for t, ns in complete])
+    await _publish_all("fail", [(t, partial(_emit_failed, emitter, table_id=t, namespace=ns, error=err)) for t, ns, err in failed])
 
 
 def summarize(results: list[DatasetResult]) -> dict[str, Any]:

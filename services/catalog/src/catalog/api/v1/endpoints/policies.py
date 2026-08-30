@@ -39,6 +39,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     DescribeTableRequest,
     InvalidInputError,
+    LanceNamespaceError,
     NamespaceAlreadyExistsError,
     NamespaceNotFoundError,
     TableNotFoundError,
@@ -47,11 +48,13 @@ from lance_namespace import (
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
 from catalog.services import native, warehouses
-from service_kit.control_emit import emit_control
+from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import maintenance_policies as policies
 
 
@@ -107,6 +110,35 @@ def _sweep_path(location: str) -> str:
     return location.removeprefix("s3://").rstrip("/")
 
 
+async def _describe(settings: Settings, kind: str, canonical: str, missing: type[LanceNamespaceError]) -> PolicyResponse:
+    """Read one policy or 404, once (catalog-api-14).
+
+    The three describe handlers each carried their own copy of read-then-refuse, and the copies had
+    already drifted: table and PROJECT both raised ``TableNotFoundError`` for a missing policy while
+    namespace raised ``NamespaceNotFoundError`` — three rungs, two answers, for one condition. The
+    exception class is a parameter now, so the choice is stated at the route instead of re-derived.
+    """
+    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, canonical)
+    if record is None:
+        raise missing(f"no maintenance policy set for {kind} {canonical!r}")
+    return _response(record)
+
+
+async def _delete(settings: Settings, control: ControlEmitter, token: IDToken | None, kind: str, canonical: str) -> PolicyDeleteResponse:
+    """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
+    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, canonical)
+    log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
+    await emit_control(
+        control,
+        action="policy_deleted",
+        object_type="policy",
+        object_id=f"{kind}:{canonical}",
+        actor=f"user:{token.sub}" if token else None,
+        extra={"kind": kind},
+    )
+    return PolicyDeleteResponse(status="deleted", kind=kind, id=canonical)
+
+
 @table_router.post("/{id}/policy/set", response_model_exclude_none=True)
 async def set_table_policy(
     id: str,
@@ -140,28 +172,13 @@ async def set_table_policy(
 @table_router.post("/{id}/policy/describe", response_model_exclude_none=True)
 async def describe_table_policy(id: str, settings: SettingsDep) -> PolicyResponse:
     """The table's maintenance policy (reader-gated); 404 when none is set."""
-    canonical = _canonical(parse_identifier(id, settings.delimiter), settings.delimiter)
-    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "table", canonical)
-    if record is None:
-        raise TableNotFoundError(f"no maintenance policy set for table {id!r}")
-    return _response(record)
+    return await _describe(settings, "table", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter), TableNotFoundError)
 
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_table_policy(id: str, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the table's maintenance policy (idempotent) — owner-gated by the router."""
-    canonical = _canonical(parse_identifier(id, settings.delimiter), settings.delimiter)
-    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), "table", canonical)
-    log.info("maintenance_policy_deleted", extra={"kind": "table", "id": canonical})
-    await emit_control(
-        control,
-        action="policy_deleted",
-        object_type="policy",
-        object_id=f"table:{canonical}",
-        actor=f"user:{token.sub}" if token else None,
-        extra={"kind": "table"},
-    )
-    return PolicyDeleteResponse(status="deleted", kind="table", id=canonical)
+    return await _delete(settings, control, token, "table", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter))
 
 
 @namespace_router.post("/{id}/policy/set", response_model_exclude_none=True)
@@ -192,28 +209,13 @@ async def set_namespace_policy(id: str, body: PolicyRequest, settings: SettingsD
 @namespace_router.post("/{id}/policy/describe", response_model_exclude_none=True)
 async def describe_namespace_policy(id: str, settings: SettingsDep) -> PolicyResponse:
     """The namespace's maintenance policy (reader-gated); 404 when none is set."""
-    canonical = _canonical(parse_identifier(id, settings.delimiter), settings.delimiter)
-    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "namespace", canonical)
-    if record is None:
-        raise NamespaceNotFoundError(f"no maintenance policy set for namespace {id!r}")
-    return _response(record)
+    return await _describe(settings, "namespace", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter), NamespaceNotFoundError)
 
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_namespace_policy(id: str, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
-    canonical = _canonical(parse_identifier(id, settings.delimiter), settings.delimiter)
-    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), "namespace", canonical)
-    log.info("maintenance_policy_deleted", extra={"kind": "namespace", "id": canonical})
-    await emit_control(
-        control,
-        action="policy_deleted",
-        object_type="policy",
-        object_id=f"namespace:{canonical}",
-        actor=f"user:{token.sub}" if token else None,
-        extra={"kind": "namespace"},
-    )
-    return PolicyDeleteResponse(status="deleted", kind="namespace", id=canonical)
+    return await _delete(settings, control, token, "namespace", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter))
 
 
 def _validated_project(id: str) -> str:
@@ -285,10 +287,9 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
     reader-tier relation); 404 when none is set."""
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "project", project)
-    if record is None:
-        raise TableNotFoundError(f"no maintenance policy set for project {id!r}")
-    return _response(record)
+    # `TableNotFoundError` on the PROJECT rung is what the copied body already raised — the spec code
+    # is what maps to the 404, and changing it here would be a contract change, not a refactor.
+    return await _describe(settings, "project", project, TableNotFoundError)
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
@@ -296,17 +297,7 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     """Remove the project's maintenance policy (idempotent) — admin-gated."""
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), "project", project)
-    log.info("maintenance_policy_deleted", extra={"kind": "project", "id": project})
-    await emit_control(
-        control,
-        action="policy_deleted",
-        object_type="policy",
-        object_id=f"project:{project}",
-        actor=f"user:{token.sub}" if token else None,
-        extra={"kind": "project"},
-    )
-    return PolicyDeleteResponse(status="deleted", kind="project", id=project)
+    return await _delete(settings, control, token, "project", project)
 
 
 def _scoped_to_project(record: dict[str, Any], *, delimiter: str, namespaces: frozenset[str], buckets: frozenset[str], project: str) -> bool:

@@ -27,7 +27,7 @@ def real_ns_client(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> Iterato
     """A TestClient whose namespace is a REAL pylance ``dir`` backend rooted at a tmp dir.
 
     Needed for the create path: every create now routes through the direct 2.2 + stable-row-ids write
-    (``dataplane._create_table_direct`` -> ``declare`` + real ``lance.write_dataset``), so a MagicMock ns can
+    (``dataplane.create_table`` -> ``declare`` + real ``lance.write_dataset``), so a MagicMock ns can
     no longer stand in — the write actually happens. This also makes the create tests STRONGER: "backend
     create fails" becomes a real create-then-recreate conflict, and "overwrite" a real overwrite, instead of
     a mocked return value. It is exactly the migration the 2.1->2.2 fix required — the mock-only tests could

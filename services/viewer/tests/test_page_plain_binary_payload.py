@@ -23,11 +23,11 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from service_kit.exceptions import register_handlers
 from viewer.api.v1.endpoints import pages as pg
 from viewer.api.v1.endpoints.pages import router
 from viewer.core.config import ViewerSettings, get_viewer_settings
-
-from service_kit.exceptions import register_handlers
 
 
 TABLE = "bronze$pages"

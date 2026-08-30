@@ -18,6 +18,7 @@ import lance
 import pyarrow as pa
 import pytest
 from lance.blob import Blob
+
 from maintenance.services.optimize import compact_one
 
 

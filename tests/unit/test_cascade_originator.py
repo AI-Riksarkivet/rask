@@ -45,11 +45,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 import pytest
+
 from catalog.api.v1.endpoints.publication import publication_extra, publication_originator
 from medallion.core.config import MedallionSettings
 from medallion.services import catalog_register, ingest_trigger, publication_trigger
 from medallion.services.trigger_guards import StageTrigger
-
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.visibility import Visibility

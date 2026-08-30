@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
+
 from ingest.runs import InMemoryRunStore, RunRecord, merge_workflow_state
 
 
@@ -148,6 +149,7 @@ def _client(reader: object | None, record: RunRecord) -> TestClient:
     import asyncio
 
     from fastapi import FastAPI
+
     from ingest.api import router
 
     app = FastAPI()
@@ -268,6 +270,7 @@ def test_a_run_the_store_LOST_is_rebuilt_from_the_engine() -> None:
     engine already holds the accepted-time record.
     """
     from fastapi import FastAPI
+
     from ingest.api import router
 
     app = FastAPI()
@@ -288,6 +291,7 @@ def test_a_run_the_store_LOST_is_rebuilt_from_the_engine() -> None:
 def test_a_run_NEITHER_the_store_nor_the_engine_knows_is_still_404() -> None:
     """The rebuild must not turn every unknown id into a fabricated run."""
     from fastapi import FastAPI
+
     from ingest.api import router
 
     app = FastAPI()

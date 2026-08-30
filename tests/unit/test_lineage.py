@@ -13,9 +13,10 @@ from typing import Any, cast
 
 import psycopg
 import pytest
+from psycopg import sql
+
 from lineage.core.age import _parse, _sql
 from lineage.models import OutputStatistics, RunEvent
-from psycopg import sql
 
 
 _SAMPLE = Path(__file__).resolve().parent.parent.parent / "services" / "lineage" / "src" / "lineage" / "sample_events.json"
@@ -1101,7 +1102,7 @@ def test_pool_closed_when_bootstrap_fails(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(main_mod, "configure_audit", lambda **_k: None)
     monkeypatch.setattr(main_mod, "instrument_lance_if_available", lambda: None)
     monkeypatch.setattr(main_mod, "assert_app_token_configured", lambda **_k: None)
-    monkeypatch.setattr(main_mod, "apply_dapr_secrets", lambda _s: None)
+    monkeypatch.setattr(main_mod, "apply_lineage_secrets", lambda _s: None)
     monkeypatch.setattr(main_mod, "make_pool", lambda *_a, **_k: pool)
     monkeypatch.setattr(main_mod, "LineageRepository", _BoomRepo)
 

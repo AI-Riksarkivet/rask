@@ -15,11 +15,11 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 from dapr.aio.clients import DaprClient
+
 from medallion.core.config import MedallionSettings
 from medallion.services.compute import seed_bronze, transform_stage
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
-
 from service_kit.lakehouse.quality import assert_quality, passed
 
 

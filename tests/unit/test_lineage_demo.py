@@ -15,6 +15,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
+
 from lineage.api.v1.endpoints import demo
 from lineage.api.v1.endpoints.demo import PeekCache, _read_dataset, _read_lineage_jsonb
 

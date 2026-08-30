@@ -21,8 +21,8 @@ from typing import Any
 
 import lancedb
 import pyarrow as pa
-from search.services.similar import key_predicate, seed_vector
 
+from search.services.similar import key_predicate, seed_vector
 from service_kit.lancekit.descriptor import Declared
 
 

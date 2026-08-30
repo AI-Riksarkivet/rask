@@ -18,12 +18,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from botocore.exceptions import ClientError
+from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
+
 from catalog.api import dependencies, fga_deps
 from catalog.core.config import Settings
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
-from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
-
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 
@@ -319,7 +319,6 @@ def _governed_settings(tmp_path: Any) -> Settings:
 
 def _create_as(settings: Settings, sub: str, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-
     from service_kit.control_emit import NoopControlEmitter
 
     return asyncio.run(
@@ -335,7 +334,6 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
 
 def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
     from catalog.api.v1.endpoints import projects as proj_ep
-
     from service_kit.control_emit import NoopControlEmitter
 
     return asyncio.run(
@@ -614,7 +612,6 @@ def _serving_settings(tmp_path: Any) -> Settings:
 
 def _create(settings: Settings, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-
     from service_kit.control_emit import NoopControlEmitter
 
     # The project must EXIST now (Decision 1) — mint its registry record first, idempotently, so
@@ -711,8 +708,9 @@ def test_a_warehouse_created_PROTECTED_actually_refuses_its_delete(tmp_path: Any
     shipped an "Override deletion protection" checkbox for a 409 production could not produce. This
     drives arm-at-create through to the refusal: the checkbox's 409 is now real.
     """
-    from catalog.schemas import CreateWarehouseRequest
     from lance_namespace import NamespaceNotEmptyError
+
+    from catalog.schemas import CreateWarehouseRequest
 
     settings = _governed_settings(tmp_path)
     _FakeStore(estate_admins=("alice",)).install(monkeypatch)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import suppress
 
@@ -38,15 +39,17 @@ from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
 # them drift apart again the moment one is tuned.
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
+from catalog.core.modes import DropBehavior
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import maintenance_policies, protection, trash
 
 
@@ -188,7 +191,7 @@ def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep) -> Desc
     return native.call(ns, "describe_namespace", req)
 
 
-async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentToken, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
+async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: IDToken | None, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
     """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96).
 
     A trash record pointing at bytes the native cascade already deleted would be a LIE: undrop
@@ -209,8 +212,13 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
     tables = [child for resource, child in descendants if resource == "table"]
     # Deepest-first, so every namespace is empty by the time its own drop runs.
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
-    for child in tables:
-        described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child))
+    # THE DESCRIBES FIRST, CONCURRENTLY (catalog-api-11): they are independent reads whose results are
+    # only collected, and a subtree of N tables paid N sequential round trips before a single record
+    # was filed. The WRITE pair below stays sequential and in order per child — see the ordering note.
+    described_all: list[DescribeTableResponse] = list(
+        await asyncio.gather(*(run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child)) for child in tables))
+    )
+    for child, described in zip(tables, described_all, strict=True):
         # A declared-only table has no location; its record carries "" and undrop skips it with a
         # warning — there were no bytes to lose, only a declaration the caller can redo.
         record = trash.make_record(
@@ -294,6 +302,11 @@ async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants:
     """
     tables = [child for resource, child in descendants if resource == "table"]
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
+    # SEQUENTIAL, DELIBERATELY (catalog-api-11 asked about this loop and the answer is no). Every call
+    # here DESTROYS bytes, and the ordered partial progress is the property the docstring above trades
+    # for: a mid-loop failure must leave a strictly SMALLER subtree that the same call finishes on a
+    # retry, and the namespace drops must run deepest-first so each is empty when its own drop lands.
+    # Concurrency buys latency on a path nobody is waiting on and costs both of those.
     for child in tables:
         with suppress(TableNotFoundError):
             await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
@@ -312,9 +325,18 @@ async def _require_descendants_unprotected(settings: Settings, descendants: list
     if force or not descendants:
         return
     so = settings.storage_options()
-    for resource, segments in descendants:
-        canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-        record = await run_in_threadpool(protection.get_protection, settings.registry_root, so, resource, canonical)
+    canonicals = [fga.canonical_object_id(segments, delimiter=settings.delimiter) for _, segments in descendants]
+    # CONCURRENT (catalog-api-11): one independent object-store read per descendant, and this is the
+    # PRE-FLIGHT of a cascade — read one at a time, the guard's latency grew with the subtree it
+    # exists to protect. The verdict is still applied in enumeration order, so the refusal still names
+    # the FIRST protected descendant, exactly as before.
+    records = await asyncio.gather(
+        *(
+            run_in_threadpool(protection.get_protection, settings.registry_root, so, resource, canonical)
+            for (resource, _), canonical in zip(descendants, canonicals, strict=True)
+        )
+    )
+    for (resource, _), canonical, record in zip(descendants, canonicals, records, strict=True):
         fga_deps.require_not_protected(record or {}, kind=resource, obj_id=canonical, force=False)
 
 
@@ -355,7 +377,7 @@ async def drop_namespace(
     # descendants BEFORE the drop (afterwards they can't be listed); only when FGA is on (else the revoke
     # loop is a no-op and the listing is wasted work). Restrict (the dir-backend default) errors on a
     # non-empty namespace, so there are never extra tuples to revoke on that path.
-    cascade = (req.behavior or "").lower() == "cascade"
+    cascade = DropBehavior.parse(req.behavior) is DropBehavior.CASCADE
     descendants: list[tuple[str, list[str]]] = []
     # Enumerated whenever a CASCADE is asked for — not only when FGA is on, as it used to be. A cascade
     # destroys children INSIDE the single native call, so they never re-enter this door: without this
@@ -431,7 +453,6 @@ async def drop_namespace(
 async def namespace_tasks(
     id: str,
     settings: SettingsDep,
-    token: CurrentToken,
 ) -> list[TrashEntry]:
     """What is queued for THIS namespace — a pending trash expiry after a recoverable cascade (#96).
     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
@@ -450,7 +471,6 @@ async def undrop_namespace(
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
-    client: FgaClientDep,
     control: ControlEmitterDep,
 ) -> CreateNamespaceResponse:
     """Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.

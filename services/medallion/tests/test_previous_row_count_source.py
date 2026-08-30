@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
+
 from medallion.services.compute import WriteResult, transform_stage
 
 

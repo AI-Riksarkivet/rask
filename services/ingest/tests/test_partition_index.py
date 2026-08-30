@@ -18,6 +18,7 @@ from __future__ import annotations
 import lance
 import pyarrow as pa
 import pytest
+
 from ingest.lander import PARTITION_INDEX, PARTITION_INDEX_NAME, _ensure_partition_index
 
 
@@ -104,6 +105,7 @@ def test_the_CATALOG_COMMIT_path_gets_the_same_indexes(tmp_path) -> None:
     two entry points: `ensure_indexes_at(uri)` must produce exactly what the lander's own commit
     produces."""
     import lance
+
     from ingest.lander import CREATION_FLAGS, ID_INDEX_NAME, PARTITION_INDEX_NAME, ensure_indexes_at
     from ingest.worker import units_to_table
 

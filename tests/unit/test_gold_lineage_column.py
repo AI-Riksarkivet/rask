@@ -23,6 +23,7 @@ from typing import Any, cast
 import lance
 import pytest
 from dapr.aio.clients import DaprClient
+
 from lineage_kit.consume import LineageDoc
 from lineage_kit.schemas import RunEvent
 from medallion.core.config import MedallionSettings
