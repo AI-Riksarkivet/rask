@@ -480,6 +480,11 @@ def _run_stage(
         delta = None  # see `_mergeable`: rebuild whole rather than write a delta into a wiped table
     rows_in = upstream.count_rows()
     rows_out = -1  # set by whichever branch runs; -1 means "read it off the destination"
+    # WHICH LANE RAN, said out loud. A delta run and a full rescan produce identical
+    # completion lines otherwise, so the one property this change exists to deliver is the
+    # one property an operator cannot confirm from the logs. Measured live before adding it:
+    # a gold hop with BASE_VERSION=104 was indistinguishable from a full rescan.
+    lane = "full"
 
     if blob_field_names(upstream.schema):
         # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
@@ -488,13 +493,14 @@ def _run_stage(
         # BACKFILL LANE. The delta is by construction small, so it is stamped and merged on the driver
         # — the same argument the cascade head below already makes for handling the bronze root
         # natively rather than distributing it.
+        lane = "delta"
         source = upstream.to_table(with_row_id=True, filter=delta)
         rows_in = source.num_rows
         if rows_in == 0:
             # A legitimate no-op, not a failure: a redelivered event whose rows this stage already
             # processed lands here. Writing an empty version would fire a publication event for data
             # nobody added.
-            print(f"RAY-STAGE OK stage={stage} rows=0 delta_empty=1 base_version={base_version}")
+            print(f"RAY-STAGE OK stage={stage} lane=delta rows=0 delta_empty=1 base_version={base_version}")
             return
         produced = _stamp_stage(source, stage, lineage)
         rows_out = produced.num_rows
@@ -555,7 +561,7 @@ def _run_stage(
 
     out = lance.dataset(to_uri, storage_options=so)
     print(
-        f"RAY-STAGE OK stage={stage} rows={out.count_rows()} version={out.version} "
+        f"RAY-STAGE OK stage={stage} lane={lane} rows={out.count_rows()} rows_in={rows_in} version={out.version} "
         f"dsv={out.data_storage_version} stable_row_ids={out.has_stable_row_ids} cols={out.schema.names}"
     )
     if not out.has_stable_row_ids:

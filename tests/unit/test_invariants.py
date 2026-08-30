@@ -5807,3 +5807,38 @@ def test_the_media_head_can_register_the_bronze_it_lands() -> None:
                 f"so POST /ingest-media fails closed on every call: {exc}"
             )
         assert location, "the media bronze URI resolved to the catalog root itself — a tier must have its own location"
+
+
+def test_the_ingest_pod_gets_the_SAME_external_blob_bases_as_the_catalog() -> None:
+    """One operator decision, rendered at both doors that enforce it.
+
+    `LANCE_EXTERNAL_BLOB_BASES` was rendered on the CATALOG deployment only, so on every shipped
+    chart `approved_external_base()` returned None in the ingest pod and EVERY ingest COPIED the
+    corpus into the lakehouse instead of referencing it. The repo carries the measurement of what
+    that costs: 3,232 bytes external against 4,002,901 bytes managed on a 4 MB corpus
+    (`services/ingest/src/ingest/adapters.py`). The only signal was one warning log; the run was green.
+
+    The ingest module's own docstring already stated the rule — "Deliberately shares the catalog's
+    variable name: in-cluster the same operator decision has to hold at both doors" — while the chart
+    made it impossible to hold.
+
+    RENDERED FROM THE ONE `vending.externalBlobBases` VALUE, never duplicated into a values `env:`
+    map. Two literals is how the ingest side approves a write under a base the catalog's manifest did
+    not register, and `initial_bases` is create-mode only — so that divergence is unrepairable on
+    every table it lands on.
+    """
+    rendered = _helm_template("vending.externalBlobBases=s3://probe-bucket/blobs/")
+
+    carriers = set()
+    for doc in yaml.safe_load_all(rendered):
+        if not doc or doc.get("kind") != "Deployment":
+            continue
+        for container in doc["spec"]["template"]["spec"]["containers"]:
+            for entry in container.get("env") or []:
+                if entry.get("name") == "LANCE_EXTERNAL_BLOB_BASES" and entry.get("value") == "s3://probe-bucket/blobs/":
+                    carriers.add(doc["metadata"]["name"])
+
+    assert any("ingest" in name for name in carriers), (
+        f"the ingest deployment does not carry LANCE_EXTERNAL_BLOB_BASES, so every ingest copies the "
+        f"corpus instead of referencing it; deployments that do carry it: {sorted(carriers)}"
+    )

@@ -238,6 +238,22 @@ spec:
             {{- range $k, $v := $svc.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}
+            {{- /* THE EXTERNAL-BLOB DECISION HOLDS AT BOTH DOORS, from ONE value.
+
+                 `services.yaml` renders this onto the catalog; without it here the ingest pod's
+                 `approved_external_base()` returned None on every shipped chart, so every ingest
+                 COPIED the corpus into the lakehouse instead of referencing it — measured in
+                 `ingest/adapters.py` as 3,232 bytes external against 4,002,901 managed on a 4 MB
+                 corpus, with one warning log and a green run as the only signal.
+
+                 Rendered from `.Values.vending.externalBlobBases`, never duplicated into the
+                 service's `env:` map: two literals is how the ingest side approves a write under a
+                 base the catalog's manifest never registered, and `initial_bases` is create-mode
+                 only — so that divergence cannot be repaired on the tables it lands on. The default
+                 mirrors services.yaml's for the same reason. */}}
+            {{- if eq $name "ingest" }}
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ $root.Values.vending.externalBlobBases | default (printf "s3://%s/models/" $root.Values.rustfs.bucket) | quote }} }
+            {{- end }}
             {{- /* WHICH CHANNELS THIS DEPLOYMENT MAY SEND, derived from the SAME `channels.*.enabled`
                    flags that render the Components in notifications-channels.yaml.
 
