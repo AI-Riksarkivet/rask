@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,67 @@ if TYPE_CHECKING:
 DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
 _SAMPLE = Path(__file__).resolve().parents[2] / "services" / "lineage" / "src" / "lineage" / "sample_events.json"
 
+#: The dataset names the shared sample writes — and the whole problem, because they are the SAME
+#: generic names the production cascade writes. The fixture seeded them unprefixed into whatever graph
+#: the DSN pointed at, then asserted over "every producer of silver$features" and "every column of
+#: silver$features" — so on any estate that has ever run the cascade it measured the estate and called
+#: it the fixture. It was a clean-room test wearing an e2e's name: red exactly where the code is
+#: healthy, and proving nothing where it matters.
+#:
+#: These four are the ONLY strings `_Sample` rewrites, which is what makes the rewrite safe to do by
+#: walking every `"name"` key: no column and no job in the sample is called any of them.
+_SAMPLE_DATASETS = frozenset({"raw_events", "bronze$events", "silver$features", "gold$catalog"})
+
+
+class _Sample:
+    """The shared medallion sample, renamed into ONE run's own corner of the graph.
+
+    Datasets AND run ids, because both collide and they collide with different things. The dataset
+    names collide with PRODUCTION. The run ids collide with THIS SUITE'S OWN PREVIOUS RUNS — they are
+    fixed uuids in the fixture, so a second run re-points the same `Run` node at a second set of
+    datasets and any assertion of the form `run.outputs == [...]` starts accumulating.
+
+    Run ids are derived with `uuid5` rather than randomised so they stay real uuids and stay stable
+    within one module run, which is what lets the discovery test still look a known run up by name.
+    """
+
+    _NS = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+
+    def __init__(self) -> None:
+        self._prefix = f"e2e{uuid.uuid4().hex[:8]}-"
+
+    def ds(self, name: str) -> str:
+        """A sample dataset's name in this run. Anything else passes through untouched."""
+        return f"{self._prefix}{name}" if name in _SAMPLE_DATASETS else name
+
+    def run_id(self, original: str) -> str:
+        return str(uuid.uuid5(self._NS, self._prefix + original))
+
+    def events(self) -> list[object]:
+        def walk(node: object) -> object:
+            if isinstance(node, dict):
+                out = {}
+                for key, value in node.items():
+                    if key == "name" and isinstance(value, str):
+                        out[key] = self.ds(value)
+                    elif key == "runId" and isinstance(value, str):
+                        out[key] = self.run_id(value)
+                    else:
+                        out[key] = walk(value)
+                return out
+            if isinstance(node, list):
+                return [walk(x) for x in node]
+            return node
+
+        return [walk(e) for e in json.loads(_SAMPLE.read_text())]
+
+
+@pytest.fixture(scope="module")
+def sample() -> _Sample:
+    """One namespace per module run — every sample-loading test below shares it."""
+    return _Sample()
+
+
 pytestmark = pytest.mark.e2e
 
 
@@ -34,13 +96,13 @@ def dsn() -> str:
     return DSN
 
 
-def test_medallion_ingest_and_lineage_queries(dsn: str) -> None:
+def test_medallion_ingest_and_lineage_queries(dsn: str, sample: _Sample) -> None:
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
     from lineage.schemas import LineageGraph, Neighbors, Producers
     from lineage.services.repository import LineageRepository
 
-    events = [RunEvent.model_validate(e) for e in json.loads(_SAMPLE.read_text())]
+    events = [RunEvent.model_validate(e) for e in sample.events()]
 
     async def run() -> tuple[Neighbors, Neighbors, Producers, LineageGraph]:
         pool = make_pool(dsn)
@@ -49,10 +111,10 @@ def test_medallion_ingest_and_lineage_queries(dsn: str) -> None:
             repo = LineageRepository(pool, "lineage")
             for event in events:
                 await repo.ingest_event(event)
-            upstream = await repo.upstream("gold$catalog")
-            downstream = await repo.downstream("raw_events")
-            producers = await repo.producers("silver$features")
-            graph = await repo.graph("silver$features")
+            upstream = await repo.upstream(sample.ds("gold$catalog"))
+            downstream = await repo.downstream(sample.ds("raw_events"))
+            producers = await repo.producers(sample.ds("silver$features"))
+            graph = await repo.graph(sample.ds("silver$features"))
             return upstream, downstream, producers, graph
         finally:
             await pool.close()
@@ -60,10 +122,13 @@ def test_medallion_ingest_and_lineage_queries(dsn: str) -> None:
     upstream, downstream, producers, graph = asyncio.run(run())
 
     # gold derives (transitively) from silver, bronze and the raw source.
-    assert {"silver$features", "bronze$events", "raw_events"} <= {d.name for d in upstream.related}
+    assert {sample.ds("silver$features"), sample.ds("bronze$events"), sample.ds("raw_events")} <= {d.name for d in upstream.related}
     # raw_events flows downstream into bronze/silver/gold.
-    assert {"bronze$events", "silver$features", "gold$catalog"} <= {d.name for d in downstream.related}
+    assert {sample.ds("bronze$events"), sample.ds("silver$features"), sample.ds("gold$catalog")} <= {d.name for d in downstream.related}
     # silver was written by data_eng across all attempts (failed embed, embed v1, caption v2).
+    # EQUALITY is the right relation and is now safe to assert: the dataset belongs to this run alone,
+    # so "every producer" means the sample's three and nothing the estate did. See `_SAMPLE_DATASETS`.
+    assert len(producers.producers) == 3, f"the sample's three silver writes should be the only ones: {producers.producers}"
     assert {p.author for p in producers.producers} == {"data_eng"}
     assert {p.dataset_version for p in producers.producers} >= {"1", "2"}
     # the failed embed attempt is recorded too: a FAIL run with an error and no produced version.
@@ -72,15 +137,15 @@ def test_medallion_ingest_and_lineage_queries(dsn: str) -> None:
     assert failed[0].dataset_version is None
     # the graph around silver spans the connected medallion DAG, with storage + tags on each node.
     node_ids = {n.id for n in graph.nodes}
-    assert {"raw_events", "bronze$events", "silver$features", "gold$catalog"} <= node_ids
-    silver_node = next(n for n in graph.nodes if n.id == "silver$features")
+    assert {sample.ds(n) for n in _SAMPLE_DATASETS} <= node_ids
+    silver_node = next(n for n in graph.nodes if n.id == sample.ds("silver$features"))
     assert silver_node.source_uri == "s3://lakehouse/silver/features"
     assert "layer=silver" in silver_node.tags
     # silver derives from bronze, gold from silver; the in-place refine is NOT a self-derivation.
     edges = {(e.source, e.target) for e in graph.edges}
-    assert ("silver$features", "bronze$events") in edges
-    assert ("gold$catalog", "silver$features") in edges
-    assert ("silver$features", "silver$features") not in edges
+    assert (sample.ds("silver$features"), sample.ds("bronze$events")) in edges
+    assert (sample.ds("gold$catalog"), sample.ds("silver$features")) in edges
+    assert (sample.ds("silver$features"), sample.ds("silver$features")) not in edges
 
 
 def test_run_inputs_pin_versions_against_age(dsn: str) -> None:
@@ -172,7 +237,7 @@ def test_ensure_graph_bootstraps_and_is_idempotent_against_age(dsn: str) -> None
     assert asyncio.run(run()) == 1
 
 
-def test_discovery_lists_against_age(dsn: str) -> None:
+def test_discovery_lists_against_age(dsn: str, sample: _Sample) -> None:
     """GOAL 4 A1/A2: the browse lists run their REAL Cypher against AGE (not a mocked ``run_cypher``).
 
     Ingest the medallion sample, then exercise ``list_datasets`` (all + namespace / tag filters) and
@@ -183,7 +248,7 @@ def test_discovery_lists_against_age(dsn: str) -> None:
     from lineage.models import RunEvent
     from lineage.services.repository import LineageRepository
 
-    events = [RunEvent.model_validate(e) for e in json.loads(_SAMPLE.read_text())]
+    events = [RunEvent.model_validate(e) for e in sample.events()]
 
     async def run() -> tuple[list, list, list, list, list]:
         pool = make_pool(dsn)
@@ -205,31 +270,31 @@ def test_discovery_lists_against_age(dsn: str) -> None:
 
     # /datasets — every medallion dataset is listed, name-sorted, with its namespace + tags carried.
     names = [d.name for d in all_ds]
-    assert {"raw_events", "bronze$events", "silver$features", "gold$catalog"} <= set(names)
+    assert {sample.ds(n) for n in _SAMPLE_DATASETS} <= set(names)
     assert names == sorted(names)
     # ?namespace= filter — only silver-namespace datasets (silver$features lives there).
     assert silver and all(d.namespace == "silver" for d in silver)
-    assert "silver$features" in {d.name for d in silver}
+    assert sample.ds("silver$features") in {d.name for d in silver}
     # ?tag= filter — exact tag membership picks up the silver dataset.
-    assert "silver$features" in {d.name for d in tagged}
+    assert sample.ds("silver$features") in {d.name for d in tagged}
     assert all("layer=silver" in d.tags for d in tagged)
     # /jobs — a job's WROTE edges are folded into its output set; some job wrote silver$features.
-    assert jobs and any("silver$features" in j.outputs for j in jobs)
+    assert jobs and any(sample.ds("silver$features") in j.outputs for j in jobs)
     # /runs — pin the `cypher.LIST_RUNS` RETURN column ORDER against real AGE (§7a): the unit fold test mirrors
     # a hand-built row, so a reordered RETURN would pass unit and silently scramble every field in prod.
     # Typed field-by-field assertions on known sample runs catch any transposition.
     by_id = {r.run_id: r for r in runs}
-    ingest = by_id["11111111-1111-1111-1111-111111111111"]
+    ingest = by_id[sample.run_id("11111111-1111-1111-1111-111111111111")]
     assert ingest.state == "COMPLETE"
     assert ingest.job == "ray-jobs/ingest_events"
     assert ingest.author == "alice"  # the ownership-facet fallback (column 2 — not the state/job slots)
-    assert ingest.outputs == ["bronze$events"]
+    assert ingest.outputs == [sample.ds("bronze$events")]
     assert ingest.events >= 1
     assert ingest.started_at and ingest.updated_at  # timestamps landed in their own slots
     # promotion_status joined the projection LAST, so an ordinary run must read None rather than
     # picking up a neighbouring column's value — the transposition this block exists to catch.
     assert ingest.promotion_status is None
-    failed = by_id["22222222-2222-2222-2222-222222222220"]
+    failed = by_id[sample.run_id("22222222-2222-2222-2222-222222222220")]
     assert failed.state == "FAIL"
     assert failed.error_message and "OOM" in failed.error_message  # error slot, not swapped with a timestamp
 
@@ -323,7 +388,7 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
     assert feed_rows and feed_rows[0][0] == "RECONCILED"
 
 
-def test_medallion_column_lineage(dsn: str) -> None:
+def test_medallion_column_lineage(dsn: str, sample: _Sample) -> None:
     """#24: field-to-field lineage ingested into real AGE then traversed (the high-risk cypher path).
 
     Exercises the bits unit tests can't: the ``DERIVED_FROM_COLUMN*1..`` transitive walk across datasets
@@ -335,7 +400,7 @@ def test_medallion_column_lineage(dsn: str) -> None:
     from lineage.schemas import ColumnGraph, ColumnNeighbors
     from lineage.services.repository import LineageRepository
 
-    events = [RunEvent.model_validate(e) for e in json.loads(_SAMPLE.read_text())]
+    events = [RunEvent.model_validate(e) for e in sample.events()]
 
     async def run() -> tuple[ColumnNeighbors, ColumnNeighbors, ColumnGraph]:
         pool = make_pool(dsn)
@@ -344,9 +409,9 @@ def test_medallion_column_lineage(dsn: str) -> None:
             repo = LineageRepository(pool, "lineage")
             for event in events:
                 await repo.ingest_event(event)
-            up = await repo.column_upstream("gold$catalog", "caption")
-            down = await repo.column_downstream("bronze$events", "payload")
-            cg = await repo.dataset_column_graph("silver$features")
+            up = await repo.column_upstream(sample.ds("gold$catalog"), "caption")
+            down = await repo.column_downstream(sample.ds("bronze$events"), "payload")
+            cg = await repo.dataset_column_graph(sample.ds("silver$features"))
             return up, down, cg
         finally:
             await pool.close()
@@ -357,21 +422,25 @@ def test_medallion_column_lineage(dsn: str) -> None:
     # (a cross-dataset AND a same-dataset column hop in one transitive walk).
     up_cols = {(c.dataset, c.field) for c in up.related}
     assert {
-        ("silver$features", "caption"),
-        ("silver$features", "embedding"),
-        ("bronze$events", "payload"),
+        (sample.ds("silver$features"), "caption"),
+        (sample.ds("silver$features"), "embedding"),
+        (sample.ds("bronze$events"), "payload"),
     } <= up_cols
     # bronze.payload flows downstream into silver.embedding and onward to gold.caption.
     down_cols = {(c.dataset, c.field) for c in down.related}
-    assert {("silver$features", "embedding"), ("gold$catalog", "caption")} <= down_cols
+    assert {(sample.ds("silver$features"), "embedding"), (sample.ds("gold$catalog"), "caption")} <= down_cols
     # the silver column graph carries its full typed inventory + the in-place caption<-embedding edge.
-    typed = {c.field: c.type for c in cg.columns if c.dataset == "silver$features"}
+    typed = {c.field: c.type for c in cg.columns if c.dataset == sample.ds("silver$features")}
     assert {"id", "payload_src", "embedding", "caption"} <= set(typed)
     assert typed["embedding"] == "array<float>"  # the Arrow type seeded from the schema facet
-    same_ds = {(e.source_field, e.target_field) for e in cg.edges if e.source_dataset == "silver$features" and e.target_dataset == "silver$features"}
+    same_ds = {
+        (e.source_field, e.target_field)
+        for e in cg.edges
+        if e.source_dataset == sample.ds("silver$features") and e.target_dataset == sample.ds("silver$features")
+    }
     assert ("embedding", "caption") in same_ds  # the in-place-refinement column edge
     # the embed transformation kind rode the edge as a scalar prop.
-    emb = next(e for e in cg.edges if e.target_dataset == "silver$features" and e.target_field == "embedding")
+    emb = next(e for e in cg.edges if e.target_dataset == sample.ds("silver$features") and e.target_field == "embedding")
     assert emb.transformation_subtype == "TRANSFORMATION"
 
 
@@ -464,17 +533,27 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
     import uuid
 
     # DESTRUCTIVE guard (§7a): the retention sub-test prunes public.lineage_events on WHATEVER DB the
-    # DSN names — refuse anything that doesn't look like the local/CI throwaway AGE. Parsed with
-    # urlsplit (the config module's own idiom), NOT string surgery: a credential-less DSN has no '@'
-    # and a naive rsplit would false-skip a genuinely local database.
-    from urllib.parse import urlsplit
-
+    # DSN names, down to a ONE-ROW keep window.
+    #
+    # IT USED TO GATE ON THE DSN HOSTNAME, and that guard is worthless — it asks how you REACHED the
+    # database, not which database it is. `kubectl port-forward` makes the production AGE Postgres
+    # answer on `localhost`, which is exactly how anyone runs this suite against a real cluster. It
+    # was not a theoretical hole: on 2026-08-30 this test ran that way, pruned the live estate's feed
+    # to one row, and left the notifications reconciler logging `lineage_feed_pruned_below_cursor`
+    # every thirty seconds for ten hours before anyone read the logs.
+    #
+    # So the gate is now an EXPLICIT opt-in. A env var cannot be produced by accident, cannot be
+    # forged by a network path, and names the consequence in the variable itself — and the default is
+    # to skip, so the suite stays runnable against a real estate with only this one test sitting out.
     from lineage.core.age import make_pool
     from lineage.services.repository import LineageRepository
 
-    host = urlsplit(dsn).hostname or ""
-    if host not in {"localhost", "127.0.0.1", "::1", "age", "lineage-postgres"}:
-        pytest.skip(f"destructive (prunes public.lineage_events): refusing non-local DSN host {host!r}")
+    if os.environ.get("LINEAGE_E2E_DESTRUCTIVE") != "1":
+        pytest.skip(
+            "destructive: prunes public.lineage_events to a 1-row window on whatever DB "
+            "LINEAGE_DATABASE_URL names. Set LINEAGE_E2E_DESTRUCTIVE=1 to allow it, and only "
+            "against a throwaway database — a port-forwarded production DSN looks local."
+        )
 
     rid, rid2 = str(uuid.uuid4()), str(uuid.uuid4())
     reader = f"user:analyst-{uuid.uuid4().hex[:8]}"  # unique per run — the audit log is a plain INSERT
@@ -576,7 +655,13 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
     from lineage.models import RunEvent
     from lineage.services.repository import LineageRepository
 
-    name = "e2e$lifecycle_gc"
+    # UNIQUE PER RUN, and this is the whole reason the test could only pass once. The name and the
+    # three run ids were fixed literals, so a second run met its own `lc-3` recreate (09:10) already in
+    # the graph — outranking the 09:05 drop this run had just written, making `dropped_at` correctly
+    # return None and the assertion fail. The suite was self-poisoning, with no production collision
+    # involved at all.
+    unique = uuid.uuid4().hex[:8]
+    name = f"e2e$lifecycle_gc_{unique}"
 
     def event(run_id: str, op: str, tm: str, fields: list[str] | None, version: str | None) -> RunEvent:
         facets: dict = {}
@@ -600,15 +685,15 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
         try:
             repo = LineageRepository(pool, "lineage")
             # v1 with schema {a,b} → drop → dropped_at derives the drop
-            await repo.ingest_event(event("lc-1", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
-            await repo.ingest_event(event("lc-2", "drop_table", "2026-07-11T09:05:00Z", None, None))
+            await repo.ingest_event(event(f"lc-1-{unique}", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
+            await repo.ingest_event(event(f"lc-2-{unique}", "drop_table", "2026-07-11T09:05:00Z", None, None))
             dropped = await repo.dropped_at(name)
             # recreate at v2 with the REPLACED schema {x,y} → alive again, inventory pruned to {x,y}
-            await repo.ingest_event(event("lc-3", "create_table", "2026-07-11T09:10:00Z", ["x", "y"], "2"))
+            await repo.ingest_event(event(f"lc-3-{unique}", "create_table", "2026-07-11T09:10:00Z", ["x", "y"], "2"))
             alive = await repo.dropped_at(name)
             inventory = [c.field for c in (await repo.dataset_column_graph(name)).columns]
             # STALE redelivery of the v1 old-schema event — the recency gate must not resurrect {a,b}
-            await repo.ingest_event(event("lc-1", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
+            await repo.ingest_event(event(f"lc-1-{unique}", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
             after_stale = [c.field for c in (await repo.dataset_column_graph(name)).columns]
             return dropped, alive, inventory, after_stale
         finally:
