@@ -168,17 +168,41 @@ indent-style = "space"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-# `flows` added with the member (adding-a-package.md step 4). The list is STILL short by eleven —
-# annotator, catalog, controlplane, ingest, lineage, lineage_kit, maintenance, medallion,
-# search, viewer — and that gap is deliberately left for its own commit, because it is not metadata:
-# a name here changes which BLOCK ruff sorts that module into, so adding the eleven turns 1 I001 into
-# 206 across 172 files (measured: `uvx ruff check --output-format concise | grep -c I001`, one name at
-# a time — every one of the eleven cascades, so there is no clean subset). The fix is mechanical and
-# one command — `uvx ruff check --select I --fix` — but it is a 172-file import re-sort that belongs
-# in a commit of its own rather than buried in a new service's diff, and landing it here would red
-# `make lint` (and therefore the pre-commit hook, which passes no filenames) for every other branch in
-# flight. Do it as a pass; do not extend the list one name at a time.
-known-first-party = ["storage", "gateway", "service_kit", "compute", "flows", "notifications", "ray_kit", "tracker", "validate"]
+# COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
+# six code-shipping packages (lineage_kit, ray_kit, service_kit, storage, tracker, validate —
+# `ray-cluster-env` is deps-only and imports as nothing) and the thirteen services: nineteen names. A missing name is not a metadata gap: ruff sorts that module into
+# the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
+# file that imported it.
+#
+# This list carried nine of the nineteen for a long time, and the comment here explained why: adding
+# the missing ten turns one I001 into hundreds, because a name changes which block ruff sorts it into
+# and every importer of it re-sorts. That was true — the pass measured 465 I001s across 391 files —
+# and it is why the fix was always "do it as a PASS": add every name, then
+# `uvx ruff check --select I --fix` once. Done 2026-08-30 (open_python-audit X3).
+#
+# ADD A NEW MEMBER'S IMPORT NAME HERE IN THE SAME CHANGE that creates it (adding-a-package.md step 4).
+# One name at a time is cheap; ten at once is a repo-wide re-sort.
+known-first-party = [
+    "annotator",
+    "catalog",
+    "compute",
+    "controlplane",
+    "flows",
+    "gateway",
+    "ingest",
+    "lineage",
+    "lineage_kit",
+    "maintenance",
+    "medallion",
+    "notifications",
+    "ray_kit",
+    "search",
+    "service_kit",
+    "storage",
+    "tracker",
+    "validate",
+    "viewer",
+]
 
 [tool.ty.terminal]
 error-on-warning = true

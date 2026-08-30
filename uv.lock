@@ -1038,7 +1038,8 @@ source = { editable = "services/gateway" }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "python-dotenv" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "service-kit" },
     { name = "uvicorn" },
 ]
@@ -1047,7 +1048,8 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "service-kit", editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -1854,6 +1856,7 @@ version = "0.1.0"
 source = { editable = "packages/lineage-kit" }
 dependencies = [
     { name = "openlineage-python" },
+    { name = "opentelemetry-api" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
 ]
@@ -1861,6 +1864,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "openlineage-python", specifier = ">=1.52.0" },
+    { name = "opentelemetry-api", specifier = ">=1.27" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "pydantic-settings", specifier = ">=2.14" },
 ]

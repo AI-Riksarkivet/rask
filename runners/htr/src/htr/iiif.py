@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 import httpx
+from tenacity import Retrying, before_sleep_log, retry_if_exception, stop_after_attempt, stop_after_delay, wait_exponential_jitter
 
 from storage.client import s3_client
 
@@ -76,32 +77,62 @@ def file_extension(query_params: str = DEFAULT_QUERY_PARAMS) -> str:
     return "." + query_params.rsplit(".", 1)[-1]
 
 
+#: Total wall-clock ceiling on one `fetch_image` call, backoff included. `stop_after_attempt` alone
+#: bounds the number of tries and not the time they take: three attempts against a server that
+#: accepts the connection and then stalls cost three read timeouts plus the waits between them, and
+#: a Ray actor blocked on one key is an actor that is prefetching nothing. The cap is deliberately
+#: larger than the 15 s per-attempt timeout `IIIFCachedSource` sets, so it bites on a pathological
+#: run rather than pre-empting the attempt budget on a normal one.
+MAX_RETRY_SECONDS = 60.0
+
+#: Ceiling on a single backoff wait, so `attempts` can grow without the last gap growing with it.
+MAX_BACKOFF_SECONDS = 10.0
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Which failures are worth another try: transport errors, 429, and 5xx.
+
+    A real 4xx (except 429) is the server answering, correctly, that the request will never work —
+    retrying it spends the budget to be told the same thing three times. Anything that is not an
+    httpx error at all is a defect here, not a hiccup, and propagates on the first attempt.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or code >= 500
+    return isinstance(exc, httpx.TransportError)
+
+
 def fetch_image(url: str, *, client: httpx.Client, attempts: int = 3, base_delay: float = 1.0) -> bytes:
     """GET one IIIF image with retry on transient httpx errors and 5xx — the shared reading primitive.
 
-    The IIIF server hands out RST under load (Errno 104 at ~64 concurrent reads); three tries with
+    The IIIF server hands out RST under load (Errno 104 at ~64 concurrent reads); a few tries with
     exponential backoff convert a transient hiccup into a slowdown instead of a pipeline kill. Real 4xx
     (except 429) raise immediately — those won't get better. Used by both :class:`IIIFCachedSource` (the
     legacy cache role) and the medallion IIIF→raw producer (the P7a harvest library role).
-    """
-    import time as _time
 
-    last: Exception | None = None
-    for i in range(attempts):
-        try:
-            resp = client.get(url)
-            resp.raise_for_status()
-            return resp.content
-        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-            if isinstance(exc, httpx.HTTPStatusError):
-                code = exc.response.status_code
-                if code != 429 and 400 <= code < 500:
-                    raise
-            last = exc
-            if i < attempts - 1:
-                _time.sleep(base_delay * (2**i))
-    assert last is not None
-    raise last
+    The retry is `tenacity`'s, not a hand-rolled loop, and the difference is not cosmetic. **The wait
+    is JITTERED**: a fixed `base_delay * 2**i` wakes every one of the ~64 concurrent readers at the
+    same instant, so the herd that overloaded the server reassembles itself on each retry — the
+    backoff synchronises the storm it exists to spread. **Exhaustion reraises the real exception**
+    (`reraise=True`): the loop this replaced ended on `assert last is not None`, which `python -O`
+    strips, so an empty attempt budget answered `TypeError: exceptions must derive from
+    BaseException` instead of the transport error that actually happened. And the budget is bounded
+    in TIME as well as in tries — see :data:`MAX_RETRY_SECONDS`.
+    """
+
+    def _get() -> bytes:
+        resp = client.get(url)
+        resp.raise_for_status()
+        return resp.content
+
+    retrying = Retrying(
+        retry=retry_if_exception(_is_transient),
+        stop=stop_after_attempt(attempts) | stop_after_delay(MAX_RETRY_SECONDS),
+        wait=wait_exponential_jitter(initial=base_delay, max=MAX_BACKOFF_SECONDS),
+        before_sleep=before_sleep_log(log, logging.WARNING),
+        reraise=True,
+    )
+    return retrying(_get)
 
 
 class IIIFCachedSource:
@@ -123,10 +154,10 @@ class IIIFCachedSource:
         s3_endpoint: str | None = None,
         iiif_base: str = DEFAULT_IIIF_BASE,
         query_params: str = DEFAULT_QUERY_PARAMS,
-        # 15s per attempt; with 3 attempts and 1+2s backoff that's ~48s worst
-        # case before we give up on a key. The previous 60s default meant a
-        # single sticky URL could block an actor for 3 min, freezing prefetch
-        # progress whenever IIIF was overloaded (the very moment we want to
+        # 15s per attempt; with 3 attempts and the jittered ~1-2s waits between them that is well
+        # inside `fetch_image`'s own MAX_RETRY_SECONDS ceiling, so a key gives up in under a minute.
+        # The previous 60s default meant a single sticky URL could block an actor for 3 min,
+        # freezing prefetch progress whenever IIIF was overloaded (the very moment we want to
         # bail and move on).
         timeout: float = 15.0,
         s3_client_factory: Callable[[], Any] | None = None,
@@ -204,9 +235,9 @@ class IIIFCachedSource:
 
         # 2. Cache miss → fetch from IIIF, with retry/backoff.
         #    The server hands out RST under load (we hit Errno 104 at ~64
-        #    concurrent reads). Three tries with exponential backoff
+        #    concurrent reads). A few tries with JITTERED exponential backoff
         #    converts a transient hiccup into a slowdown instead of a
-        #    pipeline kill — failed retry still propagates.
+        #    pipeline kill — failed retry still propagates. See `fetch_image`.
         # key shape: "<batch>/<image_id>.jpg" → image_id is the stem of the basename.
         image_id = key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         url = build_image_url(image_id, base_url=self.iiif_base, query_params=self.query_params)
