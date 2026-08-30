@@ -31,7 +31,6 @@ gap in this machine, not in the design — but it is printed so the operator can
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import sys
 import tempfile
@@ -236,10 +235,14 @@ _S3_HINT = (
 
 def _s3():  # noqa: ANN202 — boto3 client has no public stub
     """The estate's own S3 seam. CLAUDE.md forbids importing boto3 directly."""
-    if not os.getenv("RASK_S3_ENDPOINT_URL") and not os.getenv("S3_ENDPOINT_URL"):
-        raise Blocked(_S3_HINT)
-    from storage import s3_client
+    from storage import configured_endpoint, s3_client
 
+    # The blocked/runnable decision asks the SAME resolver the client will use. A local env chain
+    # here reports ENVIRONMENT-BLOCKED against a backend that is configured — a row this script's
+    # own docstring calls the estate's recurring disease, since a false blocked row reads as a gap
+    # in the machine rather than a bug in the check.
+    if not configured_endpoint():
+        raise Blocked(_S3_HINT)
     return s3_client()
 
 

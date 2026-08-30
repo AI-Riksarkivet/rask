@@ -104,9 +104,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
     # Consume the S3 secret from the Dapr secret store (OpenBao) before the first cron sweep, so the
-    # sweep's S3 access uses a store-sourced key and the plaintext secret never ships in pod env — the
-    # audit's secret-consumption fix. Mutates the cached settings in place; fails closed if unavailable.
-    # In a thread: the fetch is sync (blocking httpx + retry sleeps) and must not stall the event loop.
+    # sweep's S3 access uses a store-sourced key and the plaintext secret never ships in pod env. Fails
+    # closed if unavailable. The splice mutates the `@lru_cache`d settings IN PLACE — deliberately, so
+    # every later `get_settings()` read sees the key; `apply_dapr_secrets` carries why a copy would break
+    # this silently. In a thread: the fetch is sync (blocking httpx + retry sleeps) and must not stall
+    # the event loop.
     await run_in_threadpool(apply_dapr_secrets, settings)
     # Fail fast at boot if the S3 secret is still empty (neither the store nor plaintext env provided it) —
     # the sweep is a real S3 consumer, so a silent empty key would otherwise fail every later compaction

@@ -401,6 +401,73 @@ def test_every_parent_edge_relation_exists_on_the_child_type() -> None:
     )
 
 
+#: The ONLY production sites allowed to CALL :func:`service_kit.governed.fga.hierarchy_edge_tuples`,
+#: and what each one is for.
+#:
+#: `grant_on_create` is where the catalog's create doors land — `fga_deps.seed_ownership` is the one
+#: post-create seed and it reaches the edge through there — so every governed object that HAS a
+#: catalog record gets its hierarchy edge from a single writer.
+#:
+#: The medallion's train handler is the sanctioned second writer, and the reason is a fact about the
+#: model plane rather than a convenience: `table:<models_ns>$<model>` has NO catalog record. The
+#: trainer writes the registry dataset straight to its URI and the catalog's model doors open that
+#: URI explicitly, so no create door ever runs for a model and `seed_ownership` never fires on one.
+#: That write is the only thing that makes the FGA object exist.
+#:
+#: Anything else reaching for this function is a service minting hierarchy for objects some create
+#: door already governs — two writers for one edge, which is how a parent link ends up asserted in
+#: two shapes that drift. Route it through `seed_ownership`, or bring the reason here.
+_HIERARCHY_EDGE_WRITERS: Final = {
+    "packages/service-kit/src/service_kit/governed/fga.py",
+    "services/medallion/src/medallion/services/train.py",
+}
+
+
+def _hierarchy_edge_call_sites() -> list[str]:
+    """Repo-relative path of every production CALL to ``hierarchy_edge_tuples``.
+
+    PARSED, not grepped. The pairing is discussed in prose at half a dozen sites — its own docstring,
+    `grant_on_create`'s inline note, the seed script's shell helper, the comment at the medallion call
+    site — so a text scan reports the discussion as writers and the gate would be measuring nothing.
+    """
+    found: set[str] = set()
+    for root in (REPO / "packages", SERVICES, REPO / "scripts", REPO / "runners"):
+        for py in root.rglob("*.py"):
+            posix = py.relative_to(REPO).as_posix()
+            # A sealed runner keeps its OWN `.venv` inside the tree (`runners/<w>/.venv`), so a scan
+            # rooted above one walks a third-party site-packages — thousands of files, and the first
+            # one carrying a BOM aborts the parse. Read as bytes for the same reason.
+            if "/tests/" in posix or "/test_" in posix or ".venv/" in posix or "/node_modules/" in posix:
+                continue
+            for node in ast.walk(ast.parse(py.read_bytes())):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                name = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else None
+                if name == "hierarchy_edge_tuples":
+                    found.add(posix)
+    return sorted(found)
+
+
+def test_only_the_sanctioned_writers_seed_a_hierarchy_edge() -> None:
+    """One create-door seed, plus the model plane's — which has no create door to seed it."""
+    callers = _hierarchy_edge_call_sites()
+    missing = sorted(_HIERARCHY_EDGE_WRITERS - set(callers))
+    assert not missing, (
+        f"these files are declared hierarchy-edge writers and call nothing: {missing}. Either the "
+        "write moved and this gate is now vacuous, or a governed object lost its parent edge."
+    )
+    rogue = sorted(set(callers) - _HIERARCHY_EDGE_WRITERS)
+    assert not rogue, (
+        f"a third site writes FGA hierarchy edges: {rogue}. Hierarchy is minted by the catalog's "
+        "create-door seed (`fga_deps.seed_ownership` → `grant_on_create`); the medallion's train "
+        "handler is the ONE exception, because a model registry dataset has no catalog record and so "
+        "no create door runs for it. A service that owns neither is asserting a parent link some "
+        "create door also asserts — two writers for one edge, and nothing reports the drift. Seed it "
+        "through the catalog, or record why it cannot be and add it to `_HIERARCHY_EDGE_WRITERS`."
+    )
+
+
 def test_every_fga_relation_in_code_exists_in_the_compiled_model() -> None:
     model = _model_relations()
     phantom = [f"{loc} -> {obj_type}#{rel}" for loc, obj_type, rel in _fga_literals() if obj_type in model and rel not in model[obj_type]]

@@ -44,7 +44,7 @@ from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.serialization import dump
 from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
-from catalog.services import dataplane, native, table_create
+from catalog.services import blob_serving, dataplane, native, table_create
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
@@ -412,7 +412,7 @@ async def read_table_blob(
     """
     segments = parse_identifier(id, settings.delimiter)
     blob = await run_in_threadpool(
-        dataplane.read_blob,
+        blob_serving.read_blob,
         ns,
         so,
         segments,

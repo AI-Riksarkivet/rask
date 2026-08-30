@@ -91,13 +91,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     assert_app_token_configured(dapr_enabled=settings.control_emit_enabled)
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
-    # of truth, NOT a fallback (the audit's 'wired but never read' / 'plaintext still ships' fix). With
-    # secrets_from_dapr on, the chart does not put the secret in pod env, so reading the env would yield
-    # nothing — we fetch from the store (retrying while it seeds) and FAIL CLOSED if it never arrives,
-    # rather than booting with an empty/plaintext key.
-    # THE SHARED SEAM (DUP-09), in a thread: the fetch is sync (blocking httpx + sleep between retries,
-    # ~80s worst case) — event-loop hygiene: nothing is served during the lifespan anyway, but the loop
-    # must stay free for other startup tasks and must never normalize blocking calls in async context.
+    # of truth, NOT a fallback. With secrets_from_dapr on, the chart does not put the secret in pod env,
+    # so reading the env would yield nothing: fetch from the store (retrying while it seeds) and FAIL
+    # CLOSED if it never arrives, rather than booting with an empty/plaintext key.
+    #
+    # `settings` IS the `@lru_cache`d singleton (bound above), and the splice inside `apply_dapr_secrets`
+    # assigns onto it IN PLACE. That is deliberate, and it is the only thing that makes the per-request
+    # `SettingsDep` read correct: every route resolves `get_settings()` again, and `storage_options()`
+    # rebuilds the S3 credentials from whatever that object holds. Splicing a local copy instead would
+    # leave the cache carrying an empty secret and every request signing with it — on a fleet that boots
+    # green and reports ready. Sound because it happens ONCE, here, before the app serves anything.
+    # `apply_dapr_secrets` carries the alternatives and what each costs;
+    # tests/unit/test_boot_secret_splice_is_in_place.py fails if the in-place read is broken.
+    #
+    # In a thread: the fetch is sync (blocking httpx + sleeps between retries, ~80s worst case). Nothing
+    # is served during the lifespan, but the loop must stay free for other startup tasks — and a blocking
+    # call in async context is never normalized.
     await run_in_threadpool(consume_dapr_secrets, settings)
     app.state.namespace = build_namespace(settings)  # fail fast if storage misconfigured
     # #3-A warehouse routing caches (only used when warehouses_enabled): top-level-namespace → its physical

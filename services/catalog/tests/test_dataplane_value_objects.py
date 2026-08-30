@@ -20,7 +20,7 @@ import pathlib
 
 from pydantic import BaseModel
 
-from catalog.services.dataplane import BlobStream
+from catalog.services.blob_serving import BlobStream
 
 
 _SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "catalog"
@@ -38,11 +38,16 @@ def test_the_blob_stream_value_object_is_a_pydantic_model() -> None:
     assert issubclass(BlobStream, BaseModel), "BlobStream is not a pydantic BaseModel"
 
 
+#: The data plane's own modules — the pylance operations and the blob-serving seam split out of them.
+#: Both are in scope for the value-object rule; a new data-plane module joins this set.
+_DATA_PLANE = frozenset({"dataplane.py", "blob_serving.py"})
+
+
 def test_no_catalog_module_declares_a_dataclass_value_object_in_the_data_plane() -> None:
     offences = [
         f"{path.relative_to(_SRC)}:{node.lineno} @dataclass {node.name}"
         for path in _modules()
-        if path.name == "dataplane.py"
+        if path.name in _DATA_PLANE
         for node in ast.walk(ast.parse(path.read_text()))
         if isinstance(node, ast.ClassDef)
         for deco in node.decorator_list

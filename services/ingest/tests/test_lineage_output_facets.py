@@ -20,11 +20,13 @@ its name implies.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 from openlineage.client.serde import Serde
 
+from ingest.catalog import ServiceCatalogSeam
 from ingest.lineage import LineageRecorder, _output_datasets
 
 
@@ -325,8 +327,8 @@ def _refused() -> dict[str, Any]:
 
             return bronze_namespace_for(self.project)
 
-    class _Catalog:
-        def publish(self, _ns: str, _ds: str, _v: int) -> dict[str, Any]:
+    class _Catalog(ServiceCatalogSeam):
+        def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, object]:
             return {"published": False, "from_version": 3, "to_version": 4, "reason": "quality gate failed: not_null"}
 
     return _publish(_Catalog(), _Spec(), 4)

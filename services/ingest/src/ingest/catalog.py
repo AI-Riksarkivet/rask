@@ -1,8 +1,18 @@
 """The catalog seam — creation is server-side, appends are the lander's (D6, §0 C10).
 
-`LocalCatalog` is the filesystem implementation used by tests and local runs. The in-cluster client
-that calls the catalog service lands with the commit-through step; both satisfy
-`ingest.lander.CatalogClient`, so the lander never learns which one it has.
+**THE SEAM IS A UNION, not one contract.** `LocalCatalog` below is the filesystem implementation used
+by tests and local runs; `CatalogServiceClient` (`catalog_service.py`) is the in-cluster client. They
+share exactly one method — `ensure` — and nothing else: the local one creates datasets itself and is
+registered against by the lander, while the service one commits, publishes and reports the version
+over HTTP and never registers anything locally. One Protocol spanning both could only describe them
+by describing neither, which is what left `runtime._catalog()` returning an untyped object and every
+call site on this seam unchecked by `ty`.
+
+So the shapes are declared as they are: `LocalCatalogSeam` and `ServiceCatalogSeam`, joined as
+`CatalogSeam`. The three single-method capability protocols the service half composes
+(`CommittingCatalog`, `PublishingCatalog`, `VersioningCatalog`) are what the runtime narrows on —
+`isinstance` against a `runtime_checkable` Protocol asks exactly the question the runtime is asking,
+"does this catalog have that operation", and `ty` can follow it into the call.
 
 Creation lives HERE and not in the lander because the catalog's own door refuses it: the
 client-direct fragment endpoint hardcodes `LanceOperation.Append` and rules that "CREATE and
@@ -13,12 +23,14 @@ OVERWRITE stay server-side to centralize it and to owner-govern the destructive 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ingest.lander import create_empty
 
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import pyarrow as pa
 
 
@@ -32,6 +44,66 @@ def _is_object_store(uri: str) -> bool:
     return "://" in uri and not uri.startswith("file://")
 
 
+@runtime_checkable
+class CommittingCatalog(Protocol):
+    """A catalog that folds client-written fragments into a version ITSELF.
+
+    The distinguishing capability of the deployed plane: a commit the catalog makes is one the
+    cascade can ride, because the event that wakes a mover is the catalog's publication of a version.
+    A catalog without this operation can only record versions where nothing downstream will see them.
+    """
+
+    def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]: ...
+
+
+@runtime_checkable
+class PublishingCatalog(Protocol):
+    """A catalog that can gate a version and advance the `published` tag (§ D2 D-R1)."""
+
+    def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, object]: ...
+
+
+@runtime_checkable
+class VersioningCatalog(Protocol):
+    """A catalog that can be asked a table's current version — the `read_version` a commit is built against."""
+
+    def describe_version(self, namespace: str, dataset: str) -> int: ...
+
+
+@runtime_checkable
+class LocalCatalogSeam(Protocol):
+    """The filesystem half: it creates the dataset itself and the lander registers versions against it.
+
+    It has none of the three capabilities above, and that is the whole difference between a dev run
+    and a deployed one — a version recorded here is visible only to the process that recorded it.
+    """
+
+    def ensure(self, project: str, dataset: str, external_base: str | None = None) -> str: ...
+
+    def ensure_at(self, uri: str, external_base: str | None = None) -> str: ...
+
+    def ensure_dataset(self, project: str, dataset: str, schema: pa.Schema | None = None) -> str: ...
+
+    def register_version(self, dataset_uri: str, version: int, run_id: str) -> None: ...
+
+
+@runtime_checkable
+class ServiceCatalogSeam(CommittingCatalog, PublishingCatalog, VersioningCatalog, Protocol):
+    """The in-cluster half: creation, the commit, the publication and the version all belong to the catalog.
+
+    It has no `register_version`, because the run id rides the commit itself — so it can never be
+    handed to the lander, whose job is to register what it wrote.
+    """
+
+    def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str: ...
+
+
+#: What `runtime._catalog()` hands back. Declared as the union rather than left open, so a method that
+#: one implementation loses — or gains at one call site and not the other, which is how `external_base`
+#: reached a deployed run — is a type error rather than an in-cluster TypeError after the run is accepted.
+CatalogSeam = LocalCatalogSeam | ServiceCatalogSeam
+
+
 class LocalCatalog:
     """Filesystem catalog: creates the dataset empty with the creation-time flags, records versions."""
 
@@ -43,12 +115,12 @@ class LocalCatalog:
         raise NotImplementedError("resolved through dataset_uri(); ensure_at() is the path-based form")
 
     def ensure(self, project: str, dataset: str, external_base: str | None = None) -> str:
-        """The ID-based form, so the local and service catalogs present ONE seam.
+        """The ID-based form — the ONE method both halves of the seam share.
 
         The service vends a location; this composes the dev fallback from env and then creates
-        through the same path-based code. The caller never learns which it has, which is the whole
-        point of the seam — and is what lets the in-cluster swap be a config change rather than a
-        code change at every call site.
+        through the same path-based code. Because the call is identical either way, no caller has to
+        know which half it holds to provision a table, and the in-cluster swap stays a config change
+        rather than a code change at every call site.
         """
         from ingest.runtime import warehouse_root
 

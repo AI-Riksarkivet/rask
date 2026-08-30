@@ -18,10 +18,11 @@ def main() -> None:
     # insecure/CA flags and credentials — including the per-client HCP bridge — so
     # smoking IT smokes the production path. `derive_hcp_creds` is pure (it returns
     # the pair, mutating nothing), so it serves only the diagnostic print here.
-    from storage import derive_hcp_creds, s3_client
+    from storage import configured_endpoint, derive_hcp_creds, s3_client
 
-    endpoint = os.getenv("RASK_S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT_URL") or os.getenv("HCP_ENDPOINT")
-    print(f"endpoint: {endpoint}", flush=True)
+    # `configured_endpoint` rather than a local env chain: what this line PRINTS has to be what the
+    # client below CONNECTS to, and a second copy of the precedence list is how those two diverge.
+    print(f"endpoint: {configured_endpoint()}", flush=True)
     if os.getenv("AWS_ACCESS_KEY_ID"):
         creds_source = "env AWS_*"
     elif derive_hcp_creds() is not None:

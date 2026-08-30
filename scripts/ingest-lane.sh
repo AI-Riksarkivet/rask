@@ -523,7 +523,7 @@ cmd_kill() {
 import base64, io, os, sys, tarfile
 from storage import s3_client
 bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
-client = s3_client(os.getenv('RASK_S3_ENDPOINT_URL'))
+client = s3_client()
 with tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.read()))) as archive:
     for member in archive.getmembers():
         if not member.isfile() or not member.name.endswith('.tif'):
@@ -538,12 +538,13 @@ print('uploaded to s3://%s/%s' % (bucket, '$prefix'))
 	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, os, urllib.request
 import os as _os
+from storage import configured_endpoint
 def _auth():
     tok = _os.environ.get('APP_API_TOKEN')
     return {'dapr-api-token': tok} if tok else {}
 bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
 body = json.dumps({'kind':'s3-prefix','project':'$PROJECT','dataset':'$dataset',
-                   'options':{'bucket':bucket,'prefix':'$prefix','endpoint':os.getenv('RASK_S3_ENDPOINT_URL')}}).encode()
+                   'options':{'bucket':bucket,'prefix':'$prefix','endpoint':configured_endpoint()}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
                              headers={'Content-Type':'application/json','Idempotency-Key':'$key', **_auth()})
 with urllib.request.urlopen(req, timeout=30) as r:

@@ -19,10 +19,11 @@ reports None -- honestly, because it has no way to recognise its own earlier com
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
 
 import pytest
 
+from ingest.catalog import LocalCatalogSeam, ServiceCatalogSeam
 from ingest.runtime import _prior_commit_for_run, finalize_run
 from ingest.workflow import RunSpec
 
@@ -30,19 +31,23 @@ from ingest.workflow import RunSpec
 SPEC = RunSpec.model_validate({"run_id": "run-purged", "kind": "s3-prefix", "project": "acme", "dataset": "pages", "options": {}})
 
 
-class _CatalogThatRemembers:
-    """A catalog service client whose `commit` honours the run marker, as the real one now does."""
+class _CatalogThatRemembers(ServiceCatalogSeam):
+    """A catalog service client whose `commit` honours the run marker, as the real one now does.
+
+    Declared as the seam half it stands for: the parameter names are the ones the runtime may pass by
+    keyword, so a double that drifts from the real client is a type error rather than a live TypeError.
+    """
 
     def __init__(self, answer: tuple[int, int] | None) -> None:
         self._answer = answer
         self.asked: list[tuple[str, int]] = []
 
-    def ensure(self, _namespace: str, _dataset: str) -> str:
+    def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
         """`finalize_run` resolves the table before anything else; not the subject here."""
         return "s3://wh/pages.lance"
 
-    def commit(self, _project: str, _dataset: str, fragments: list[str], read_version: int, run_id: str) -> tuple[int, int]:
-        self.asked.append((run_id, len(fragments)))
+    def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
+        self.asked.append((run_id, len(fragments_json)))
         if self._answer is None:
             raise ValueError("no fragments to commit")
         return self._answer
@@ -66,7 +71,7 @@ def test_a_run_that_NEVER_committed_answers_None_rather_than_raising() -> None:
 def test_a_catalog_with_NO_commit_answers_None() -> None:
     """LocalCatalog, the dev default. No marker, so no recognition -- and no crash."""
 
-    class _Local:
+    class _Local(LocalCatalogSeam):
         pass
 
     assert _prior_commit_for_run(_Local(), SPEC) is None
@@ -94,19 +99,11 @@ def test_the_terminal_record_DISTINGUISHES_the_two_empties(
     """
     from ingest import runtime as runtime_module
 
-    class _Result:
-        rows = 0
-
-    class _Lander:
-        def __init__(self, _catalog: object) -> None: ...
-
-        def commit_fragments(self, *_a: Any, **_k: Any) -> Any:
-            return _Result()
-
-    # Patched at the SOURCE module: `finalize_run` imports `Lander` locally inside the function, so
+    # Patched at the SOURCE module: `finalize_run` imports the reader locally inside the function, so
     # binding it on `ingest.runtime` binds nothing the call will look at — the same local-import trap
-    # `test_fanin_return_ceiling` records for `discover_staged`.
-    monkeypatch.setattr("ingest.lander.Lander", _Lander)
+    # `test_fanin_return_ceiling` records for `discover_staged`. The URI below names no real store;
+    # the tier total is not this test's subject, only the terminal record derived beside it.
+    monkeypatch.setattr("ingest.lander.rows_in_dataset", lambda _uri: 0)
     monkeypatch.setattr(runtime_module, "_catalog", lambda: _CatalogThatRemembers(prior))
     monkeypatch.setattr("ingest.staging.discover_staged", lambda *_a, **_k: [])
     monkeypatch.setattr("ingest.staging.purge_staged", lambda *_a, **_k: None)

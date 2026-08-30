@@ -39,9 +39,12 @@ def _check(label: str, fn: Callable[[], object]) -> bool:
 
 def main() -> int:
     load_dotenv()
-    from storage import s3_client
+    from storage import configured_endpoint, s3_client
 
-    endpoint = os.getenv("RASK_S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT_URL")
+    # `configured_endpoint` rather than a local env chain: this value both reports the backend and
+    # decides whether the smoke runs at all, so a copy that omits an alias refuses a backend
+    # `s3_client()` would have reached — a green-looking refusal, the worst answer available here.
+    endpoint = configured_endpoint()
     print(f"endpoint: {endpoint}", flush=True)
     print(f"creds set: {bool(os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY'))}", flush=True)
     if not endpoint:

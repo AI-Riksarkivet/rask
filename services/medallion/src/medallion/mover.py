@@ -53,8 +53,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.startup_complete = False
     app.state.shutting_down = False
     assert_app_token_configured(dapr_enabled=_settings.dapr_enabled)
-    # Consume the S3 secret from the Dapr secret store when configured (Batch 7 — strict sole source,
-    # fails closed; no-op in dev). Threadpool: the fetch blocks + retries while the store seeds.
+    # Consume the S3 secret from the Dapr secret store when configured (strict sole source, fails closed;
+    # no-op in dev). Threadpool: the fetch blocks + retries while the store seeds. The splice mutates the
+    # `@lru_cache`d settings IN PLACE — deliberately, so every later `get_settings()` read sees the key;
+    # `apply_dapr_secrets` carries why a copy would break this silently.
     await run_in_threadpool(apply_dapr_secrets, _settings)
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     app.state.dapr = DaprClient()  # local sidecar; persists publishes to NATS JetStream

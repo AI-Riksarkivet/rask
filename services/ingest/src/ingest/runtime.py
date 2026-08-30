@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import pyarrow as pa
 from lance import blob_field
 
+from ingest.catalog import CatalogSeam, CommittingCatalog, PublishingCatalog, VersioningCatalog
 from ingest.config import settings
 
 
@@ -313,8 +314,7 @@ def ensure_dataset_at(spec: RunSpec) -> tuple[str, int]:
             external_base=approved_external_base(external_base_for(source_spec)),
         )
     )
-    describe_version = getattr(catalog, "describe_version", None)
-    read_version = int(describe_version(spec.namespace, spec.dataset)) if describe_version is not None else 0
+    read_version = int(catalog.describe_version(spec.namespace, spec.dataset)) if isinstance(catalog, VersioningCatalog) else 0
     return location, read_version
 
 
@@ -512,7 +512,7 @@ async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:
         await queue.close()
 
 
-def _prior_commit_for_run(catalog: object, spec: RunSpec) -> tuple[int, int] | None:
+def _prior_commit_for_run(catalog: CatalogSeam, spec: RunSpec) -> tuple[int, int] | None:
     """The version THIS run already committed, or None.
 
     Asked with an EMPTY fragment list on purpose: that is the shape a post-purge replay is in, and the
@@ -520,14 +520,13 @@ def _prior_commit_for_run(catalog: object, spec: RunSpec) -> tuple[int, int] | N
     including the deliberate refusal an unknown run gets — because "I cannot tell" and "it never
     committed" lead to the same honest report, and a status read must not raise into a terminal path.
     """
-    commit = getattr(catalog, "commit", None)
-    if commit is None:
+    if not isinstance(catalog, CommittingCatalog):
         return None
     try:
         # read_version=0 so the marker scan walks EVERY version. It scans versions AFTER the floor,
         # so a floor that is too high would hide the run's own commit — and this caller does not know
         # which version the run based its commit on, only that it may have made one.
-        version, rows = commit(spec.project, spec.dataset, [], 0, spec.run_id)
+        version, rows = catalog.commit(spec.project, spec.dataset, [], 0, spec.run_id)
     except Exception:
         return None
     return (int(version), int(rows))
@@ -584,7 +583,7 @@ def _fragments_to_commit(uri: str, spec: RunSpec, carried: list[str], *, fallbac
     return staged
 
 
-def _finalize_without_fragments(catalog: Any, uri: str, spec: RunSpec, errors: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 — the catalog seam
+def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, errors: dict[str, str]) -> dict[str, Any]:
     """The run committed nothing. Report that HONESTLY, and purge what it staged.
 
     A whole alternative terminal path, lifted out of `finalize_run` (ingest-flow-10) rather than
@@ -596,14 +595,14 @@ def _finalize_without_fragments(catalog: Any, uri: str, spec: RunSpec, errors: d
     whose staged manifests it then purged. Only the catalog can tell the third from the first two,
     which is what `_prior_commit_for_run` asks.
     """
-    from ingest.lander import Lander
+    from ingest.lander import rows_in_dataset
     from ingest.staging import purge_staged
 
     # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this path exists because the
-    # catalog branch in `finalize_run` skipped the one `Lander.commit_fragments` has always had
-    # (`lander.py:95-100`: "a run whose every unit failed should leave no version behind to
-    # explain"). It POSTed `{"fragments": []}`, which the catalog refuses with 400 "no fragments
-    # to commit" (`catalog/services/dataplane.py:598`).
+    # catalog branch in `finalize_run` skipped the guard `Lander.commit_fragments` has always had
+    # ("a run whose every unit failed should leave no version behind to explain"). It POSTed
+    # `{"fragments": []}`, which the catalog refuses with 400 "no fragments to commit"
+    # (`catalog/services/dataplane.py:598`).
     #
     # DEPLOYED, that 400 is a crash, not a message: `RASK_INGEST_USE_CATALOG: "true"`
     # (chart/values.yaml), so the 400 raises out of the `finalize` ACTIVITY, burns its four
@@ -616,7 +615,11 @@ def _finalize_without_fragments(catalog: Any, uri: str, spec: RunSpec, errors: d
     # `commit`, and `LocalCatalog` — the default with `RASK_INGEST_USE_CATALOG` unset, which is what
     # every test uses — does not. No local test could take that branch. That is the argument for the
     # guard living out here rather than inside either catalog implementation.
-    result = Lander(catalog).commit_fragments(uri, [], run_id=spec.run_id)
+    #
+    # The tier total is READ rather than obtained by committing nothing through a `Lander`. A lander
+    # registers what it wrote, and only the LOCAL half of the catalog seam can be registered against
+    # — so the catalog half must never be handed to one, however empty the fragment list is.
+    tier_rows = rows_in_dataset(uri)
     # ASK BEFORE ASSERTING NOTHING LANDED. Reaching here with an empty list has two very different
     # causes, and only the catalog can tell them apart: a run that genuinely wrote nothing, and a
     # RETRY of a run that already committed — the commit path purges the staged manifests right
@@ -643,7 +646,7 @@ def _finalize_without_fragments(catalog: Any, uri: str, spec: RunSpec, errors: d
         # version THIS run committed, recognised by its own marker, or None if it never did.
         "committed_version": prior[0] if prior else None,
         "rows": prior[1] if prior else 0,
-        "dataset_rows": result.rows,
+        "dataset_rows": tier_rows,
         "errors": errors,
         # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
         # `finalize_run(spec, [], {...})` and pins COMPLETE_WITH_ERRORS under "a run that
@@ -687,7 +690,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
     if not all_fragments:
         return _finalize_without_fragments(catalog, uri, spec, errors)
 
-    if hasattr(catalog, "commit"):
+    if isinstance(catalog, CommittingCatalog):
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot
         # ride: the event that wakes a mover is the catalog's publication of a new version, so a
         # locally-recorded commit lands the data and tells nothing downstream it happened.
@@ -764,7 +767,7 @@ class PublishSpec(Protocol):
     def run_id(self) -> str: ...
 
 
-def _publish(catalog: Any, spec: PublishSpec, version: int) -> dict[str, Any]:  # noqa: ANN401 — the catalog seam
+def _publish(catalog: CatalogSeam, spec: PublishSpec, version: int) -> dict[str, Any]:
     """Publish the committed version, and report the RANGE it covers (§ D2 D-R3).
 
     `from_version`/`to_version` are what a consumer needs to resolve an exact row delta
@@ -774,11 +777,10 @@ def _publish(catalog: Any, spec: PublishSpec, version: int) -> dict[str, Any]:  
     committed and a later publish can still gate them, so the failure is REPORTED on the run rather
     than raised. Silence here would be worse than either — a run that looks published and is not.
     """
-    publish = getattr(catalog, "publish", None)
-    if publish is None:
+    if not isinstance(catalog, PublishingCatalog):
         return {"published": False, "publish_error": "catalog has no publish operation"}
     try:
-        body = publish(spec.namespace, spec.dataset, version)
+        body = catalog.publish(spec.namespace, spec.dataset, version)
     except Exception as exc:
         _log.warning("publish failed for run %s at version %s: %s", spec.run_id, version, exc)
         return {"published": False, "publish_error": str(exc)}
@@ -790,7 +792,13 @@ def _publish(catalog: Any, spec: PublishSpec, version: int) -> dict[str, Any]:  
     }
 
 
-def _catalog() -> Any:  # noqa: ANN401 — LocalCatalog or CatalogServiceClient, one seam
+def _catalog() -> CatalogSeam:
+    """The catalog this process talks to — one of the seam's two halves, and which one is config.
+
+    Declared as the union rather than left open so `ty` checks every call made on it: the halves
+    share only `ensure`, and a call that only one of them can answer must be reached through an
+    `isinstance` against the capability it needs.
+    """
     from ingest.catalog_service import build_catalog
 
     return build_catalog(BRONZE_SCHEMA)

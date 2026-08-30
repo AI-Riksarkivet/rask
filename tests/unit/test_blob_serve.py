@@ -1,4 +1,4 @@
-"""§9 P1 blob serving path — ``dataplane.read_blob`` + the Range parsing + the authz tier pin.
+"""§9 P1 blob serving path — ``blob_serving.read_blob`` + the Range parsing + the authz tier pin.
 
 Like ``test_blob_create.py``, the read tests run a REAL ``dir`` namespace + real pylance (no mocks):
 they are the unit-level proof that a credential-less consumer gets exact payload bytes (full and
@@ -26,8 +26,9 @@ from lance_namespace import (
 
 from catalog.api.fga_deps import _action_relation
 from catalog.api.v1.endpoints.data import _parse_range
-from catalog.services import dataplane
-from catalog.services.dataplane import BlobStream, create_table, read_blob
+from catalog.services import blob_serving
+from catalog.services.blob_serving import BlobStream, read_blob
+from catalog.services.dataplane import create_table
 
 
 def _blob_schema() -> pa.Schema:
@@ -110,7 +111,7 @@ def test_read_blob_unsatisfiable_range(ns) -> None:
 def test_read_blob_streams_in_bounded_windows(ns, monkeypatch: pytest.MonkeyPatch) -> None:
     # The chunk loop is what keeps a multi-GB payload out of catalog memory — pin its math by
     # shrinking the window: 11 bytes at window 4 must arrive as 4+4+3, byte-identical.
-    monkeypatch.setattr(dataplane, "_BLOB_CHUNK_BYTES", 4)
+    monkeypatch.setattr(blob_serving, "_BLOB_CHUNK_BYTES", 4)
     blob = read_blob(ns, {}, ["clips"], column="payload", row=0)
     pieces = list(blob.chunks())
     assert pieces == [b"hell", b"o-wo", b"rld"]

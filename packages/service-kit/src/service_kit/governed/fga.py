@@ -126,15 +126,18 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relat
     """BOTH directions of one parent→child link, so a caller cannot write half of it.
 
     OpenFGA cannot walk a tuple backwards, so `can_get_metadata: reader or can_get_metadata from
-    child` needs the inverse edge STORED. `grant_on_create` has always written both; every other
-    writer has written only `parent`, and each one of those is an object whose upward visibility is
-    silently dead — the grantee can read the table and cannot see the namespace or warehouse that
-    contains it, so their own breadcrumb 403s and every list above it comes back empty.
+    child` needs the inverse edge STORED. An object holding the forward `parent` edge alone has
+    silently dead upward visibility: the grantee can read the table and cannot see the namespace or
+    warehouse that contains it, so their own breadcrumb 403s and every list above it comes back empty.
 
-    That is why this exists as a function rather than as a rule people are expected to remember: the
-    C1 rollout shipped with `medallion.services.train` and `scripts/seed_medallion_fga.sh` still
-    writing the forward edge alone, and nothing catches it — a one-directional link is a perfectly
-    valid tuple that simply never resolves.
+    That is why the pairing is a function rather than a rule people are expected to remember — a
+    one-directional link is a perfectly valid tuple that simply never resolves, so it is invisible to
+    every mocked-client test and to the API itself. The set of callers is closed, and
+    `tests/unit/test_invariants.py::test_only_the_sanctioned_writers_seed_a_hierarchy_edge` holds it
+    that way: `grant_on_create` below (where the catalog's create-door seed lands) and
+    `medallion.services.train`, whose model registry datasets have no catalog record and so reach no
+    create door at all. `scripts/seed_medallion_fga.sh` pairs the two directions in its own `link`
+    helper, being shell.
 
     The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
     a `child` tuple on a type that does not is accepted by the API and read by no rule, which is the

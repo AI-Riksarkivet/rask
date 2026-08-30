@@ -90,7 +90,13 @@ class CommitResult(BaseModel):
 
 
 class CatalogClient(Protocol):
-    """The catalog seam. A Protocol so the lander is testable without a live catalog service."""
+    """What the LANDER needs of a catalog — the local half of the seam (`ingest.catalog`).
+
+    A Protocol so the lander is testable without a live catalog service, and narrower than
+    `LocalCatalogSeam` on purpose: these two methods are the whole of what committing through the
+    lander touches. The service-side client satisfies none of it — it registers no version, because
+    the run id rides its own commit — so a lander can only ever be built over the local half.
+    """
 
     def ensure_dataset(self, project: str, dataset: str, schema: pa.Schema) -> str:
         """Create the dataset EMPTY server-side if absent; return its object-store URI."""
@@ -103,6 +109,16 @@ class CatalogClient(Protocol):
         image tag binds a CODE version to a DATA version in lineage.
         """
         ...
+
+
+def rows_in_dataset(uri: str) -> int:
+    """The TIER total — how many rows the dataset holds right now, not what any run added.
+
+    Here rather than at the caller so that every Lance touch in this plane stays in the one module
+    that is allowed them (I4), and so a test that needs to stand in for the store has one seam to
+    patch instead of one per reader.
+    """
+    return lance.dataset(uri).count_rows()
 
 
 class Lander:

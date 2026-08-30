@@ -496,10 +496,20 @@ async def _problem_json(_request: Request, exc: StarletteHTTPException) -> JSONR
 # caller was handed matched none of them. An id that differs per hop correlates nothing — the same
 # failure as having none.
 #
-# `X-Request-ID` is not hop-by-hop, so the proxy below already forwards it untouched once it is set;
-# `service_kit.otel.server_request_hook` then puts it on every service's span. A caller-supplied id is
-# PRESERVED rather than replaced, so a client correlating its own logs across the boundary keeps the
-# join.
+# `X-Request-ID` is not hop-by-hop, so the proxy below forwards it untouched once it is set, and each
+# service's own `RequestIDMiddleware` echoes rather than re-mints it — so one value reaches every
+# downstream LOG line, through the filter `setup_logging` installs.
+#
+# IT REACHES A DOWNSTREAM SPAN ONLY WHERE THE APP WIRES OTEL IN PROCESS.
+# `service_kit.otel.server_request_hook` is a Python callable handed to
+# `FastAPIInstrumentor.instrument_app`, so only `setup_otel` can install it: the five
+# `make_service_app` services and this app. The eight the chart launches under
+# `opentelemetry-instrument` (the lance five, the media three) take their instrumentation from an
+# entry point that accepts no callable, and their spans carry no `request.id`. Which family is which
+# is pinned by `tests/unit/test_the_app_roster_has_no_fifth_shape.py`.
+#
+# A caller-supplied id is PRESERVED rather than replaced, so a client correlating its own logs across
+# the boundary keeps the join.
 app.add_middleware(RequestIDMiddleware)
 
 

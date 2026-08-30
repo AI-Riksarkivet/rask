@@ -12,8 +12,10 @@ needs to tell "this ran and published nothing" from "this broke".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
+from ingest.catalog import LocalCatalogSeam, ServiceCatalogSeam
 from ingest.runtime import _publish
 
 
@@ -43,14 +45,21 @@ class _Spec:
         return bronze_namespace_for(self.project)
 
 
-class _Catalog:
+class _Catalog(ServiceCatalogSeam):
+    """A publishing catalog — declared as the seam half it stands for, so it cannot drift from it.
+
+    Only `publish` is exercised; the rest of the half is inherited. Subclassing the Protocol rather
+    than duck-typing it means a signature this double gets wrong is a type error here instead of a
+    TypeError in a deployed run, which is the whole reason the seam is typed.
+    """
+
     def __init__(self, body: dict[str, Any] | None = None, raises: Exception | None = None) -> None:
         self._body = body or {}
         self._raises = raises
         self.calls: list[tuple[str, str, int]] = []
 
-    def publish(self, project: str, dataset: str, version: int, *, key_column: str = "id") -> dict[str, Any]:
-        self.calls.append((project, dataset, version))
+    def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, object]:
+        self.calls.append((namespace, dataset, version))
         if self._raises is not None:
             raise self._raises
         return self._body
@@ -117,7 +126,7 @@ def test_a_catalog_WITHOUT_publish_is_reported_rather_than_crashing() -> None:
     reads like a bug in the run. What it must never do is report success.
     """
 
-    class _NoPublish:
+    class _NoPublish(LocalCatalogSeam):
         pass
 
     out = _publish(_NoPublish(), _Spec(), 4)

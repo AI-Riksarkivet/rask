@@ -1,11 +1,11 @@
-"""HTTP middleware registration.
+"""The MEDIA plane's HTTP middleware stack: CORS, the request-body ceiling, one request id.
 
-Only CORS is registered. Deliberately NO ``BaseHTTPMiddleware``-based
-RequestID/Timing middleware: ``BaseHTTPMiddleware`` fully buffers the response
-body, which would break the ``/api/explorer`` ``StreamingResponse`` Range streaming
-(206 partial-content video seeking). If per-request IDs/timing are ever needed,
-use a pure ASGI middleware that passes through streaming bodies, or wire it via
-OpenTelemetry's ASGI instrumentation — not ``BaseHTTPMiddleware``.
+NO LAYER ON THIS PLANE MAY BE ``BaseHTTPMiddleware``-BASED — a constraint on anything added later, not
+a description of what happens to be here. ``BaseHTTPMiddleware`` fully buffers the response body,
+which breaks the ``/api/explorer`` ``StreamingResponse`` Range streaming that 206 partial-content
+video seeking depends on. Each layer below is pure ASGI: it rewrites only the response START message,
+or refuses before the body is read, so a streaming response passes through chunk for chunk. A timing
+or auth layer wanted here is written the same way.
 
 ``expose_headers`` is load-bearing: the browser needs Content-Range /
 Content-Length / Accept-Ranges visible to seek video.
@@ -45,10 +45,7 @@ def register_media_middleware(app: FastAPI, settings: Settings) -> None:
     # a handler-side `read(cap + 1)` bounds that handler's memory and nothing about the landing zone.
     # Pure-ASGI, so this refuses as bytes arrive — before starlette spools anything.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
-    # THE EXEMPTION THIS MODULE RECORDED IS OVER. Its docstring refused a `BaseHTTPMiddleware`
-    # RequestID/Timing pair because that class fully buffers the response body and would break the
-    # `/api/explorer` Range streaming 206 seeking depends on — and it named the remedy: "use a pure ASGI
-    # middleware that passes through streaming bodies". `RequestIDMiddleware` is exactly that now, so
-    # these three apps get the same one id every other service has, and the streaming they traded it for
-    # is untouched: only the response START message is rewritten, never a body chunk.
+    # ONE ID PER REQUEST, on this plane too: `RequestIDMiddleware` is pure ASGI and rewrites only the
+    # response START message, never a body chunk, so the media trio gets the same correlation id every
+    # other service has and the Range streaming above is untouched.
     app.add_middleware(RequestIDMiddleware)

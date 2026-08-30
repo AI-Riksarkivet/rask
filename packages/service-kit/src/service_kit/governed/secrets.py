@@ -164,6 +164,25 @@ def apply_dapr_secrets(settings: SupportsDaprSecrets) -> dict[str, str]:
 
     SYNC by design (the fetch retries while the store seeds, ~80s worst case), so async lifespans call
     it through ``run_in_threadpool``.
+
+    IN PLACE IS THE MECHANISM — do not "fix" it into a copy. Every caller hands this the object its
+    ``@lru_cache``d ``get_settings()`` returns, and that same object is what ``SettingsDep`` (and every
+    later non-request read) resolves; assigning onto it IS how a boot-time secret reaches the request
+    path. Returning a new object or ``model_copy(update=...)`` would leave the cache holding the
+    un-spliced one, so every S3 call signs with an empty key — and it fails INVISIBLY: the boot
+    succeeds, the pods go ready, and the estate reports itself healthy while the object store 403s.
+    Freezing the model lands in the same place, because the accessor would then have to be re-seated
+    (its cache cleared AND a spliced instance forced back in) at five call sites — more moving parts
+    guarding a singleton that no request can reach. Holding the secret OUTSIDE ``Settings``, in a
+    credential object the storage seam reads, is the one genuinely better shape; it is a change across
+    four services and every ``storage_options()`` caller, not a local edit, and nobody has decided to
+    spend it.
+
+    Mutating shared state is sound here because of WHERE it runs: once, inside the lifespan, before the
+    app serves its first request, single-threaded — no reader exists yet, so there is no race and no
+    request can observe a half-spliced object. That is also the constraint: never call this from a
+    request handler or a background task. Pinned by
+    ``tests/unit/test_boot_secret_splice_is_in_place.py``.
     """
     if not settings.secrets_from_dapr:
         return {}

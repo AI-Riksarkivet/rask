@@ -3,20 +3,18 @@
 open_fastapi-audit — "No `server_request_hook` anywhere: `X-Request-ID` is minted, echoed to the
 client, and joined to no span and no log".
 
-`RequestIDMiddleware` mints an id, stores it on `request.state` and echoes it in the response header.
-`setup_otel` then installs the FastAPI instrumentor with NO hook, so that id appears on no span and in
-no log record: a caller holding an `X-Request-ID` from a failed call has nothing to search for. The
-correlation the header exists to provide does not exist.
+`RequestIDMiddleware` mints an id, stores it on `request.state` and echoes it in the response header;
+without a hook on the instrumentation that id reaches no span, and a caller holding an `X-Request-ID`
+from a failed call has a value that correlates with nothing. The hook is the join, and it belongs in
+`setup_otel` rather than in another middleware: it runs INSIDE the instrumentation and buffers
+nothing, so it is safe on the `/api/explorer` Range streaming that 206 video seeking depends on, where
+a `BaseHTTPMiddleware` layer is refused outright (`service_kit.media.middleware`).
 
-THE EXPLORER TRIO IS NOT AN OVERSIGHT, and the finding is careful about this. viewer, search and
-annotator deliberately run no `BaseHTTPMiddleware` RequestID/Timing pair — `media/middleware.py` says
-why in its own docstring: `BaseHTTPMiddleware` fully buffers the response body, which would break the
-`/api/explorer` `StreamingResponse` Range streaming that 206 video seeking depends on. And it names
-the remedy: "wire it via OpenTelemetry's ASGI instrumentation — not BaseHTTPMiddleware".
-
-That is exactly what a `server_request_hook` is. It runs inside the instrumentation, buffers nothing,
-and so restores correlation for the three apps that consciously traded it away — which is why the fix
-belongs in `setup_otel` rather than in another middleware.
+THE HOOK'S REACH IS THE `setup_otel` FAMILY, not the estate. It is a Python callable passed to
+`FastAPIInstrumentor.instrument_app`, so only an app that wires the SDK in process can install it —
+the five `make_service_app` services and the gateway. The eight the chart launches under
+`opentelemetry-instrument` carry the id in their logs and on no span; which family takes which OTel
+path is pinned by `tests/unit/test_the_app_roster_has_no_fifth_shape.py`.
 
 PII STAYS OFF THE SPAN. The reference is explicit: "Don't put PII (email, raw user id, auth tokens) in
 span attributes — those go to the trace backend forever." The estate is clean there today and this
@@ -146,8 +144,9 @@ def test_the_gateway_mints_a_request_id_for_the_whole_trace() -> None:
     the caller's echoed value matched none of them. An id that differs per hop correlates nothing,
     which is the same failure as having none.
 
-    `X-Request-ID` is not hop-by-hop, so once the gateway sets it the proxy already forwards it
-    unchanged and the hook above puts it on every service's span.
+    `X-Request-ID` is not hop-by-hop, so once the gateway sets it the proxy forwards it unchanged and
+    every downstream service echoes rather than re-mints it — one value across every hop's logs, and
+    across the spans of the apps that wire OTel in process (see the module docstring).
     """
     import importlib
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import logging
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ingest.config import settings
 from ingest.naming import delimiter
@@ -44,6 +44,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import pyarrow as pa
+
+    from ingest.catalog import CatalogSeam
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,12 @@ class CatalogError(RuntimeError):
 
 
 class CatalogServiceClient:
-    """Talks to the catalog service. Satisfies the same seam `LocalCatalog` does."""
+    """Talks to the catalog service — the `ServiceCatalogSeam` half of the seam (`ingest.catalog`).
+
+    It shares `ensure` with `LocalCatalog` and nothing else: committing, publishing and reporting a
+    version are operations only a real catalog has, and it registers no version locally because the
+    run id rides the commit itself.
+    """
 
     def __init__(self, schema: pa.Schema, base_url: str | None = None, token: str | None = None) -> None:
         self._schema = schema
@@ -460,7 +467,7 @@ class CatalogServiceClient:
         return int(response.json().get("version") or 1)
 
 
-def build_catalog(schema: pa.Schema) -> Any:  # noqa: ANN401 — LocalCatalog | CatalogServiceClient
+def build_catalog(schema: pa.Schema) -> CatalogSeam:
     """The one place that decides which catalog the plane is talking to."""
     if catalog_enabled():
         return CatalogServiceClient(schema)

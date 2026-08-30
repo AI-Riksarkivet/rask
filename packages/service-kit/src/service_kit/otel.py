@@ -43,16 +43,22 @@ _SPAN_HEADERS: dict[str, str] = {
 def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
     """Join the estate's own `X-Request-ID` to the span it belongs to.
 
-    `RequestIDMiddleware` mints the id, stores it on `request.state` and echoes it to the caller — and
-    it reached no span and no log, so a caller holding an id from a failed request had nothing to
-    search for. The correlation the header exists to provide did not exist.
+    `RequestIDMiddleware` mints the id, stores it on `request.state`, echoes it to the caller and
+    publishes it to the context var `setup_logging`'s filter reads — so the id a caller quotes from a
+    failed request finds the log lines. This is the other half: the same id on the span, so the log
+    line and the trace are one search.
 
-    IN THE INSTRUMENTATION, not in another middleware, and that is the point rather than a convenience.
-    viewer, search and annotator deliberately run no `BaseHTTPMiddleware` RequestID pair —
-    `media/middleware.py` explains that `BaseHTTPMiddleware` fully buffers the response body, which
-    would break the `/api/explorer` Range streaming that 206 video seeking depends on — and that same
-    docstring names this seam as the remedy: "wire it via OpenTelemetry's ASGI instrumentation". A hook
-    buffers nothing, so it restores correlation for the three apps that consciously traded it away.
+    IN THE INSTRUMENTATION, not in another middleware. A hook buffers nothing, which is what makes it
+    safe on the `/api/explorer` Range streaming that 206 video seeking depends on — a
+    `BaseHTTPMiddleware` layer fully buffers the response body and is refused on that plane
+    (`service_kit.media.middleware`).
+
+    IT APPLIES ONLY WHERE `setup_otel` RUNS: the five `make_service_app` services and the gateway. A
+    hook is a Python callable passed to `FastAPIInstrumentor.instrument_app`, and
+    `opentelemetry-instrument` builds the instrumentor from an entry point with no way to carry one —
+    so the eight apps the chart launches under it (the lance five and the media three) carry the id in
+    their logs and on no span. `tests/unit/test_the_app_roster_has_no_fifth_shape.py` pins which family
+    takes which OTel path; closing the gap is a decision about that split, not a change to this hook.
 
     Defensive on both counts the reference's own example is: a missing header is normal (the hook runs
     on every request in every app), and a non-recording span must cost nothing.

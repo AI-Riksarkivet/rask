@@ -234,24 +234,33 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         except ServiceUnavailableError as exc:
             log.warning("train_fga_unavailable", extra={"token": token, "error": str(exc)})
             return _RETRY
-        # The per-model parent link (#115c: `namespace:models parent table:models$<m>`) — seeded
-        # HERE, before the submit, exactly like the seed script pre-links the mover datasets: the
-        # movers write Lance directly, so without this tuple no human rung ever cascades to the
-        # registry dataset and the published model is INVISIBLE in /runs, /datasets/*, /graph under
-        # RASK_FGA_ENABLED. Idempotent (duplicate writes are swallowed); a dangling link for a
-        # job that later fails is harmless (same posture as the pre-seeded mover links). Placed
-        # before the ack so an outage RETRYs rather than acking with the link half-missing.
+        # THE MEDALLION IS THE SANCTIONED SEEDER OF THE MODEL PLANE'S FGA HIERARCHY, and the reason is
+        # that nothing else can be: `table:<models_ns>$<model>` HAS NO CATALOG RECORD. The trainer
+        # writes the registry dataset straight to its URI (`registry_uri_for`) and the catalog's model
+        # doors open that URI explicitly rather than resolving it natively, so no create door ever runs
+        # for a model and the catalog's one post-create seed (`fga_deps.seed_ownership`) never fires on
+        # one. This write is the ONLY thing that makes the FGA object exist. Delete it and no human rung
+        # cascades to the registry dataset: the published model is INVISIBLE in /runs, /datasets/* and
+        # /graph under RASK_FGA_ENABLED, with nothing logged and nothing denied.
+        #
+        # Every OTHER governed object gets its hierarchy edge from the create-door seed, and a third
+        # writer would mean two services asserting one edge in shapes that can drift. That split is
+        # pinned by `tests/unit/test_invariants.py::test_only_the_sanctioned_writers_seed_a_hierarchy_edge`.
+        #
+        # Seeded BEFORE the submit and before the ack: an FGA outage then RETRYs rather than acking with
+        # the link missing. Idempotent (duplicate writes are swallowed), so redelivery is free, and a
+        # link left dangling by a job that later fails is harmless — the same posture the seed script's
+        # pre-linked mover datasets take.
         try:
             await fga.write_tuples(
                 fga_client,
                 actor="system:medallion",
                 origin="train",
-                # BOTH directions. The forward `parent` edge alone leaves the model table with no
-                # upward visibility — `can_get_metadata: reader or can_get_metadata from child` needs
-                # the inverse STORED, because OpenFGA cannot walk a tuple backwards — so a grantee on
-                # one model could read it and could not see the `models` namespace containing it.
-                # This wrote the forward half only; `hierarchy_edge_tuples` is what stops the pair
-                # being re-separated by the next writer.
+                # BOTH directions, which is why this comes from `hierarchy_edge_tuples` rather than a
+                # hand-built tuple. OpenFGA cannot walk a tuple backwards, so
+                # `can_get_metadata: reader or can_get_metadata from child` needs the inverse STORED:
+                # with the forward `parent` edge alone a grantee on one model can read that model and
+                # cannot see the `models` namespace containing it.
                 tuples=fga.hierarchy_edge_tuples(
                     child_object=f"table:{settings.models_namespace}${model}",
                     parent_object=f"namespace:{settings.models_namespace}",
