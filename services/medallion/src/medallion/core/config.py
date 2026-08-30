@@ -345,6 +345,28 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # object-store client fall back to its default chain (or a local path needs no creds at all). ---------
     s3_endpoint: str = Field(default="", alias="MEDALLION_S3_ENDPOINT")
     s3_access_key_id: str = Field(default="", alias="MEDALLION_S3_ACCESS_KEY_ID")
+    #: The access key a RAY STAGE JOB runs under. Empty = the mover's own, which is what every estate
+    #: has today and what keeps this change a no-op until somebody splits them.
+    #:
+    #: SEPARATE FROM THE MOVER'S ON PURPOSE, and the reason is a grant difference rather than tidiness.
+    #: A mover does its own S3 work — `outbox.stage_event` calls `create_dir`, which issues a
+    #: `HeadBucket` — and `HeadBucket` needs an UNCONDITIONED `s3:ListBucket` on the bucket. A stage
+    #: job needs only one tier in and one tier out, which is exactly the shape a prefix-conditioned
+    #: policy can express. One setting forced one grant, so the compute plane could not be scoped
+    #: without either breaking the mover or leaving the job on the tenant root credential.
+    #:
+    #: It also has to be settable here rather than on the Ray pod alone: `submit_stage_job` exports
+    #: `S3_KEY` into `runtime_env` while the pod supplies `S3_SECRET` (the Jobs API echoes runtime_env
+    #: to any reader, so the secret is deliberately not in it) — the pair therefore comes from two
+    #: places and has to be changeable in both. Measured: repointing only the pod gives every job
+    #: `SignatureDoesNotMatch`.
+    ray_s3_access_key_id: str = Field(default="", alias="MEDALLION_RAY_S3_ACCESS_KEY_ID")
+
+    @property
+    def ray_s3_access_key(self) -> str:
+        """The key a stage job should present — the dedicated one, else the mover's."""
+        return self.ray_s3_access_key_id or self.s3_access_key_id
+
     # SecretStr so it's redacted in repr/model_dump (parity with the catalog) — .get_secret_value() to read.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="MEDALLION_S3_SECRET_ACCESS_KEY")
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage +

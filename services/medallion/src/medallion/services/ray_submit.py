@@ -189,7 +189,11 @@ async def submit_stage_job(
         # infra-credentials; dev: `make ray-up` exports it to the local head), and Ray merges this
         # dict OVER the process env, so the job's `os.environ` contract is unchanged.
         "S3_ENDPOINT": settings.s3_endpoint,
-        "S3_KEY": settings.s3_access_key_id,
+        # THE JOB'S OWN KEY, which is not necessarily the mover's — see `ray_s3_access_key`.
+        # The SECRET is deliberately absent (the Jobs API echoes runtime_env to any reader), so
+        # the Ray pod supplies it and the two halves have to be configured to MATCH: repointing
+        # only the pod gives every job `SignatureDoesNotMatch`, measured on the live estate.
+        "S3_KEY": settings.ray_s3_access_key,
         "S3_REGION": settings.s3_region,
         # Forward this pod's OTLP config (the train path below already does) so the job can export the
         # span it parents on the handed-over trace context. The service name is the mover's own — the
@@ -359,7 +363,9 @@ async def submit_train_job(
                 # Empty/absent token (dev/auth-off) → header omitted → the ingest stays open.
                 "LINEAGE_SERVICE_ID": settings.trainer_identity,
                 "S3_ENDPOINT": settings.s3_endpoint,
-                "S3_KEY": settings.s3_access_key_id,
+                # The TRAIN lane runs on the same cluster under the same pod secret, so it takes the same
+                # key — scoping one lane and leaving the other would put two keys against one secret.
+                "S3_KEY": settings.ray_s3_access_key,
                 "S3_REGION": settings.s3_region,
                 # Forward this pod's own OTLP config so the training job's metrics land in the same
                 # GreptimeDB the services use (#18 experiment tracking → Perses). Empty (observability
