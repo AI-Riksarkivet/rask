@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.dapr = DaprClient()
     # BOTH DEFAULT TO None BEFORE THE BUILD, because this app's dependencies read the attributes
     # directly rather than through `getattr`: the trainer consumer (#115a) gates as its own identity
-    # and the client MUST exist here or the gate is silently off with MEDALLION_FGA_ENABLED=true
+    # and the client MUST exist here or the gate is silently off with RASK_FGA_ENABLED=true
     # (review 2026-07-10 caught exactly that bypass), and #64's OIDC verifier is the /produce human
     # door — an admin can trigger the cascade without the service token.
     #

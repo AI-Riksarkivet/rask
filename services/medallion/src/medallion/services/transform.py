@@ -332,7 +332,7 @@ async def _authorize(
 ) -> dict[str, str] | None:
     """May this mover produce the target stage, as its own service identity?
 
-    When ``fga_client`` is set (MEDALLION_FGA_ENABLED), the mover CHECKS it is authorized to produce
+    When ``fga_client`` is set (RASK_FGA_ENABLED), the mover CHECKS it is authorized to produce
     the target stage — ``can_promote`` for the silver->gold mover, ``can_create_table`` for the others
     — as its own service identity. Unauthorized -> ``DROP`` (redelivery won't grant the role): the
     cascade enforces the ReBAC, so a mover lacking the validator role genuinely cannot promote to gold.

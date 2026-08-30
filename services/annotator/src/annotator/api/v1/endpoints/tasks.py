@@ -24,11 +24,11 @@ the checker's own answer, never forwarded from the request body.
 
 from __future__ import annotations
 
-import logging
 from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Depends, Path, Request, status
 from pydantic import BaseModel, Field
+from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
@@ -42,6 +42,7 @@ from annotator.projects.machines import (
     TASK_EDGES,
     IllegalTransition,
     identity_violation,
+    refuse_unreadable_ontology,
     task_transition,
 )
 from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState
@@ -50,9 +51,6 @@ from service_kit.control_emit import emit_control
 from service_kit.control_events import ControlAction
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-
-
-logger = logging.getLogger(__name__)
 
 
 def require_actor_plane(request: Request) -> None:
@@ -442,17 +440,23 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
     taken = {str(s.get("shape_id")) for s in existing_shapes if s.get("shape_id")}
 
     # The ontology CAPTURED on the task, not one the client sends — the caller must not be able to
-    # supply the rules it is judged by. An absent/unparseable ontology means "constrains nothing",
-    # which is the same posture every other surface takes.
+    # supply the rules it is judged by. An ABSENT ontology means "constrains nothing"; an
+    # UNPARSEABLE one does not, and the difference is the whole point: an import lands hundreds of
+    # shapes at once, so silently dropping a contract we cannot read is how invented classes reach
+    # a draft that then submits and publishes. Refused by name instead.
+    #
+    # Reachable only across a ROLLING UPGRADE that changes `LabelOntology`: within one deployed
+    # version the task actor's `_load` refuses first, so this parse cannot fail. During an upgrade
+    # the read can be served by an actor pod still on the old code, whose `model_dump` this newer
+    # model rejects — and the named refusal is what makes that window diagnosable.
     ontology = None
     raw_ontology = current.get("ontology")
     if raw_ontology:
         try:
             parsed = LabelOntology.model_validate(raw_ontology)
-        except Exception:  # noqa: BLE001 - an unreadable rule is not a reason to 500 the import
-            logger.warning("task %s carries an ontology this service cannot parse", task_id)
-        else:
-            ontology = parsed if parsed.constrains else None
+        except PydanticValidationError as exc:
+            refuse_unreadable_ontology(exc, "task", task_id, path="")
+        ontology = parsed if parsed.constrains else None
 
     payload = await request.body()
     # OFF THE LOOP. This route is `async def` because it awaits four actor round-trips, but the decode

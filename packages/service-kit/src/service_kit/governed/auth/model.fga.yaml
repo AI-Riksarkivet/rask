@@ -476,7 +476,7 @@ tests:
         assertions: { can_administer: false, can_create_warehouse: false }
       # namespace creation is gated on the warehouse AND a parent namespace: a writer (dave) may; an outsider (eve) may not.
       # The warehouse is ALSO the parent the app checks for a TOP-LEVEL create when fga_lock_root_create is
-      # on (LANCE_FGA_ROOT_OBJECT = warehouse:lance_catalog), so EVERY can_create_* the app can send at a
+      # on (RASK_FGA_ROOT_OBJECT = warehouse:lance_catalog), so EVERY can_create_* the app can send at a
       # parent — table, namespace AND materialized_view — must resolve on `warehouse`, not just `namespace`.
       - user: user:dave # plain writer on the bucket
         object: warehouse:acme_bucket

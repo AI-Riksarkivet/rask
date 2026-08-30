@@ -223,9 +223,9 @@ spec:
                    ungoverned. IngestAuthSettings extends GovernedAuthSettings, so the prefix is
                    LANCE_ — verified, not assumed: emitting the wrong prefix produces variables the
                    service never reads, which looks wired and does nothing. */}}
-            {{- include "lance.governedOidcEnv" (list $root "LANCE") | nindent 12 }}
-            {{- include "lance.governedFgaEnv" (list $root "LANCE") | nindent 12 }}
-            {{- with include "lance.governedFgaPins" (list $root "LANCE") }}{{- . | nindent 12 }}{{- end }}
+            {{- include "lance.governedOidcEnv" $root | nindent 12 }}
+            {{- include "lance.governedFgaEnv" $root | nindent 12 }}
+            {{- with include "lance.governedFgaPins" $root }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
             {{- /* Per-service env passthrough. Added 2026-08-03 because this block was a FIXED set of
                  includes: a values key a service needed had nowhere to render, and the first

@@ -987,7 +987,7 @@ MERGE (d)-[:DERIVED_FROM]->(:Dataset {name:"alpha$bronze$images"})`, chips:["Apa
         payload:`GET /datasets/alpha$gold$catalog/upstream
 Authorization: Bearer <JWT>`, chips:["provenance"] },
       { from:"lineage", to:"oidc", color:"--c-embed", title:"Verify token (opt-in)", route:"JWKS verify",
-        desc:"<em>Implemented (P0 #1):</em> when <code>LINEAGE_OIDC_ENABLED</code>, the bearer JWT is verified first (401 if absent), reusing the catalog's verifier. Default OFF in dev.",
+        desc:"<em>Implemented (P0 #1):</em> when <code>RASK_OIDC_ENABLED</code>, the bearer JWT is verified first (401 if absent), reusing the catalog's verifier. Default OFF in dev.",
         payload:`verify(JWT) -> { sub: "ana" }`, chips:["JWKS","default OFF"] },
       { from:"lineage", to:"openfga", color:"--c-vector", title:"Authorize (opt-in)", route:"check can_get_metadata",
         desc:"<em>Implemented (P0 #1):</em> same permission as describe-table — you see lineage only if you may see the table's metadata. Reuses the shared OpenFGA store read-only; related/graph datasets you can't see are filtered out (<code>batch_check</code>). Default OFF.",

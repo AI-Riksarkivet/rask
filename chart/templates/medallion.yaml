@@ -125,15 +125,15 @@ spec:
             # checks as `settings.trainer_identity` (MEDALLION_TRAINER_IDENTITY, set above), so the movers'
             # SERVICE_IDENTITY/REQUIRED_ACTION pair is deliberately NOT rendered here — it is theirs, and a
             # copy on this app would only mislead. These two envs are all the gate needs to come alive.
-            - { name: MEDALLION_FGA_ENABLED, value: "true" }
-            - { name: MEDALLION_FGA_API_URL, value: {{ .Values.medallion.fgaApiUrl | quote }} }
+            - { name: RASK_FGA_ENABLED, value: "true" }
+            - { name: RASK_FGA_API_URL, value: {{ .Values.medallion.fgaApiUrl | quote }} }
             {{- with .Values.auth.fgaStoreId }}
             # Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
             # Job use (see the catalog twin, services.yaml). Unset = provision-by-name at boot.
-            - { name: MEDALLION_FGA_STORE_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
             {{- with .Values.auth.fgaModelId }}
-            - { name: MEDALLION_FGA_MODEL_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
             {{- end }}
             {{- end }}
             {{- if .Values.auth.enabled }}
@@ -141,7 +141,7 @@ spec:
             # /produce or /train WITHOUT the service token. The web BFF forwards the user's bearer here; the
             # service-to-service app-token path (APP_API_TOKEN, above) is unchanged. Same OIDC construction
             # shape as catalog/lineage; the admin gate resolves against project:<produceAdminProject>.
-            {{- include "lance.governedOidcEnv" (list . "MEDALLION") | nindent 12 }}
+            {{- include "lance.governedOidcEnv" . | nindent 12 }}
             - { name: MEDALLION_PRODUCE_ADMIN_PROJECT, value: {{ .Values.medallion.produceAdminProject | quote }} }
             {{- end }}
             {{- if .Values.dapr.resiliency.enabled }}
@@ -479,14 +479,14 @@ spec:
             {{- end }}
             {{- end }}
             {{- if $root.Values.medallion.fgaEnabled }}
-            - { name: MEDALLION_FGA_ENABLED, value: "true" }
-            - { name: MEDALLION_FGA_API_URL, value: {{ $root.Values.medallion.fgaApiUrl | quote }} }
+            - { name: RASK_FGA_ENABLED, value: "true" }
+            - { name: RASK_FGA_API_URL, value: {{ $root.Values.medallion.fgaApiUrl | quote }} }
             {{- with $root.Values.auth.fgaStoreId }}
             # Operator-pinned FGA store id — one auth.fgaStoreId across every consumer (see services.yaml).
-            - { name: MEDALLION_FGA_STORE_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
             {{- with $root.Values.auth.fgaModelId }}
-            - { name: MEDALLION_FGA_MODEL_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
             {{- end }}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_FGA_REQUIRED_ACTION, value: {{ .requiredAction | quote }} }

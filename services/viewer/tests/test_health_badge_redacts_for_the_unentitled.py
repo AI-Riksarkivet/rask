@@ -80,10 +80,10 @@ def _app(*, fga_enabled: bool, allow: bool, subject: str = "eve", monkeypatch: p
 
     settings = ViewerSettings.model_validate(
         {
-            "LANCE_FGA_ENABLED": fga_enabled,
-            "LANCE_OIDC_ENABLED": fga_enabled,
-            "LANCE_OIDC_ISSUER": "https://issuer.test",
-            "LANCE_OIDC_AUDIENCE": "rask",
+            "RASK_FGA_ENABLED": fga_enabled,
+            "RASK_OIDC_ENABLED": fga_enabled,
+            "RASK_OIDC_ISSUER": "https://issuer.test",
+            "RASK_OIDC_AUDIENCE": "rask",
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings

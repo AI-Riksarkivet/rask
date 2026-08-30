@@ -62,7 +62,7 @@ class IngestAuthSettings(GovernedAuthSettings, BaseSettings):
     """The auth half of the ingest service's config.
 
     A separate model rather than fields on the fleet `Settings`, because `GovernedAuthSettings` is the
-    estate's shared vocabulary (`LANCE_OIDC_*`, `LANCE_FGA_*`) and re-spelling those names under a
+    estate's shared vocabulary (`RASK_OIDC_*`, `RASK_FGA_*`) and re-spelling those names under a
     `RASK_INGEST_` prefix would give this one service its own dialect for settings every other
     governed service already reads.
     """
@@ -154,7 +154,7 @@ async def _resolve_caller(
     expected = os.environ.get("APP_API_TOKEN")
     # An absent service token means "this deployment has no SERVICE door" — never "this deployment has
     # no door". Returning on it alone was a full bypass of the user path as well: an estate with
-    # `LANCE_OIDC_ENABLED=true`, a live FGA client and a blank or unset `APP_API_TOKEN` accepted every
+    # `RASK_OIDC_ENABLED=true`, a live FGA client and a blank or unset `APP_API_TOKEN` accepted every
     # ingest from anyone who could reach the port, while every surface reported authorization as ON.
     # That is open_python-audit's ING-01, and the blank case is the likely one — a secret that renders
     # empty is far more common than one nobody wired, and it fails OPEN rather than loudly.

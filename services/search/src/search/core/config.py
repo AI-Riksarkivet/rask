@@ -17,7 +17,7 @@ class SearchSettings(Settings, GovernedAuthSettings):
     """The search service's config, now carrying the shared OIDC/FGA knobs.
 
     It shipped with NO authorization of any kind — the only explorer service without one — while the
-    chart set `LANCE_OIDC_*`/`LANCE_FGA_*` on all three. That env reached this service and bound to
+    chart set `RASK_OIDC_*`/`RASK_FGA_*` on all three. That env reached this service and bound to
     nothing, so authorization here was configured-looking and inert (open_python-audit X6), and the
     route that takes a raw SQL `where` predicate was the one with no subject behind it (VS-13).
 

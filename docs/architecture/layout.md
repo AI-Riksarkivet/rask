@@ -20,7 +20,7 @@ flowchart TD
             pst["storage"]
             psk["service-kit"]
             prk["ray-kit"]
-            ptv["tracker · validate"]
+            ptv["validate"]
         end
         cx["scripts/ · one-shot dev + ops tools"]
     end
@@ -46,7 +46,6 @@ plane, and language purity is what lets both workspaces glob their members.
 | [`packages/storage`](../packages/storage.md) | Python | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `s3_client`, `iter_keys`, HCP credential derivation. |
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel). |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service. |
-| `packages/tracker` | Python | Run/metric tracking helpers (`tracker`; optional `tracker[postgres]` extra). |
 | `packages/validate` | Python | Validation helpers (`validate`). |
 | `frontend/packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`); `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar`/`nav-config` every app imports. |
 | `frontend/packages/api` | TS | Shared API client (package `@rask/api`, valibot fetch client), split into `ray`/`ingest`/`projects` modules (+ the BFF/OIDC subpaths). |

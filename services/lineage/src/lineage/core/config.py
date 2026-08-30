@@ -1,25 +1,26 @@
 """Lineage service settings (pydantic-settings, ``LINEAGE_*`` env vars).
 
-Auth is **opt-in and default OFF** (exactly like the catalog: ``LANCE_OIDC_ENABLED`` /
-``LANCE_FGA_ENABLED``) so dev and tests run open; **production MUST enable both**. When
-enabled the service reuses the catalog's ``OIDCVerifier`` + the **shared** OpenFGA store
-(read-only) — so its FGA store/model ids must match the catalog's. Fail-closed config:
-enabling a layer without the inputs it needs raises at startup, never silently opens.
+Auth is **opt-in and default OFF** (``RASK_OIDC_ENABLED`` / ``RASK_FGA_ENABLED``, the estate's ONE
+pair) so dev and tests run open; **production MUST enable both**. The knobs come from the shared
+``GovernedAuthSettings`` rather than a ``LINEAGE_*`` twin: this service reuses the catalog's
+``OIDCVerifier`` and the **shared** OpenFGA store read-only, so its store/model ids must match the
+catalog's — and while the twin existed they were configured under two different names. Fail-closed
+config: enabling a layer without the inputs it needs raises at startup, never silently opens.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Self
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
-class LineageSettings(BaseSettings):
+class LineageSettings(GovernedAuthSettings, BaseSettings):
     """Config for the lineage service, its Apache AGE graph store, and its auth gate."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
@@ -39,22 +40,10 @@ class LineageSettings(BaseSettings):
     # so it can't pin a pooled connection forever (§4). Generous: normal statements are point MERGEs.
     age_statement_timeout_seconds: float = Field(default=30.0, ge=1.0, alias="LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS")
 
-    # --- OIDC (authn) — verifies the bearer token on reads + ingest --------------------
-    oidc_enabled: bool = Field(default=False, alias="LINEAGE_OIDC_ENABLED")
-    oidc_issuer: str | None = Field(default=None, alias="LINEAGE_OIDC_ISSUER")
-    # Split-horizon fetch location (see the catalog twin): empty = derive from the issuer.
-    oidc_discovery_url: str | None = Field(default=None, alias="LINEAGE_OIDC_DISCOVERY_URL")
-    oidc_audience: str | None = Field(default=None, alias="LINEAGE_OIDC_AUDIENCE")
-    oidc_cache_ttl: int = Field(default=3600, alias="LINEAGE_OIDC_CACHE_TTL")
-    oidc_leeway: int = Field(default=60, alias="LINEAGE_OIDC_LEEWAY")
-    oidc_allow_insecure: bool = Field(default=False, alias="LINEAGE_OIDC_ALLOW_INSECURE")
-
     # --- OpenFGA (authz) — reuses the catalog's store READ-ONLY -------------------------
-    fga_enabled: bool = Field(default=False, alias="LINEAGE_FGA_ENABLED")
-    fga_api_url: str = Field(default="http://openfga:8080", alias="LINEAGE_FGA_API_URL")
-    fga_store_id: str | None = Field(default=None, alias="LINEAGE_FGA_STORE_ID")
-    fga_model_id: str | None = Field(default=None, alias="LINEAGE_FGA_MODEL_ID")
-    fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_FGA_TIMEOUT_SECONDS")
+    # The OIDC/FGA field-set itself is `GovernedAuthSettings`' (`RASK_OIDC_*` / `RASK_FGA_*`); only the
+    # knob below is lineage's own. It used to be declared here under `LINEAGE_*`, and the copy had
+    # already lost the shared HTTPS-issuer validator.
     # The FGA object type a Lance dataset maps to. A lineage Dataset node's ``name`` is the
     # catalog ``table:<id>``, so a read is gated on ``can_get_metadata`` of ``table:<name>``.
     fga_object_type: str = Field(default="table", alias="LINEAGE_FGA_OBJECT_TYPE")
@@ -197,19 +186,6 @@ class LineageSettings(BaseSettings):
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="LINEAGE_DOCS")
-
-    @model_validator(mode="after")
-    def _validate_auth(self) -> Self:
-        """Fail closed: a half-configured auth layer is a startup error, not open access."""
-        if self.oidc_enabled and not (self.oidc_issuer and self.oidc_audience):
-            raise ValueError("LINEAGE_OIDC_ENABLED requires LINEAGE_OIDC_ISSUER and LINEAGE_OIDC_AUDIENCE")
-        if self.fga_enabled and not self.oidc_enabled:
-            raise ValueError("LINEAGE_FGA_ENABLED requires LINEAGE_OIDC_ENABLED (need a verified subject)")
-        # NOTE: store_id/model_id are intentionally NOT required here. main.py provisions the store by NAME
-        # ("lance-catalog") at boot when they are absent — the idempotent convergence the catalog uses too —
-        # so pinning them ahead of time is optional, not mandatory. Requiring them here crashed the lineage
-        # pod in governed mode (the chart can't know the runtime-provisioned ids at helm-template time).
-        return self
 
 
 @lru_cache

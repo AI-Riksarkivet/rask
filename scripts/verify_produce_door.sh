@@ -46,9 +46,9 @@ env_val() {
   kubectl get deploy "$RELEASE-medallion-producer" \
     -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='$1')].value}"
 }
-[ "$(env_val MEDALLION_OIDC_ENABLED)" = "true" ] || fail "MEDALLION_OIDC_ENABLED not true on medallion-producer"
+[ "$(env_val RASK_OIDC_ENABLED)" = "true" ] || fail "RASK_OIDC_ENABLED not true on medallion-producer"
 [ "$(env_val MEDALLION_PRODUCE_ADMIN_PROJECT)" = "acme" ] || fail "produce-admin project not acme"
-echo "   OIDC_ENABLED=true  ADMIN_PROJECT=acme  ISSUER=$(env_val MEDALLION_OIDC_ISSUER)"
+echo "   OIDC_ENABLED=true  ADMIN_PROJECT=acme  ISSUER=$(env_val RASK_OIDC_ISSUER)"
 # The monolithic web app is retired — every MFE zone carries MEDALLION_API (the produce/train door UI
 # lives in the models zone; the env is shared zone plumbing). Assert on the models zone.
 webapi="$(kubectl get deploy "$RELEASE-web-models" -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='MEDALLION_API')].value}")"

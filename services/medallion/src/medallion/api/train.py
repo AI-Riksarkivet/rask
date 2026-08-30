@@ -141,7 +141,7 @@ def register_train_trigger_route(app: FastAPI, dapr_app: DaprApp | None = None) 
         """Thin wrapper over the testable :func:`handle_train_trigger` (submit-and-ack, D2).
         Authenticated by the Dapr app-api-token so a forged trigger can't spend training compute; the
         FGA client is the host app's (``app.state.fga`` — built by the producer lifespan when
-        MEDALLION_FGA_ENABLED, ``None`` otherwise → gate off, symmetric with the movers)."""
+        RASK_FGA_ENABLED, ``None`` otherwise → gate off, symmetric with the movers)."""
         if drain is not None:
             return drain
         fga_client = getattr(request.app.state, "fga", None)

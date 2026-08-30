@@ -10,7 +10,7 @@ What is pinned, and why each is here at all:
 * the three retention knobs — set to SMALL values so the boundary cases (the row cap biting, a pointer
   aging out) are reachable in a test rather than only after thirty days. They are inputs the suite
   depends on, not defence: the defaults are deliberately production-shaped.
-* `LANCE_OIDC_ENABLED` / `LANCE_FGA_ENABLED` removed — a developer's `.env` enabling FGA without OIDC
+* `RASK_OIDC_ENABLED` / `RASK_FGA_ENABLED` removed — a developer's `.env` enabling FGA without OIDC
   makes `GovernedAuthSettings` refuse to construct, and these suites are about the inbox, not auth.
 * `DAPR_GRPC_PORT` removed — the estate-wide convention for "no sidecar here". Nothing in this suite
   talks to daprd, and a service that branches on it must not take the durable lane by accident.
@@ -38,8 +38,8 @@ def _notifications_env() -> Iterator[None]:
         mp.setenv("RASK_NOTIFICATIONS_INBOX_TTL_SECONDS", "86400")
         mp.setenv("RASK_NOTIFICATIONS_COMPACTION_INTERVAL_SECONDS", "3600")
         mp.setenv("RASK_NOTIFICATIONS_INBOX_MAX_ROWS", "5")
-        mp.delenv("LANCE_OIDC_ENABLED", raising=False)
-        mp.delenv("LANCE_FGA_ENABLED", raising=False)
+        mp.delenv("RASK_OIDC_ENABLED", raising=False)
+        mp.delenv("RASK_FGA_ENABLED", raising=False)
         mp.delenv("DAPR_GRPC_PORT", raising=False)
         mp.delenv("APP_API_TOKEN", raising=False)
         get_notifications_settings.cache_clear()

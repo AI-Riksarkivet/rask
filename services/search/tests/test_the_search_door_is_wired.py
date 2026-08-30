@@ -5,7 +5,7 @@ backlog rather than by any test — including the one I wrote for X6.
 
 X6 gave search everything except the line that makes it work: `SearchSettings` mixes in
 `GovernedAuthSettings`, `api/security.py` builds the deps, every route declares the gate, and the
-chart ships `LANCE_OIDC_*`/`LANCE_FGA_*`. But `main.py::lifespan` never set `app.state.fga`, and
+chart ships `RASK_OIDC_*`/`RASK_FGA_*`. But `main.py::lifespan` never set `app.state.fga`, and
 `make_auth_deps.get_checker` is fail-CLOSED by design: FGA enabled with no client is
 `ServiceUnavailableError`. So on an auth-enabled estate every search route answered **503**. The door
 was shut, not guarded — which is safe, and is not what shipping an authorization seam means.
@@ -38,12 +38,12 @@ def _governed_settings() -> SearchSettings:
     """FGA on, and pre-provisioned so `attach_auth` builds a client without touching the network."""
     return SearchSettings.model_validate(
         {
-            "LANCE_FGA_ENABLED": True,
-            "LANCE_OIDC_ENABLED": True,
-            "LANCE_OIDC_ISSUER": "https://issuer.test",
-            "LANCE_OIDC_AUDIENCE": "rask",
-            "LANCE_FGA_STORE_ID": "01JSTORE",
-            "LANCE_FGA_MODEL_ID": "01JMODEL",
+            "RASK_FGA_ENABLED": True,
+            "RASK_OIDC_ENABLED": True,
+            "RASK_OIDC_ISSUER": "https://issuer.test",
+            "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_FGA_STORE_ID": "01JSTORE",
+            "RASK_FGA_MODEL_ID": "01JMODEL",
         }
     )
 

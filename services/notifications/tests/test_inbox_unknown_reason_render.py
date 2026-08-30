@@ -99,8 +99,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
     app.state.fga = _DenyingFGA()
-    # Authorization ON, injected rather than switched on through settings: `LANCE_FGA_ENABLED`
-    # legitimately refuses to be set without `LANCE_OIDC_ENABLED` ("authz needs a verified subject"),
+    # Authorization ON, injected rather than switched on through settings: `RASK_FGA_ENABLED`
+    # legitimately refuses to be set without `RASK_OIDC_ENABLED` ("authz needs a verified subject"),
     # and dragging a bearer through this fixture would test the auth door, not the render gate.
     # Without `enabled=True` `Visibility._filter` short-circuits permissive and the two "must stay
     # governed" cases below would pass while asserting nothing.

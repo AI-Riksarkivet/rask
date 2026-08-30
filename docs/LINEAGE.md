@@ -45,8 +45,8 @@ via the shared OpenFGA store — is now **implemented** (see the next section).
 
 > ✅ **Implemented** (audit `w8u4rc2tg` P0; reviewed by `wi2l437mq`). The query + ingest
 > endpoints are gated in-service (`services/lineage/api/{security,fga_deps}.py`), **default OFF** like the catalog — set
-> `LINEAGE_OIDC_ENABLED` + `LINEAGE_FGA_ENABLED` (+ the shared `LINEAGE_FGA_STORE_ID` /
-> `LINEAGE_FGA_MODEL_ID`) in production. Ingest also requires a verified token and binds the run
+> `RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED` (+ the shared `RASK_FGA_STORE_ID` /
+> `RASK_FGA_MODEL_ID`) in production. Ingest also requires a verified token and binds the run
 > author to it (no forged provenance), and related/graph datasets the caller can't see are
 > filtered out (`DatasetFilter`, via `fga.batch_check`).
 

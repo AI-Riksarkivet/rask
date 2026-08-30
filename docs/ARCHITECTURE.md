@@ -340,9 +340,10 @@ make auth-chain                 # anon 401 → alice create/read/write 200 → b
 dagger call auth-chain          # the same, standing Dex + OpenFGA up as Dagger services
 ```
 
-Config is env-driven (`LANCE_*`, see `services/catalog/core/config.py`): `LANCE_OIDC_ENABLED`,
-`LANCE_FGA_ENABLED`, `LANCE_FGA_API_URL`, `LANCE_FGA_ROOT_OBJECT` (default `catalog:lance`),
-`LANCE_FGA_TIMEOUT_SECONDS`, etc.
+Config is env-driven and estate-wide — ONE name per setting, declared once in
+`packages/service-kit/src/service_kit/governed/settings.py`: `RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`,
+`RASK_FGA_API_URL`, `RASK_FGA_ROOT_OBJECT` (default `warehouse:lance_catalog`),
+`RASK_FGA_TIMEOUT_SECONDS`, etc.
 
 ---
 

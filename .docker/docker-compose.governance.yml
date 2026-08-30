@@ -13,8 +13,8 @@
 #     -f .docker/docker-compose.governance.yml up -d
 #
 # Note: the lineage service runs with its own auth OFF here (the demo focuses on catalog
-# authz + provenance authorship). In production, enable LINEAGE_OIDC_ENABLED +
-# LINEAGE_FGA_ENABLED and pin LINEAGE_FGA_STORE_ID/MODEL_ID to the catalog's store — the catalog
+# authz + provenance authorship). In production, enable RASK_OIDC_ENABLED +
+# RASK_FGA_ENABLED and pin RASK_FGA_STORE_ID/MODEL_ID to the catalog's store — the catalog
 # forwards the caller's bearer on emit (services/catalog/core/lineage_emit.py), so create events are accepted.
 services:
   server:

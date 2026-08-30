@@ -59,8 +59,6 @@ dev = [
     "datasets>=4.8.4",
     "pylance>=10.0.0",
     "lancedb>=0.20",
-    "pytest-postgresql>=6.1",
-    "tracker[postgres]",
     "validate",
     # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this
     # suite hangs and a developer box does not. Two dead ends were paid for before it was added, and
@@ -79,7 +77,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-tracker = { workspace = true }
 validate = { workspace = true }
 
 [tool.ruff]
@@ -169,12 +166,12 @@ indent-style = "space"
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
-# six code-shipping packages (lineage_kit, ray_kit, service_kit, storage, tracker, validate —
-# `ray-cluster-env` is deps-only and imports as nothing) and the thirteen services: nineteen names. A missing name is not a metadata gap: ruff sorts that module into
+# five code-shipping packages (lineage_kit, ray_kit, service_kit, storage, validate —
+# `ray-cluster-env` is deps-only and imports as nothing) and the thirteen services: eighteen names. A missing name is not a metadata gap: ruff sorts that module into
 # the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
 # file that imported it.
 #
-# This list carried nine of the nineteen for a long time, and the comment here explained why: adding
+# This list carried nine of the eighteen for a long time, and the comment here explained why: adding
 # the missing ten turns one I001 into hundreds, because a name changes which block ruff sorts it into
 # and every importer of it re-sorts. That was true — the pass measured 465 I001s across 391 files —
 # and it is why the fix was always "do it as a PASS": add every name, then
@@ -199,7 +196,6 @@ known-first-party = [
     "search",
     "service_kit",
     "storage",
-    "tracker",
     "validate",
     "viewer",
 ]
@@ -241,7 +237,7 @@ exclude = [
 # the list is explicit, and adding the directory is a separate act from adding the file. Three landed
 # regression suites (the catalog's replayed-commit door, lineage's external-source authz and its
 # privileged-identity door) sat green-by-absence until 2026-08-09.
-testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
@@ -272,12 +268,12 @@ branch = true
 # THE SRC ROOTS, not the workspace directories. `["packages/", "services/"]` names two paths that are
 # not importable package roots (every member is a src-layout project), so coverage.py's unexecuted-file
 # discovery pruned the tree and the denominator became "files some test happened to import". Measured
-# on a tracker-only run: 3 files discovered before, 427 after. A headline percentage computed over only
+# on a single package's test run: 3 files discovered before, 427 after. A headline percentage computed over only
 # the files a run touched is not a coverage number, it is a tautology.
 #
 # Enumerated because coverage.py does not glob `source` — and pinned against the globs by
 # tests/unit/test_coverage_denominator.py, so a new package cannot silently fall out of the denominator.
-source = ["packages/lineage-kit/src", "packages/ray-kit/src", "packages/service-kit/src", "packages/storage/src", "packages/tracker/src", "packages/validate/src", "services/annotator/src", "services/catalog/src", "services/compute/src", "services/controlplane/src", "services/flows/src", "services/gateway/src", "services/ingest/src", "services/lineage/src", "services/maintenance/src", "services/medallion/src", "services/notifications/src", "services/search/src", "services/viewer/src"]
+source = ["packages/lineage-kit/src", "packages/ray-kit/src", "packages/service-kit/src", "packages/storage/src", "packages/validate/src", "services/annotator/src", "services/catalog/src", "services/compute/src", "services/controlplane/src", "services/flows/src", "services/gateway/src", "services/ingest/src", "services/lineage/src", "services/maintenance/src", "services/medallion/src", "services/notifications/src", "services/search/src", "services/viewer/src"]
 # `**/__init__.py` was here for empty package markers and deleted 409 statements of real
 # implementation across 69 files — including the ENTIRE gateway service, whose route table,
 # `_CLIENT_SPOOFABLE` header strip and proxy all live in `__init__.py`. Measured: the estate's front

@@ -2,7 +2,7 @@
 
 It rode `service_kit`'s generic `Settings`, which carries the shared knobs and NONE of the estate's
 auth knobs — so the problem was not "auth is off here" but "auth CANNOT be turned on here". With no
-`GovernedAuthSettings` there is no `LANCE_OIDC_ENABLED` to bind, and no chart value could gate this
+`GovernedAuthSettings` there is no `RASK_OIDC_ENABLED` to bind, and no chart value could gate this
 service however the estate was configured.
 
 What that left open: `compute` proxies the Ray dashboard using a token the chart deliberately turns

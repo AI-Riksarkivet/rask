@@ -1,8 +1,8 @@
 """Worker + work queue against a REAL clustered NATS, and the write path against REAL Lance.
 
 Not mocked, on purpose. The design's central claim is that the STREAM is the outstanding-work ledger
-— that is the reasoning that dissolved the tracker — and a mocked queue would prove only that the
-mock agrees with the claim. `RetentionPolicy.WORK_QUEUE` removing an acked message is either true of
+— the reasoning that keeps a per-unit side ledger out of this estate — and a mocked queue would
+prove only that the mock agrees with the claim. `RetentionPolicy.WORK_QUEUE` removing an acked message is either true of
 JetStream or the design is wrong, and only a real broker can say which.
 
 Skips (never fakes) when no NATS is reachable: `kubectl port-forward svc/rask-nats 4222:4222`, or
@@ -84,10 +84,11 @@ async def queue() -> WorkQueue:
 
 @pytest.mark.asyncio
 async def test_the_stream_is_the_outstanding_work_ledger(queue: WorkQueue, tmp_path: Path) -> None:
-    """The claim that dissolved the tracker: acked units LEAVE the stream.
+    """The claim that keeps this plane ledger-free: acked units LEAVE the stream.
 
     If WORK_QUEUE retention did not remove acked messages, "what is outstanding" would need a side
-    ledger — which is exactly what packages/tracker was for. This asserts the property directly.
+    ledger — the per-file transfer ledger this estate deleted rather than adopt. The property is
+    load-bearing for that decision, so it is asserted directly rather than assumed.
     """
     run = f"r{uuid.uuid4().hex[:8]}"
     uri = str(tmp_path / "bronze.lance")

@@ -1,11 +1,11 @@
 {{- if and .Values.auth.enabled .Values.auth.bootstrapAdmin }}
 # Estate-admin bootstrap (goal cond 4): the chart itself seeds the FIRST estate admin instead of an
 # out-of-band `fga tuple write`. A post-install/post-upgrade hook grants `owner` on the FGA root object
-# (warehouse:lance_catalog — LANCE_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
+# (warehouse:lance_catalog — RASK_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
 # what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin.
 # There is no fga CLI image, so the Job reuses the catalog image (ships httpx) and speaks the OpenFGA
 # HTTP API directly: use the PINNED store id when auth.fgaStoreId sets one (rendered as
-# LANCE_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
+# RASK_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
 # the store this Job grants into), else resolve the store id by name (the catalog's startup provision
 # creates/reuses the `lance-catalog` store — services/common/fga.py), CHECK the grant first (the clean
 # idempotence guard), and only then write the tuple, treating a duplicate-write 400/409 as success. On
@@ -50,13 +50,13 @@ spec:
             limits: { cpu: "200m", memory: "256Mi" }
           env:
             - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
-            # Must match the catalog's LANCE_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
+            # Must match the catalog's RASK_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
             - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
             {{- with .Values.auth.fgaStoreId }}
-            # The operator-pinned store (env parity with the catalog's LANCE_FGA_STORE_ID): the script
+            # The operator-pinned store (env parity with the catalog's RASK_FGA_STORE_ID): the script
             # prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
             # still gets the bootstrap grant in the right place.
-            - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
           command: ["python", "-c"]
           args:
@@ -72,10 +72,10 @@ spec:
               subject = {{ .Values.auth.bootstrapAdmin | quote }}
               user = subject if ":" in subject else f"user:{subject}"
 
-              # Pinned store id wins (LANCE_FGA_STORE_ID, auth.fgaStoreId) — no name lookup, no wait.
+              # Pinned store id wins (RASK_FGA_STORE_ID, auth.fgaStoreId) — no name lookup, no wait.
               # Fallback: the catalog provisions the store at startup (post-install races its first
               # boot) — wait for it by name.
-              store_id = os.environ.get("LANCE_FGA_STORE_ID") or None
+              store_id = os.environ.get("RASK_FGA_STORE_ID") or None
               deadline = time.monotonic() + 600
               while store_id is None and time.monotonic() < deadline:
                   try:

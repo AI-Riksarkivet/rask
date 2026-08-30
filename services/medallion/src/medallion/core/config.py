@@ -21,6 +21,7 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.control_events import CONTROL_TOPIC
+from service_kit.governed.settings import FgaSettings, OidcSettings
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -30,8 +31,15 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lakehouse.warehouse_registry import project_namespace as project_namespace
 
 
-class MedallionSettings(BaseSettings):
-    """Config for one medallion service (a mover stage, or the medallion-producer producer)."""
+class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
+    """Config for one medallion service (a mover stage, or the medallion-producer producer).
+
+    Mixes the two auth halves DIRECTLY rather than the composed `GovernedAuthSettings`, because this
+    one class serves two roles and only one of them has a human door. The producer runs the #64 admin
+    trigger (OIDC bearer + `can_administer`); a MOVER authorizes as its own `fga_service_identity` and
+    the chart renders it FGA with no OIDC at all — which `GovernedAuthSettings`' authz-needs-authn
+    coupling would refuse at boot. The field-set is still declared exactly once, in the mixins.
+    """
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
@@ -184,13 +192,9 @@ class MedallionSettings(BaseSettings):
     # stage before emitting. The silver→gold mover checks `can_promote` (validator-only); the others check
     # `can_create_table` (writer). It checks as its own service identity, so a mover not granted the role
     # is DENIED — the cascade then ENFORCES the model, not just describes it. Off by default. -------------
-    fga_enabled: bool = Field(default=False, alias="MEDALLION_FGA_ENABLED")
-    fga_api_url: str = Field(default="http://openfga:8080", alias="MEDALLION_FGA_API_URL")
-    # Pinned store/model ids (production posture, same as catalog/lineage): set → no boot-time provision,
-    # no model rewrite, read-only OpenFGA access suffices. Unset (dev/e2e) → provision-by-name as before.
-    fga_store_id: str = Field(default="", alias="MEDALLION_FGA_STORE_ID")
-    fga_model_id: str = Field(default="", alias="MEDALLION_FGA_MODEL_ID")
-    fga_timeout_seconds: float = Field(default=5.0, alias="MEDALLION_FGA_TIMEOUT_SECONDS")
+    # The client knobs are `FgaSettings`' (`RASK_FGA_*`). Pinned store/model ids (production posture,
+    # same as catalog/lineage): set → no boot-time provision, no model rewrite, read-only OpenFGA
+    # access suffices. Unset (dev/e2e) → provision-by-name. Only the two subjects below are medallion's.
     # BARE subject (no ``user:`` prefix) — ``service_kit.governed.fga.check`` adds ``user:`` itself, so ``user:service-*``
     # here would double-prefix (``user:user:service-*``) and the gate would always deny. Matches the
     # catalog's convention (it passes the bare OIDC sub to fga.check).
@@ -201,14 +205,7 @@ class MedallionSettings(BaseSettings):
     # service, unchanged) OR a signed-in OIDC user who is a project admin (``can_administer``). The OIDC path
     # lets the web UI trigger produce WITHOUT the web pod ever holding the service token — the human/external
     # door, mirroring the catalog's OIDC verifier. Off by default; enabled with an issuer + audience. --------
-    oidc_enabled: bool = Field(default=False, alias="MEDALLION_OIDC_ENABLED")
-    oidc_issuer: str | None = Field(default=None, alias="MEDALLION_OIDC_ISSUER")
-    # Split-horizon fetch location (see the catalog twin): empty = derive from the issuer.
-    oidc_discovery_url: str | None = Field(default=None, alias="MEDALLION_OIDC_DISCOVERY_URL")
-    oidc_audience: str | None = Field(default=None, alias="MEDALLION_OIDC_AUDIENCE")
-    oidc_cache_ttl: int = Field(default=3600, alias="MEDALLION_OIDC_CACHE_TTL")
-    oidc_leeway: int = Field(default=60, alias="MEDALLION_OIDC_LEEWAY")
-    oidc_allow_insecure: bool = Field(default=False, alias="MEDALLION_OIDC_ALLOW_INSECURE")
+    # The verifier's knobs are `OidcSettings`' (`RASK_OIDC_*`); only the project below is medallion's.
     # The project a trigger-ing user must administer — the gate is ``can_administer`` on ``project:<this>``.
     produce_admin_project: str = Field(default="acme", alias="MEDALLION_PRODUCE_ADMIN_PROJECT")
 

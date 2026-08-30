@@ -55,7 +55,7 @@ class TypedActorProxy:
 
 
 def _translating(call: Any) -> Any:
-    """Re-raise an actor-side `IllegalTransition` as itself on THIS side of the sidecar.
+    """Re-raise an actor-side DOMAIN REFUSAL as itself on THIS side of the sidecar.
 
     Dapr serialises an actor's exception into an HTTP 500 body and the SDK raises `DaprHttpError`,
     so every `except IllegalTransition` in the endpoints — the code that turns a refused transition
@@ -71,19 +71,27 @@ def _translating(call: Any) -> Any:
     **The domain fields ride a structured token, not the prose.** This used to substring-match the
     class name and then rebuild `kind`/`state`/`event` with a regex over the formatted sentence,
     after a hand-rolled loop tried to undo Dapr's two layers of JSON escaping. All three steps were
-    wrong on live paths — see `machines._WIRE_MARKER` for the measured failures. `IllegalTransition`
-    now carries its own fields in its `repr`, which is exactly what Dapr serialises, so this side
-    DECODES rather than guesses; anything without that token is not a refused transition and is
-    re-raised as the failure it is.
+    wrong on live paths — see `machines._WIRE_MARKER` for the measured failures. Each refusal now
+    carries its own fields in its `repr`, which is exactly what Dapr serialises, so this side
+    DECODES rather than guesses; anything without a token is not a refusal we own and is re-raised as
+    the failure it is.
+
+    **Two refusals cross here, and both had to.** `IllegalTransition` is a refused transition
+    (409 + the reason). `UnreadableOntology` is a stored document the running models cannot parse —
+    which the actor's `_load` refuses first, so without a decode on this side the annotator got an
+    anonymous 500 for every call to that project, naming neither it nor the reason. Adding a refusal
+    to the actors without adding it here is exactly the silent regression this seam exists to
+    prevent, so the decoders are tried in one place rather than at each endpoint.
     """
 
     async def invoke(*args: Any, **kwargs: Any) -> Any:
-        from annotator.projects.machines import IllegalTransition  # noqa: PLC0415 - import cycle
+        from annotator.projects.machines import IllegalTransition, UnreadableOntology  # noqa: PLC0415 - import cycle
 
         try:
             return await call(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - re-raised unless it is the one shape we own
-            refusal = IllegalTransition.from_wire(str(exc))
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is one of the shapes we own
+            text = str(exc)
+            refusal: BaseException | None = IllegalTransition.from_wire(text) or UnreadableOntology.from_wire(text)
             if refusal is None:
                 raise
             raise refusal from exc

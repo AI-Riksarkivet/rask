@@ -136,9 +136,9 @@ class _Fga:
 @pytest.fixture
 def _oidc_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
-    monkeypatch.setenv("LANCE_OIDC_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("LANCE_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
 
 
 def _patch_check(monkeypatch: pytest.MonkeyPatch, *, allow: bool, outage: bool = False) -> list[dict[str, str]]:
@@ -278,9 +278,9 @@ def test_a_DIRECT_caller_with_no_dapr_hop_still_works(monkeypatch: pytest.Monkey
 def _oidc_on_without_service_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_oidc_on` minus the service token — the deployment shape the bypass lived in."""
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
-    monkeypatch.setenv("LANCE_OIDC_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("LANCE_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
 
 
 @pytest.mark.usefixtures("_oidc_on_without_service_token")
@@ -306,9 +306,9 @@ def test_a_stray_service_token_header_cannot_authenticate_when_none_is_configure
 def test_a_BLANK_service_token_does_not_open_the_door_when_auth_is_ON(monkeypatch: pytest.MonkeyPatch) -> None:
     """The likelier shape of the same fault — a secret that rendered empty, not one nobody wired."""
     monkeypatch.setenv("APP_API_TOKEN", "")
-    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
-    monkeypatch.setenv("LANCE_OIDC_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("LANCE_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
 
     with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
         assert client.post("/ingests", json={"project": "demo"}).status_code == 403

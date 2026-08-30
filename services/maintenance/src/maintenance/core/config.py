@@ -1,4 +1,9 @@
-"""Maintenance service settings (pydantic-settings, ``MAINTENANCE_*`` env vars)."""
+"""Maintenance service settings (pydantic-settings, ``MAINTENANCE_*`` env vars).
+
+The OpenFGA knobs are the estate's, not this service's: it mixes in ``FgaSettings`` and reads
+``RASK_FGA_*``. ``FgaSettings`` alone rather than ``GovernedAuthSettings`` because this service has no
+human door — its routes are gated by the Dapr app token and it only ever READS tuples, as itself.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from typing import TYPE_CHECKING
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.governed.settings import FgaSettings
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -16,7 +22,7 @@ if TYPE_CHECKING:
     import lance
 
 
-class MaintenanceSettings(BaseSettings):
+class MaintenanceSettings(FgaSettings, BaseSettings):
     """Config for the table-maintenance service + its S3 access to the lakehouse buckets."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
@@ -154,15 +160,12 @@ class MaintenanceSettings(BaseSettings):
     #
     # This service only ever READS tuples (`fga.read_tuples`); it holds no grant-writing path at all,
     # which is why it needs no model id beyond what pins the store.
-    fga_enabled: bool = Field(default=False, alias="MAINTENANCE_FGA_ENABLED")
-    fga_api_url: str = Field(default="http://openfga:8080", alias="MAINTENANCE_FGA_API_URL")
-    fga_store_id: str | None = Field(default=None, alias="MAINTENANCE_FGA_STORE_ID")
-    fga_model_id: str | None = Field(default=None, alias="MAINTENANCE_FGA_MODEL_ID")
-    fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="MAINTENANCE_FGA_TIMEOUT_SECONDS")
-    # The estate root object, excluded from the ghost report BY DESIGN: it carries real tuples and has
-    # no registry record, so without this every run would name a known-good finding and train the
-    # reader to skip the category. Must match the catalog's LANCE_FGA_ROOT_OBJECT.
-    fga_root_object: str = Field(default="warehouse:lance_catalog", alias="MAINTENANCE_FGA_ROOT_OBJECT")
+    # The knobs themselves are `FgaSettings`' (`RASK_FGA_*`) — including `fga_root_object`, the estate
+    # root this service excludes from the ghost report BY DESIGN: it carries real tuples and has no
+    # registry record, so without the exclusion every run would name a known-good finding and train the
+    # reader to skip the category. It has to be the SAME object the catalog gates on, which is exactly
+    # what a per-service twin of that setting could not guarantee — which is why the 2026-08-30
+    # rename collapsed every spelling of it onto the single `RASK_FGA_ROOT_OBJECT`.
 
     # --- #79 expired-trash purge (RECLAMATION — the only mutation this service makes outside a dataset).
     #

@@ -183,8 +183,7 @@ Two **language-pure planes** — **don't blur them**. Python lives at the repo r
   - `packages/storage` — the S3 CLIENT seam: `s3_client`/`S3Client`, `configured_endpoint`, `derive_hcp_creds`, `split_s3_uri`/`merge_prefix`, and the `StorageError`/`BucketNotFoundError`/`ObjectNotFoundError` + `s3_errors` family. It still exports `FSSource/Sink`, `S3Source/Sink`, `iter_keys` and `build_source`/`build_sink`, but **those are no longer the fleet's source/sink seam** — this line read as if they were. The lakehouse plane's adapters live in `service_kit.lakehouse.sources` / `.sinks` (what `ingest.adapters` registers and what the medallion's media produce uses); `build_source`/`build_sink` and the FS pair have their only production caller in `runners/htr`. **Protocol-agnostic:** a source only every modality can use belongs here; one only a single workload uses belongs in that runner (an IIIF read-through cache lived here until 2026-08-17 with exactly one consumer, and moved to `runners/htr`)
   - `packages/service-kit` — shared **platform library**: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel).
   - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Used by the `compute` service.
-  - `packages/tracker` — pluggable transfer-state tracking (SQLite / Postgres backends)
-  - `packages/validate` — pre-upload image validation (TIFF/JPEG/PNG corruption detection + pluggable rules)
+  - `packages/validate` — pre-upload image validation: TIFF/JPEG/PNG corruption detection, over bytes or paths. (A `rules.py` rule-plugin framework was exported beside it with no caller and no test anywhere in the estate; deleted 2026-08-29.)
   - `packages/lineage-kit` — the OpenLineage emission kernel used by the medallion producer/movers
   - `packages/ray-cluster-env` — a deps-only member (`package = false`, ships no code) NAMING the Ray images' platform environment; both Ray dockerfiles `uv sync --package ray-cluster-env` from the root lock. (`packages/ratch` was DISSOLVED 2026-08-28 — owner ruling, `open_ray-kernel.md`: its Ray-interaction half was a drifted third submission seam retired for `ray-kit`, its schema/dataset layer was vendored into the sealed audio runners that consumed it undeclared, and its CLI had no callers. With it went the one sanctioned CLI exception — packages ship no entrypoints again, without exception.)
 - `services/` — runnable **Python** code. **The old monolithic `viewer` service is gone**, and so is the whole batches/orchestrator plane (P7a compute-plane cutover — see `docs/architecture/lance-ns-merge.md` P7):
@@ -277,6 +276,18 @@ single file:
 - **The cross-zone link gate is a test, not a lint rule.** A cross-zone `<a>` must carry `data-sveltekit-reload` or SvelteKit soft-navigates into a route the zone doesn't own (→ 404). Enforced by `@rask/zone-contract`'s vitest suite (`frontend/packages/zone-contract/src/cross-zone-reload.test.ts`) — oxlint's `.svelte` support reads the `<script>` block, not the markup, so an anchor-attribute rule cannot live there.
 - **Frontend is SSR + Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Browser-only globals must stay inside `onMount`/`$effect`/handlers (never component top level or `load`) or SSR render crashes.
 - **`ty` is configured with `error-on-warning = true`** — typecheck warnings fail CI.
+- **Comments carry rationale and provenance, never HISTORY** (owner ruling 2026-08-30). Three kinds of
+  prose live in these modules and only two may stay: **(1) rationale** — why it is this way, what is
+  load-bearing — stays; **(2) provenance** — "measured 2026-08-26", "pinned by `test_x.py`" — stays,
+  with its measurement; **(3) history** — "this used to say X", "an earlier version claimed Y" — is
+  **banned in new code**. Falsified prose is REWRITTEN, and rewriting means the old claim is gone, not
+  annotated as wrong. Where the history genuinely matters, it belongs in `docs/DECISIONS.md` or the
+  commit message, both of which are built to hold it.
+  **The rule is FORWARD-ONLY and that is deliberate**: the ~35,000 existing prose lines are not to be
+  drained, because a retroactive pass is a large unreviewable diff that would delete the measurements
+  the prose exists to preserve. `scripts/comment_history_gate.py` enforces it on CHANGED lines only;
+  its `--report` mode is an advisory whole-tree count and never gates. Passing the gate is a floor
+  under the rule, not proof of conformance — only a reader can tell the three kinds apart.
 
 ## Claude Code project config
 

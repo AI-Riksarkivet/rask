@@ -5,7 +5,7 @@ path at all — the chart's estate-wide OIDC/FGA env has nothing to bind to" —
 "The search service has no authn/authz at all yet accepts a raw SQL `where` expression ANDed into
 every query". One service, one root cause, so one change.
 
-WHY IT IS NOW THE ANOMALY, not the norm: the chart sets `LANCE_OIDC_*`/`LANCE_FGA_*` on all three
+WHY IT IS NOW THE ANOMALY, not the norm: the chart sets `RASK_OIDC_*`/`RASK_FGA_*` on all three
 explorer services, and `viewer` and `annotator` both bind them (`ViewerSettings(Settings,
 GovernedAuthSettings)`, `AnnotatorSettings(GovernedAuthSettings, ...)`). `SearchSettings(Settings)`
 did not, so the estate's authorization env reached this service and had nothing to attach to — it was
@@ -30,7 +30,7 @@ from service_kit.governed.settings import GovernedAuthSettings
 
 
 def test_the_search_settings_bind_the_estates_auth_env() -> None:
-    """X6's core: the chart ships LANCE_OIDC_*/LANCE_FGA_* to this service and nothing read them."""
+    """X6's core: the chart ships RASK_OIDC_*/RASK_FGA_* to this service and nothing read them."""
     assert issubclass(SearchSettings, GovernedAuthSettings), (
         "SearchSettings does not mix in GovernedAuthSettings — the estate's OIDC/FGA env reaches this "
         "service and binds to nothing, so authorization is configured-looking and inert"
@@ -119,7 +119,7 @@ def test_a_caller_with_no_grant_is_REFUSED_a_named_corpus(monkeypatch) -> None:
     app.include_router(router)
     register_handlers(app)
     settings = SearchSettings.model_validate(
-        {"LANCE_FGA_ENABLED": True, "LANCE_OIDC_ENABLED": True, "LANCE_OIDC_ISSUER": "https://i.test", "LANCE_OIDC_AUDIENCE": "rask"}
+        {"RASK_FGA_ENABLED": True, "RASK_OIDC_ENABLED": True, "RASK_OIDC_ISSUER": "https://i.test", "RASK_OIDC_AUDIENCE": "rask"}
     )
     app.dependency_overrides[get_search_settings] = lambda: settings
     app.dependency_overrides[StateDep.__metadata__[0].dependency] = lambda: object()

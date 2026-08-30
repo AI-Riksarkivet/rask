@@ -143,8 +143,8 @@ spec:
             #
             # The annotation TASK plane is FGA-gated too (can_claim/can_review/can_publish on
             # annotation_project:<id>, §6). Mirrors the catalog's block in services.yaml.
-            {{- include "lance.governedOidcEnv" (list $root "LANCE") | nindent 12 }}
-            {{- include "lance.governedFgaEnv" (list $root "LANCE") | nindent 12 }}
+            {{- include "lance.governedOidcEnv" $root | nindent 12 }}
+            {{- include "lance.governedFgaEnv" $root | nindent 12 }}
             {{- if eq $name "annotator" }}
             # ANNOTATOR ONLY, and it stays that way: the publish saga's identity coordinates. This is
             # a service credential for writing back annotations, which no other explorer service does.
@@ -166,7 +166,7 @@ spec:
             {{- end }}
             - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
             {{- end }}
-            {{- with include "lance.governedFgaPins" (list $root "LANCE") }}{{- . | nindent 12 }}{{- end }}
+            {{- with include "lance.governedFgaPins" $root }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if eq $name "viewer" }}
             # The S3 object browser (ported from the retired volumes-api, R6/R20): the viewer's

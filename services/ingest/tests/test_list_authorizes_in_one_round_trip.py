@@ -50,14 +50,14 @@ def _oidc_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Auth ON for this test only.
 
     `get_auth_settings` is `lru_cache`d, so the clear has to bracket the test on BOTH sides: without
-    the teardown clear, an `IngestAuthSettings` built with `LANCE_OIDC_ENABLED=true` stays cached
+    the teardown clear, an `IngestAuthSettings` built with `RASK_OIDC_ENABLED=true` stays cached
     after monkeypatch has restored the environment, and every later test in the session runs against
     a door it never configured. Measured: sixteen unrelated failures across three modules.
     """
     monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
-    monkeypatch.setenv("LANCE_OIDC_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("LANCE_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
     from ingest.auth import get_auth_settings
 

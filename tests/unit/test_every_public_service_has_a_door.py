@@ -1,6 +1,7 @@
 """A service the gateway publishes must be able to refuse an unauthenticated caller.
 
-THE HOLE. Nine services mix in `GovernedAuthSettings` (or declare its byte-identical twin inline).
+THE HOLE. Nine services mix in `GovernedAuthSettings` (some once declared a byte-identical twin
+inline; those copies were collapsed onto the mixin 2026-08-30).
 `compute` and `controlplane` declared NEITHER, shipped no `security.py`, and `make_service_app` adds
 only CORS / RequestID / Timing / SlashTolerance — no auth. So on an `auth.enabled` estate every route
 in both was anonymous, and the gateway carries both to the public edge: `{prefix}/ray`,
@@ -25,7 +26,7 @@ auth ON for a while — and the owner ruling of 2026-08-26 settled it: the estat
 
 This gate is the structural half of that ruling. It asserts the CAPABILITY (the service can express
 an auth door at all), not a live 401, because a request-level test needs each service's own app and
-these two have no test harness in common. A service that cannot bind `LANCE_OIDC_ENABLED` cannot be
+these two have no test harness in common. A service that cannot bind `RASK_OIDC_ENABLED` cannot be
 gated by any amount of chart configuration, which is the failure this catches.
 """
 
@@ -54,7 +55,7 @@ def _settings_bases(service: str) -> set[str]:
 
 
 def test_every_publicly_proxied_service_can_bind_the_estates_auth_env() -> None:
-    """Without `GovernedAuthSettings` the service cannot read `LANCE_OIDC_ENABLED` at all.
+    """Without `GovernedAuthSettings` the service cannot read `RASK_OIDC_ENABLED` at all.
 
     That is the load-bearing difference between "auth is off here" and "auth CANNOT be turned on
     here": the second cannot be fixed by a values file, and reads identically from the outside.
@@ -62,7 +63,7 @@ def test_every_publicly_proxied_service_can_bind_the_estates_auth_env() -> None:
     ungated = [s for s in PUBLICLY_PROXIED if "GovernedAuthSettings" not in _settings_bases(s)]
     assert not ungated, (
         f"{ungated} are proxied to the public edge by the gateway and declare no settings class "
-        f"mixing in GovernedAuthSettings, so they cannot bind LANCE_OIDC_ENABLED / LANCE_FGA_* and "
+        f"mixing in GovernedAuthSettings, so they cannot bind RASK_OIDC_ENABLED / RASK_FGA_* and "
         f"no chart value can gate them. Give them the door their nine siblings share."
     )
 
@@ -121,7 +122,7 @@ def test_the_chart_FEEDS_the_door_it_now_has() -> None:
         )
         assert deployment is not None, f"no Deployment rendered for {service}"
         env = {e["name"] for e in deployment["spec"]["template"]["spec"]["containers"][0].get("env", [])}
-        if "LANCE_OIDC_ENABLED" not in env or "LANCE_FGA_ENABLED" not in env:
+        if "RASK_OIDC_ENABLED" not in env or "RASK_FGA_ENABLED" not in env:
             missing.append(f"{service}: has {sorted(e for e in env if 'OIDC' in e or 'FGA' in e)}")
 
     assert not missing, (

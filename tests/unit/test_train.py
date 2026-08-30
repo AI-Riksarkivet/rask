@@ -210,7 +210,7 @@ def test_consumer_fga_outage_retries(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.MonkeyPatch) -> None:
     # #115c: without `namespace:models parent table:models$<m>` no human rung cascades to the
-    # registry dataset — the published model would be invisible under LINEAGE_FGA_ENABLED. The
+    # registry dataset — the published model would be invisible under RASK_FGA_ENABLED. The
     # consumer writes it idempotently BEFORE the submit ack; an outage on the write → RETRY.
     written: list[Any] = []
 

@@ -4,7 +4,7 @@ open_fastapi-audit — "An `http://` OIDC issuer in production surfaces as an op
 request, and the 'logged distinctly' the code promises does not exist".
 
 `_require_https` raises `UnauthenticatedError`, which every call site maps to 401 "Invalid or expired
-token". So an operator who ships `LANCE_OIDC_ISSUER=http://…` without `LANCE_OIDC_ALLOW_INSECURE` gets
+token". So an operator who ships `RASK_OIDC_ISSUER=http://…` without `RASK_OIDC_ALLOW_INSECURE` gets
 a service where every VALID bearer answers 401 with the same body a genuinely expired token gets —
 and the two are indistinguishable to the caller.
 
@@ -47,21 +47,21 @@ class _Governed(BaseSettings, GovernedAuthSettings):
 
 def _settings(**over: object) -> _Governed:
     base = {
-        "LANCE_OIDC_ENABLED": True,
-        "LANCE_OIDC_ISSUER": "https://issuer.test",
-        "LANCE_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_ENABLED": True,
+        "RASK_OIDC_ISSUER": "https://issuer.test",
+        "RASK_OIDC_AUDIENCE": "rask",
     }
     return _Governed.model_validate({**base, **over})
 
 
 def test_an_http_issuer_is_refused_at_construction() -> None:
     with pytest.raises(ValueError, match="HTTPS"):
-        _settings(LANCE_OIDC_ISSUER="http://issuer.test")
+        _settings(RASK_OIDC_ISSUER="http://issuer.test")
 
 
 def test_the_dev_escape_hatch_still_works() -> None:
     """A local Dex over http is the case the flag exists for; this must not become a hard ban."""
-    settings = _settings(LANCE_OIDC_ISSUER="http://dex.local:5556", LANCE_OIDC_ALLOW_INSECURE=True)
+    settings = _settings(RASK_OIDC_ISSUER="http://dex.local:5556", RASK_OIDC_ALLOW_INSECURE=True)
     assert settings.oidc_issuer == "http://dex.local:5556"
 
 
@@ -71,7 +71,7 @@ def test_https_is_unaffected() -> None:
 
 def test_the_check_is_skipped_when_oidc_is_off() -> None:
     """An issuer nobody verifies against is not a misconfiguration."""
-    assert _Governed.model_validate({"LANCE_OIDC_ENABLED": False, "LANCE_OIDC_ISSUER": "http://x"}) is not None
+    assert _Governed.model_validate({"RASK_OIDC_ENABLED": False, "RASK_OIDC_ISSUER": "http://x"}) is not None
 
 
 def test_the_runtime_backstop_logs_what_its_comment_promises(caplog: pytest.LogCaptureFixture) -> None:
@@ -100,13 +100,13 @@ def test_the_catalog_twin_refuses_it_too() -> None:
 
     base = {
         "LANCE_REST_IMPL": "dir",
-        "LANCE_OIDC_ENABLED": True,
-        "LANCE_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_ENABLED": True,
+        "RASK_OIDC_AUDIENCE": "rask",
         "LANCE_S3_ACCESS_KEY_ID": "k",
         "LANCE_S3_SECRET_ACCESS_KEY": "s",
     }
     with pytest.raises(ValueError, match="HTTPS"):
-        CatalogSettings.model_validate({**base, "LANCE_OIDC_ISSUER": "http://issuer.test"})
+        CatalogSettings.model_validate({**base, "RASK_OIDC_ISSUER": "http://issuer.test"})
 
-    ok = CatalogSettings.model_validate({**base, "LANCE_OIDC_ISSUER": "http://dex.local:5556", "LANCE_OIDC_ALLOW_INSECURE": True})
+    ok = CatalogSettings.model_validate({**base, "RASK_OIDC_ISSUER": "http://dex.local:5556", "RASK_OIDC_ALLOW_INSECURE": True})
     assert ok.oidc_issuer == "http://dex.local:5556"

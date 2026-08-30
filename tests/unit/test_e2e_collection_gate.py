@@ -354,11 +354,13 @@ def test_every_notification_lane_drive_is_invoked_by_something() -> None:
 def test_every_opt_in_pytest_option_has_something_that_passes_it() -> None:
     """A suite gated on a CLI option nobody passes is a deletion that still reads as coverage.
 
-    `packages/tracker/tests/test_postgres.py` skipped six tests unless `--postgresql-port` was given,
-    and no Makefile target, script, CI job or Dagger function gave it. The package's stated contract is
-    backend-agnosticism — SQLite for dev, Postgres for production — so every green tracker run proved
-    only the half that does not ship. Measured: 17 passed / 6 skipped locally, against 23 passed / 0
-    skipped once something actually passes the option.
+    The case that produced this gate: a transfer-ledger package's Postgres suite skipped six tests
+    unless `--postgresql-port` was given, and no Makefile target, script, CI job or Dagger function
+    gave it — so its stated backend-agnosticism was proven only on the SQLite half. Measured then:
+    17 passed / 6 skipped locally, against 23 passed / 0 skipped once something passed the option.
+    That package was deleted 2026-08-30 (zero consumers), which leaves the estate with NO
+    `getoption` call site at all — so this gate currently passes over an empty scan. It is kept
+    armed rather than deleted because the next opt-in suite must not have to rediscover the rule.
 
     This is the same rule as the two gates above, applied to the third way a test can be unreachable.
     A suite can fail to run because nothing SELECTS it (a marker with no target), because nothing NAMES
@@ -367,9 +369,23 @@ def test_every_opt_in_pytest_option_has_something_that_passes_it() -> None:
     """
     surfaces = _selection_surfaces()
     unpassed: list[str] = []
+    pattern = re.compile(r'getoption\(\s*["\'](--[a-z0-9-]+)["\']')
 
-    for path in sorted((REPO_ROOT / "packages").rglob("test_*.py")) + sorted((REPO_ROOT / "tests").rglob("test_*.py")):
-        for match in re.finditer(r'getoption\(\s*["\'](--[a-z0-9-]+)["\']', path.read_text(encoding="utf-8")):
+    # NON-VACUITY, and it has to be self-directed. The sibling gates above assert their scan found
+    # SOMETHING ("the glob is broken, not the estate"); this one cannot, because the estate now has
+    # zero `getoption` call sites and an empty result is the correct answer rather than a broken scan.
+    # So prove the two halves that CAN silently rot instead: that the pattern still recognises the
+    # shape it hunts, and that the roots it walks still hold test files at all. Without this, renaming
+    # `tests/` or breaking the regex would leave a gate that passes forever and checks nothing.
+    # ASSEMBLED, never written out: a literal probe would BE a call site, and this file is inside the
+    # scan — the gate would then report itself as the unreachable suite. (Measured: it did.)
+    probe = "request.config." + "getoption" + '("--probe-only")'
+    assert pattern.search(probe), "the detector stopped recognising its own target shape"
+    roots = sorted((REPO_ROOT / "packages").rglob("test_*.py")) + sorted((REPO_ROOT / "tests").rglob("test_*.py"))
+    assert roots, "the scan walks no files — the glob is broken, not the estate"
+
+    for path in roots:
+        for match in pattern.finditer(path.read_text(encoding="utf-8")):
             option = match.group(1)
             if option not in surfaces:
                 unpassed.append(f"{path.relative_to(REPO_ROOT).as_posix()} -> {option}")

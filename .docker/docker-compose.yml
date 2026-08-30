@@ -59,11 +59,11 @@ services:
       LANCE_S3_VIRTUAL_HOSTED: "false"
       # --- Auth is OFF by default. Uncomment to enforce OIDC (Dex) + OpenFGA authz.
       #   The openfga/postgres/dex services below provide the infra.
-      # LANCE_OIDC_ENABLED: "true"
-      # LANCE_OIDC_ISSUER: http://dex:5556/dex
-      # LANCE_OIDC_AUDIENCE: lance-catalog
-      # LANCE_FGA_ENABLED: "true"
-      # LANCE_FGA_API_URL: http://openfga:8080
+      # RASK_OIDC_ENABLED: "true"
+      # RASK_OIDC_ISSUER: http://dex:5556/dex
+      # RASK_OIDC_AUDIENCE: lance-catalog
+      # RASK_FGA_ENABLED: "true"
+      # RASK_FGA_API_URL: http://openfga:8080
     ports:
       - "2333:2333"
 

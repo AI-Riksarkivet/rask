@@ -156,7 +156,7 @@ the distinction between a *registered validator that gates movement* and the *ev
 
 | Gate | Flag | Question | Mechanism | Fail action |
 | ---- | ---- | -------- | --------- | ----------- |
-| **Authorization** | `MEDALLION_FGA_ENABLED` | *May this identity promote?* | the mover CHECKs OpenFGA as its **own service identity** — silver→gold needs `can_promote` (validator rung), the others `can_create_table` (writer) | `DROP` (redelivery won't grant the role) + `medallion.stage.denied` |
+| **Authorization** | `RASK_FGA_ENABLED` | *May this identity promote?* | the mover CHECKs OpenFGA as its **own service identity** — silver→gold needs `can_promote` (validator rung), the others `can_create_table` (writer) | `DROP` (redelivery won't grant the role) + `medallion.stage.denied` |
 | **Data quality** | `MEDALLION_QUALITY_ENABLED` (chart `medallion.quality`) | *Is the produced data good enough?* | after the compute writes the downstream dataset, the mover runs cheap, exact assertions on it (`row_count_positive`, `not_null` on the key column) via `services/medallion/services/quality.py` | `DROP` (deterministically bad) + `medallion.stage.quality_blocked`; the failed run + its `dataQualityAssertions` facet are **still emitted** so the bad batch is auditable in lineage |
 
 Both gate the **same act** (promotion) from different angles, and both compose: a stage promotes only when

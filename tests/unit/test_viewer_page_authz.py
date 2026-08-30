@@ -57,10 +57,10 @@ def _app(
 
     settings = ViewerSettings.model_validate(
         {
-            "LANCE_FGA_ENABLED": True,
-            "LANCE_OIDC_ENABLED": True,
-            "LANCE_OIDC_ISSUER": "https://issuer.test",
-            "LANCE_OIDC_AUDIENCE": "rask",
+            "RASK_FGA_ENABLED": True,
+            "RASK_OIDC_ENABLED": True,
+            "RASK_OIDC_ISSUER": "https://issuer.test",
+            "RASK_OIDC_AUDIENCE": "rask",
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings

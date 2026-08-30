@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.api.v1.endpoints.serve_discovery import discovered_backends
 from annotator.projects.generation_schema import generation_schema
+from annotator.projects.machines import UnreadableOntology, refuse_unreadable_ontology
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ForbiddenError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, audit
@@ -269,9 +270,15 @@ async def producers(state: StateDep, task_id: str | None = None) -> ProducerList
 async def enforced_shape_types(task_id: str | None) -> set[str] | None:
     """The shape types a task will ACCEPT, canonicalised. `None` = no constraint to speak of.
 
-    The three ways to get `None` are deliberately indistinguishable to callers — no task, an
-    ontology that constrains nothing, or a task that could not be read. All three mean the same
-    thing: there is no rule here that anyone may be judged against, so make no claim.
+    TWO ways to get `None`, and they are deliberately indistinguishable to callers: no task, or an
+    ontology that constrains nothing. Both mean the same thing — there is no rule here that anyone
+    may be judged against, so make no claim.
+
+    There used to be a third, "a task that could not be read", and it was the fail-open branch
+    ANN-05 removed: an ontology the current model cannot parse now RAISES out of this function (409)
+    rather than being flattened into "no constraint". An unreadable rule is not the absence of a
+    rule, and returning `None` for it silently un-enforced the taxonomy the publish path depends on.
+    A transport failure reaching the task store is a different thing and still propagates as itself.
     """
     if not task_id:
         return None
@@ -380,10 +387,12 @@ def _within_contract(shapes: list[AssistShape], ontology: LabelOntology | None) 
     server or (as before) by a human at submit time. PURE: the route reads the ontology once and
     both contract halves (the generation schema and this filter) derive from that one read.
 
-    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read that
-    failed arrives as ``None`` and is treated the same way: the assist still returns its shapes,
-    because refusing a prediction because we could not read a rule would be a worse failure than
-    the mismatch it guards against.
+    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read whose
+    TRANSPORT failed arrives as ``None`` and is treated the same way: the assist still returns its
+    shapes, because refusing a prediction because we could not FETCH a rule would be a worse failure
+    than the mismatch it guards against. A stored ontology that will not parse never reaches here —
+    `_task_ontology` refuses it by name, so this filter is never asked to stand in for a contract
+    that exists and cannot be read.
     """
     if ontology is None:
         return shapes, []
@@ -400,28 +409,41 @@ def _within_contract(shapes: list[AssistShape], ontology: LabelOntology | None) 
 
 
 async def _task_ontology(task_id: str) -> LabelOntology | None:
-    """The ontology CAPTURED onto a task, read server-side. `None` when it cannot be read.
+    """The ontology CAPTURED onto a task, read server-side. `None` when there is no rule to apply.
 
     Read here rather than accepted from the caller on purpose: the client would otherwise be
     supplying the rules it is judged by. `None` means "no claim" everywhere it is used — nothing
-    filters, nothing is reported compatible — so a transport failure degrades to the unconstrained
-    behaviour rather than to a wrong answer. An ontology that constrains NOTHING reads as `None`
-    too, which is the same statement: there is no rule to judge anyone against.
+    filters, nothing is reported compatible. An ontology that constrains NOTHING reads as `None`,
+    which is the same statement: there is no rule to judge anyone against.
+
+    **A TRANSPORT failure and an UNREADABLE ontology are not the same answer**, though they arrive
+    at this call site identically. A sidecar that did not answer says nothing about the rules, so it
+    degrades to unconstrained rather than to a wrong answer — losing a real prediction because a
+    rule could not be fetched is the worse failure. A stored ontology that will not PARSE says the
+    opposite: the rules exist and this build cannot read them, so returning `None` would hand the
+    annotator unfiltered suggestions that look exactly like filtered ones. That one is refused, by
+    name, and is the only exception this function lets past.
     """
     try:
         from annotator.api.v1.endpoints.tasks import _proxy  # noqa: PLC0415 - import cycle
 
         task = await _proxy(task_id).get()
-    except Exception:  # noqa: BLE001 - an unreadable rule must not lose a prediction; see callers
+    except UnreadableOntology:
+        # The task actor's `_load` already refused this document by name — and it crosses the
+        # sidecar as itself (`projects.proxies._translating`). Swallowing it here as a transport
+        # failure would put the ONE case that must fail closed back on the fail-open path.
+        raise
+    except Exception:  # noqa: BLE001 - a rule we could not FETCH must not lose a prediction; see above
         logger.warning("assist could not read task %s; proceeding without its contract", task_id)
         return None
     try:
         ontology = LabelOntology.model_validate((task or {}).get("ontology") or {})
-    except ValidationError:
-        # A stored ontology that no longer validates is a real possibility across a model change,
-        # and it is not a reason to drop a prediction. Same fail-open stance, same reasoning.
-        logger.warning("task %s carries an ontology this service cannot parse", task_id)
-        return None
+    except ValidationError as exc:
+        # Reachable only across a ROLLING UPGRADE that changes `LabelOntology`: within one deployed
+        # version the actor's `_load` refuses first, so this parse cannot fail. During an upgrade the
+        # read can be served by an actor pod still on the old code, whose `model_dump` this newer
+        # model rejects — and the named refusal is what makes that window diagnosable.
+        refuse_unreadable_ontology(exc, "task", task_id, path="")
     return ontology if ontology.constrains else None
 
 

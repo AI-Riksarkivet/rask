@@ -1,6 +1,6 @@
 # Dex dev OIDC provider (static, in-memory). Logins: alice@example.com / bob@example.com,
 # both password "password" (a second identity lets the e2e prove a 403 for an ungranted user).
-# Token audience = the static client id "lance-catalog" (set LANCE_OIDC_AUDIENCE to match).
+# Token audience = the static client id "lance-catalog" (set RASK_OIDC_AUDIENCE to match).
 issuer: http://dex:5556/dex
 storage:
   type: memory

@@ -68,7 +68,7 @@ link "$WAREHOUSE" namespace:bronze-media
 link "$WAREHOUSE" namespace:silver-media
 # The cascade DATASETS' table→namespace parent links. The catalog seeds these for tables it creates, but
 # the movers write Lance DIRECTLY — without a parent tuple on table:<dataset> nothing cascades to it, so
-# under LINEAGE_FGA_ENABLED no human (not even a warehouse owner) can can_get_metadata a mover-produced
+# under RASK_FGA_ENABLED no human (not even a warehouse owner) can can_get_metadata a mover-produced
 # dataset: the whole medallion estate is invisible in /runs, /datasets/*, /graph. Linking each dataset to
 # its stage namespace restores the normal rung inheritance (warehouse reader → stage reader → table reader).
 # INTENDED SIDE EFFECT (say it where the tuples are written): the parent links extend the FULL warehouse

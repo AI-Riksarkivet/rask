@@ -157,17 +157,17 @@ def test_authorization_without_authentication_is_refused_at_construction(monkeyp
     proves the names an operator actually sets are the ones that bind. Passing them as keyword
     arguments would exercise a path no deployment uses.
     """
-    monkeypatch.setenv("LANCE_FGA_ENABLED", "true")
-    monkeypatch.setenv("LANCE_OIDC_ENABLED", "false")
-    with pytest.raises(ValueError, match="LANCE_OIDC_ENABLED is required"):
+    monkeypatch.setenv("RASK_FGA_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "false")
+    with pytest.raises(ValueError, match="RASK_OIDC_ENABLED is required"):
         AnnotatorSettings()
 
 
 def test_oidc_without_issuer_and_audience_is_refused_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
-    monkeypatch.delenv("LANCE_OIDC_ISSUER", raising=False)
-    monkeypatch.delenv("LANCE_OIDC_AUDIENCE", raising=False)
-    with pytest.raises(ValueError, match="LANCE_OIDC_ISSUER and LANCE_OIDC_AUDIENCE are required"):
+    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.delenv("RASK_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("RASK_OIDC_AUDIENCE", raising=False)
+    with pytest.raises(ValueError, match="RASK_OIDC_ISSUER and RASK_OIDC_AUDIENCE are required"):
         AnnotatorSettings()
 
 

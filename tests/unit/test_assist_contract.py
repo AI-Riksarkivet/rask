@@ -78,14 +78,21 @@ def test_an_ontology_that_CONSTRAINS_NOTHING_filters_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_task_returns_the_predictions_unfiltered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail OPEN, deliberately, and only here.
+async def test_a_TRANSPORT_failure_reaching_the_task_still_returns_the_predictions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An UNREACHABLE actor is not an unreadable rule, and only the first one is tolerated here.
 
-    Everywhere a write is gated this codebase fails closed. This is not a gate: submit still refuses
-    a violating shape, so the contract holds regardless. Losing a real prediction because a rule
-    could not be READ would be a worse failure than the mismatch this guards against — and it would
-    be invisible, because the annotator would simply see fewer suggestions. The route composes the
-    read (`_task_ontology`, None on failure) with the pure filter — exercised here as it composes.
+    The distinction is the whole point, and this test used to blur it: it was called
+    `test_an_unreadable_task_returns_the_predictions_unfiltered` and its docstring claimed "fail OPEN,
+    deliberately" as the assist plane's policy. ANN-05 ended that — an ontology the current model
+    cannot PARSE now raises 409 out of `enforced_shape_types`, because an unreadable rule is not the
+    absence of a rule and flattening it to "no constraint" silently un-enforced the taxonomy. The
+    name and the docstring survived the change and read as pinning the behaviour that was removed.
+
+    What this actually exercises, and what remains correct, is the TRANSPORT path: the actor is
+    unreachable (`RuntimeError`), so there is no ontology to have an opinion about. This is not a
+    gate — submit still refuses a violating shape, so the contract holds regardless — and losing a
+    real prediction to a momentary actor outage would be invisible to the annotator, who would simply
+    see fewer suggestions.
     """
 
     class _Boom:
@@ -99,5 +106,5 @@ async def test_an_unreadable_task_returns_the_predictions_unfiltered(monkeypatch
     ontology = await _task_ontology("t1")
     kept, dropped = _within_contract([_shape("polygon")], ontology)
 
-    assert len(kept) == 1, "a prediction was lost because a rule could not be read"
+    assert len(kept) == 1, "a prediction was lost to a momentary actor outage"
     assert dropped == []

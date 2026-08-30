@@ -320,7 +320,7 @@ async def provision(api_url: str, *, store_name: str = "lance-catalog") -> tuple
     unpinned boot — otherwise a restart strands every tuple written against the previous
     store (creators silently lose access). The model is (re)written each time so
     ``model.json`` edits take effect; tuples live on the store and survive new model
-    versions. For dev / e2e; in production pin ``LANCE_FGA_STORE_ID`` + ``LANCE_FGA_MODEL_ID``.
+    versions. For dev / e2e; in production pin ``RASK_FGA_STORE_ID`` + ``RASK_FGA_MODEL_ID``.
     """
     model = load_model()
     async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:

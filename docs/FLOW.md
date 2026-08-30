@@ -81,7 +81,7 @@ distinction between a *registered validator that gates movement* and the *event-
 
 | Gate | Flag | Question | Fail action |
 |------|------|----------|-------------|
-| **Authorization** (OpenFGA) | `MEDALLION_FGA_ENABLED` | May this identity promote? `silver→gold` needs `can_promote` (validator rung), the others `can_create_table` (writer) — checked as the mover's own service identity | `DROP` + `medallion.stage.denied` |
+| **Authorization** (OpenFGA) | `RASK_FGA_ENABLED` | May this identity promote? `silver→gold` needs `can_promote` (validator rung), the others `can_create_table` (writer) — checked as the mover's own service identity | `DROP` + `medallion.stage.denied` |
 | **Data quality** | `MEDALLION_QUALITY_ENABLED` | Is the produced data good enough? assertions on the written dataset (`row_count_positive`, `not_null` on the key) | `DROP` + `medallion.stage.quality_blocked`; the failed run + its `dataQualityAssertions` are still emitted (auditable) |
 
 Both gate the **same act** (promotion) and compose: a stage promotes only when *authorized* **and** the data

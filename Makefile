@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -71,6 +71,16 @@ fmt:
 
 storybook:
 	bun --cwd=frontend run storybook
+
+# ---- comment rule (forward-only; docs/DECISIONS.md) -------------------------
+# Kind (3) prose — a comment whose subject is a previous comment — is banned in NEW code. The 35,279
+# lines already written are deliberately left alone, so this reads ADDED lines only and is green at
+# HEAD by construction. `prek` runs the same script on `--staged`; CI should run it as
+# `--base origin/main`. `--report` prints the standing population and always exits 0.
+# NOT wired into `make check`: check is a whole-tree gate and this one is a diff gate, and pretending
+# otherwise is how a diff gate ends up either red for everyone or scoped to nothing.
+comment-gate:
+	uv run python scripts/comment_history_gate.py --worktree
 
 clean:
 	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/.turbo **/storybook-static
@@ -213,7 +223,7 @@ knip:
 #
 # The denominator it produced was also wrong twice over, and both are fixed in `[tool.coverage.run]`:
 # `source` named the workspace directories rather than the src roots (3 files discovered on a
-# tracker-only run, vs 427 after), and `omit` deleted every `__init__.py` — which is where the whole
+# single package's test run, vs 427 after), and `omit` deleted every `__init__.py` — which is where the whole
 # gateway service lives.
 #
 # NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
@@ -267,17 +277,6 @@ audit:
 # repository rule is absolute: every container goes through Dagger. `go-fmt-fixed` is the write half —
 # `dagger call go-fmt-fixed export --path=.dagger` — because a gate with no paired fixer is a gate
 # people work around, and here the only alternative would be installing a toolchain.
-# The tracker's PostgreSQL integration suite. Six tests sat behind `--postgresql-port` and NOTHING
-# passed it — no target, no script, no CI job, no Dagger function — so `packages/tracker`'s stated
-# contract is backend-agnosticism while only its SQLite half was ever proven. An opt-in with no
-# opter-in is a deletion that still reads as coverage. Measured: `uv run pytest .../test_postgres.py`
-# gives 17 passed / 6 SKIPPED; this target gives 23 passed / 0 skipped.
-#
-# The server is a Dagger SERVICE, because the rule admits no exception — "Any container ... one-off
-# fixtures ... goes through Dagger" — and a test fixture is exactly the case it names.
-tracker-postgres: ## The tracker's Postgres integration suite against a real PG16 (via Dagger)
-	dagger call tracker-postgres
-
 go-fmt: ## gofmt gate over the .dagger Go plane (fix: dagger call go-fmt-fixed export --path=.dagger)
 	dagger call go-fmt
 

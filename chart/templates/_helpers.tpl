@@ -1125,14 +1125,14 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
 {{- end -}}
 {{- end -}}
 
-{{/* ── the governed-auth env, defined ONCE and PREFIX-PARAMETERISED ────────────────────────────
-     `(list $root "LANCE")` -> LANCE_OIDC_*; `(list $root "LINEAGE")` -> LINEAGE_OIDC_*; and so on.
+{{/* ── the governed-auth env, defined ONCE ─────────────────────────────────────────────────────
+     `(include "lance.governedOidcEnv" $root)` -> RASK_OIDC_*, everywhere, for every service.
 
-     The prefix is a parameter because the estate does NOT share one: `service-kit`'s
-     GovernedAuthSettings reads LANCE_*, lineage's own config reads LINEAGE_*, medallion's reads
-     MEDALLION_*. A helper that hardcoded LANCE_ would have emitted, onto lineage, seven variables
-     that lineage does not read — wired-looking and completely inert. That was written and caught
-     here before it shipped, which is the whole argument for one definition over three copies.
+     This helper used to take the variable PREFIX as a parameter, because the estate did not share
+     one: service-kit read LANCE_*, lineage's own config LINEAGE_*, medallion's MEDALLION_*. The
+     parameter is gone with the copies (2026-08-30) — the auth field-set is declared once, in
+     `service_kit.governed.settings`, and binds one RASK_* name each. A prefix parameter here is now
+     the way to emit variables nothing reads.
 
      Split into OIDC / FGA / PINS rather than one block, because the callers genuinely need
      different subsets: the medallion producer runs OIDC without turning FGA on, and folding them
@@ -1143,22 +1143,22 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
      (explorer.yaml's reasoning, from #90, where scoping the block to one service left the one that
      streams page IMAGE BYTES wide open.) */}}
 {{- define "lance.governedOidcEnv" -}}
-{{- $root := index . 0 }}{{- $p := index . 1 }}
-- { name: {{ $p }}_OIDC_ENABLED, value: "true" }
-- { name: {{ $p }}_OIDC_ISSUER, value: {{ $root.Values.dex.issuer | quote }} }
+{{- $root := . }}
+- { name: RASK_OIDC_ENABLED, value: "true" }
+- { name: RASK_OIDC_ISSUER, value: {{ $root.Values.dex.issuer | quote }} }
 {{- /* Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster. */}}
-- { name: {{ $p }}_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
-- { name: {{ $p }}_OIDC_AUDIENCE, value: {{ $root.Values.dex.clientId | quote }} }
+- { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
+- { name: RASK_OIDC_AUDIENCE, value: {{ $root.Values.dex.clientId | quote }} }
 {{- /* Scheme-derived like the vault skipVerify: the http escape hatch opens ONLY for a plain-http
        issuer (the in-cluster dev Dex); an https issuer (a real IdP) keeps the HTTPS guard enforced. */}}
-- { name: {{ $p }}_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
+- { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
 {{- end -}}
 
 {{/* The FGA client coordinates. Separate from OIDC — see above. */}}
 {{- define "lance.governedFgaEnv" -}}
-{{- $root := index . 0 }}{{- $p := index . 1 }}
-- { name: {{ $p }}_FGA_ENABLED, value: "true" }
-- { name: {{ $p }}_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
+{{- $root := . }}
+- { name: RASK_FGA_ENABLED, value: "true" }
+- { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
 {{- end -}}
 
 {{/* The operator-pinned FGA store/model ids — optional, and emitted at DIFFERENT positions by
@@ -1168,12 +1168,12 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
      so a pinned store can never diverge from the store the services check against. Unset =
      provision-by-name at boot (`lance-catalog`). */}}
 {{- define "lance.governedFgaPins" -}}
-{{- $root := index . 0 }}{{- $p := index . 1 }}
+{{- $root := . }}
 {{- with $root.Values.auth.fgaStoreId }}
-- { name: {{ $p }}_FGA_STORE_ID, value: {{ . | quote }} }
+- { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
 {{- end }}
 {{- with $root.Values.auth.fgaModelId }}
-- { name: {{ $p }}_FGA_MODEL_ID, value: {{ . | quote }} }
+- { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
 {{- end }}
 {{- end -}}
 

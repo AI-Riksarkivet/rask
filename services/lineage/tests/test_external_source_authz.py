@@ -92,12 +92,12 @@ def settings() -> LineageSettings:
     # over a self-asserted identity is not one. Constructing the pair here rather than patching the flag
     # keeps the test on the configuration the service actually runs.
     return LineageSettings(
-        LINEAGE_FGA_ENABLED=True,
-        LINEAGE_OIDC_ENABLED=True,
-        LINEAGE_OIDC_ISSUER="https://example.invalid/realms/rask",
-        LINEAGE_OIDC_AUDIENCE="rask",
-        LINEAGE_FGA_OBJECT_TYPE="table",
-    )  # type: ignore[call-arg]
+        fga_enabled=True,
+        oidc_enabled=True,
+        oidc_issuer="https://example.invalid/realms/rask",
+        oidc_audience="rask",
+        fga_object_type="table",
+    )
 
 
 @pytest.fixture

@@ -64,14 +64,14 @@ spec:
                    team, workload type, k8s namespace and each project's LIVE INGRESS HOST — and the
                    gateway carries it to the public edge. It answered anonymously until 2026-08-26
                    because this service declared no settings class with the estate's auth knobs, so
-                   there was no `LANCE_OIDC_ENABLED` to bind and no values change could gate it.
+                   there was no `RASK_OIDC_ENABLED` to bind and no values change could gate it.
                    It now declares ControlplaneSettings(GovernedAuthSettings, BaseSettings) and gates
                    its router on the estate reader tier; this env is what feeds that door. Emitting
                    the block without the code, or the code without the block, both look wired and do
                    nothing — the `explorer.yaml` failure. Prefix is LANCE_, matching the mixin. */}}
-            {{- include "lance.governedOidcEnv" (list . "LANCE") | nindent 12 }}
-            {{- include "lance.governedFgaEnv" (list . "LANCE") | nindent 12 }}
-            {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
+            {{- include "lance.governedOidcEnv" . | nindent 12 }}
+            {{- include "lance.governedFgaEnv" . | nindent 12 }}
+            {{- with include "lance.governedFgaPins" . }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
           {{/* Two questions, two paths — see fleet.yaml. `/api/health` is a static badge, so probing
                it for READINESS reports "ready" while the pod drains; `/readyz` reports lifecycle

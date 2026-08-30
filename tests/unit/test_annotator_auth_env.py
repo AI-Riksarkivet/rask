@@ -54,10 +54,10 @@ def test_auth_enabled_wires_fga_and_oidc_onto_the_annotator() -> None:
     # allowHeadless: the render pin cares about the BACKEND env; the half-governed-deploy guard
     # (auth-consistency.yaml) otherwise rightly refuses auth.enabled without the UI's OIDC block.
     env = _annotator_env(_render(explorer__enabled="true", auth__enabled="true", auth__allowHeadless="true"))
-    assert env.get("LANCE_FGA_ENABLED") == "true"
-    assert env.get("LANCE_OIDC_ENABLED") == "true"
-    assert "openfga" in env.get("LANCE_FGA_API_URL", ""), env.get("LANCE_FGA_API_URL")
-    assert env.get("LANCE_OIDC_AUDIENCE"), "the audience must come from dex.clientId"
+    assert env.get("RASK_FGA_ENABLED") == "true"
+    assert env.get("RASK_OIDC_ENABLED") == "true"
+    assert "openfga" in env.get("RASK_FGA_API_URL", ""), env.get("RASK_FGA_API_URL")
+    assert env.get("RASK_OIDC_AUDIENCE"), "the audience must come from dex.clientId"
 
 
 def test_auth_off_leaves_the_annotator_permissive_dev_parity() -> None:
@@ -65,8 +65,8 @@ def test_auth_off_leaves_the_annotator_permissive_dev_parity() -> None:
     ON so a forgotten values file cannot silently install an ungoverned estate. This test still pins
     the ungoverned shape — it just has to request it, which is the whole point of the change."""
     env = _annotator_env(_render(explorer__enabled="true", auth__enabled="false", frontend__oidc__enabled="false"))
-    assert "LANCE_FGA_ENABLED" not in env
-    assert "LANCE_OIDC_ENABLED" not in env
+    assert "RASK_FGA_ENABLED" not in env
+    assert "RASK_OIDC_ENABLED" not in env
 
 
 def test_the_publish_identity_coordinates_ride_env_but_the_password_never_does() -> None:

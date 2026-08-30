@@ -87,11 +87,13 @@ def shapes_from_ipc(
 ) -> tuple[list[Shape], list[Link]]:
     """Decode Arrow IPC into draft shapes + links, or raise `ValidationError` naming the offender.
 
-    Fails CLOSED, and that is the deliberate difference from the assist endpoint beside it. Assist
-    fails open — an unreadable rule must not lose a single interactive prediction the annotator is
-    watching for. An import is a bulk write of somebody else's data that nobody is watching, so a
-    label outside the taxonomy must be refused AT THE DOOR and named, not discovered at submit after
-    a reviewer has already worked through the item.
+    Fails CLOSED. This paragraph used to draw the contrast with assist, which "fails open — an
+    unreadable rule must not lose a single interactive prediction"; that stopped being true when
+    ANN-05 landed and the whole service went fail-closed on an unreadable ontology. The reason for
+    THIS door's posture never depended on the contrast and still stands on its own: an import is a
+    bulk write of somebody else's data that nobody is watching, so a label outside the taxonomy must
+    be refused AT THE DOOR and named, not discovered at submit after a reviewer has already worked
+    through the item.
     """
     table = _read_table(payload)
     taken = set(taken_ids or ())

@@ -136,8 +136,8 @@ spec:
             # every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             {{- if .Values.auth.enabled }}
-            {{- include "lance.governedOidcEnv" (list . "LANCE") | nindent 12 }}
-            {{- include "lance.governedFgaEnv" (list . "LANCE") | nindent 12 }}
+            {{- include "lance.governedOidcEnv" . | nindent 12 }}
+            {{- include "lance.governedFgaEnv" . | nindent 12 }}
             {{- /* THE CATALOG'S SERVICE DOOR, which had no chart wiring at all — the same shape
                    LINEAGE_SERVICE_SUBJECTS has below, and absent here for no stated reason. The
                    catalog reads `LANCE_SERVICE_SUBJECTS` (catalog/core/config.py) and every caller
@@ -211,7 +211,7 @@ spec:
             {{- if .Values.auth.dedicatedServiceCredentials }}
             - { name: LANCE_PRIVILEGED_SUBJECTS, value: {{ compact $privileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
-            {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
+            {{- with include "lance.governedFgaPins" . }}{{- . | nindent 12 }}{{- end }}
             # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
             # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making
             # `false` un-settable), while a bare reference renders "" when the key is missing entirely —
@@ -395,22 +395,22 @@ spec:
             - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- if .Values.auth.enabled }}
-            - { name: LINEAGE_OIDC_ENABLED, value: "true" }
-            - { name: LINEAGE_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
+            - { name: RASK_OIDC_ENABLED, value: "true" }
+            - { name: RASK_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
             # Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
-            - { name: LINEAGE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
-            - { name: LINEAGE_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
+            - { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
+            - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
             # Scheme-derived (see the catalog twin above): https issuer => HTTPS guard stays enforced.
-            - { name: LINEAGE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
-            - { name: LINEAGE_FGA_ENABLED, value: "true" }
-            - { name: LINEAGE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
+            - { name: RASK_FGA_ENABLED, value: "true" }
+            - { name: RASK_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
             {{- with .Values.auth.fgaStoreId }}
             # Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
             # Job use (see the catalog twin above). Unset = provision-by-name at boot.
-            - { name: LINEAGE_FGA_STORE_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
             {{- with .Values.auth.fgaModelId }}
-            - { name: LINEAGE_FGA_MODEL_ID, value: {{ . | quote }} }
+            - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
             {{- end }}
             # Read-side audit (services.lineage.readAudit): record every ALLOWED FGA-gated data read into
             # lineage_reads — feeds GET /datasets/{name}/readers + the ReadersPanel. Rendered only under

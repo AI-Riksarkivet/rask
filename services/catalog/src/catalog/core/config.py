@@ -1,9 +1,11 @@
 """Application settings (pydantic-settings).
 
 Produces the ``properties`` map for the native ``lance_namespace`` backend and
-the ``storage_options`` for direct pylance access. All values come from
-``LANCE_*`` environment variables; object-store credentials are required (no
-silent fallback) so a misconfigured deployment fails fast at boot.
+the ``storage_options`` for direct pylance access. The catalog's own values come
+from ``LANCE_*`` environment variables; the OIDC/FGA knobs are the estate's and
+come from ``GovernedAuthSettings`` under ``RASK_OIDC_*`` / ``RASK_FGA_*``.
+Object-store credentials are required (no silent fallback) so a misconfigured
+deployment fails fast at boot.
 """
 
 from __future__ import annotations
@@ -14,14 +16,19 @@ from typing import Literal, Self
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 _STORAGE_PREFIX = "storage."
 
 
-class Settings(BaseSettings):
-    """Catalog + object-store configuration sourced from ``LANCE_*`` env vars."""
+class Settings(GovernedAuthSettings, BaseSettings):
+    """Catalog + object-store configuration sourced from ``LANCE_*`` env vars.
+
+    The OIDC/FGA knobs are NOT declared here. They are the estate's shared vocabulary and arrive from
+    `GovernedAuthSettings` under `RASK_OIDC_*` / `RASK_FGA_*`; this class once carried a byte-identical
+    twin of them, which is precisely how the copies drifted."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
@@ -187,24 +194,9 @@ class Settings(BaseSettings):
     dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
 
-    # OIDC authentication (opt-in). When disabled, all routes are open. When
-    # enabled, every /v1 route requires a valid bearer token from the issuer.
-    oidc_enabled: bool = Field(default=False, alias="LANCE_OIDC_ENABLED")
-    oidc_issuer: str | None = Field(default=None, alias="LANCE_OIDC_ISSUER")
-    # Split-horizon fetch location (reverse-proxy IdP): where discovery/JWKS are FETCHED when the
-    # public issuer URL isn't reachable in-cluster. Empty = derive from the issuer, as before.
-    oidc_discovery_url: str | None = Field(default=None, alias="LANCE_OIDC_DISCOVERY_URL")
-    oidc_audience: str | None = Field(default=None, alias="LANCE_OIDC_AUDIENCE")
-    oidc_cache_ttl: int = Field(default=3600, alias="LANCE_OIDC_CACHE_TTL")
-    # Clock-skew leeway (seconds) for exp/iat checks, and an explicit opt-in to accept
-    # an http:// issuer/JWKS (needed only for the local Dex dev IdP — never in prod).
-    oidc_leeway: int = Field(default=60, alias="LANCE_OIDC_LEEWAY")
-    oidc_allow_insecure: bool = Field(default=False, alias="LANCE_OIDC_ALLOW_INSECURE")
-
-    # OpenFGA authorization (opt-in; requires OIDC for the user identity). When
-    # store/model ids are unset, the app provisions them at startup (dev/e2e);
-    # in production, provision once and pin both ids.
-    fga_enabled: bool = Field(default=False, alias="LANCE_FGA_ENABLED")
+    # OIDC authentication + OpenFGA authorization (both opt-in, both inherited from
+    # `GovernedAuthSettings`). When store/model ids are unset, the app provisions them at startup
+    # (dev/e2e); in production, provision once and pin both ids.
 
     # Bare FGA subjects (comma-separated) that may call the catalog as an in-cluster SERVICE, using
     # the app token + `x-lance-service-identity` instead of an OIDC bearer.
@@ -224,22 +216,11 @@ class Settings(BaseSettings):
     # Subjects that may NOT use the shared app token and need their own credential. Same contract as
     # lineage's — see `service_principal`.
     privileged_subjects: str = Field(default="", alias="LANCE_PRIVILEGED_SUBJECTS")
-    fga_api_url: str = Field(default="http://openfga:8080", alias="LANCE_FGA_API_URL")
     # Compliance audit trail (#41): emit a structured event on the dedicated `lance.audit` logger for every
     # security-relevant action — authn success/failure, authz allow/deny, credential vending — carrying
     # who/what/resource/outcome. Default on so a governed deployment records an audit trail out of the box;
     # set false to silence the stream. The events only carry a real subject when OIDC is on.
     audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
-    fga_store_id: str | None = Field(default=None, alias="LANCE_FGA_STORE_ID")
-    fga_model_id: str | None = Field(default=None, alias="LANCE_FGA_MODEL_ID")
-    # The FGA `warehouse:` root object (= the lakehouse bucket). Two roles: (1) every top-level
-    # namespace links to it as its `parent`, so a grant here cascades into all namespaces/tables;
-    # (2) it gates create-on-parent for top-level creation when fga_lock_root_create is on. Grant
-    # admins owner/writer on it to bootstrap — OR attach it to a `project:` (and the project to a
-    # `team:`) for the full multi-tenant hierarchy (see service_kit/governed/auth/model.fga).
-    # Must be a `warehouse:` object (the model's catalog-root type). Bootstrapped by an admin granting
-    # owner/writer on it (there is no auto-seed) — only needed when fga_lock_root_create is on.
-    fga_root_object: str = Field(default="warehouse:lance_catalog", alias="LANCE_FGA_ROOT_OBJECT")
     #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
     #:
     #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines
@@ -271,9 +252,6 @@ class Settings(BaseSettings):
     # TTL bounds all of it to a window instead of the process lifetime. Minutes, because this is a
     # backstop for a lost event and not a consistency mechanism; 0 disables it.
     warehouse_binding_cache_ttl_seconds: float = Field(default=300.0, alias="LANCE_WAREHOUSE_BINDING_CACHE_TTL_SECONDS")
-    # Per-request OpenFGA client timeout (seconds). A hung authz call fails fast and is
-    # retried rather than pinning a request worker. Wired into fga.make_client at startup.
-    fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_FGA_TIMEOUT_SECONDS")
 
     # Data-plane credential vending (pluggable; see services/catalog/core/vending.py). Target = S3-compatible
     # storage (MinIO default, AWS S3, Ceph RGW, RustFS). Default "mode_b": server-mediated — no
@@ -354,20 +332,8 @@ class Settings(BaseSettings):
     user_state_max_bytes: int = Field(default=512 * 1024, ge=1, alias="LANCE_USER_STATE_MAX_BYTES")
 
     @model_validator(mode="after")
-    def _validate_auth(self) -> Self:
-        """Fail fast on incomplete auth / lineage configuration."""
-        if self.oidc_enabled and not (self.oidc_issuer and self.oidc_audience):
-            raise ValueError("LANCE_OIDC_ISSUER and LANCE_OIDC_AUDIENCE are required when OIDC is enabled")
-        if self.fga_enabled and not self.oidc_enabled:
-            raise ValueError("LANCE_OIDC_ENABLED is required when LANCE_FGA_ENABLED is set (authz needs a user)")
-        # Mirrors `service_kit.governed.settings.GovernedAuthSettings`, which this class predates and
-        # whose docstring makes the contract explicit: the aliases are byte-identical so one set of
-        # `LANCE_*` variables configures every service, and a rule enforced in only one of the two is
-        # precisely the silent split it warns about. An `http://` issuer would otherwise surface as a
-        # 401 on every request — identical to an expired token, and the catalog is the service that
-        # OWNS the tuple store.
-        if self.oidc_enabled and self.oidc_issuer and not self.oidc_allow_insecure and not self.oidc_issuer.startswith("https://"):
-            raise ValueError("LANCE_OIDC_ISSUER must use HTTPS (set LANCE_OIDC_ALLOW_INSECURE=true for a dev IdP)")
+    def _validate_lineage(self) -> Self:
+        """Fail fast on incomplete lineage configuration. The auth invariants are the shared mixin's."""
         if self.lineage_emit_enabled and self.lineage_transport == "http" and not self.lineage_url:
             raise ValueError("LANCE_LINEAGE_URL is required for the http lineage transport")
         return self

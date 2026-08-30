@@ -2,7 +2,7 @@
 
 It rode `service_kit`'s generic `Settings` — which carries the shared knobs (api prefix, CORS, OTel)
 and NONE of the estate's auth knobs. The consequence was not "auth is off here" but "auth CANNOT be
-turned on here": with no `GovernedAuthSettings` there is no `LANCE_OIDC_ENABLED` to bind, so no chart
+turned on here": with no `GovernedAuthSettings` there is no `RASK_OIDC_ENABLED` to bind, so no chart
 value could gate `GET /api/projects/` however the estate was configured. That route returns every
 operator Project CR in the cluster — slug, team, workload type, k8s namespace and each tenant's live
 ingress host — and `gateway/__init__.py` carries it to the public edge.

@@ -30,12 +30,20 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
+from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
 from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
 from annotator.api.v1.responses import DropReceipt, SendReceipt, TaskListing
-from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
+from annotator.projects.machines import (
+    FROZEN_PROJECT_STATES,
+    PROJECT_EDGES,
+    IllegalTransition,
+    legal_task_events,
+    project_transition,
+    refuse_unreadable_ontology,
+)
 from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
@@ -435,8 +443,17 @@ def _validated_predictions(project: dict[str, Any], payload: SendItemsRequest) -
     if raw:
         try:
             ontology = LabelOntology.model_validate(raw)
-        except Exception:  # noqa: BLE001 - an unreadable rule constrains nothing, as everywhere else
-            logger.warning("project %s carries an ontology this service cannot parse", project.get("project_id"))
+        except PydanticValidationError as exc:
+            # FAIL CLOSED. An ontology this build cannot read is not "no rules" — it is rules we
+            # cannot apply, and reading it as `LabelOntology()` would let a bulk send seed hundreds
+            # of rows carrying invented classes into a project whose whole point is a closed set.
+            #
+            # Reachable only across a ROLLING UPGRADE that changes `LabelOntology`: within one
+            # deployed version the project actor's `_load` refuses the document first, so this parse
+            # cannot fail. During an upgrade the call can be served by an actor pod still on the old
+            # code, whose `model_dump` this endpoint's newer model rejects — and the named refusal is
+            # what makes that window one legible 409 instead of a burst of unattributed 500s.
+            refuse_unreadable_ontology(exc, "project", str(project.get("project_id") or "unknown"), path="")
 
     out: list[list[Shape]] = []
     for index, item in enumerate(payload.items):

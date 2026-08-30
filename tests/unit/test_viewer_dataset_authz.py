@@ -119,11 +119,11 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
     # checker cannot see them, and `uvx ty check` runs with error-on-warning.
     settings = ViewerSettings.model_validate(
         {
-            "LANCE_FGA_ENABLED": fga_enabled,
+            "RASK_FGA_ENABLED": fga_enabled,
             # FGA requires OIDC — the shared settings validator refuses the pair otherwise.
-            "LANCE_OIDC_ENABLED": fga_enabled,
-            "LANCE_OIDC_ISSUER": "https://issuer.test",
-            "LANCE_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_ENABLED": fga_enabled,
+            "RASK_OIDC_ISSUER": "https://issuer.test",
+            "RASK_OIDC_AUDIENCE": "rask",
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings

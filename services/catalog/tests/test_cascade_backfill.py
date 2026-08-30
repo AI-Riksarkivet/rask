@@ -21,10 +21,10 @@ def _settings(**overrides: object) -> Settings:
 
 def _fga_settings(**overrides: object) -> Settings:
     return _settings(
-        LANCE_FGA_ENABLED=True,
-        LANCE_OIDC_ENABLED=True,
-        LANCE_OIDC_ISSUER="https://dex",
-        LANCE_OIDC_AUDIENCE="rask",
+        RASK_FGA_ENABLED=True,
+        RASK_OIDC_ENABLED=True,
+        RASK_OIDC_ISSUER="https://dex",
+        RASK_OIDC_AUDIENCE="rask",
         **overrides,
     )
 

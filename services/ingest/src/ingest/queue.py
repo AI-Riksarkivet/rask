@@ -9,8 +9,8 @@ enforces the boundary.
 component cannot express, and every one of them is load-bearing:
 
 * `RetentionPolicy.WORK_QUEUE` — a message is REMOVED once acked. That is what makes the stream
-  itself the outstanding-work ledger, which is why this plane needs no side ledger (the reasoning
-  that dissolved the tracker, docs/DECISIONS.md).
+  itself the outstanding-work ledger, which is why this plane needs no side ledger — the reasoning
+  that ruled a per-unit transfer ledger out of this estate entirely (docs/DECISIONS.md).
 * `max_ack_pending` — bounds in-flight units per worker, i.e. backpressure against a rate-limited
   IIIF endpoint. Without it a worker fetches faster than it can land and the source throttles us.
 * `ack_wait` + explicit `nak(delay)` — a unit that fails transiently is redelivered on OUR schedule,

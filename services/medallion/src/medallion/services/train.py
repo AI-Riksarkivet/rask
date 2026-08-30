@@ -238,7 +238,7 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         # HERE, before the submit, exactly like the seed script pre-links the mover datasets: the
         # movers write Lance directly, so without this tuple no human rung ever cascades to the
         # registry dataset and the published model is INVISIBLE in /runs, /datasets/*, /graph under
-        # LINEAGE_FGA_ENABLED. Idempotent (duplicate writes are swallowed); a dangling link for a
+        # RASK_FGA_ENABLED. Idempotent (duplicate writes are swallowed); a dangling link for a
         # job that later fails is harmless (same posture as the pre-seeded mover links). Placed
         # before the ack so an outage RETRYs rather than acking with the link half-missing.
         try:

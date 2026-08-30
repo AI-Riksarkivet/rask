@@ -32,8 +32,9 @@ from typing import Any, Final
 
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 from dapr.actor.runtime.failure_policy import ActorReminderFailurePolicy
+from pydantic import ValidationError as PydanticValidationError
 
-from annotator.projects.machines import IllegalTransition, may_publish, project_transition
+from annotator.projects.machines import IllegalTransition, may_publish, project_transition, refuse_unreadable_ontology
 from annotator.projects.models import (
     TERMINAL_TASK_STATES,
     Adjudication,
@@ -149,8 +150,24 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
     """Holds one project's document and its task index."""
 
     async def _load(self) -> AnnotationProject | None:
+        """The project document, or `None` when this actor has never been created.
+
+        A document that EXISTS but no longer parses is refused by name rather than dropped or
+        patched around — `refuse_unreadable_ontology` explains why the ontology in particular has no
+        safe default. Naming it here, at the one seam every read of this actor goes through, is what
+        stops the condition reaching the annotator as an anonymous 500 that repeats on every call.
+        """
         has, raw = await self._state_manager.try_get_state(PROJECT_KEY)
-        return AnnotationProject.model_validate(json.loads(raw)) if has and raw else None
+        if not (has and raw):
+            return None
+        stored = json.loads(raw)
+        try:
+            return AnnotationProject.model_validate(stored)
+        except PydanticValidationError as exc:
+            # The id is read off the RAW document — there is no model to read it off, and it has to
+            # be the `project_id` the URL and the FGA object carry, so the operator can go from the
+            # refusal to the one document that needs rewriting without a log dive.
+            refuse_unreadable_ontology(exc, "project", str(stored.get("project_id") or "unknown"))
 
     async def _require(self) -> AnnotationProject:
         project = await self._load()

@@ -3,7 +3,7 @@
 `[tool.coverage.run] source` used to be `["packages/", "services/"]` — two paths that are not
 importable package roots, because every workspace member is a src-layout project. coverage.py's
 unexecuted-file discovery therefore pruned the tree, and the denominator collapsed to "the files some
-test happened to import". Measured on a `packages/tracker/tests` run: **3 files discovered before, 427
+test happened to import". Measured on a single package's test run: **3 files discovered before, 427
 after**. A percentage computed over only the files a run touched cannot go down when coverage gets
 worse; it is not a measurement.
 

@@ -7,7 +7,7 @@ to provision AND refused to look up, so it was the only service in the estate th
 the estate's own default posture. Every user-bearer request 503'd, reaching a person as
 `{"message":"Internal Error"}` from an ETL submit, with a startup warning as the only trace.
 
-The stopgap was `kubectl set env LANCE_FGA_STORE_ID=…` against the live deployment — which drifts from
+The stopgap was `kubectl set env RASK_FGA_STORE_ID=…` against the live deployment — which drifts from
 the chart and dies at the next `make k3s-up`.
 
 THE PRINCIPLE THAT SURVIVED. A data writer that mints a store or writes an authorization model becomes

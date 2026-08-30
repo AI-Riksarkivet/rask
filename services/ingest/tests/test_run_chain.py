@@ -69,7 +69,7 @@ def _empty_bronze(path: Path) -> str:
 
 
 def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityContext, tmp_path: Path) -> None:
-    """The decision that dissolved the tracker: activities carry CHUNKS.
+    """The decision that kept this plane ledger-free: activities carry CHUNKS.
 
     A million persisted-and-replayed activity results would melt the state store. One child per
     ~1000 keys returns one compact result, and the workflow's own durable state becomes the ledger.

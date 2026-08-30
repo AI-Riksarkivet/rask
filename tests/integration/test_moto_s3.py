@@ -56,8 +56,8 @@ def _client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch, **extra: str) -
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_S3_ALLOW_HTTP": "true",
-        "LANCE_OIDC_ENABLED": "false",
-        "LANCE_FGA_ENABLED": "false",
+        "RASK_OIDC_ENABLED": "false",
+        "RASK_FGA_ENABLED": "false",
         **extra,
     }.items():
         monkeypatch.setenv(key, value)  # auto-restored on teardown -> order-independent

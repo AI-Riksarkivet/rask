@@ -20,11 +20,12 @@ THE SHAPE, and why each piece is where it is:
       drain_chunk              activity: fetch, validate, stage a fragment, ack — the actual work
       reconcile_chunk          activity: queue truth, only when the drain reports short
 
-**Chunks, never units.** A unit is a page image; a run is millions of them. Persisting and replaying
-a million activity results would melt the state store — the plan said so, and it is the reason the
-tracker looked necessary. Chunking answers it: one child workflow per ~1-10k keys returns ONE
-compact result, and the workflow's own durable state becomes the ledger. That is what dissolved the
-tracker (DECISIONS.md), so this file is the reason `packages/tracker` gains no consumer.
+**Chunks, never units.** A unit is one source object; a run is millions of them. Persisting and
+replaying a million activity results would melt the state store — the plan said so, and it is the
+reason a per-unit ledger looked necessary. Chunking answers it: one child workflow per ~1-10k keys
+returns ONE compact result, and the workflow's own durable state becomes the ledger. That, plus the
+work queue's own retention, is why this estate carries no transfer-ledger package at all
+(DECISIONS.md).
 
 **Determinism.** Workflow functions replay from history, so every non-deterministic thing — clocks,
 randomness, I/O, network — lives in an ACTIVITY. `ctx.current_utc_datetime` and `ctx.create_timer`

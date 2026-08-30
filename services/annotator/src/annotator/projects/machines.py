@@ -15,12 +15,16 @@ from __future__ import annotations
 import base64
 import json
 import re
-from typing import Final
+from collections.abc import Sequence
+from typing import Any, Final, NoReturn
+
+from pydantic import ValidationError as PydanticValidationError
 
 from annotator.projects.models import ProjectState, TaskState
+from service_kit.exceptions import ConflictError
 
 
-#: The wire form of a refused transition, and the reason it exists.
+#: The wire form of a domain refusal, and the reason it exists.
 #:
 #: Dapr gives an actor-side exception exactly ONE channel to this side of the sidecar: the actor
 #: HTTP surface answers 500 with ``repr(ex)`` inside a JSON envelope
@@ -35,8 +39,41 @@ from annotator.projects.models import ProjectState, TaskState
 #:
 #: So the fields ride as a base64 payload instead. The alphabet (``A-Za-z0-9_-=``) is exactly the set
 #: JSON never escapes, which is the whole point: no un-escaping step can exist to get it wrong.
+#:
+#: One marker per refusal TYPE, and the codec below is shared. A second refusal that crossed the
+#: sidecar with a second hand-rolled encoder would be a second chance to make the same three
+#: mistakes, on a path nothing exercises until something is already broken.
 _WIRE_MARKER: Final = "illegal-transition"
 _WIRE_RE: Final = re.compile(rf"\[{_WIRE_MARKER}:([A-Za-z0-9_-]+=*)\]")
+
+#: The same channel, for a stored document the running models cannot parse. See
+#: :class:`UnreadableOntology`.
+_UNREADABLE_MARKER: Final = "unreadable-ontology"
+_UNREADABLE_RE: Final = re.compile(rf"\[{_UNREADABLE_MARKER}:([A-Za-z0-9_-]+=*)\]")
+
+
+def _wire_token(marker: str, payload: dict[str, Any]) -> str:
+    """Encode `payload` in a form two layers of JSON escaping cannot touch."""
+    blob = json.dumps(payload, ensure_ascii=False)
+    return f"[{marker}:{base64.urlsafe_b64encode(blob.encode()).decode('ascii')}]"
+
+
+def _wire_payload(pattern: re.Pattern[str], text: str) -> dict[str, Any] | None:
+    """Decode the one token `pattern` matches in `text`, or `None` when `text` carries none.
+
+    `None` is a real answer and every caller must re-raise on it: a failure that is not the refusal
+    being looked for has to stay the failure it is. There is deliberately NO prose fallback — an
+    actor that answers without a token is not running this code, and guessing at its sentence is the
+    behaviour this replaces.
+    """
+    found = pattern.search(text)
+    if found is None:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(found.group(1).encode("ascii")).decode())
+    except ValueError:  # binascii.Error, UnicodeDecodeError and JSONDecodeError are all ValueError
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 class IllegalTransition(ValueError):
@@ -59,8 +96,7 @@ class IllegalTransition(ValueError):
 
     def wire_token(self) -> str:
         """The structured payload, in a form two layers of JSON escaping cannot touch."""
-        blob = json.dumps({"kind": self.kind, "state": self.state, "event": self.event, "message": str(self)}, ensure_ascii=False)
-        return f"[{_WIRE_MARKER}:{base64.urlsafe_b64encode(blob.encode()).decode('ascii')}]"
+        return _wire_token(_WIRE_MARKER, {"kind": self.kind, "state": self.state, "event": self.event, "message": str(self)})
 
     def __repr__(self) -> str:
         """What crosses the sidecar — the sentence AND the token, in one ordinary exception repr."""
@@ -68,21 +104,9 @@ class IllegalTransition(ValueError):
 
     @classmethod
     def from_wire(cls, text: str) -> IllegalTransition | None:
-        """Rebuild the error from `text`, or `None` when `text` does not carry one.
-
-        `None` is a real answer and the caller must re-raise on it: a failure that is not a refused
-        transition has to stay the failure it is. There is deliberately NO prose fallback — an actor
-        that answers without a token is not running this code, and guessing at its sentence is the
-        behaviour this replaces.
-        """
-        found = _WIRE_RE.search(text)
-        if found is None:
-            return None
-        try:
-            payload = json.loads(base64.urlsafe_b64decode(found.group(1).encode("ascii")).decode())
-        except ValueError:  # binascii.Error, UnicodeDecodeError and JSONDecodeError are all ValueError
-            return None
-        if not isinstance(payload, dict):
+        """Rebuild the error from `text`, or `None` when `text` does not carry one — see `_wire_payload`."""
+        payload = _wire_payload(_WIRE_RE, text)
+        if payload is None:
             return None
         message = payload.get("message")
         return cls(
@@ -91,6 +115,110 @@ class IllegalTransition(ValueError):
             str(payload.get("event", "")),
             message=str(message) if message else None,
         )
+
+
+class UnreadableOntology(ConflictError):
+    """A PERSISTED annotation document whose ontology the running models cannot parse.
+
+    **Why this is a refusal and not a shrug.** The ontology is a CLOSED-SET contract: `send`,
+    `import`, `assist` and `submit` judge every shape against it and the publish stamps its class
+    list into the run facet. Reading an unparseable ontology as `LabelOntology()` — "constrains
+    nothing" — does not degrade the contract, it DELETES it, silently, on exactly the paths where
+    one click is hundreds of rows. So the request is refused instead, and the whole publish path
+    keeps the closed-set property it is built on.
+
+    **Why it is named.** Refusing was already the behaviour (both actors validate the whole stored
+    document in `_load`, so an unreadable ontology raised a bare `pydantic.ValidationError`), but it
+    reached the annotator as an anonymous 500 that named neither the project nor the reason and
+    repeated on every subsequent call. Naming it is what turns "this project is bricked" into a
+    sentence an operator can act on, and `fields` says which part of the document to rewrite.
+
+    **Why 409 rather than 500.** The stored document conflicts with the code asked to read it —
+    server state, not a server fault. A 5xx would tell the caller to retry, and a retry cannot fix
+    yesterday's schema; it would also bury the condition in the 500 counter every service already
+    has noise in.
+
+    **The rolling-upgrade window is the case that makes this reachable end to end.** Within one
+    deployed version the actor's `_load` refuses first, so the endpoint-side parses can never see a
+    document their own models reject. During an upgrade that CHANGES `LabelOntology` they can: a call
+    can be routed to an actor pod still running the old code, which loads and dumps its document
+    happily, and hand that dump to a new-code endpoint that cannot parse it. This error is what makes
+    that window legible instead of a burst of unattributed 500s — which is why the endpoint-side
+    seams raise it too rather than being deleted outright.
+
+    It lives beside :class:`IllegalTransition` because the sidecar wire codec does: it is the second
+    domain refusal that has to cross Dapr's one text channel and be rebuilt on the far side.
+    """
+
+    problem_type = "about:blank#unreadable-ontology"
+
+    def __init__(self, kind: str, identifier: str, fields: Sequence[str]) -> None:
+        self.kind = str(kind)
+        self.identifier = str(identifier)
+        #: Dotted paths into the stored document that failed validation — what to rewrite.
+        self.fields: list[str] = [str(f) for f in fields]
+        # The paths ride as an RFC 9457 §3.2 extension member rather than inside `detail`, so the
+        # sentence stays stable while the structure a client could dispatch on stays machine-readable.
+        super().__init__(
+            f"annotation {self.kind} {self.identifier} carries a stored ontology this build cannot read",
+            extensions={"kind": self.kind, "identifier": self.identifier, "fields": self.fields},
+        )
+
+    def wire_token(self) -> str:
+        """The structured payload, in a form two layers of JSON escaping cannot touch."""
+        return _wire_token(_UNREADABLE_MARKER, {"kind": self.kind, "identifier": self.identifier, "fields": self.fields})
+
+    def __repr__(self) -> str:
+        """What crosses the sidecar — the sentence AND the token, in one ordinary exception repr."""
+        return f"{type(self).__name__}({str(self) + ' ' + self.wire_token()!r})"
+
+    @classmethod
+    def from_wire(cls, text: str) -> UnreadableOntology | None:
+        """Rebuild the error from `text`, or `None` when `text` does not carry one — see `_wire_payload`."""
+        payload = _wire_payload(_UNREADABLE_RE, text)
+        if payload is None:
+            return None
+        fields = payload.get("fields")
+        return cls(
+            str(payload.get("kind", "")),
+            str(payload.get("identifier", "")),
+            [str(f) for f in fields] if isinstance(fields, list) else [],
+        )
+
+
+#: Where the ontology sits inside a whole stored annotation document, and the prefix every seam
+#: reports its failing paths under. Held here rather than spelled at each call site so a rename of
+#: the field cannot leave one seam reporting a path that no longer exists.
+ONTOLOGY_FIELD: Final = "ontology"
+
+
+def refuse_unreadable_ontology(exc: PydanticValidationError, kind: str, identifier: str, *, path: str = ONTOLOGY_FIELD) -> NoReturn:
+    """Re-raise `exc` as an :class:`UnreadableOntology`, or as ITSELF when the ontology is not why it failed.
+
+    `path` says where the ontology sat inside the object that was validated, and the two seams
+    differ: the ACTORS validate the whole stored document, so an ontology failure arrives located at
+    ``ontology.…``; the endpoint-side parses are handed the ontology sub-document directly, so the
+    same failure arrives located at ``required_labels`` with no prefix at all. Passing ``path=""``
+    says "the object validated IS the ontology", which is both what decides that every failure counts
+    and what lets the reported paths be identical whichever seam refused — an operator comparing a
+    409 from a bulk send against one from a task read must not have to translate between two
+    spellings of the same field.
+
+    SCOPED ON PURPOSE when a whole document was validated. It can fail for any of its fields, and
+    only the ontology has the closed-set contract this refusal is named for — so a failure elsewhere
+    stays the failure it is rather than being re-labelled as something an operator would then look
+    for in the wrong place. Widening it would mean widening the NAME too; the other fields' anonymous
+    refusal is a separate, still-open problem and not one this error may quietly absorb.
+
+    Every path that failed is reported, not just the ontology's: the document has to be rewritten as
+    a whole, and hiding the other paths would send the operator back for a second round.
+    """
+    located = [".".join(str(part) for part in error["loc"]) for error in exc.errors()]
+    if not path:
+        raise UnreadableOntology(kind, identifier, [f"{ONTOLOGY_FIELD}.{field}" for field in located]) from exc
+    if not any(field == path or field.startswith(f"{path}.") for field in located):
+        raise exc
+    raise UnreadableOntology(kind, identifier, located) from exc
 
 
 #: (from, event) -> (to, required permission). `None` = caused by the system (a workflow or an actor

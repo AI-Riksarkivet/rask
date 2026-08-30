@@ -8,7 +8,7 @@ surfaced to the browser as `{"message":"Internal Error"}` — a 500 carrying not
 cause: `OIDCVerifier` fetched the discovery document from the ISSUER, which in k3s is the
 browser-facing `http://localhost:8080/dex`. Inside a pod that resolves to the pod itself.
 
-The chart had been setting `LANCE_OIDC_DISCOVERY_URL=http://rask-dex:5556/dex` all along, and
+The chart had been setting `RASK_OIDC_DISCOVERY_URL=http://rask-dex:5556/dex` all along, and
 `GovernedAuthSettings` had been parsing it into `oidc_discovery_url`. The ingest door simply never
 passed it to the verifier — while catalog, lineage, viewer, annotator and medallion all did, with the
 identical expression at five sites.
@@ -140,6 +140,6 @@ def test_the_settings_field_is_the_SHARED_one() -> None:
     """
     settings = (ROOT / "packages/service-kit/src/service_kit/governed/settings.py").read_text(encoding="utf-8")
 
-    assert 'oidc_discovery_url: str | None = Field(default=None, alias="LANCE_OIDC_DISCOVERY_URL")' in settings, (
+    assert 'oidc_discovery_url: str | None = Field(default=None, alias="RASK_OIDC_DISCOVERY_URL")' in settings, (
         "the shared discovery-url setting moved or was renamed — every door's override reads it, and they will fall back to the issuer"
     )

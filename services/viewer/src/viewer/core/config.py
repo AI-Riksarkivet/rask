@@ -22,7 +22,7 @@ class ViewerSettings(Settings, GovernedAuthSettings):
     reachable by more than one person: a corpus LIST names data someone may not know exists.
 
     Mixing the shared `GovernedAuthSettings` in rather than declaring VIEWER_* twins keeps one set of
-    LANCE_OIDC_*/LANCE_FGA_* variables across every governed service, and inherits its fail-fast
+    RASK_OIDC_*/RASK_FGA_* variables across every governed service, and inherits its fail-fast
     validator (FGA without OIDC is refused at construction, because authz needs a verified subject).
     """
 

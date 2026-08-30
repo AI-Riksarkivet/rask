@@ -160,13 +160,13 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 		c = c.
 			WithServiceBinding("dex", stack.Dex).
 			WithServiceBinding("openfga", stack.OpenFGA).
-			WithEnvVariable("LANCE_OIDC_ENABLED", "true").
-			WithEnvVariable("LANCE_OIDC_ISSUER", "http://dex:5556/dex").
-			WithEnvVariable("LANCE_OIDC_AUDIENCE", "lance-catalog").
+			WithEnvVariable("RASK_OIDC_ENABLED", "true").
+			WithEnvVariable("RASK_OIDC_ISSUER", "http://dex:5556/dex").
+			WithEnvVariable("RASK_OIDC_AUDIENCE", "lance-catalog").
 			// Dex serves discovery over http here. Dev only — the chart never sets this.
-			WithEnvVariable("LANCE_OIDC_ALLOW_INSECURE", "true").
-			WithEnvVariable("LANCE_FGA_ENABLED", "true").
-			WithEnvVariable("LANCE_FGA_API_URL", "http://openfga:8080")
+			WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").
+			WithEnvVariable("RASK_FGA_ENABLED", "true").
+			WithEnvVariable("RASK_FGA_API_URL", "http://openfga:8080")
 	}
 	if lineage != nil {
 		// The governance stack turns catalog->lineage emission ON. Without this the catalog runs

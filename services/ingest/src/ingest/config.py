@@ -1,7 +1,7 @@
 """THE operational settings of the ingest plane — one declaration per knob, in one place.
 
 Before this, the plane read the environment in 44 places across 15 modules and there was no model at
-all: `IngestAuthSettings` covered the AUTH half (`LANCE_OIDC_*` / `LANCE_FGA_*`) and everything
+all: `IngestAuthSettings` covered the AUTH half (`RASK_OIDC_*` / `RASK_FGA_*`) and everything
 operational was a bare `os.getenv` at the point of use (ING-07, ingest-flow-09). Three consequences,
 all of them observed in this tree rather than imagined:
 

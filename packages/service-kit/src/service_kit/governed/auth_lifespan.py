@@ -51,11 +51,12 @@ log = logging.getLogger(__name__)
 class _FgaSettings(Protocol):
     """The FGA half alone — `maintenance` reaches the client without an OIDC door in front of it.
 
-    READ-ONLY members (properties, not annotations) because a mutable protocol member is INVARIANT:
-    the estate's settings classes disagree on optionality — `GovernedAuthSettings` declares
-    `fga_store_id: str | None`, medallion declares `fga_store_id: str` defaulting to `""` — and an
-    invariant `str | None` member rejects the second outright. Nothing here writes to settings, so
-    accepting both is correct rather than lax.
+    READ-ONLY members (properties, not annotations) because a mutable protocol member is INVARIANT,
+    which would make this signature reject a settings class whose field is declared even slightly
+    differently. Nothing here writes to settings, so read-only is correct rather than lax. (It used to
+    be load-bearing for a second reason: the estate's classes disagreed on optionality, medallion
+    declaring `fga_store_id: str = ""` against everyone else's `str | None`. That disagreement is gone
+    — the field is declared once, in `service_kit.governed.settings.FgaSettings`.)
     """
 
     @property
@@ -71,9 +72,9 @@ class _FgaSettings(Protocol):
 
 
 class _GovernedSettings(_FgaSettings, Protocol):
-    """The subset of `GovernedAuthSettings` this needs. A Protocol, so any service's own settings
-    class satisfies it structurally without importing a base — which is what lets medallion's
-    `MedallionSettings`, ingest's `IngestAuthSettings` and the catalog's pre-mixin twin all pass."""
+    """The subset of `GovernedAuthSettings` this needs. A Protocol, so a settings class satisfies it
+    structurally without importing a base — which is what lets medallion, whose class mixes the two
+    halves directly rather than the composed `GovernedAuthSettings`, pass without a cast."""
 
     @property
     def oidc_enabled(self) -> bool: ...

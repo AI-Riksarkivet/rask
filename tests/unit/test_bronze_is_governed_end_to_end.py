@@ -89,16 +89,16 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
         # Authn ON only because the settings refuse FGA without it (authz needs a user); the verifier
         # itself is never reached — `security.authenticate` is overridden below.
         "LANCE_AUTH_ENABLED": "true",
-        "LANCE_OIDC_ENABLED": "true",
-        "LANCE_OIDC_ISSUER": "https://dex.test/dex",
-        "LANCE_OIDC_AUDIENCE": "lance-catalog",
-        "LANCE_OIDC_ALLOW_INSECURE": "true",
-        "LANCE_FGA_ENABLED": "true",  # so the register door's ownership seed actually runs
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": "https://dex.test/dex",
+        "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_FGA_ENABLED": "true",  # so the register door's ownership seed actually runs
         # PINNED ids = the production posture: no boot-time store provisioning, so the lifespan never
         # reaches for an OpenFGA that is not running here. The grant call itself is recorded below.
-        "LANCE_FGA_API_URL": "http://127.0.0.1:9",
-        "LANCE_FGA_STORE_ID": "01TESTSTORE",
-        "LANCE_FGA_MODEL_ID": "01TESTMODEL",
+        "RASK_FGA_API_URL": "http://127.0.0.1:9",
+        "RASK_FGA_STORE_ID": "01TESTSTORE",
+        "RASK_FGA_MODEL_ID": "01TESTMODEL",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_S3_ACCESS_KEY_ID": "x",
         "LANCE_S3_SECRET_ACCESS_KEY": "x",

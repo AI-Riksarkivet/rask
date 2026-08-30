@@ -5,7 +5,7 @@
 #   bob@example.com   / password   (holds no grant -> denied)
 # Both share the same bcrypt hash of "password"; bcrypt verifies against the
 # plaintext only (no username binding), so reusing the hash is correct.
-# Token audience = the static client id "lance-catalog" (LANCE_OIDC_AUDIENCE).
+# Token audience = the static client id "lance-catalog" (RASK_OIDC_AUDIENCE).
 issuer: http://dex:5556/dex
 storage:
   type: memory

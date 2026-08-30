@@ -47,10 +47,10 @@ def _settings(**overrides: object) -> Settings:
 
 
 def _fga_settings(**overrides: object) -> Settings:
-    """Settings with FGA on. The model fail-closes — `LANCE_OIDC_ENABLED is required when
-    LANCE_FGA_ENABLED is set (authz needs a user)` — so authorization can never be switched on
+    """Settings with FGA on. The model fail-closes — `RASK_OIDC_ENABLED is required when
+    RASK_FGA_ENABLED is set (authz needs a user)` — so authorization can never be switched on
     without an identity source behind it."""
-    return _settings(LANCE_FGA_ENABLED=True, LANCE_OIDC_ENABLED=True, LANCE_OIDC_ISSUER="https://dex", LANCE_OIDC_AUDIENCE="rask", **overrides)
+    return _settings(RASK_FGA_ENABLED=True, RASK_OIDC_ENABLED=True, RASK_OIDC_ISSUER="https://dex", RASK_OIDC_AUDIENCE="rask", **overrides)
 
 
 def test_it_is_empty_by_default() -> None:

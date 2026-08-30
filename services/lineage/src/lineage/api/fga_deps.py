@@ -20,7 +20,7 @@ Three holes this closes (audit ``w8u4rc2tg``):
   provenance was forgeable. The author is taken from the verified token
   (:func:`enforce_author`) — the client-claimed facet is overwritten.
 
-Default OFF (``LINEAGE_FGA_ENABLED``), exactly like the catalog; production enables it.
+Default OFF (``RASK_FGA_ENABLED``), exactly like the catalog; production enables it.
 Fail-closed when enabled-but-unwired (503, never silent allow).
 """
 

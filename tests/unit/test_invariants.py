@@ -1590,8 +1590,8 @@ def test_the_INGEST_stream_has_ONE_definition_and_the_chart_agrees_with_the_code
     """Two definitions of one stream, reconciled only by "whoever creates it first wins".
 
     `services/ingest/.../queue.py` declares `RetentionPolicy.WORK_QUEUE` and BUILDS ON it — "a message
-    is REMOVED once acked … which is why this plane needs no side ledger" is the reasoning that
-    dissolved the tracker. The chart created the same stream with `--retention limits`, and in-cluster
+    is REMOVED once acked … which is why this plane needs no side ledger" is the reasoning that keeps
+    a per-unit ledger out of this estate. The chart created the same stream with `--retention limits`, and in-cluster
     the Job wins. Measured on the live stream 2026-08-06: retention=limits, deny_purge=true,
     deny_delete=true, max_age=168h — so acked messages were RETAINED and `messages` was not
     outstanding work. The design claim was false exactly where it shipped.

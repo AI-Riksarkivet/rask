@@ -178,7 +178,7 @@ labeling substance landed after the first close:
   per-task server-gated, failures reported individually (the e2e for it caught a real
   derived-after-clear bug). The LLM-labeller import ride (`prediction_import` → drafts with
   `origin: model`) and the embedding view need the assist runner (mock-labelled today).
-- **FGA on the annotator is chart-wired** (`media.yaml`: LANCE_FGA/OIDC under `auth.enabled`,
+- **FGA on the annotator is chart-wired** (`media.yaml`: RASK_FGA/OIDC under `auth.enabled`,
   annotator only; render-pinned by `tests/unit/test_annotator_auth_env.py` both ways).
 - **The annotator sidebar is project-centric** — the Corpus group (Search/Atlas/Graph cross-zone
   links) removed; the flow runs media→send→project, not annotator→launcher.
@@ -724,7 +724,7 @@ bronze. With the collapse, the bronze write happens in the producer, whose inges
 `scripts/seed_medallion_fga.sh` now grants `writer` to `user:service-lance-ray` (the producer identity),
 so the model DESCRIBES the intended rung.
 **What closes it.** The ingest heads (`/produce`, `/ingest-iiif`, `/ingest-media`) check
-`can_create_table` on `namespace:bronze` as `service-lance-ray` when `MEDALLION_FGA_ENABLED` — the same
+`can_create_table` on `namespace:bronze` as `service-lance-ray` when `RASK_FGA_ENABLED` — the same
 enforce-not-describe posture the movers keep.
 
 ## E. Latent — surfaced by the pre-copy docs audit (2026-07-27), adversarially verified open
@@ -1005,7 +1005,31 @@ Two independent findings, same shape: a resource type or service is referenced b
 RBAC, and consumed by the UI — while the chart never creates it. Each presents as an empty list or a
 500 far from the cause.
 
-### G1 · No `Project` CRD, so no project can exist
+### ~~G1 · No `Project` CRD, so no project can exist~~ **SETTLED 2026-08-16, prescription CORRECTED 2026-08-29**
+
+**The heading and the fix below are both wrong, and are kept only so the wrong fix is not re-derived
+from them.** Two corrections, in order of how much damage each did:
+
+1. **Do NOT ship the CRD.** `docs/DECISIONS.md` — *"Watch enrolment does not wait for the
+   `platform.rask.io` CRD"*, 2026-08-16 — rules the CRD **abandoned as a rask-repo concern**: it
+   belongs to the separate `rask-operator` repo, and installing it here without its controller
+   yields unreconciled CRs that render exactly like projects stuck mid-provision. That is the
+   quieter lie, not the fix.
+2. **"No project can be created at all" is false.** A k8s Project CR and a catalog TENANT are two
+   unrelated things that share a word (`open_projects.md` §1). Tenants are minted by
+   `POST /v1/projects` on the catalog, and the home gallery reads them — `me.projects` off the
+   frozen `/v1/me` contract, plus `/capi/v1/projects`, which proxies to the **catalog**
+   (`bff.ts::makeCatalogProxy`), never to the controlplane (`home/src/lib/gallery.ts:73`). The
+   gallery does not depend on this CRD and is not empty because of it.
+
+What was real and is now fixed: the controlplane reported the 404 as
+`503 {"detail":"cannot reach kubernetes api"}`, which is why the finding below blamed the chart and
+`HANDOFF-lakehouse.md:101-106` blamed the ServiceAccount. It now answers **501** naming the
+unregistered `projects.platform.rask.io` type — never an empty `200`
+(`services/controlplane/tests/test_the_missing_operator_names_itself.py`).
+
+<details><summary>The 2026-07-29 finding as filed</summary>
+
 
 `services/controlplane/src/controlplane/k8s.py:10-13` lists
 `group=platform.rask.io, version=v1alpha1, plural=projects`. That CRD is **not installed and not
@@ -1027,6 +1051,8 @@ the backend has never heard of. Two sources, one placeholder, and the mismatch r
 
 Fix: ship the CRD (`chart/crds/` or a template) and either seed a default `Project` CR or give the UI
 a create path. Until then `/lakehouse/catalog/projects` and the home picker can only be empty.
+
+</details>
 
 ### ~~G2 · `compute` is built and imported but never deployed~~ **FIXED 2026-07-29**
 
@@ -1398,12 +1424,16 @@ publication and submits the mover.
 
 A17 and A18 both need 1, since they are assertions about a mover and a publication that do not run.
 
-### 4. `packages/tracker` has zero consumers and should probably die
+### 4. ~~`packages/tracker` has zero consumers and should probably die~~ — DELETED 2026-08-30
 
-Adopting Dapr Workflow dissolved the reason it existed (`docs/DECISIONS.md`): the workflow's own
-durable history is the run ledger, so nothing needs a side table of unit states. It is not deleted
-here because that is an owner call, not a cleanup — but it is dead weight, and leaving it invites
-someone to wire it back in and re-create the two-ledger problem.
+Owner call, made: the package is gone. Adopting Dapr Workflow dissolved the reason it existed
+(`docs/DECISIONS.md`) — the workflow's own durable history is the run ledger, and JetStream
+`WORK_QUEUE` retention is the outstanding-work set, so nothing needs a side table of unit states.
+It never had a consumer here at all: it arrived in `0c90ae51` harvested from ra-hcp beside
+`validate`, and unlike `validate` it never found one. Deleted with it: its root workspace rows, its
+`make tracker-postgres` / `.dagger/tracker.go` pair, and `sqlmodel`, `sqlalchemy`,
+`pytest-postgresql` (+ `greenlet`, `mirakuru`, `port-for`, `psutil`) out of the root lock —
+233 → 225 packages. `psycopg` stays: `services/lineage` declares it for AGE.
 
 ### 5. Known operational sharp edges, recorded rather than fixed
 
@@ -2076,7 +2106,7 @@ The dummy producer/movers define the contract the real Ray Data jobs must reprod
   CDF, write the to-stage) → emit the **`DERIVED_FROM`** OpenLineage edge → publish the next trigger.
 - **Gold mover (terminal):** write the gold dataset **with the embedded `lineage` JSONB column** (per
   `scripts/medallion_demo.py: write_gold`) → no next trigger. This is the durable, exportable artifact.
-- **Authz:** when `MEDALLION_FGA_ENABLED`, the mover checks `can_create_table` (writer) / `can_promote`
+- **Authz:** when `RASK_FGA_ENABLED`, the mover checks `can_create_table` (writer) / `can_promote`
   (validator, silver→gold) as its **service identity** before emitting; unauthorized → `DROP`.
 - **Creds:** the job authenticates with **workload identity** (KubeRay projected SA / OIDC token) and vends
   short-TTL, table-scoped creds via the catalog `POST /v1/table/{id}/credentials` (web_identity flow). **No
@@ -3408,7 +3438,7 @@ a registered empty bronze table behind. Note a latent blocker for that fix: `run
 door still answers COMPLETE.
 
 **STILL OPEN — the ingest ceilings.** Enumeration is unbounded for every source kind: no unit, byte
-or time ceiling. `S3Source` does a full recursive LIST when `prefix` is empty, which the registry
+or time ceiling. `S3FileSystemSource` does a full recursive LIST when `prefix` is empty, which the registry
 explicitly invites ("Leave empty to take the whole bucket"). Separately, `chart/values.yaml` declares
 `RASK_INGEST_MAX_RUN_HOURS: "24"` that **no code in `services/ingest` reads**, while gate A15 asserts
 `olderThanDays * 24 >= max_run_hours` and passes — a green gate certifying a relation whose other

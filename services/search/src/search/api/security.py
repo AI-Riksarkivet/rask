@@ -1,7 +1,7 @@
 """Who is asking, and which corpora they may search.
 
 The search service shipped with no authorization at all (open_python-audit `X6`): the estate's
-`LANCE_OIDC_*`/`LANCE_FGA_*` env reached it and bound to nothing, while its two siblings — viewer and
+`RASK_OIDC_*`/`RASK_FGA_*` env reached it and bound to nothing, while its two siblings — viewer and
 annotator — both carry the full seam. With the viewer's corpus routes gated, this was the last
 unguarded door on the `/api/explorer` edge, and the one that accepts a raw SQL `where` predicate
 ANDed into every query (`VS-13`).

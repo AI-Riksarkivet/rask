@@ -57,3 +57,16 @@ name = "reject Co-Authored-By Claude"
 entry = "sh -c '! grep -qi \"co-authored-by.*claude\" \"$1\"' --"
 language = "system"
 stages = ["commit-msg"]
+
+[[repos.hooks]]
+id = "comment-history-gate"
+name = "comments carry rationale, not a changelog of the prose"
+# FORWARD ONLY, and `--staged` is the whole reason this is safe to turn on. The estate holds 35,279
+# lines of module prose (measured 2026-08-30, tokenize pass over packages/ + services/ src) and the
+# owner ruled it is NOT to be drained — so the gate reads the lines this commit ADDS and nothing else.
+# A whole-tree form would be red on its first run against prose nobody may touch, and a gate that is
+# red by construction is one everybody learns to pass with --no-verify.
+# The rule, and the two kinds of prose it deliberately protects, live in docs/DECISIONS.md.
+entry = "uv run python scripts/comment_history_gate.py --staged"
+language = "system"
+pass_filenames = false

@@ -40,8 +40,8 @@ def test_authorization_still_requires_authentication(monkeypatch: pytest.MonkeyP
     """Inherited from `GovernedAuthSettings` and asserted here because this service is the one whose
     whole point is that a badge counts YOUR work: checking a subject nobody verified would be worse
     than no check at all."""
-    monkeypatch.setenv("LANCE_FGA_ENABLED", "true")
-    with pytest.raises(ValidationError, match="LANCE_OIDC_ENABLED"):
+    monkeypatch.setenv("RASK_FGA_ENABLED", "true")
+    with pytest.raises(ValidationError, match="RASK_OIDC_ENABLED"):
         NotificationsSettings.model_validate({})
 
 

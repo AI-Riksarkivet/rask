@@ -41,11 +41,13 @@ from typing import Any, Final
 
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 from dapr.actor.runtime.failure_policy import ActorReminderFailurePolicy
+from pydantic import ValidationError as PydanticValidationError
 
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
     IllegalTransition,
     identity_violation,
+    refuse_unreadable_ontology,
     submit_target,
     task_transition,
 )
@@ -119,8 +121,23 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
     """Holds one task's state and its draft."""
 
     async def _load(self) -> Task | None:
+        """The task document, or `None` when this actor has never been seeded.
+
+        A document that EXISTS but no longer parses is refused by name — see
+        `machines.refuse_unreadable_ontology`. The task carries its OWN captured copy of the
+        ontology (that capture is what makes submit-time enforcement possible at all), so this is a
+        second, independent seam from the project actor's and needs the same guard.
+        """
         has, raw = await self._state_manager.try_get_state(TASK_KEY)
-        return Task.model_validate(json.loads(raw)) if has and raw else None
+        if not (has and raw):
+            return None
+        stored = json.loads(raw)
+        try:
+            return Task.model_validate(stored)
+        except PydanticValidationError as exc:
+            # Read off the RAW document — there is no model to read it off, and the `task_id` is the
+            # id the caller already holds, so the refusal names something it can act on.
+            refuse_unreadable_ontology(exc, "task", str(stored.get("task_id") or "unknown"))
 
     async def _store(self, task: Task) -> None:
         # BOUND THE HISTORY HERE, at the one seam every write goes through, rather than at each
