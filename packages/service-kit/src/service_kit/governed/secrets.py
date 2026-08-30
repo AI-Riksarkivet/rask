@@ -171,9 +171,11 @@ def apply_dapr_secrets(settings: SupportsDaprSecrets) -> dict[str, str]:
     path. Returning a new object or ``model_copy(update=...)`` would leave the cache holding the
     un-spliced one, so every S3 call signs with an empty key — and it fails INVISIBLY: the boot
     succeeds, the pods go ready, and the estate reports itself healthy while the object store 403s.
-    Freezing the model lands in the same place, because the accessor would then have to be re-seated
-    (its cache cleared AND a spliced instance forced back in) at five call sites — more moving parts
-    guarding a singleton that no request can reach. Holding the secret OUTSIDE ``Settings``, in a
+    Freezing the model fails DIFFERENTLY and, on its own, better: assignment onto a ``frozen=True``
+    model raises ``ValidationError`` (measured), so the splice would break loudly at boot instead of
+    signing with an empty key. What rules it out is the cost of the shape it forces, not the failure
+    mode — the accessor would have to be re-seated (its cache cleared AND a spliced instance forced
+    back in) at five call sites: more moving parts guarding a singleton that no request can reach. Holding the secret OUTSIDE ``Settings``, in a
     credential object the storage seam reads, is the one genuinely better shape; it is a change across
     four services and every ``storage_options()`` caller, not a local edit, and nobody has decided to
     spend it.

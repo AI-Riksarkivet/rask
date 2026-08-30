@@ -31,7 +31,17 @@ _ENDPOINT_ENVS = ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT")
 
 
 def _getenv_endpoint_sites(tree: ast.AST) -> list[tuple[int, str]]:
-    """Every `os.getenv(<endpoint env>)` / `os.environ[...]` / `.get(...)` site, with its line."""
+    """Every `os.getenv(<endpoint env>)` / `getenv(...)` / `os.environ[...]` / `.get(...)` site.
+
+    BOTH CALLABLE SHAPES, and the bare one is not hypothetical: `from os import getenv` makes the
+    call an `ast.Name`, so a walk that inspected only `ast.Attribute` scored zero hits on it and this
+    gate reported green over the very read it exists to refuse. A regression gate with a spelling it
+    cannot see is worse than no gate, because it gets quoted as proof.
+
+    A bare Name matches `getenv` ALONE. `get` is matched only as an attribute (`environ.get`): a bare
+    `get(...)` is an ordinary call, and matching it would make this fire on unrelated code until
+    somebody deleted the gate to get their work through.
+    """
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         name: object = None
@@ -39,8 +49,13 @@ def _getenv_endpoint_sites(tree: ast.AST) -> list[tuple[int, str]]:
         if isinstance(node, ast.Call):
             lineno = node.lineno
             func = node.func
-            attr = func.attr if isinstance(func, ast.Attribute) else None
-            if attr in {"getenv", "get"} and node.args and isinstance(node.args[0], ast.Constant):
+            if isinstance(func, ast.Attribute):
+                callee = func.attr if func.attr in {"getenv", "get"} else None
+            elif isinstance(func, ast.Name):
+                callee = func.id if func.id == "getenv" else None
+            else:
+                callee = None
+            if callee and node.args and isinstance(node.args[0], ast.Constant):
                 name = node.args[0].value
         elif isinstance(node, ast.Subscript):
             lineno = node.lineno
@@ -105,3 +120,20 @@ def test_smoke_scripts_report_the_endpoint_the_client_will_actually_use(monkeypa
         source = (_SCRIPTS / f"{stem}.py").read_text()
         assert "configured_endpoint" in source, f"{stem}.py does not use the shared resolver"
     assert resolved == "http://localhost:9000"
+
+
+def test_the_scan_also_sees_a_BARE_getenv_import() -> None:
+    """`from os import getenv` is the evasion the first version of this gate could not see.
+
+    Its walk inspected `ast.Attribute` callables only, so `os.getenv(...)` was caught and the bare
+    `getenv(...)` — the same read, one import line apart — scored zero hits and the gate stayed green.
+    A regression gate with a spelling it cannot see is worse than none, because it is quoted as proof.
+
+    Only `getenv` is matched on a bare Name: a bare `get(...)` is an ordinary call, not an env read,
+    and matching it would make the gate fire on unrelated code until someone deleted the gate.
+    """
+    evasion = ast.parse("from os import getenv\nendpoint = getenv('RASK_S3_ENDPOINT_URL')\n")
+    assert [name for _, name in _getenv_endpoint_sites(evasion)] == ["RASK_S3_ENDPOINT_URL"]
+
+    innocent = ast.parse("mapping = {}\nvalue = get('RASK_S3_ENDPOINT_URL')\n")
+    assert _getenv_endpoint_sites(innocent) == [], "a bare get() is not an environment read"

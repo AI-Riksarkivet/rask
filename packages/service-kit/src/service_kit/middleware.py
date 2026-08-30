@@ -51,12 +51,11 @@ class RequestIDMiddleware:
     Without it, we mint a UUID hex.
 
     PURE ASGI, NOT `BaseHTTPMiddleware`, and that is what makes it safe everywhere. `BaseHTTPMiddleware`
-    fully buffers the response body — `service_kit/media/middleware.py` records exactly this, and it is
-    why viewer/search/annotator deliberately ran NO request-id middleware: it would have broken the
-    `/api/explorer` Range streaming that 206 video seeking depends on, and the catalog's Arrow-IPC data
-    plane has the same shape. Its own docstring named the remedy: "use a pure ASGI middleware that
-    passes through streaming bodies". This is that, so the exemption is no longer needed and every
-    service can carry one id.
+    fully buffers the response body, which would break the `/api/explorer` Range streaming that 206
+    video seeking depends on; the catalog's Arrow-IPC data plane has the same shape. That constraint is
+    stated for the media plane in `service_kit/media/middleware.py`, whose layers are pure ASGI for the
+    same reason. Because this one rewrites only the response START message and passes the body through
+    untouched, the media services need no exemption and every service can carry one id.
 
     It touches only the response START message to add the header; body chunks pass through untouched.
     """

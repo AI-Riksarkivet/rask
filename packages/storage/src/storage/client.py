@@ -21,9 +21,11 @@ type S3Client = Any
 # aliases kept while HCP is the current backend (the chart + dev `.env` still set
 # HCP_ENDPOINT/HCP_INSECURE); drop them once everything uses RASK_S3_*.
 #
-# RESOLVED BY HAND rather than by a pydantic-settings model, because the whole configuration surface
-# is three OPTIONAL strings with nothing to validate — a settings class buys uniformity and no
-# behaviour. Weighed against that: `boto3` is this package's ONLY runtime dependency, and
+# RESOLVED BY HAND rather than by a pydantic-settings model, and the reason is dependency weight, not
+# an absence of validation — there IS one coercion here, the insecure flag parsed to a bool at
+# `s3_client` below, which is exactly the kind of thing a settings model would own. The surface is
+# small (three optional families) and the coercion is one line, so a settings class buys uniformity
+# and almost no behaviour. Weighed against that: `boto3` is this package's ONLY runtime dependency, and
 # `runners/htr` + `runners/dummy` hold the package as a path dep resolved into their own sealed
 # locks, so `pydantic-settings` (in neither) is a relock of two model environments for a change
 # nothing can observe. The semantics also differ where it matters here: `_env_first` skips an EMPTY

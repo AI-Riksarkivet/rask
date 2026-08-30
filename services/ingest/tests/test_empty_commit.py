@@ -1,6 +1,6 @@
 """The branch no local test could reach: `finalize` against a catalog that HAS `commit`.
 
-`finalize_run` branches on `hasattr(catalog, "commit")`. `LocalCatalog` — the default with
+`finalize_run` branches on `isinstance(catalog, CommittingCatalog)`. `LocalCatalog` — the default with
 `RASK_INGEST_USE_CATALOG` unset, which is what every other test uses — does not have one, so the
 entire catalog-service path is invisible to the suite. The chart deploys
 `RASK_INGEST_USE_CATALOG: "true"`, so it is the ONLY path a deployed run takes.

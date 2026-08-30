@@ -404,9 +404,16 @@ def test_every_parent_edge_relation_exists_on_the_child_type() -> None:
 #: The ONLY production sites allowed to CALL :func:`service_kit.governed.fga.hierarchy_edge_tuples`,
 #: and what each one is for.
 #:
+#: SCOPED TO THE ``parent`` EDGE, which is what this function mints and all this gate can speak for.
 #: `grant_on_create` is where the catalog's create doors land — `fga_deps.seed_ownership` is the one
-#: post-create seed and it reaches the edge through there — so every governed object that HAS a
-#: catalog record gets its hierarchy edge from a single writer.
+#: post-create seed and it reaches the edge through there — so a namespace or a table gets its
+#: ``parent`` link from a single writer.
+#:
+#: A WAREHOUSE DOES NOT, and that is by design rather than an escape: its parent-pointer relation is
+#: ``project``, not ``parent`` (`model.fga`), so `fga_deps.seed_warehouse` writes those tuples
+#: directly — `grant_on_create` hardcodes ``parent``, a relation the ``warehouse`` type does not
+#: define, and writing it makes OpenFGA reject the whole seed with a 503. So "one writer per object"
+#: is true of the ``parent`` edge and false of hierarchy in general; this gate claims only the former.
 #:
 #: The medallion's train handler is the sanctioned second writer, and the reason is a fact about the
 #: model plane rather than a convenience: `table:<models_ns>$<model>` has NO catalog record. The
@@ -459,10 +466,11 @@ def test_only_the_sanctioned_writers_seed_a_hierarchy_edge() -> None:
     )
     rogue = sorted(set(callers) - _HIERARCHY_EDGE_WRITERS)
     assert not rogue, (
-        f"a third site writes FGA hierarchy edges: {rogue}. Hierarchy is minted by the catalog's "
-        "create-door seed (`fga_deps.seed_ownership` → `grant_on_create`); the medallion's train "
-        "handler is the ONE exception, because a model registry dataset has no catalog record and so "
-        "no create door runs for it. A service that owns neither is asserting a parent link some "
+        f"a third site calls hierarchy_edge_tuples: {rogue}. The ``parent`` edge is minted by the "
+        "catalog's create-door seed (`fga_deps.seed_ownership` → `grant_on_create`); the medallion's "
+        "train handler is the one other caller, because a model registry dataset has no catalog "
+        "record and so no create door runs for it. (A warehouse's parent pointer is a different "
+        "relation, ``project``, written directly by `seed_warehouse` and outside this gate.) A service that owns neither is asserting a parent link some "
         "create door also asserts — two writers for one edge, and nothing reports the drift. Seed it "
         "through the catalog, or record why it cannot be and add it to `_HIERARCHY_EDGE_WRITERS`."
     )

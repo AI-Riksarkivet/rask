@@ -1,27 +1,32 @@
 """ANN-13, RATIFIED: the annotator publishes under TWO planes, and this file is where that is said.
 
-**The prefix split is a trust boundary, not an inconsistency.**
+**EDGE-REACHABILITY IS DECIDED BY THE GATEWAY TABLE, NOT BY THE SHAPE OF A PATH.** State it that way
+round, because the intuitive reading is wrong and measurably so: the gateway carries exactly ONE
+annotator row — `Route("/api/explorer/annotations", "/api/annotations", *annotator)` in
+`services/gateway/src/gateway/__init__.py` — so of the paths this service mounts under `/api`, only
+the `/api/annotations` subtree is reachable from outside the cluster. `/api/assist` and `/api/jobs`
+carry the same prefix and have NO row; `jobs.py`'s own comment says so and is correct.
 
-* The **edge plane** — every path under `/api` — is what the gateway publishes to the browser:
-  `Route("/api/explorer/annotations", "/api/annotations", *annotator)` in
-  `services/gateway/src/gateway/__init__.py`. A path here is reachable from outside the cluster.
-* The **actor plane** — `/projects` and `/tasks` — has NO gateway row and must not acquire one. The
-  annotator zone's SSR calls it directly, server-side and in-cluster, on `ANNOTATOR_PROJECTS_API`
-  (`frontend/microfrontends/annotator/src/lib/server/doors.ts`), and `require_actor_plane` refuses
-  it 503 when the Dapr actors are unregistered. The shape of a path therefore states which side of
-  the boundary it is on; one uniform prefix would erase that.
+* The **`/api` plane** is this service's mounting convention, shared with every sibling. It says where
+  a router sits inside the app, and nothing about who may reach it.
+* The **actor plane** — `/projects` and `/tasks` — is the annotator's own shape for routes backed by
+  Dapr actors. It has no gateway row either, and must not acquire one: the annotator zone's SSR calls
+  it directly, server-side and in-cluster, on `ANNOTATOR_PROJECTS_API`
+  (`frontend/microfrontends/annotator/src/lib/server/doors.ts`).
+  `require_actor_plane` is attached to the `/tasks` router ALONE (`tasks.py:84`); `/projects` carries
+  no such dependency, so an unregistered actor plane surfaces there as a 500 rather than a 503.
 
 **Unification is blocked at the door, not merely unattractive.** `/api/projects` belongs to the
-CONTROLPLANE at the gateway (`Route(f"{prefix}/projects", …, *controlplane)`), so the annotator
-cannot take it. Moving the actor plane under `/api` means inventing some third path for it, rewiring
-`projects.remote.ts` and `tasks.remote.ts`, and adding a gateway row that publishes actor state at
-the edge. The split costs one extra shape to read; the unification costs the boundary.
+CONTROLPLANE at the gateway (`Route(f"{prefix}/projects", …, *controlplane)`), so the annotator cannot
+take it. Moving the actor plane under `/api` means inventing some third path, rewiring
+`projects.remote.ts` and `tasks.remote.ts`, and deciding separately whether to publish actor state at
+the edge — which the prefix move would not itself accomplish, since publication is the gateway's call.
 
-**What is pinned here:** the exact published set, and that every published path belongs to one of the
-two planes. A new path, a moved path, or a router inventing a third shape fails here and has to be
-argued for. Plane membership and the not-the-API exclusions are both matched on a SEGMENT boundary —
-a router mounted at `/daprtools` or `/projectsx` is a new public shape, not a sidecar callback and
-not the actor plane, and the assertions below see it.
+**What is pinned here:** the exact mounted set, and that every path belongs to one of the two planes.
+A new path, a moved path, or a router inventing a third shape fails here and has to be argued for.
+Plane membership and the not-the-API exclusions are both matched on a SEGMENT boundary — a router
+mounted at `/daprtools` or `/projectsx` is a new shape, not a sidecar callback and not the actor
+plane, and the assertions below see it.
 """
 
 from __future__ import annotations
