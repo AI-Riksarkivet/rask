@@ -30,6 +30,7 @@ import httpx
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.services.transform_spec import resolve_transform_async
 from ray_kit import submit as rk
+from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 
 
 log = logging.getLogger(__name__)
@@ -159,6 +160,11 @@ async def submit_stage_job(
     entrypoint = spec.entrypoint if spec else settings.ray_entrypoint
     job_params = spec.params if spec else settings.ray_job_params
     code_version = spec.code_version if spec else settings.ray_code_version
+    # THE LANE'S ROW CARDINALITY. Chart lanes have never declared one and are 1:1, which is exactly
+    # what the job's default enforces — so an un-migrated lane behaves identically. A DECLARED lane
+    # can ask for a fan-out (one video into frames, one recording into speaker turns), and this is the
+    # line that makes the declaration reach the job rather than being stored and ignored.
+    cardinality = spec.cardinality if spec else ONE_TO_ONE
 
     # The work identity rides in the id: a token-less trigger used to collapse EVERY submission of a
     # stage onto `ray-<stage>-notoken`, and submit_or_reattach read the collision as success — the
@@ -175,6 +181,7 @@ async def submit_stage_job(
         # everything", so an empty string is the one spelling that has a defined meaning downstream.
         # A first publication genuinely has no floor; that is not a missing value.
         "BASE_VERSION": "" if from_version is None else str(from_version),
+        "STAGE_CARDINALITY": cardinality,
         "LINEAGE_JSON": lineage_json,
         # ENDPOINT, KEY ID AND REGION ONLY — the SECRET is deliberately absent. It rode this dict,
         # and the Jobs API echoes runtime_env back to any reader of `GET /api/jobs/<id>` (P0, fixed

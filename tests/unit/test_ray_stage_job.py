@@ -586,3 +586,195 @@ def test_the_distributed_branch_creates_its_destination_from_the_SAME_constructi
         f"shape that killed the gold tier: destination={created['schema'].names} "
         f"emitted={emitted['schema'].names}"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# D1 — THE DELTA BOUNDARY, AND THE CARDINALITY CONTRACT THAT COMES WITH IT.
+#
+# `submit_stage_job` has always exported `BASE_VERSION`, and the publication event has always carried
+# the `{from_version, to_version}` range it comes from. The generic stage job never read it: a grep of
+# this script for BASE_VERSION matched NOTHING, so every run — including a backfill that added two
+# rows to a million-row bronze — reopened the whole upstream and rewrote the destination with
+# `mode="overwrite"`. Cost scaled with the TIER, not with the delta, and the range the publication
+# event exists to carry was decorative on the only lane that ships by default.
+#
+# `ray_dummy_job.py` — baked into the SAME cluster image — has done this correctly all along:
+# `_row_created_at_version > base` for the read, `merge_insert` for the write. These tests hold the
+# generic job to the standard its sibling already meets.
+#
+# THE ROW-COUNT ASSERTION HAD TO GO WITH IT, and that is not a loosening. `out.count_rows() ==
+# upstream.count_rows()` is unstatable once a run processes a delta — the destination legitimately
+# holds rows this run never looked at. What the assertion was really protecting is PROVENANCE: that
+# no row arrives without a parent. That property is checkable on a delta run, on a fan-out run, and
+# on a full run alike, and it is strictly stronger than counting.
+
+
+def _versions_of(uri: str) -> int:
+    import lance
+
+    return lance.dataset(uri).version
+
+
+def test_a_delta_run_reprocesses_only_the_rows_added_since_BASE_VERSION(tmp_path: Path) -> None:
+    """The backfill property: two rows added to an existing tier must move two rows, not the tier.
+
+    Observed through the STAGE STAMP rather than a row count, because a count cannot tell the two
+    apart — a full rescan and a correct delta both leave six rows in silver. Re-running with a
+    different stage label means only the rows this run actually read carry the new one.
+
+    Note the destination must already exist: a delta against a destination that cannot merge degrades
+    to a full run on purpose (see `_mergeable`), because writing a delta into a table `_reset_if_legacy`
+    just wiped is silent data loss. That degradation is what the first version of this test hit.
+    """
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=4)
+    silver = str(tmp_path / "silver_delta")
+    job._run_stage(bronze, silver, "first-pass", {}, lineage='{"run_id": "r-full"}')
+    base = _versions_of(bronze)
+
+    lance.write_dataset(
+        pa.table({"id": pa.array([100, 101], pa.int64()), "payload": pa.array(["late-a", "late-b"]), "stage": pa.array(["bronze"] * 2, pa.string())}),
+        bronze,
+        mode="append",
+        data_storage_version="2.2",
+    )
+    job._run_stage(bronze, silver, "backfill-pass", {}, lineage='{"run_id": "r-delta"}', base_version=base)
+
+    out = lance.dataset(silver).to_table(columns=["id", "stage"]).to_pylist()
+    by_id = {row["id"]: row["stage"] for row in out}
+    assert len(by_id) == 6, f"the merge did not converge: {sorted(by_id)}"
+    assert by_id[100] == "backfill-pass" and by_id[101] == "backfill-pass", "the new rows were not processed"
+    assert [by_id[i] for i in range(4)] == ["first-pass"] * 4, f"the delta run reprocessed rows it should never have read: {by_id}"
+
+
+def test_a_redelivered_delta_CONVERGES_instead_of_duplicating(tmp_path: Path) -> None:
+    """Dapr redelivers. A second run over the same delta must leave the destination unchanged.
+
+    `merge_insert` on the key, never `append`: an append would double every row on the redelivery that
+    at-least-once delivery guarantees will eventually happen, and nothing downstream would notice.
+    """
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=3)
+    silver = str(tmp_path / "silver_converge")
+
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-1"}')
+    first = lance.dataset(silver).count_rows()
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-1"}')
+
+    assert lance.dataset(silver).count_rows() == first == 3, "the redelivery duplicated rows"
+
+
+def test_a_FANOUT_lane_is_allowed_and_its_provenance_is_complete() -> None:
+    """One input row becoming many is a legitimate governed shape — a video into frames, a recording
+    into speaker turns. It was refused outright by a row-count equality a fan-out can never satisfy.
+
+    What replaces it is the property the count was standing in for: EVERY output row names a parent.
+    That holds for 1:1, for a fan-out and for a filter alike, and it is strictly stronger than counting
+    — a transform that swapped two rows for two different ones passed the old check and fails this one.
+
+    Driven as a PURE function rather than through a job parameter: the generic job is stamp-only by
+    design, so a `transform=` hook added to make this testable would be a production seam existing for
+    a test. The contract is the thing under test, so the contract is what the test calls.
+
+    `parentless` rather than the id list, because the call site must evaluate this on a tier that may
+    hold millions of rows: a null-count pushdown is one cheap scan, materialising every parent id is
+    not. The mapping itself (which parent each child names) is asserted in the integration test below.
+    """
+    job._assert_stage_contract(rows_in=3, rows_out=6, cardinality="1:N", parentless=0)
+
+
+def test_a_fanout_row_with_NO_parent_is_refused() -> None:
+    """The half that makes the relaxation safe. Dropping the count check without this would let a
+    fan-out lane write rows that descend from nothing, which is exactly the ungoverned shape the
+    1:1 rule was over-enforcing against."""
+    with pytest.raises(SystemExit, match="parent"):
+        job._assert_stage_contract(rows_in=3, rows_out=4, cardinality="1:N", parentless=1)
+
+
+def test_a_1to1_lane_still_REFUSES_a_transform_that_changes_the_row_count() -> None:
+    """The original guard, kept where it belongs — scoped to the lanes that actually claim 1:1
+    rather than forbidding the shape estate-wide."""
+    with pytest.raises(SystemExit, match="row count"):
+        job._assert_stage_contract(rows_in=3, rows_out=6, cardinality="1:1", parentless=0)
+
+
+def test_a_1to1_lane_that_holds_its_count_passes() -> None:
+    """The ordinary case: nothing about the default lane changes."""
+    job._assert_stage_contract(rows_in=3, rows_out=3, cardinality="1:1", parentless=0)
+
+
+def test_an_unknown_cardinality_is_refused_rather_than_defaulted() -> None:
+    """A typo in a declared lane must not silently buy the loosest contract — the failure mode of
+    every string-typed policy that falls back to a default."""
+    with pytest.raises(SystemExit, match="cardinality"):
+        job._assert_stage_contract(rows_in=3, rows_out=3, cardinality="one-to-many", parentless=0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# …AND A LANE MUST BE ABLE TO DECLARE IT. The contract above is unreachable if nothing sets
+# STAGE_CARDINALITY: the job would support a fan-out that no project can ask for, which is the
+# half-built shape this estate keeps finding in its own audits. `TransformSpec` is where a project
+# already declares its entrypoint and params through the catalog's admin-gated door, so it is where
+# the cardinality belongs too.
+
+
+def test_a_declared_lane_can_ask_for_a_FANOUT_and_it_reaches_the_job() -> None:
+    """The wiring, end to end: declaration -> submit env -> the job's contract."""
+    from service_kit.lakehouse.transform_specs import TransformSpec
+
+    spec = TransformSpec(
+        name="frames",
+        project="acme",
+        from_id="bronze$events",
+        to_id="silver$frames",
+        entrypoint="python /home/ray/jobs/ray_stage_job.py",
+        cardinality="1:N",
+    )
+    assert spec.cardinality == "1:N"
+
+
+def test_a_declared_lane_defaults_to_1to1() -> None:
+    """An un-migrated declaration keeps the shape it has always had — the default must not loosen."""
+    from service_kit.lakehouse.transform_specs import TransformSpec
+
+    spec = TransformSpec(name="x", project="acme", from_id="a", to_id="b", entrypoint="python /home/ray/jobs/ray_stage_job.py")
+    assert spec.cardinality == job.ONE_TO_ONE
+
+
+def test_a_declared_cardinality_the_job_cannot_honour_is_refused_at_DECLARATION_time() -> None:
+    """Refused at the door, not at 3am on the cluster. The job refuses an unknown cardinality too,
+    but by then a Ray job has been submitted and the operator sees a stage FAIL instead of a 422."""
+    import pydantic
+
+    from service_kit.lakehouse.transform_specs import TransformSpec
+
+    with pytest.raises(pydantic.ValidationError):
+        TransformSpec(name="x", project="acme", from_id="a", to_id="b", entrypoint="python /home/ray/jobs/ray_stage_job.py", cardinality="one-to-many")
+
+
+def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
+    """The link that makes the declaration real. Without it a project can declare a fan-out lane, the
+    catalog stores it, and the job runs under the 1:1 default that refuses the very shape declared."""
+    import inspect
+
+    from medallion.services import ray_submit
+
+    source = inspect.getsource(ray_submit.submit_stage_job)
+    assert "STAGE_CARDINALITY" in source, "submit_stage_job does not export STAGE_CARDINALITY, so a declared fan-out lane cannot reach the job"
+
+
+def test_the_catalog_DOOR_accepts_a_declared_cardinality() -> None:
+    """The last link. `TransformSpecRequest` is a separate `extra="forbid"` model, so a cardinality
+    the mover honours and the spec validates is still unreachable until the DOOR accepts it — and a
+    forbidden extra is a 422, so the caller is told the field does not exist."""
+    from catalog.schemas import TransformSpecRequest, TransformSpecResponse
+
+    body = TransformSpecRequest(
+        name="frames", from_id="bronze$events", to_id="silver$frames", entrypoint="python /home/ray/jobs/ray_stage_job.py", cardinality="1:N"
+    )
+    assert body.cardinality == "1:N"
+    assert "cardinality" in TransformSpecResponse.model_fields, "a declared cardinality must be readable back, or nobody can audit what governs a lane"

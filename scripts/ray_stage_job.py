@@ -65,7 +65,7 @@ from lance import blob_array, blob_field
 # `service-kit[media]` extra, which the ray-cluster image installs.
 from service_kit.lakehouse import media
 from service_kit.lakehouse.blobs import blob_field_names
-from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, STAGE_COLUMN
+from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN
 
 
 def _storage_options() -> dict[str, str]:
@@ -384,19 +384,121 @@ def main() -> None:
     so = _storage_options()
     from_uri, to_uri, stage = os.environ["FROM_URI"], os.environ["TO_URI"], os.environ["STAGE"]
     lineage = os.environ.get("LINEAGE_JSON", "")  # this run's consume-layer provenance document (R26)
+    # THE DELTA BOUNDARY, finally read. `submit_stage_job` has exported it since the publication event
+    # started carrying {from_version, to_version}; this job ignored it, so every run rescanned the tier.
+    # Blank means a full run — a first stage has no boundary to be incremental against.
+    raw_base = os.environ.get("BASE_VERSION", "").strip()
+    base_version = int(raw_base) if raw_base else None
+    # The lane's declared row cardinality. Absent means 1:1, which is what every default mover is and
+    # what the old unconditional assertion enforced — so an un-migrated lane behaves exactly as before.
+    cardinality = os.environ.get("STAGE_CARDINALITY", "").strip() or ONE_TO_ONE
 
     # Continue the submitting mover's trace (P3): the whole stage transform runs as one child span of
     # the mover's medallion.transform span; without a handed-over context it runs exactly as before.
     with _traced_root("ray.stage_job", {"lance.medallion.stage": stage}):
-        _run_stage(from_uri, to_uri, stage, so, lineage=lineage)
+        _run_stage(from_uri, to_uri, stage, so, lineage=lineage, base_version=base_version, cardinality=cardinality)
 
 
-def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str], *, lineage: str = "") -> None:
+def _assert_stage_contract(*, rows_in: int, rows_out: int, cardinality: str, parentless: int) -> None:
+    """What a stage owes its tier, checked after the write.
+
+    THIS REPLACED A ROW-COUNT EQUALITY, and the replacement is a tightening rather than a loosening.
+    The old check was ``out.count_rows() != upstream.count_rows()``, which has two problems. It
+    FORBIDS a shape the lakehouse is supposed to support — one row becoming many is what a video
+    landing as frames, or a recording as speaker turns, actually is — and it is unstatable at all once
+    a run processes a DELTA, because the destination legitimately holds rows this run never read.
+
+    And it was never really about counting. What it protected is that no row arrives in a governed
+    tier without a parent, and equal counts are only a proxy for that: a transform that swapped two
+    rows for two unrelated ones passed the old check and fails this one.
+
+    So provenance is asserted ALWAYS, for every cardinality and for delta and full runs alike, and the
+    count is asserted only where a lane has DECLARED that its count should hold.
+
+    An unknown cardinality is refused rather than defaulted. A typo in a declared lane must not buy
+    the loosest contract by falling through — that is how a string-typed policy silently stops
+    enforcing anything.
+    """
+    if cardinality not in CARDINALITIES:
+        raise SystemExit(f"unknown stage cardinality {cardinality!r}; declare one of {sorted(CARDINALITIES)}")
+    if parentless:
+        raise SystemExit(f"stage transform produced {parentless} row(s) with no parent: {SOURCE_ROWID_COLUMN} is null")
+    if cardinality == ONE_TO_ONE and rows_out != rows_in:
+        raise SystemExit(f"stage transform produced wrong row count: {rows_out} out for {rows_in} in, on a {cardinality} lane")
+
+
+def _delta_filter(base_version: int | None) -> str | None:
+    """The change-data-feed predicate for a backfill, or `None` for a full run.
+
+    ``_row_created_at_version`` requires ``enable_stable_row_ids`` AT CREATION — setting it later is a
+    silent no-op — which is why the catalog's creation contract enforces it and why every write in
+    this file passes it. `None` means "everything": a first run has no boundary to be incremental
+    against, and filtering against version 0 would be the same answer at more cost.
+    """
+    return None if base_version is None else f"_row_created_at_version > {base_version}"
+
+
+def _mergeable(to_uri: str, so: dict[str, str]) -> bool:
+    """Can this destination take a delta, or must the run rebuild it whole?
+
+    A destination that does not exist yet, or one written before stable row ids, cannot accept a
+    merge — and `_reset_if_legacy` would WIPE the legacy one. Writing only a delta into a table that
+    was just wiped is silent data loss, so a delta run over such a destination degrades to a full run
+    instead. It becomes mergeable on the next run, because the full run creates it with stable ids.
+    """
+    with contextlib.suppress(Exception):
+        return bool(lance.dataset(to_uri, storage_options=so).has_stable_row_ids)
+    return False
+
+
+def _merge_into(to_uri: str, table: pa.Table, so: dict[str, str]) -> None:
+    """Converge this run's rows into the destination on the tier's key.
+
+    `merge_insert`, never `append`: Dapr delivers at least once, so a redelivered publication event
+    WILL re-run this stage over the same delta, and an append would double every row of it with
+    nothing downstream noticing. `id` is a tier-contract column (`TIER_COLUMNS`), not a workload
+    assumption, so merging on it is the platform's to do.
+    """
+    lance.dataset(to_uri, storage_options=so).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(table)
+
+
+def _run_stage(
+    from_uri: str,
+    to_uri: str,
+    stage: str,
+    so: dict[str, str],
+    *,
+    lineage: str = "",
+    base_version: int | None = None,
+    cardinality: str = ONE_TO_ONE,
+) -> None:
     upstream = lance.dataset(from_uri, storage_options=so)
+    # THE DELTA BOUNDARY (D1). `submit_stage_job` has always exported BASE_VERSION and this job never
+    # read it, so every run — a two-row backfill included — rescanned and rewrote the whole tier.
+    delta = _delta_filter(base_version)
+    if delta is not None and not _mergeable(to_uri, so):
+        delta = None  # see `_mergeable`: rebuild whole rather than write a delta into a wiped table
+    rows_in = upstream.count_rows()
+    rows_out = -1  # set by whichever branch runs; -1 means "read it off the destination"
 
     if blob_field_names(upstream.schema):
         # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
         _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage)
+    elif delta is not None:
+        # BACKFILL LANE. The delta is by construction small, so it is stamped and merged on the driver
+        # — the same argument the cascade head below already makes for handling the bronze root
+        # natively rather than distributing it.
+        source = upstream.to_table(with_row_id=True, filter=delta)
+        rows_in = source.num_rows
+        if rows_in == 0:
+            # A legitimate no-op, not a failure: a redelivered event whose rows this stage already
+            # processed lands here. Writing an empty version would fire a publication event for data
+            # nobody added.
+            print(f"RAY-STAGE OK stage={stage} rows=0 delta_empty=1 base_version={base_version}")
+            return
+        produced = _stamp_stage(source, stage, lineage)
+        rows_out = produced.num_rows
+        _merge_into(to_uri, produced, so)
     elif "source_rowid" not in upstream.schema.names:
         # CASCADE HEAD (tabular): mint root-provenance source_rowid from the upstream _rowid, as a native
         # pylance overwrite on the driver (the bronze root is small); deeper tabular stages, which already
@@ -456,8 +558,17 @@ def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str], *, li
         f"RAY-STAGE OK stage={stage} rows={out.count_rows()} version={out.version} "
         f"dsv={out.data_storage_version} stable_row_ids={out.has_stable_row_ids} cols={out.schema.names}"
     )
-    if out.count_rows() != upstream.count_rows() or not out.has_stable_row_ids:
-        raise SystemExit("stage transform produced wrong row count or lost stable row ids")
+    if not out.has_stable_row_ids:
+        raise SystemExit("stage transform lost stable row ids")
+    # Provenance is checked with a null-count PUSHDOWN, not by materialising every parent id: this
+    # runs against a tier that may hold millions of rows.
+    parentless = out.count_rows(filter=f"{SOURCE_ROWID_COLUMN} IS NULL") if SOURCE_ROWID_COLUMN in out.schema.names else 0
+    _assert_stage_contract(
+        rows_in=rows_in,
+        rows_out=out.count_rows() if rows_out < 0 else rows_out,
+        cardinality=cardinality,
+        parentless=parentless,
+    )
 
 
 if __name__ == "__main__":

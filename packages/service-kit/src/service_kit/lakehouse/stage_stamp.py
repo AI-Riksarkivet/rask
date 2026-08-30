@@ -45,6 +45,20 @@ LINEAGE_COLUMN: Final = "lineage"
 #: value advances on the next overwrite, so persisting it records an id that will not be true.
 _ROWID: Final = "_rowid"
 
+#: A lane that maps each input row to exactly one output row — every default mover's shape.
+ONE_TO_ONE: Final = "1:1"
+
+#: A lane that may emit MANY output rows per input row: a video into frames, a recording into speaker
+#: turns, a document into chunks. `source_rowid` is what keeps such a child attached to its parent,
+#: which is why the cardinality vocabulary lives beside the stamp that threads it rather than in the
+#: declaration module — the two are one contract, and a stage driver needs it without importing a
+#: spec registry.
+ONE_TO_MANY: Final = "1:N"
+
+#: Every cardinality a lane may declare. An unknown one is REFUSED rather than defaulted, at both the
+#: declaration door and the job — a typo must not buy the loosest contract by falling through.
+CARDINALITIES: Final = frozenset({ONE_TO_ONE, ONE_TO_MANY})
+
 
 def carry_source_rowid(table: pa.Table) -> pa.Table:
     """Ensure `source_rowid` holds the stable `_rowid` of the BRONZE row this output descends from.
@@ -95,4 +109,13 @@ def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "") -> pa.Table:
     return _set_or_append(out, pa.field(LINEAGE_COLUMN, pa.json_()), document.cast(pa.json_()))
 
 
-__all__ = ["LINEAGE_COLUMN", "SOURCE_ROWID_COLUMN", "STAGE_COLUMN", "carry_source_rowid", "stamp_stage"]
+__all__ = [
+    "CARDINALITIES",
+    "LINEAGE_COLUMN",
+    "ONE_TO_MANY",
+    "ONE_TO_ONE",
+    "SOURCE_ROWID_COLUMN",
+    "STAGE_COLUMN",
+    "carry_source_rowid",
+    "stamp_stage",
+]

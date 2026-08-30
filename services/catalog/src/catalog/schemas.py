@@ -20,6 +20,7 @@ from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.user_state import UserStateDocument
+from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 
 
 # --------------------------------------------------------------------------- #
@@ -854,6 +855,10 @@ class TransformSpecRequest(BaseModel):
     entrypoint: str
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
+    #: Row cardinality. Validated by `TransformSpec`, not here — one definition, two services — so an
+    #: unknown value is refused at declaration time with the field named, rather than becoming a
+    #: stage FAIL on the cluster hours later.
+    cardinality: str = ONE_TO_ONE
 
 
 class TransformNameRequest(BaseModel):
@@ -900,6 +905,9 @@ class TransformSpecResponse(BaseModel):
     entrypoint: str
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
+    #: Read back so an operator can audit which contract governs a lane. A declared value that cannot
+    #: be read is indistinguishable from one that was never stored.
+    cardinality: str = ONE_TO_ONE
 
 
 class TransformDeleteResponse(BaseModel):

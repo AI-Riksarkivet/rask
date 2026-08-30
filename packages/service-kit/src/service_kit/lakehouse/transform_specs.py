@@ -40,6 +40,7 @@ import pyarrow.fs as pafs
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.stage_stamp import CARDINALITIES, ONE_TO_ONE
 
 
 log = logging.getLogger(__name__)
@@ -96,7 +97,25 @@ class TransformSpec(BaseModel):
     to_id: str = Field(min_length=1, description="downstream catalog table identifier, e.g. silver$dummy")
     entrypoint: str = Field(description=f"the Ray entrypoint; must reference a script baked under {BAKED_JOBS_DIR}")
     params: dict[str, str] = Field(default_factory=dict, description="opaque workload parameters; never secrets")
+    #: How many output rows this lane may emit per input row. DECLARED, never inferred: a stage
+    #: driver cannot tell a deliberate fan-out from a transform that lost rows, and guessing in
+    #: either direction is wrong — guessing 1:1 forbids a shape the lakehouse supports (a video into
+    #: frames, a recording into speaker turns), and guessing 1:N stops catching the transform bug the
+    #: count check exists for. Defaults to the shape every un-migrated lane already has.
+    cardinality: str = Field(default=ONE_TO_ONE, description=f"row cardinality; one of {sorted(CARDINALITIES)}")
     code_version: str = Field(default="", max_length=128, description="the image tag this transform is declared against")
+
+    @field_validator("cardinality")
+    @classmethod
+    def _known_cardinality(cls, value: str) -> str:
+        """Refused at the DOOR, not at 3am on the cluster.
+
+        The job refuses an unknown cardinality too, but by then a Ray job has been submitted and the
+        operator sees a stage FAIL rather than a 422 naming the field.
+        """
+        if value not in CARDINALITIES:
+            raise ValueError(f"invalid cardinality {value!r}: must be one of {sorted(CARDINALITIES)}")
+        return value
 
     @field_validator("name")
     @classmethod
