@@ -3078,3 +3078,45 @@ One thing the re-verification could NOT settle, and which a reader should know: 
 being actively rewritten while this audit was re-verified, and that work has since landed. Several
 `medallion` findings here — `MED-004`, `MED-005` and the promotion-gate findings in particular — sit on
 code it touched. Re-check those against the current tree rather than against this file.
+
+## Appendix H — the OWNER-decision rulings (2026-08-30)
+
+The eleven rows parked as **OWNER** were briefed one agent each, with every premise adversarially
+re-checked against the code as it stands today rather than against the 2026-08-24 evidence snapshot.
+**Three premises were corrected by that re-check, and the corrections matter:**
+
+- **X10 is WORSE than audited, not overstated.** Seven prefixes at audit, nine at the 2026-08-28
+  re-run, **thirteen today** — ~395 distinct non-`RASK_` names. The `LANCE_*` leak is real.
+- **CAT-CORE-04 is CONFIRMED, not partly.** `dataplane.py` is **1508** lines (audited at 1438), 45
+  top-level defs, all twelve concern-clusters intact — and the "including HTTP protocol semantics"
+  half is true as written.
+- **X1 is materially reduced.** The error-taxonomy axis is CLOSED (all 13 non-gateway apps install the
+  handlers in one order). Two axes survive, not four.
+
+Also worth recording, because it changes what MED-011 even asks: the audit's framing — "a SECOND
+tuple-write path outside `seed_ownership`" — is **not true**. There are eight `fga.write_tuples` call
+sites, five outside `seed_ownership`, which is specifically the post-create seed for the catalog's
+create doors and not the estate's only tuple writer. The real issue underneath is different and larger:
+`table:models$<model>` **has no catalog record at all**, so the medallion's write is not a duplicate —
+it is the only thing making those FGA objects exist.
+
+### The owner's rulings
+
+| Finding | Ruling | Note |
+| --- | --- | --- |
+| `X10` | **Unify auth only — HARD RENAME, no aliases** | The estate-wide 395-variable rename was rejected. The defect fixed is the narrow one: auth config declared five times under four names, already drifted. Old names are DELETED, not aliased — *"we don't care really about backward compatibility"* — so a missing variable fails loudly at startup instead of silently falling back |
+| `ingest-flow-12` | **Rule forward only** | Rationale stays, provenance keeps its measurement, history (`this used to say X`) is banned in NEW code. The 35,445 existing prose lines are explicitly NOT drained: a retroactive pass is a large unreviewable diff that risks deleting the measurements the prose exists to preserve. Confirmed on a follow-up question that this was the intended scope |
+| `PS-09` | **Delete `packages/tracker`** | Owner asked what replaced it. Answer, verified from history: nothing, because it was never used. It arrived in `0c90ae51` (ra-hcp Phase 1 harvest, "tracker + validate leaf libs"); `validate` found a consumer, `tracker` never did — no service declares it, no commit imports it outside its own package. Its job (a per-file transfer ledger) is done here by JetStream `WORK_QUEUE` retention, where an unacked message IS the pending row and vanishes on ack, plus Dapr Workflow's durable state — `ingest.workflow.reconcile_chunk`: *"asks the QUEUE what is outstanding rather than a ledger"* |
+| `ANN-05` | **Fail closed, legibly** | Fail-closed is already the de-facto behaviour and is right for a closed-set contract the publish path depends on. What was missing is a refusal an operator can act on: a NAMED error at the two actor `_load` seams, plus deletion of the three dead fail-open branches and the comments asserting a policy the code does not implement |
+
+### Taken on the assistant's recommendation (owner did not object)
+
+| Finding | Default taken | One-line reason |
+| --- | --- | --- |
+| `ANN-13` | Ratify the two-plane split; close as **WRONG** | The split encodes a real trust boundary (gateway-published vs SSR-internal), is already pinned by a gate refusing a third shape, and `/api/projects` is owned by controlplane at the gateway |
+| `CAT-CORE-04` | Carve out **`blob_serving.py` only**, then close | The one cut where the halves change for genuinely different reasons (RFC 9110 HTTP semantics vs pylance operations); the rest is cohesive-by-purpose |
+| `ingest-flow-11` | **Type the catalog seam as the union it is** | The only row rated *should-decide-soon*: two implementations sharing one method, selected by `hasattr`, with `_catalog() -> Any` keeping `ty` blind. This class of failure has already fired once in production |
+| `PS-07` | **No pydantic-settings**; rewrite the false justification | Three optional strings and no validation — a settings class buys nothing functional. But the comment at `client.py:24-28` justifies the hand-rolling with a claim that is provably false (both sealed runner locks DO carry pydantic) |
+| `catalog-api-17` | **Ratify the boot splice and pin it** | The in-place splice is what makes `SettingsDep`'s per-request credential read correct; it runs once, single-threaded, inside the lifespan. The hazard is that it READS as a bug inviting a "fix" that would break production |
+| `MED-011` | **Name the medallion as sanctioned seeder**; park the redesign | The finding as written misdiagnoses it. Removing the write without a replacement is the only dangerous move. "Should the model registry be a catalog table" is a real question — asked separately, not smuggled in as a tuple-write cleanup |
+| `X1` | **Close with a roster gate** | Three of four axes are answered by the code already; pin every deployed app to its family so a fifteenth cannot invent a fifth shape. The broken span hook is a separate small bug, not an OTel migration |
