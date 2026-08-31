@@ -18,7 +18,8 @@ dependencies = [
     "openfga-sdk>=0.10.4",
     # The canonical S3 seam — warehouses.py builds its bucket client through storage.s3_client.
     "storage",
-    # Direct boto3 stays for core/vending's STS clients only; S3 clients go through `storage`.
+    # Declared for the `botocore.exceptions` imports (`ClientError` handling in the credentials door
+    # and the warehouse registry). Every CLIENT — S3 and STS alike — is built by `storage`.
     "boto3>=1.34",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",

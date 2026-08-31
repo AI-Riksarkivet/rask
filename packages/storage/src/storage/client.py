@@ -81,20 +81,29 @@ def s3_client(
     *,
     access_key: str | None = None,
     secret_key: str | None = None,
+    session_token: str | None = None,
+    region: str | None = None,
     insecure: bool | None = None,
 ) -> Any:  # noqa: ANN401 — boto3 client has no public stub
     """Build a boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS / HCP).
 
     Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, with HCP_* as the
-    legacy bridge). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults;
-    region comes from AWS_REGION so it isn't left solely to the boto3 env chain.
+    legacy bridge). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults.
 
-    ``access_key``/``secret_key``/``insecure`` override the env for THIS client only. Env-only
-    credentials are a single global pair, so one process could address exactly one backend — and the
-    estate genuinely spans two: the governed tiers on the deployment's own store, and raw on an
-    external one with different keys. Reading a store from the wrong backend does not error, it
-    returns an empty listing, which is the least debuggable failure available. Passing them per call
-    is what lets one process serve both. Omitted → the env chain, byte-identical to before.
+    ``access_key``/``secret_key``/``session_token``/``region``/``insecure`` override the env for THIS
+    client only. Env-only credentials are a single global pair, so one process could address exactly
+    one backend — and the estate genuinely spans two: the governed tiers on the deployment's own
+    store, and raw on an external one with different keys. Reading a store from the wrong backend
+    does not error, it returns an empty listing, which is the least debuggable failure available.
+    Passing them per call is what lets one process serve both. Omitted → the env chain.
+
+    ``region`` is per-client for the same reason: a caller holding a store's OWN region (a warehouse
+    record, a lance-style ``storage_options`` dict) must be able to spend it, or every backend in the
+    process is pinned to whatever ``AWS_REGION`` says. Omitted → ``AWS_REGION``, default us-east-1.
+
+    ``session_token`` completes a vended temporary credential. It is refused without its key pair
+    because botocore silently IGNORES a lone token and falls back to the env credential chain — the
+    request then signs as a different identity and the store's 403 names the wrong problem.
     """
     import boto3
     from botocore.config import Config
@@ -108,14 +117,18 @@ def s3_client(
         connect_timeout=10,
         read_timeout=60,
     )
+    if session_token and not (access_key and secret_key):
+        raise ValueError("session_token needs access_key and secret_key: botocore drops a lone token and signs with the env credential chain instead")
     kwargs: dict = {
         "endpoint_url": endpoint or configured_endpoint(),
-        "region_name": os.getenv("AWS_REGION", "us-east-1"),
+        "region_name": region or os.getenv("AWS_REGION", "us-east-1"),
         "config": cfg,
     }
     if access_key and secret_key:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
+        if session_token:
+            kwargs["aws_session_token"] = session_token
     elif creds := derive_hcp_creds():
         # HCP bridge applied to THIS client only — no process-global env mutation.
         kwargs["aws_access_key_id"] = creds["access_key"]

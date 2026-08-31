@@ -23,6 +23,8 @@ from storage.protocol import Source as Source
 from storage.s3 import S3Sink as S3Sink
 from storage.s3 import S3Source as S3Source
 from storage.s3 import iter_keys as iter_keys
+from storage.sts import STSClient as STSClient
+from storage.sts import sts_client as sts_client
 from storage.uri import build_sink as build_sink
 from storage.uri import build_source as build_source
 from storage.uri import merge_prefix as merge_prefix

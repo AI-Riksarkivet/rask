@@ -125,3 +125,42 @@ def test_s3_client_applies_hcp_creds_without_env_mutation(monkeypatch):
     assert client._request_signer._credentials.access_key == base64.b64encode(b"alice").decode()
     assert "AWS_ACCESS_KEY_ID" not in os.environ
     assert "AWS_SECRET_ACCESS_KEY" not in os.environ
+
+
+def test_s3_client_region_overrides_the_env_for_this_client_only(monkeypatch):
+    """A per-store region must reach the client, or every backend is pinned to `AWS_REGION`.
+
+    The callers holding a region of their own (`service_kit.lakehouse.records`, whose
+    `storage_options` carry one per warehouse) had no way to pass it through this seam, which is
+    exactly what kept them on a hand-rolled `boto3.client`. Omitted still resolves from the env.
+    """
+    from storage import s3_client
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    assert s3_client(region="eu-north-1").meta.region_name == "eu-north-1"
+    assert s3_client().meta.region_name == "us-east-1"
+
+
+def test_s3_client_forwards_a_session_token():
+    """Vended temporary credentials are a TRIPLE, and dropping the token is not a visible failure:
+    SigV4 signs happily with the key pair alone and the store answers 403 `InvalidAccessKeyId`, which
+    reads as a credential problem rather than as a client that discarded a field it was handed."""
+    from storage import s3_client
+
+    client = s3_client("http://rf:9000", access_key="ak", secret_key="sk", session_token="tok")
+
+    creds = client._request_signer._credentials
+    assert (creds.access_key, creds.secret_key, creds.token) == ("ak", "sk", "tok")
+
+
+def test_s3_client_refuses_a_session_token_without_its_key_pair():
+    """botocore IGNORES `aws_session_token` when the key pair is absent and falls back to the env
+    credential chain, so a mis-wired caller would sign as the wrong identity with no error anywhere.
+    Refusing at the seam turns that into an exception at the one place that can still name it."""
+    import pytest
+
+    from storage import s3_client
+
+    with pytest.raises(ValueError, match="session_token"):
+        s3_client("http://rf:9000", session_token="tok")

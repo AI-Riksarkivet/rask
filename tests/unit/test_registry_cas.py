@@ -9,7 +9,7 @@ demonstrably honors put-if-not-exists (`tests/e2e-py/test_object_store_cas_e2e.p
 is the one conditional-create seam, and the id-minting doors go through it.
 
 Local-FS branch is exercised directly (``open(..., "xb")`` exclusivity — the same arbitration, by
-the OS); the S3 branch is driven through a fake boto3 client pinning the ``IfNoneMatch`` parameter
+the OS); the S3 branch is driven through a fake client at the ``storage.s3_client`` seam, pinning the ``IfNoneMatch`` parameter
 and the 412 → ``RecordExistsError`` mapping, mirroring how ``test_vending.py`` pins the STS call.
 The live contended-writer proof against RustFS lives in ``tests/e2e-py/test_registry_cas_e2e.py``
 (env-gated, ``cas`` marker) — this file is the always-running half.
@@ -25,6 +25,7 @@ import pytest
 from botocore.exceptions import ClientError
 from lance_namespace import NamespaceAlreadyExistsError
 
+import storage
 from catalog.services import warehouses
 from service_kit.lakehouse import records
 
@@ -91,7 +92,7 @@ def _client_error(code: str, status: int) -> ClientError:
 
 def test_create_json_s3_sends_if_none_match(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MagicMock()
-    monkeypatch.setattr(records, "_s3_client", lambda so: client)
+    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     records.create_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
     kwargs = client.put_object.call_args.kwargs
     assert kwargs["Bucket"] == "ctrl"
@@ -102,7 +103,7 @@ def test_create_json_s3_sends_if_none_match(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_create_json_s3_root_without_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MagicMock()
-    monkeypatch.setattr(records, "_s3_client", lambda so: client)
+    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     records.create_json("s3://ctrl", _SO, "_projects/acme.json", {"id": "acme"})
     kwargs = client.put_object.call_args.kwargs
     assert (kwargs["Bucket"], kwargs["Key"]) == ("ctrl", "_projects/acme.json")
@@ -111,7 +112,7 @@ def test_create_json_s3_root_without_prefix(monkeypatch: pytest.MonkeyPatch) -> 
 def test_create_json_s3_412_maps_to_record_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MagicMock()
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
-    monkeypatch.setattr(records, "_s3_client", lambda so: client)
+    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(records.RecordExistsError):
         records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
 
@@ -121,7 +122,7 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
     # must surface as itself — laundering it into "already exists" would hide a real failure.
     client = MagicMock()
     client.put_object.side_effect = _client_error("AccessDenied", 403)
-    monkeypatch.setattr(records, "_s3_client", lambda so: client)
+    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(ClientError):
         records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
 

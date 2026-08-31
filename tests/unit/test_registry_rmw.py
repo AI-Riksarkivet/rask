@@ -18,8 +18,8 @@ The interleave below is DETERMINISTIC, not threaded: the rival write is performe
 would pass on a machine that happens to schedule kindly, which for a race is the same as no test.
 
 Local-FS is the branch exercised directly (`flock` + content-hash ETag — cooperating writers on one
-host, which is the whole scope of a local root); the S3 branch is driven through a fake boto3 client
-pinning the `IfMatch` parameter and the 412 → `RecordChangedError` mapping, mirroring
+host, which is the whole scope of a local root); the S3 branch is driven through a fake client at the
+`storage.s3_client` seam, pinning the `IfMatch` parameter and the 412 → `RecordChangedError` mapping, mirroring
 `test_registry_cas.py`'s treatment of the create branch.
 """
 
@@ -33,6 +33,7 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
+import storage
 from catalog.services import warehouses
 from service_kit.lakehouse import records
 
@@ -155,7 +156,7 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
     client = MagicMock()
     client.get_object.return_value = {"Body": MagicMock(read=lambda: b'{"id":"w","status":"active"}'), "ETag": '"abc123"'}
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
-    monkeypatch.setattr(records, "_s3_client", lambda _so: client)
+    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
 
     with pytest.raises(records.RecordChangedError):
         records.mutate_json("s3://ctl/root", {}, "_warehouses/w.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
@@ -169,7 +170,7 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
     404 and, one level up, into a create that overwrites a record it could not read."""
     client = MagicMock()
     client.get_object.side_effect = _client_error("AccessDenied", 403)
-    monkeypatch.setattr(records, "_s3_client", lambda _so: client)
+    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(Exception, match="AccessDenied"):
         records.read_json("s3://ctl/root", {}, "_warehouses/w.json")
 

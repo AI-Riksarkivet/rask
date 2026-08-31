@@ -212,9 +212,12 @@ class StsVendor:
 
     def _default_assume_role(self, **kwargs: object) -> dict[str, object]:
         if self._client is None:
-            import boto3  # lazy: only needed when STS vending is actually enabled
+            from storage import sts_client  # lazy: only needed when STS vending is actually enabled
 
-            self._client = boto3.client("sts", region_name=self._region, endpoint_url=self._endpoint)
+            # `storage` is where boto3 is declared and imported, so the timeouts and retry policy are
+            # decided once; a client built here would inherit botocore's timeout-free defaults and an
+            # unresponsive STS endpoint would hang the vend instead of failing it.
+            self._client = sts_client(region=self._region, endpoint=self._endpoint)
         return cast(dict[str, object], self._client.assume_role(**kwargs))
 
     def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
@@ -268,16 +271,12 @@ class WebIdentityVendor:
 
     def _default_assume(self, **kwargs: object) -> dict[str, object]:
         if self._client is None:
-            import boto3  # lazy: only when web_identity vending is enabled
-            from botocore import UNSIGNED
-            from botocore.config import Config
+            from storage import sts_client  # lazy: only when web_identity vending is enabled
 
-            self._client = boto3.client(
-                "sts",
-                region_name=self._region,
-                endpoint_url=self._endpoint,
-                config=Config(signature_version=UNSIGNED),  # token-authenticated, not SigV4
-            )
+            # `unsigned`: token-authenticated, not SigV4 — the JWT in the body is the credential, and
+            # this caller holds no key to sign with. Built through `storage` so the connect/read
+            # timeouts apply here too; the vend is on a data-plane request's critical path.
+            self._client = sts_client(region=self._region, endpoint=self._endpoint, unsigned=True)
         return cast(dict[str, object], self._client.assume_role_with_web_identity(**kwargs))
 
     def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
@@ -350,7 +349,7 @@ def has_external_bases(location: str, storage_options: dict[str, str]) -> bool:
     door (``credentials.py``) and describe-with-vending (``tables.py``) must answer it identically,
     and a helper shared across endpoint modules belongs in the layer they both already import.
     """
-    import lance  # lazy, matching this module's boto3 style: pylance loads only where vending runs
+    import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
 
     try:
         ds = lance.dataset(location, storage_options=storage_options)

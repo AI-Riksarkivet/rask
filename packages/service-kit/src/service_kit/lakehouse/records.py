@@ -11,9 +11,9 @@ on a read that can go stale between the check and the write.
 
 Two branches, one contract:
 
-- ``s3://`` roots: boto3 ``put_object(..., IfNoneMatch="*")`` — the store rejects the second create
-  with 412 ``PreconditionFailed``. pyarrow's ``S3FileSystem`` cannot express a conditional PUT,
-  which is why this write (alone among the registry IO) goes through boto3.
+- ``s3://`` roots: ``put_object(..., IfNoneMatch="*")`` on a ``storage.s3_client`` — the store rejects
+  the second create with 412 ``PreconditionFailed``. pyarrow's ``S3FileSystem`` cannot express a
+  conditional PUT, which is why this write (alone among the registry IO) goes through an S3 client.
 - local roots (dev/tests): ``open(path, "xb")`` — ``O_CREAT|O_EXCL``, the OS arbitrates. Same
   exactly-one-winner semantics, so the unit suite proves the door logic without object storage.
 
@@ -56,18 +56,31 @@ class RecordExistsError(Exception):
 
 
 def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    import boto3
-    from botocore.config import Config
+    """The S3 client the three conditional branches share, built through ``storage.s3_client``.
 
-    return boto3.client(
-        "s3",
-        endpoint_url=storage_options.get("endpoint"),
-        aws_access_key_id=storage_options.get("access_key_id"),
-        aws_secret_access_key=storage_options.get("secret_access_key"),
-        region_name=storage_options.get("region") or "us-east-1",
-        # Path-style, matching `lance_storage_options(virtual_hosted=False)`: RustFS/MinIO reject
-        # virtual-hosted signing with 403 SignatureDoesNotMatch.
-        config=Config(s3={"addressing_style": "path"}),
+    ``packages/storage`` is the estate's canonical S3 seam and owns, in one place, everything a
+    hand-rolled client silently forfeits: path-style addressing (matching
+    ``lance_storage_options(virtual_hosted=False)`` — RustFS/MinIO reject virtual-hosted signing with
+    403 SignatureDoesNotMatch), s3v4, adaptive retries, and connect/read timeouts. The timeouts matter
+    most here: these doors are on the synchronous path of every warehouse and project mint, and
+    botocore's default is to wait forever.
+
+    The registry's ``storage_options`` carry a per-warehouse ``region`` and, when the caller holds
+    vended credentials, a ``session_token``; both are forwarded. A dropped region pins the warehouse
+    to ``AWS_REGION``, and a dropped token makes a scoped credential sign as an unknown identity.
+
+    ``storage`` is imported at call time so a test can replace the SEAM rather than this wrapper —
+    patching the wrapper would let a regression back to a raw client pass unnoticed — and so the
+    local-root branch below needs no S3 stack at all.
+    """
+    from storage import s3_client
+
+    return s3_client(
+        storage_options.get("endpoint"),
+        access_key=storage_options.get("access_key_id"),
+        secret_key=storage_options.get("secret_access_key"),
+        session_token=storage_options.get("session_token"),
+        region=storage_options.get("region") or "us-east-1",
     )
 
 

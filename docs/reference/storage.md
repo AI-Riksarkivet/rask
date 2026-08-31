@@ -7,6 +7,10 @@ overview see [Packages → Storage](../packages/storage.md).
 
 ::: storage.client
 
+## STS (credential vending)
+
+::: storage.sts
+
 ## The Source/Sink contract
 
 ::: storage.protocol
