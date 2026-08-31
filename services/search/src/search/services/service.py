@@ -285,39 +285,74 @@ def _search_hybrid(ctx: SearchContext) -> list[dict[str, Any]]:
     return _maybe_rerank(ctx, raw)
 
 
+def _drop_or_raise(leg: str, exc: Exception) -> None:
+    """Decide what ONE failed leg of the fused ``all`` search means — and never let it pass silently.
+
+    A leg the REQUEST cannot drive is dropped and the fusion carries on: an unbuilt space, a
+    wrong-dimension query vector, a predicate naming a column that leg's table lacks. Those arrive
+    either as Lance's marker phrase (:func:`~search.services.query_errors.is_caller_input_error`) or
+    already classified into a domain :class:`ValidationError` by ``vector_search`` /
+    ``frames_to_row_hits``. One space the caller cannot drive must not 400 a search the other legs
+    can still answer.
+
+    Anything else is the estate's fault and PROPAGATES — a store outage, an expired credential, a
+    corrupt manifest, a :class:`ServiceUnavailableError` from a frame ranker that could not run. A
+    fused response is indistinguishable from a complete one, so swallowing those hands the caller
+    vector-only hits presented as the fused answer: a wrong answer, not a degraded one.
+
+    Either way it is LOGGED, because a dropped leg leaves no trace in the response — the log line is
+    the only record that half the search did not run.
+    """
+    if not isinstance(exc, ValidationError) and not is_caller_input_error(exc):
+        raise exc
+    logger.warning("%s leg dropped from 'all' search", leg, exc_info=True)
+
+
 def _search_all(ctx: SearchContext) -> list[dict[str, Any]]:
-    """Fuse the FTS + semantic + visual + scene legs via RRF (whatever exists)."""
+    """Fuse the FTS + semantic + visual + scene legs via RRF (whatever exists).
+
+    Every ATTEMPTED leg reports: it contributes a ranking, or ``_drop_or_raise`` records why it did
+    not. With every attempted leg dropped there is nothing left to fuse, and ``[]`` would claim the
+    corpus holds no match for a query that was never actually run — so that is answered as the
+    caller error the drops classify it as, not as an empty 200.
+    """
     spec = ctx.spec
     target = ctx.target
     rankings: list[list[dict[str, Any]]] = []
+    attempted = 0
     from lancedb.query import MatchQuery
 
     # FTS leg (only if we have text and a row-table FTS binding).
     fts = target.fts
     if spec.q and fts is not None and fts.table == target.row_table_name:
+        attempted += 1
         try:
             qb = target.row_tbl.search(MatchQuery(spec.q, fts.column, fuzziness=spec.fuzziness)).select(["_score", *target.payload_columns]).limit(spec.n * 3)
             if ctx.where:
                 qb = qb.where(ctx.where, prefilter=spec.prefilter)
             rankings.append(qb.to_list())
-        except Exception:
-            pass
+        except Exception as exc:
+            _drop_or_raise("fts", exc)
 
     # One vector leg per DECLARED embedding space the search box can drive —
     # uniform across modalities. `_query_vec` picks the right query vector (image
     # for an image encoder, text otherwise) or None for a space we can't drive
-    # (foreign encoder), which is skipped. Each leg drops on failure — like the
-    # FTS leg above — so one wrong-dimension / unbuilt space can't 400 the whole
-    # fused search, it just contributes nothing.
+    # (foreign encoder), which is skipped. Both legs then share ONE policy
+    # (`_drop_or_raise`): a leg the REQUEST cannot drive contributes nothing, so one
+    # wrong-dimension / unbuilt space can't 400 the whole fused search, while a leg the ESTATE
+    # cannot serve raises rather than quietly shrinking the answer.
     for binding in target.vectors.values():
         vec = _query_vec(ctx, binding)
         if vec is None:
             continue
+        attempted += 1
         try:
             rankings.append(_vector_leg(ctx, binding, vec, n=spec.n * 3))
-        except Exception:
-            logger.warning("vector leg %r dropped from 'all' search", binding.column, exc_info=True)
+        except Exception as exc:
+            _drop_or_raise(f"vector {binding.column!r}", exc)
 
+    if attempted and not rankings:
+        raise ValidationError("no search leg could run this query")
     fused = rrf_fuse(rankings, key_fields=target.key_fields)
     # Optional cross-encoder rerank on the fused head (rerank_n), then trim to
     # spec.n. Without rerank we just take the fused top-n.

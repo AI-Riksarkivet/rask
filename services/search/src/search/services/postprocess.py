@@ -11,6 +11,7 @@ because the backend may not import the pipeline package (§4.4).
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from search.services.constants import REPRESENTATIVE_FRAME_INDEX
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from search.services.target import SearchTarget
+
+logger = logging.getLogger(__name__)
 
 #: Stable identity of a row/frame hit: its key-field values, in declared order.
 RowKey = tuple[Any, ...]
@@ -87,9 +90,14 @@ def attach_captions(
 
     Captions live on the frame table, not the row table, so this one filtered
     scan is how the list/table views learn the scene description for every
-    mode. A no-op (leaves no ``caption`` key) when the frame table or the
-    caption column is absent — captions are a nice-to-have, never a reason to
-    fail a search.
+    mode.
+
+    ABSENCE — no hits, no frame table, no caption column — is answered by the guard below, and it
+    is the only thing entitled to answer SILENTLY: a corpus that declares no captions is not a
+    fault. A scan that gets past that guard and still fails is a genuine one, so it is logged as
+    one. It does not fail the search: the hits are already complete and correct when this runs, and
+    a broken enrichment must not take a correct result set down with it (the fused legs in
+    ``service._search_all`` raise instead, because THEIR failure changes which rows come back).
     """
     if not hits or frame_tbl is None or caption_column not in frame_tbl.schema.names:
         return
@@ -104,6 +112,7 @@ def attach_captions(
     try:
         rows = frame_tbl.to_lance().to_table(columns=[*key_fields, caption_column], filter=key_filter).to_pylist()
     except Exception:
+        logger.warning("caption scan failed; %d hits answer without a caption", len(hits), exc_info=True)
         return
     by_key = {row_key(r, key_fields): r.get(caption_column) for r in rows}
     for h in hits:
