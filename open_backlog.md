@@ -18,6 +18,30 @@ A row does not move to LIVE because it looks right. It moves when someone drives
 
 ---
 
+## 0. Two tracks, not one
+
+Owner observation, 2026-08-31: *"Compute and workflow / batch processing is one thing, and the
+lakehouse should work as intended either way — if we do it all manually with code, move data
+ourselves, access, and do batch processing ourselves."*
+
+That is correct, and this file had been ignoring it. Everything below had been living in one list as
+though the estate were one product. It is two, and they have different acceptance tests:
+
+| Track | What it is | Its acceptance test |
+| --- | --- | --- |
+| **A · The lakehouse** | Lance Namespace catalog, the file/table layer, versioning + tagging, governance (OpenFGA), lineage (OpenLineage→AGE), credential vending, maintenance | **Can a person drive it by hand, with their own code, moving their own data, with NO rask compute plane at all?** If yes, it stands alone. |
+| **B · Compute & workflow** | The medallion cascade, the movers, Dapr Workflow, the Ray submission path, Kueue, the executor contract | Does a unit of work get submitted, watched, verified and published — and could a second engine do it? |
+
+**Track B is a CONSUMER of Track A, never the other way round.** Any finding where A depends on B is a
+defect in A by definition — that is what `BAKED_JOBS_DIR` is (the catalog validating Ray paths), and it
+is why it ranks first in the decoupling list rather than being a tidy-up.
+
+A consequence worth stating: **Track A can be judged against other catalogs** (Lakekeeper, Polaris,
+Unity, Nessie) and Track B cannot, because Track B is not a product anyone else ships. Mixing them is
+what made "are we using the right tooling?" hard to answer — the honest answer differs per track.
+
+---
+
 ## 1. Deployed and verified live
 
 | # | What | Proof |
