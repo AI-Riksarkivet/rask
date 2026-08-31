@@ -142,6 +142,13 @@ class StageJobSpec(BaseModel):
     #: `None`/`0` mean "first turn": submit, then count from there.
     submission_id: str | None = None
     polls_done: int = 0
+    #: Has ANY poll come back with a real status? Carried across `continue_as_new` for the same reason
+    #: `polls_done` is, and it is what separates the two events that both arrive as `None` from
+    #: `poll_stage`: a dashboard that has not registered a just-submitted id yet, and a job record that
+    #: is GONE. Before the id has ever been seen a 404 is the submit race and the watch must survive it;
+    #: after it has, the only way back to 404 is the head losing its job table — measured 2026-08-31,
+    #: a head rollout leaves the new head answering `jobs: 0` while the watch polls on.
+    seen: bool = False
     #: When the watch STARTED, as an ISO-8601 string, carried across `continue_as_new` for the same
     #: reason `polls_done` is: each turn begins with empty history and would otherwise re-stamp it.
     #:
@@ -253,10 +260,22 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         status = None
         watch_lost = True
 
+    # THE JOB RECORD IS GONE, which is a different event from the one `None` usually means. A 404
+    # before the id was ever seen is the submit race the `None` return exists to survive; a 404 AFTER
+    # a real status means the dashboard forgot a job it had registered, and the only thing that does
+    # that is the head losing its job table. Ray's GCS is not fault-tolerant here (no external Redis,
+    # a deliberate estate-wide `no Redis`), so a head restart takes every job record with it.
+    #
+    # Without this the two are indistinguishable and the watch spends its whole ceiling — 2880 polls
+    # at 30 s, TWENTY-FOUR HOURS — asking a head that can never answer, while the tier behind it waits
+    # on a `publish_stage_ready` that only the success branch reaches.
+    seen = spec.seen or status is not None
+    vanished = spec.seen and status is None and not watch_lost
+
     # STILL RUNNING and budget left: hand the rest to a fresh turn. Everything above is awaited, which
     # matters — `continue_as_new` restarts immediately and DISCARDS any task started but not awaited.
-    if not watch_lost and not _is_terminal(status) and polls < spec.max_polls:
-        ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls, "started_at": started_at}).model_dump())
+    if not watch_lost and not vanished and not _is_terminal(status) and polls < spec.max_polls:
+        ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls, "started_at": started_at, "seen": seen}).model_dump())
         return {}
 
     if not _is_terminal(status):
@@ -267,7 +286,10 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
             submission_id=submission_id, status=status, polls=polls, verdict="abandoned", duration_seconds=_watch_seconds(ctx, started_at)
         )
         if not ctx.is_replaying:
-            log.warning("medallion_stage_watch_abandoned", extra={"submission_id": submission_id, "status": status, "polls": polls})
+            log.warning(
+                "medallion_stage_watch_abandoned",
+                extra={"submission_id": submission_id, "status": status, "polls": polls, "reason": "job_vanished" if vanished else "poll_ceiling"},
+            )
         yield ctx.call_activity(report_stage_outcome, input=StageReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
         return outcome.model_dump()
 
@@ -775,6 +797,11 @@ class TrainJobSpec(BaseModel):
     #: Carried across `continue_as_new`; a fresh turn starts with empty history and would otherwise
     #: count from zero and never reach the ceiling.
     polls_done: int = 0
+    #: Has ANY poll answered with a real status? Same role as `StageJobSpec.seen` — it is what tells a
+    #: submit-race 404 apart from a job record the head has LOST. Patience is right for a slow job and
+    #: wrong for a gone one: the run being four hours long is an argument for waiting on a job that
+    #: still exists, not for waiting on one whose record went with the head.
+    seen: bool = False
 
 
 class TrainJobOutcome(BaseModel):
@@ -814,16 +841,24 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         status = None
         watch_lost = True
 
-    if not watch_lost and not _is_terminal(status) and polls < spec.max_polls:
-        ctx.continue_as_new(spec.model_copy(update={"polls_done": polls}).model_dump())
+    seen = spec.seen or status is not None
+    vanished = spec.seen and status is None and not watch_lost
+
+    if not watch_lost and not vanished and not _is_terminal(status) and polls < spec.max_polls:
+        ctx.continue_as_new(spec.model_copy(update={"polls_done": polls, "seen": seen}).model_dump())
         return {}
 
     if not _is_terminal(status):
-        # The ceiling, or a lost watch. NOT a failure: a training job still running at the ceiling is
-        # alive and may yet land, and reporting it as dead sends somebody hunting a healthy run.
+        # The ceiling, a lost watch, or a job the head has forgotten. NOT a failure in any of the
+        # three: a training job still running at the ceiling is alive and may yet land, and reporting
+        # it as dead sends somebody hunting a healthy run. `reason` is what separates them in the log —
+        # the vanished arm is the only one where waiting longer could not have helped.
         outcome = TrainJobOutcome(submission_id=spec.submission_id, status=status, polls=polls, verdict="abandoned")
         if not ctx.is_replaying:
-            log.warning("medallion_train_watch_abandoned", extra={"submission_id": spec.submission_id, "status": status, "polls": polls})
+            log.warning(
+                "medallion_train_watch_abandoned",
+                extra={"submission_id": spec.submission_id, "status": status, "polls": polls, "reason": "job_vanished" if vanished else "poll_ceiling"},
+            )
         # REPORTED, where it used to return in silence. A lost or ceiling-hit watch told nobody: no
         # metric, no log an operator polls, nothing. Somebody's four-hour GPU run simply stopped being
         # watched. The reporter is two-armed for this — it counts the verdict and says the WATCH ended,
