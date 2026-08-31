@@ -568,10 +568,16 @@ def _run_stage(
         raise SystemExit("stage transform lost stable row ids")
     # Provenance is checked with a null-count PUSHDOWN, not by materialising every parent id: this
     # runs against a tier that may hold millions of rows.
-    parentless = out.count_rows(filter=f"{SOURCE_ROWID_COLUMN} IS NULL") if SOURCE_ROWID_COLUMN in out.schema.names else 0
+    #
+    # AN ABSENT COLUMN MEANS EVERY ROW IS PARENTLESS, not none. This read `... else 0`, so a transform
+    # that dropped `source_rowid` entirely reported ZERO parentless rows and the contract passed — the
+    # check was defeated by committing the violation harder rather than partially. That is the shape a
+    # green test proves nothing about, because its subject was never there to inspect.
+    written = out.count_rows() if rows_out < 0 else rows_out
+    parentless = out.count_rows(filter=f"{SOURCE_ROWID_COLUMN} IS NULL") if SOURCE_ROWID_COLUMN in out.schema.names else written
     _assert_stage_contract(
         rows_in=rows_in,
-        rows_out=out.count_rows() if rows_out < 0 else rows_out,
+        rows_out=written,
         cardinality=cardinality,
         parentless=parentless,
     )
