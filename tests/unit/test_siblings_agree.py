@@ -156,6 +156,45 @@ def _branch_population() -> list[tuple[str, Function, list[str], list[ast.Call]]
     return population
 
 
+def test_a_route_with_an_UNTYPED_body_still_reads_its_branch() -> None:
+    """A handler taking `body: dict` must read `branch` out of the envelope itself.
+
+    THE GAP THIS CLOSES IS IN THE SIBLING TEST BELOW, not in the estate. That walk finds branch-carrying
+    handlers by their annotated request MODEL — so a route taking `body: dict[str, Any]` is invisible to
+    it, and `update_table_schema_metadata` dropped `branch` on both its paths while the walk reported
+    clean.
+
+    The spec is explicit about where `branch` lives, and it is not always a parameter: the component's
+    own description says the query form is "used by branch-scoped operations that cannot carry a
+    `branch` field in their request body (Arrow IPC stream and bodyless operations). Operations with a
+    JSON request body carry `branch` as a body field instead."
+
+    So a handler that hand-parses its body owes the envelope the same read it already gives `id` — it
+    calls `reconcile_body_id` for one and must not silently ignore the other.
+    """
+    offenders: list[str] = []
+    for path, tree in _modules(ENDPOINTS):
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            untyped_body = any(a.arg == "body" and a.annotation is not None and ast.unparse(a.annotation).startswith("dict") for a in fn.args.args)
+            if not untyped_body:
+                continue
+            source = ast.unparse(fn)
+            # It reads the envelope's id, so it is the hand-parsing shape — and `branch` must be read
+            # too, or accepted as an explicit parameter.
+            if "reconcile_body_id" not in source:
+                continue
+            takes_branch = any(a.arg == "branch" for a in fn.args.args + fn.args.kwonlyargs)
+            if not takes_branch and '"branch"' not in source and "'branch'" not in source:
+                offenders.append(f"{path.name}::{fn.name}")
+
+    assert not offenders, (
+        "these routes hand-parse a JSON body and reconcile its `id`, but never read its `branch` — so a "
+        "branch-scoped call silently acts on MAIN:\n  " + "\n  ".join(sorted(offenders))
+    )
+
+
 def test_a_branch_carrying_request_reaches_open_dataset() -> None:
     """A door handed a branch must open the branch — the silent wrong-target write class."""
     population = _branch_population()

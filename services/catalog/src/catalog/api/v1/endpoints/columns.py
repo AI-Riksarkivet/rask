@@ -219,17 +219,29 @@ async def update_table_schema_metadata(
         # (audit 2026-07-15 — the first cut popped them from the flat form and silently dropped them).
         raw_id = body.get("id")
         reconcile_body_id(segments, raw_id if isinstance(raw_id, list) else None)
+        # THE BRANCH RIDES THE ENVELOPE TOO, and dropping it rewrote MAIN's properties while answering
+        # 200. The spec's own `branch` parameter description says where it lives: the query form is
+        # "used by branch-scoped operations that cannot carry a `branch` field in their request body
+        # ... Operations with a JSON request body carry `branch` as a body field instead." This route
+        # has a JSON body, so the envelope is where it belongs — and it was reading `id` from there
+        # while ignoring `branch` in the same dict.
+        raw_branch = body.get("branch")
+        branch = raw_branch if isinstance(raw_branch, str) and raw_branch else None
         raw = nested
     else:
+        # A FLAT body IS the metadata map, so there is no envelope to read a branch out of — the spec's
+        # query parameter is the only channel left, and this route does not serve one. Stated rather
+        # than left implicit: main is the correct target here, not an oversight.
+        branch = None
         raw = body
     # `str(v)` on a null would write the literal string "None" — the deletion signal must survive intact.
     values: dict[str, str | None] = {str(k): None if v is None else str(v) for k, v in raw.items()}
     response: UpdateTableSchemaMetadataResponse
     if any(v is None for v in values.values()):
-        updated = await run_in_threadpool(dataplane.update_schema_metadata, ns, so, segments, values)
+        updated = await run_in_threadpool(dataplane.update_schema_metadata, ns, so, segments, values, branch=branch)
         response = UpdateTableSchemaMetadataResponse(metadata=updated)
     else:
-        req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None})
+        req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None}, branch=branch)
         response = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
     await lineage_deps.emit_measured_write(
         emitter,

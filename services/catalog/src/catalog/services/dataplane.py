@@ -1026,7 +1026,9 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
     return out
 
 
-def update_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str], values: dict[str, str | None]) -> dict[str, str]:
+def update_schema_metadata(
+    ns: LanceNamespace, so: StorageOptions, table_id: list[str], values: dict[str, str | None], *, branch: str | None = None
+) -> dict[str, str]:
     """Upsert the table's schema-level metadata; a ``None`` value DELETES that key.
 
     The table-level twin of :func:`update_field_metadata`'s dialect, and the only way to REMOVE a table
@@ -1042,7 +1044,7 @@ def update_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: lis
 
     Returns the table's new full map with ``lineage.*`` filtered out, matching what the read twin reports.
     """
-    result = open_dataset(ns, so, table_id).update_schema_metadata(values)
+    result = open_dataset(ns, so, table_id, branch=branch).update_schema_metadata(values)
     return {k: v for k, v in result.items() if not k.startswith("lineage.")}
 
 
