@@ -43,6 +43,7 @@ REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     "media": ("LANCE_E2E_LANCERAY_URL", "LANCE_E2E_LINEAGE_URL"),
     "media-catalog": ("MEDIA_CATALOG_URL",),
     "observability": ("LANCE_E2E_CATALOG_URL", "LANCE_E2E_LINEAGE_URL", "LANCE_E2E_GREPTIME_URL"),
+    "track-a": ("LANCE_E2E_CATALOG_URL", "LANCE_E2E_TOKEN", "LANCE_E2E_S3_ENDPOINT"),
     "user-state": ("LANCE_E2E_CATALOG_URL",),
     "ray-batch": ("LANCE_E2E_RAY_HEAD_DEPLOY",),
     "ray-train": ("LANCE_E2E_LANCERAY_URL", "LANCE_E2E_CATALOG_URL", "LANCE_E2E_LINEAGE_URL", "LANCE_E2E_FGA"),

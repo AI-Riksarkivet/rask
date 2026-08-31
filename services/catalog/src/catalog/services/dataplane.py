@@ -35,6 +35,7 @@ from lance_namespace import (
     AlterTableDropColumnsRequest,
     AlterTableDropColumnsResponse,
     ConcurrentModificationError,
+    CountTableRowsRequest,
     CreateTableBranchRequest,
     CreateTableBranchResponse,
     CreateTableIndexRequest,
@@ -938,6 +939,63 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     with _user_sql("invalid delete predicate"):
         dataset.delete(req.predicate)
     return DeleteFromTableResponse(version=dataset.version)
+
+
+def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str) -> None:
+    """Refuse a branch-scoped read the upstream implementation answers from MAIN.
+
+    `query_table`, `explain_table_query_plan` and `analyze_table_query_plan` all declare `branch` and
+    all delegate whole-request to the upstream implementation, which ignores it. Verified live
+    2026-08-31: after deleting two of three rows on `work`, `/query` returned 3 rows for `branch=work`
+    AND 3 for a branch that had never been created — main's answer, twice, with a 200.
+
+    A 501 rather than a wrong 200, and that IS the fix at this door rather than a deferral of it. The
+    defect is not "branch queries are missing"; it is that the parameter is accepted and disregarded, so
+    a caller staging work on a branch reads main and is told nothing. Answering "this backend does not
+    do that" is correct, complete and spec-shaped — error code 0, `Unsupported` — where answering with
+    another dataset's rows is neither.
+
+    NOT the same call as `count_rows`, which is honoured rather than refused: a count is a single
+    documented operation over a dataset handle, so serving it branch-aware adds no second definition of
+    anything. A faithful branch-scoped `query` would have to re-derive vector search, full-text search,
+    prefilter, nprobes, refine_factor and distance_type against a handle, and a subtle divergence there
+    is a wrong answer wearing the right shape — the failure this whole file exists to stop. That
+    implementation is real work with its own tests; it is named in `open_backlog.md`, not smuggled in
+    behind a door that currently lies.
+    """
+    if branch is not None:
+        raise UnsupportedOperationError(
+            f"{door} cannot be scoped to a branch: the underlying implementation answers from the main "
+            f"branch regardless of `branch`, so honouring the parameter here would return main's rows "
+            f"labelled as {branch!r}. Read the branch through `count_rows`, or query it directly."
+        )
+
+
+def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsRequest) -> int:
+    """Count rows on the ref the request NAMES — the read-side twin of `update_table`'s omission.
+
+    The upstream `count_table_rows` takes the whole request and answers from main whatever `branch`
+    says, so a branch-scoped count returned a number that was correct for a dataset the caller did not
+    ask about. Verified live 2026-08-31 against ground truth read from S3 with pylance: after deleting
+    two of three rows on `work`, the branch held 1 and this door reported 3 — and a branch that had
+    NEVER BEEN CREATED also reported 3, which is what proves the parameter was not read rather than
+    mishandled.
+
+    Spec-mandated on both counts. `CountTableRowsRequest.branch` is "Branch to target. When not
+    specified, the main branch is used" (namespace.md), and the SDK states the general rule for a
+    branch-scoped handle: "Reads and writes operate in the branch's context." An absent ref is error
+    code 22 `TableBranchNotFound`, which `open_dataset` already raises — so routing through it buys the
+    404 as well as the correct answer.
+
+    MAIN STAYS ON THE UPSTREAM PATH. A branchless count is the overwhelmingly common one and already
+    correct; re-implementing it here would put a second definition of "count" in the estate for no
+    defect, and any divergence in predicate dialect or version resolution would be ours to own.
+    """
+    if req.branch is None:
+        return int(native.call(ns, "count_table_rows", req))
+    dataset = open_dataset(ns, so, _table_id(req), version=req.version, branch=req.branch)
+    with _user_sql("invalid count predicate"):
+        return int(dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows())
 
 
 def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumnsRequest) -> AlterTableAddColumnsResponse:

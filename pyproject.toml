@@ -260,6 +260,7 @@ markers = [
     "observability: observability (OTLP/Greptime) e2e",
     "ray_batch: Ray batch-path e2e",
     "ray_train: Ray train-path e2e",
+    "track_a: Track A acceptance e2e (tier contract, gate/publish symmetry, branch isolation) against a live catalog",
     "user_state: user-state live e2e",
 ]
 

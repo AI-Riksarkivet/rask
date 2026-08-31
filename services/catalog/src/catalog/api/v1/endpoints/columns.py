@@ -237,7 +237,17 @@ async def update_table_schema_metadata(
     # `str(v)` on a null would write the literal string "None" — the deletion signal must survive intact.
     values: dict[str, str | None] = {str(k): None if v is None else str(v) for k, v in raw.items()}
     response: UpdateTableSchemaMetadataResponse
-    if any(v is None for v in values.values()):
+    # A BRANCH TAKES THE DATAPLANE PATH WHICHEVER DIALECT THE BODY SPEAKS. Passing `branch` to the
+    # native op is not enough and looked like it was: the spec request carries the field, the catalog
+    # filled it in, and the upstream implementation disregards it — so a null-free body on a branch
+    # rewrote MAIN's properties and answered 200, while the same call carrying a null was isolated
+    # correctly. Verified live 2026-08-31 against the object store: main advanced a version and took
+    # the branch's key. The dataplane implementation merges and null-deletes with the same semantics
+    # and opens the ref it is given, so routing a branch through it is the whole fix rather than a
+    # detour around one. It costs the native op's transaction id on branch writes, which is a real
+    # trade and the right way round: an id naming a commit to the wrong dataset is worth less than no
+    # id at all.
+    if branch is not None or any(v is None for v in values.values()):
         updated = await run_in_threadpool(dataplane.update_schema_metadata, ns, so, segments, values, branch=branch)
         response = UpdateTableSchemaMetadataResponse(metadata=updated)
     else:

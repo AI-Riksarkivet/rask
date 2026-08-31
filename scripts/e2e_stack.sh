@@ -282,6 +282,7 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_outbox_e2e.py \
   tests/e2e-py/test_outbox_crash_e2e.py \
   tests/e2e-py/test_maintenance_s3_e2e.py \
+  tests/e2e-py/test_track_a_acceptance.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
 # NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right

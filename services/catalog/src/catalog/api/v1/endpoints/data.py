@@ -443,23 +443,29 @@ async def read_table_blob(
 def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     data = native.call(ns, "query_table", body)
     return Response(content=data, media_type=ARROW_FILE)
 
 
 @router.post("/{id}/count_rows")
-def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, body: CountTableRowsRequest | None = None) -> Response:
-    """Count the table's rows (optionally filtered) — ``count_table_rows``; returns plain text."""
+def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, body: CountTableRowsRequest | None = None) -> Response:
+    """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
+
+    Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
+    was not: the parameter reached the upstream implementation, which answered from main regardless,
+    so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
+    """
     req = body or CountTableRowsRequest()
     req.id = reconcile_body_id(parse_identifier(id, settings.delimiter), req.id)
-    count = native.call(ns, "count_table_rows", req)
-    return PlainTextResponse(str(count))
+    return PlainTextResponse(str(dataplane.count_rows(ns, so, req)))
 
 
 @router.post("/{id}/explain_plan")
 def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="explain_table_query_plan")
     result = native.call(ns, "explain_table_query_plan", body)
     return PlainTextResponse(result if isinstance(result, str) else json.dumps(dump(result)))
 
@@ -468,5 +474,6 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
 def analyze_table_query_plan(id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     result = native.call(ns, "analyze_table_query_plan", body)
     return PlainTextResponse(result if isinstance(result, str) else json.dumps(dump(result)))
