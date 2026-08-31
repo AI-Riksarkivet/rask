@@ -228,6 +228,46 @@ session), then `count_rows`, `schema_metadata/update`, `insert`, `merge_insert` 
 (honoured), and `query`/`explain_plan`/`analyze_plan` (501). A static audit of 304 findings named none
 of them.
 
+### THE STRUCTURAL GATE, and what it actually proved
+
+`services/catalog/tests/test_a_declared_branch_is_never_silently_dropped.py` fails when a function
+hands a branch-carrying spec request to `native.call` and neither serves the branch, refuses it, nor
+records a measurement. Proven to catch a regression: reverting the one door it names turns it red.
+
+**It found zero new bugs on today's tree, and that is worth stating rather than hiding.** It flagged
+five doors; driving all five showed `describe_table_version`, `batch_delete_table_versions` and
+`list_table_versions` all HONOUR branch, `backfill_column` is 501 upstream, and `create_table_version`
+could not be driven. Its value is not detection — it is that a new door cannot ship until someone
+LOOKS, which is the step skipped ten times today. It *would* have caught `insert` and `merge_insert`
+before they shipped.
+
+**A CORRECTION I OWE THE RECORD: `version/list` was never broken.** `branch` on that route is a QUERY
+parameter, not a body field. My probe sent it in the body, FastAPI ignored it, the door answered for
+main — indistinguishable from the defect. I wrote a replacement for a working door and then proved it
+unnecessary by deploying the ORIGINAL and driving it correctly: `?branch=work` returns 4 versions with
+`tree/work/` manifest paths against a branch diverged to 4 while main sat at 1. Reverted in full. The
+e2e test is rewritten from an accusation into a PIN that asserts through the query string.
+
+**Upstream is right or wrong PER OPERATION.** `describe_table_version` honours branch and `count_rows`
+did not, from adjacent modules. Nothing static can tell them apart — the answer is in Rust behind
+`self._inner` — which is why the gate demands a measurement rather than asserting a bug.
+
+### THE SWEEP'S FIRST RETURNS — two holes in the same day's work
+
+An exhaustive six-lens sweep (`dropped-parameter-sweep`) is driving the live catalog for this defect
+class across the whole estate. Two confirmed and fixed already, both in code landed EARLIER TODAY:
+
+* **The public index doors were writes to the wrong dataset.** `create_scalar_index` with
+  `branch=work` returned 200, MAIN advanced a version and took the index, the branch got none. The
+  merge-key BTREE inside `/merge_insert` was fixed this morning; the public door one layer out was
+  never looked at. Now 501 — the line is the OPTION SURFACE, not the verb: `CreateTableIndexRequest`
+  carries a full-text option surface where a silently-defaulted setting is the same quiet wrongness as
+  the wrong table, while `ensure_merge_key_index` builds one fixed shape and stays served.
+* **My own `explain_plan` guard covered one channel of two.** The request NESTS the query, so `branch`
+  arrives at the top level or inside `query`. The guard read `body.branch` only; a nested branch
+  returned 200 and a plan, for a real branch and a never-created one alike. A guard covering one of two
+  channels is worse than none — it is why the door looked settled.
+
 ### OPEN — faithful branch-scoped `query`
 
 The 501 is honest, not complete. Serving a branch-scoped query properly means re-deriving vector
