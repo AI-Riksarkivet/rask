@@ -160,14 +160,27 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         audit("authn", SUCCESS, subject=token.sub)
         return token
 
-    def current_subject(token: Annotated[IDToken | None, Depends(authenticate)]) -> str:
+    def current_subject(request: Request, token: Annotated[IDToken | None, Depends(authenticate)]) -> str:
         """The verified principal as the FGA subject id (no `user:` prefix — `fga.check` qualifies it).
 
         With OIDC off this is `anon`, which keeps a dev stack working. With OIDC on it is the token's
         `sub` and nothing else: there is deliberately no header fallback, because a fallback is what
         turns "verified subject" back into "whatever the caller claimed".
+
+        **IT IS ALSO PUBLISHED ON `request.state`, and that is not incidental.** `rate_limit.by_subject`
+        reads `request.state.subject` and falls back to the client IP; nothing in the estate ever wrote
+        it, so the subject branch was dead and every request fell to the IP branch. Behind the gateway
+        the observed IP is the gateway pod, so one bucket served every caller — worse than no limiter,
+        because a single caller could exhaust everyone's quota.
+
+        Published HERE rather than in the limiter because the limiter is a slowapi key function running
+        outside the dependency graph: it cannot ask for a subject, so the subject has to leave one. And
+        here rather than per-service so every route on this dependency is keyed correctly, not just the
+        one service that happened to notice.
         """
-        return token.sub if token is not None else ANONYMOUS_SUBJECT
+        subject = token.sub if token is not None else ANONYMOUS_SUBJECT
+        request.state.subject = subject
+        return subject
 
     def optional_subject(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> str:
         """The verified principal, or ``anon`` — soft ONLY on absence.
