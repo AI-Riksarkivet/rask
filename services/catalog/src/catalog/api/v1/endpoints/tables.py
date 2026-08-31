@@ -62,6 +62,7 @@ from catalog.core.lineage_emit import (
     InputPin,
     emit_write_event,
 )
+from catalog.core.namespace import open_dataset
 from catalog.core.vending import has_external_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, warehouses
@@ -301,6 +302,7 @@ def describe_table(
     check_declared: bool | None = None,
     version: int | None = None,
     tag: str | None = None,
+    branch: str | None = None,
     vend_credentials: bool | None = None,
 ) -> DescribeTableResponse:
     """Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``, optionally
@@ -369,6 +371,12 @@ def describe_table(
             tag = body.tag
         if "vend_credentials" in sent:
             vend_credentials = body.vend_credentials
+    # THE QUERY CHANNEL, which the body refusal below did not cover. `branch` was body-only, so a caller
+    # who wrote `?branch=work` reached a route that does not declare it: FastAPI dropped it and the door
+    # answered for MAIN with a 200 — including for a branch that had never been created (verified live
+    # 2026-08-31). A refusal that covers one of two channels is why this door read as settled.
+    if branch is not None and branch != _MAIN_BRANCH:
+        raise InvalidInputError(f"`branch` is not supported by describe (got {branch!r}); use the branch operations under /v1/table/{{id}}/branches")
     if tag is not None:
         if version is not None:
             raise InvalidInputError("`tag` cannot be used together with `version` (spec 0.9)")
@@ -381,6 +389,14 @@ def describe_table(
         check_declared=check_declared,
         version=version,
     )
+    if version is not None:
+        # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
+        # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
+        # returned 200 with byte-identical metadata (verified live 2026-08-31) — a caller probing whether
+        # a version exists is told yes about every number they try. Opening the pinned dataset is what
+        # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
+        # named, so the unpinned describe every client makes is untouched.
+        open_dataset(ns, so, segments, version=version)
     response: DescribeTableResponse = native.call(ns, "describe_table", req)
 
     # pylance 8.0.0 leaves `metadata` empty even with load_detailed_metadata — so the #74 Table Properties

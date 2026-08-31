@@ -829,3 +829,40 @@ def test_a_read_door_that_never_offered_a_branch_now_refuses_one(estate: Estate,
     estate.branch(name, "work")
     response = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/{door}?{query}", headers=_auth(), timeout=60)
     assert response.status_code == 501, f"/{door} answered a branch-scoped read with {response.status_code} instead of 501: {response.text[:200]}"
+
+
+def test_describe_refuses_a_branch_on_both_channels_and_an_impossible_version(estate: Estate) -> None:
+    """`describe` had a body-only refusal, which is a refusal on one of two channels.
+
+    The route already refused `branch` in the request BODY, with a comment saying exactly why —
+    "SILENTLY describing main for a caller who pinned a branch is the same class of wrong-but-plausible
+    answer". It did not DECLARE `branch` as a query parameter, so `?branch=work` reached a route that
+    does not take it, FastAPI dropped it, and the door answered for main with a 200 — for a real branch
+    and for one that had never been created alike. The reasoning was right and covered half the door.
+
+    `?version=9999` is the same shape on the other parameter: `describe_table` answers off the namespace
+    manifest and does not resolve the pin, so every version number a caller tries is confirmed to exist.
+    A caller probing for a version gets yes, always. Opening the pinned dataset mints spec error 11
+    `TableVersionNotFound`, and it runs only when a version was named, so the unpinned describe every
+    client makes is untouched.
+    """
+    estate.create("descchan", _rowed(("a", "one")))
+    estate.branch("descchan", "work")
+    table = estate.table_id("descchan")
+
+    query_branch = requests.post(f"{CATALOG}/v1/table/{table}/describe?branch=work", headers=_auth(), timeout=60)
+    assert query_branch.status_code == 400, f"?branch=work answered {query_branch.status_code}: {query_branch.text[:180]}"
+
+    body_branch = requests.post(f"{CATALOG}/v1/table/{table}/describe", json={"branch": "work"}, headers=_auth(), timeout=60)
+    assert body_branch.status_code == 400, f"the body channel regressed: {body_branch.status_code} {body_branch.text[:180]}"
+
+    absent = requests.post(f"{CATALOG}/v1/table/{table}/describe?version=9999", headers=_auth(), timeout=60)
+    assert absent.status_code == 404, (
+        f"describing version 9999 of a table that has 1 answered {absent.status_code}: {absent.text[:180]}. "
+        "A version that does not exist must not be confirmed."
+    )
+
+    # The unpinned and validly-pinned describes must still work — a validation that refuses everything
+    # would satisfy the assertions above.
+    assert requests.post(f"{CATALOG}/v1/table/{table}/describe", headers=_auth(), timeout=60).status_code == 200
+    assert requests.post(f"{CATALOG}/v1/table/{table}/describe?version=1", headers=_auth(), timeout=60).status_code == 200
