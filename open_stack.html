@@ -1,0 +1,1083 @@
+<title>The Lakehouse Compute Stack</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700;1,6..72,400&family=Public+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f7f8f6; --panel:#ffffff; --panel2:#eceee9; --rule:#d6d9d1; --rule2:#b9bdb1;
+  --ink:#181a17; --ink2:#4b4f48; --ink3:#767a71;
+  --bronze:#96591f; --silver:#5d6b7a; --gold:#8a6d13;
+  --ok:#1f6b3f; --okbg:#e2f0e6;
+  --warn:#8a5510; --warnbg:#fbf0de;
+  --bad:#9c2a20; --badbg:#fbe8e5;
+  --accent:#1f4d7a;
+  --sh:0 1px 2px rgba(24,26,23,.05),0 12px 30px -24px rgba(24,26,23,.55);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#131512; --panel:#1b1e1a; --panel2:#242821; --rule:#2f342b; --rule2:#454b3f;
+  --ink:#eceee7; --ink2:#b2b7ab; --ink3:#848a7c;
+  --bronze:#d09452; --silver:#9fb0c2; --gold:#d9b445;
+  --ok:#6ec98d; --okbg:#122a1a;
+  --warn:#e0a54a; --warnbg:#2b2113;
+  --bad:#ef8b7d; --badbg:#2d1613;
+  --accent:#78aede;
+  --sh:0 1px 2px rgba(0,0,0,.5),0 12px 30px -24px rgba(0,0,0,.9);
+}}
+:root[data-theme="dark"]{
+  --bg:#131512; --panel:#1b1e1a; --panel2:#242821; --rule:#2f342b; --rule2:#454b3f;
+  --ink:#eceee7; --ink2:#b2b7ab; --ink3:#848a7c;
+  --bronze:#d09452; --silver:#9fb0c2; --gold:#d9b445;
+  --ok:#6ec98d; --okbg:#122a1a;
+  --warn:#e0a54a; --warnbg:#2b2113;
+  --bad:#ef8b7d; --badbg:#2d1613;
+  --accent:#78aede;
+  --sh:0 1px 2px rgba(0,0,0,.5),0 12px 30px -24px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);margin:0;font-family:'Public Sans',system-ui,sans-serif;font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:48px 24px 120px}
+code,pre,.mono{font-family:'DM Mono',ui-monospace,Menlo,monospace}
+
+h1{font-family:'Newsreader',Georgia,serif;font-weight:700;font-size:clamp(32px,5.4vw,50px);line-height:1.06;letter-spacing:-.015em;margin:10px 0 0;text-wrap:balance}
+h2{font-family:'Newsreader',Georgia,serif;font-weight:600;font-size:30px;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em}
+h3{font-size:17px;font-weight:700;margin:26px 0 6px}
+.kick{font-family:'DM Mono',monospace;font-size:11px;letter-spacing:.19em;text-transform:uppercase;color:var(--ink3)}
+.sub{font-size:18.5px;color:var(--ink2);max-width:63ch;margin:16px 0 0}
+header{border-bottom:1px solid var(--rule2);padding-bottom:28px;margin-bottom:14px}
+section{margin:56px 0 0;scroll-margin-top:20px}
+.lede{color:var(--ink2);max-width:70ch;margin:0 0 20px}
+p{max-width:72ch}
+
+/* table of contents */
+nav.toc{background:var(--panel2);border:1px solid var(--rule);border-radius:5px;padding:16px 20px;margin-top:26px}
+nav.toc ol{margin:0;padding-left:20px;columns:2;column-gap:32px;font-size:14.5px}
+@media(max-width:700px){nav.toc ol{columns:1}}
+nav.toc a{color:var(--accent);text-decoration:none}
+nav.toc a:hover{text-decoration:underline}
+nav.toc li{margin-bottom:3px;break-inside:avoid}
+
+/* DIAGRAMS — always on a fixed light ground, so the viewer's theme can never
+   put light text on a light fill. This is the bug from the previous version. */
+.dia{background:#fbfbf9;border:1px solid var(--rule2);border-radius:5px;padding:20px 16px;margin:0 0 8px;overflow-x:auto;box-shadow:var(--sh)}
+.dia pre{margin:0;background:none;padding:0;border:none}
+.dia svg text,.dia svg .nodeLabel,.dia svg .edgeLabel,.dia svg .cluster-label,
+.dia svg .messageText,.dia svg .actor-box text,.dia svg .labelText,.dia svg .loopText,
+.dia svg .noteText,.dia svg span{fill:#16202b!important;color:#16202b!important}
+.dia svg .edgeLabel rect,.dia svg .labelBkg{fill:#fbfbf9!important}
+.cap{font-size:13.5px;color:var(--ink3);margin:0 0 30px;max-width:72ch}
+.cap b{color:var(--ink2)}
+
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:520px}
+.tw{overflow-x:auto;border:1px solid var(--rule);border-radius:5px;background:var(--panel);box-shadow:var(--sh);margin-bottom:8px}
+th{text-align:left;font-family:'DM Mono',monospace;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3);font-weight:500;padding:12px 15px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:12px 15px;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink2)}
+tr:last-child td{border-bottom:none}
+td:first-child{color:var(--ink);font-weight:600}
+td code,th code,p code,li code{font-size:13px;background:var(--panel2);padding:1px 5px;border-radius:3px}
+
+.note{border:1px solid var(--rule);border-left:3px solid var(--accent);background:var(--panel);border-radius:4px;padding:15px 19px;margin:16px 0;box-shadow:var(--sh)}
+.note.bad{border-left-color:var(--bad);background:var(--badbg)}
+.note.ok{border-left-color:var(--ok);background:var(--okbg)}
+.note.warn{border-left-color:var(--warn);background:var(--warnbg)}
+.note .h{font-family:'DM Mono',monospace;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;font-weight:500;margin-bottom:6px;color:var(--ink3)}
+.note.bad .h{color:var(--bad)} .note.ok .h{color:var(--ok)} .note.warn .h{color:var(--warn)}
+.note p{margin:0;font-size:14.5px}
+.note p+p{margin-top:9px}
+
+ul.tight{margin:8px 0;padding-left:20px;font-size:15px;color:var(--ink2);max-width:72ch}
+ul.tight li{margin-bottom:6px}
+
+.big{font-family:'Newsreader',Georgia,serif;font-size:21px;line-height:1.45;color:var(--ink);max-width:62ch;font-style:italic;border-left:3px solid var(--rule2);padding-left:20px;margin:22px 0}
+
+footer{margin-top:72px;padding-top:18px;border-top:1px solid var(--rule);font-family:'DM Mono',monospace;font-size:12px;color:var(--ink3)}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="kick">rask · lakehouse × compute</div>
+  <h1>The Lakehouse Compute Stack</h1>
+  <p class="sub">What each component is for, how batch processing actually runs today, what a “lane” really is — and exactly where the coupling is wrong.</p>
+  <nav class="toc"><ol>
+    <li><a href="#parts">The parts, in one table</a></li>
+    <li><a href="#today">How it sits today</a></li>
+    <li><a href="#batch">How batch processing actually works</a></li>
+    <li><a href="#job">What <code>ray_stage_job</code> does</a></li>
+    <li><a href="#lane">What a “lane” actually is</a></li>
+    <li><a href="#dapr">What Dapr Workflow gives us</a></li>
+    <li><a href="#primitives">Actors, KV, NATS, cron — when and why</a></li>
+    <li><a href="#target2">Where Dagster, Spark and Kueue would live</a></li>
+    <li><a href="#cr">The cascade as a CR</a></li>
+    <li><a href="#smells">What looks wrong</a></li>
+    <li><a href="#dataflow">Where the bytes actually move</a></li>
+    <li><a href="#target">The target state</a></li>
+    <li><a href="#promotion">Human promotion — the flow nobody else runs</a></li>
+    <li><a href="#maint">Maintenance on Ray — the correction</a></li>
+    <li><a href="#tooling">Are we using the right tooling?</a></li>
+    <li><a href="#next">What to do now</a></li>
+    <li><a href="#blobs">Where a million images live</a></li>
+    <li><a href="#flow11">Flow A — images to embeddings (1:1)</a></li>
+    <li><a href="#flow1n">Flow B — transcription (1:many)</a></li>
+    <li><a href="#decouple">Where to decouple — ranked</a></li>
+  </ol></nav>
+</header>
+
+<section id="parts">
+  <h2>1 · The parts, in one table</h2>
+  <p class="lede">Scoped to the lakehouse and its compute interaction. The frontend, notifications and the annotator UI are deliberately out of frame.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Component</th><th>Its one job</th><th>Would a second compute engine change it?</th></tr></thead>
+    <tbody>
+      <tr><td>Catalog</td><td>Owns the hierarchy (project → warehouse → namespace → table), vends storage locations and credentials, runs the publish gate, announces every write.</td><td><b>It should not.</b> Today it does — it validates Ray entrypoints.</td></tr>
+      <tr><td>Lineage</td><td>Ingests OpenLineage events into AGE, serves the durable feed, relays the staged outbox.</td><td>No.</td></tr>
+      <tr><td>Medallion producer</td><td>Seeds bronze, reacts to arrival events, fires the cascade.</td><td>No — it publishes triggers, it does not run compute.</td></tr>
+      <tr><td>Movers (×3)</td><td>One Deployment per hop. Authorises the write, submits a job, waits for it, publishes the next trigger.</td><td><b>Yes</b> — this is where the engine is named.</td></tr>
+      <tr><td>Maintenance</td><td>Compaction, index optimisation, version cleanup, drift reconcile.</td><td>No — runs in-process on pylance.</td></tr>
+      <tr><td>Ingest</td><td>Acquisition: a source-agnostic control API, a durable unit queue, a fragment lander.</td><td>No — Dapr + JetStream, no Ray anywhere.</td></tr>
+      <tr><td>Ray (KubeRay)</td><td>Runs the job.</td><td>It <em>is</em> the engine.</td></tr>
+      <tr><td>Dapr Workflow</td><td>Makes the <em>waiting</em> durable — see §6.</td><td>No, and that is the point.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="today">
+  <h2>2 · How it sits today</h2>
+  <p class="lede">Green is loosely coupled and should stay that way. Red is where a compute engine's name has leaked into something that should not know about it.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  subgraph GOV["GOVERNANCE PLANE — engine-agnostic by design"]
+    CAT["Catalog<br/>hierarchy · locations · credentials<br/>publish gate"]
+    LIN["Lineage<br/>OpenLineage to AGE"]
+    FGA["OpenFGA<br/>can_write_data"]
+  end
+  subgraph ORCH["ORCHESTRATION PLANE — Dapr"]
+    PROD["Medallion producer<br/>seeds bronze, fires cascade"]
+    MOV["Movers x3<br/>bronze to silver, silver to gold, media"]
+    WF["Dapr Workflow<br/>submit poll publish"]
+  end
+  subgraph EXEC["EXECUTION PLANE"]
+    RAY["KubeRay cluster"]
+    JOB["ray_stage_job.py<br/>BAKED into the image"]
+  end
+  ST[("Lance on S3<br/>bronze silver gold")]
+
+  PROD -->|"NATS topic"| MOV
+  MOV -->|"POST credentials tier=write"| CAT
+  CAT --> FGA
+  MOV --> WF
+  WF -->|"Jobs REST API"| RAY
+  RAY --> JOB
+  JOB --> ST
+  CAT -->|"announces write"| LIN
+  LIN -->|"NATS topic"| PROD
+  CAT -.->|"REFUSES a non-Ray entrypoint"| WF
+
+  style CAT fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style LIN fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style FGA fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style PROD fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style MOV fill:#fbdcd7,stroke:#9c2a20,stroke-width:2px,color:#2b100c
+  style WF fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style RAY fill:#fbdcd7,stroke:#9c2a20,stroke-width:2px,color:#2b100c
+  style JOB fill:#fbdcd7,stroke:#9c2a20,stroke-width:2px,color:#2b100c
+  style ST fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  </pre></div>
+  <p class="cap"><b>The dotted line is the defect.</b> The catalog — the governance door — refuses a lane whose entrypoint is not a baked Ray script, because the allowlist (<code>/home/ray/jobs/</code> plus three filenames) lives in the shared platform library that the catalog depends on. A Spark lane cannot be <em>declared</em>, let alone run.</p>
+</section>
+
+<section id="batch">
+  <h2>3 · How batch processing actually works</h2>
+  <p class="lede">Two entry paths, one cascade. The vocabulary first, because everything below uses it.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Term</th><th>Means</th></tr></thead>
+    <tbody>
+      <tr><td>bronze / silver / gold</td><td>Three governed Lance tables. Every row is <code>{id, payload, stage, lineage, source_rowid}</code> and <code>payload</code> is <b>opaque</b> — the tier does not know what is in it.</td></tr>
+      <tr><td>mover</td><td>A Deployment that owns one hop. Generic code; the hop is chart config.</td></tr>
+      <tr><td>trigger</td><td>A small JSON message on a NATS topic saying “there is new data at this tier”.</td></tr>
+      <tr><td>cascade</td><td>The chain: an arrival fires bronze→silver, whose publish fires silver→gold.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+sequenceDiagram
+  autonumber
+  participant P as Producer
+  participant C as Catalog
+  participant N as NATS
+  participant M as Mover
+  participant W as Dapr Workflow
+  participant R as Ray
+
+  P->>C: write bronze rows
+  C->>C: commit to Lance
+  C->>N: announce the write (lineage event)
+  N->>P: /bronze-arrival
+  Note over P: filters out byte-free ops<br/>(register/deregister/declare)
+  P->>N: publish medallion.bronze
+  N->>M: /medallion-event
+  M->>C: ensure destination + POST credentials tier=write
+  Note over M,C: a refusal STOPS here — no job is ever submitted
+  M->>W: start stage_run
+  W->>R: submit job
+  loop every 30s, one poll per workflow turn
+    W->>R: poll status
+  end
+  R-->>W: SUCCEEDED
+  W->>C: publish the written version (quality gate)
+  C->>N: table_published
+  N->>M: wakes silver to gold
+  </pre></div>
+  <p class="cap"><b>Read step 3–5 carefully:</b> the cascade is driven by the catalog <em>announcing</em> the write, not by the ingest call. That is why an external writer — Spark, Argo, anything — that writes through the catalog's data door drives the cascade identically, with no rask service in the loop on the producing side.</p>
+
+  <div class="note warn">
+    <div class="h">The trap that will catch an integrator</div>
+    <p>POSTing OpenLineage to <code>/api/lineage</code> — the door whose own docstring advertises “Airflow, Spark, dbt … with no glue” — <b>fires nothing</b>. It records to the graph and returns. The cascade listens to a NATS <em>topic</em>, and nothing republishes from HTTP ingest onto it. You get a perfect lineage graph, zero compute, every pod green. (The docstring now says so; it did not until today.)</p>
+  </div>
+</section>
+
+<section id="job">
+  <h2>4 · What <code>ray_stage_job</code> does — and why this is the most surprising thing here</h2>
+
+  <p>It is 581 lines. Strip the media branch, the delta branch, the trace plumbing and the contract assertions, and the actual transform is this:</p>
+
+  <div class="big">Carry <code>source_rowid</code> forward. Set <code>stage</code> to a constant string. Set <code>lineage</code> to a constant JSON document. Write it back.</div>
+
+  <p>That is the whole computation of a generic cascade stage. It reads a Lance dataset, stamps three provenance columns, and writes a Lance dataset. <b>No model, no aggregation, no join, no filter</b> — except in the delta lane, where it adds a version predicate.</p>
+
+  <div class="note bad">
+    <div class="h">The observation worth sitting with</div>
+    <p>The default cascade runs a <b>distributed Ray Data job to add three constant columns</b>. That is a metadata write, not compute. It is also why the estate already has a second, in-process executor behind a boolean (<code>use_ray</code>) — because for the default lane, distribution buys nothing.</p>
+    <p>Real compute lives in the <b>sealed runners</b>. Those are where a workload's actual transform — a model, an embedding, a transcription — runs, and they get their own images. The generic stage job is the platform's <em>default</em> transform, and the default is provenance.</p>
+  </div>
+
+  <h3>Why it is baked into the image</h3>
+  <p>Two reasons, both recorded in the dockerfile:</p>
+  <ul class="tight">
+    <li><b>Ray documents <code>runtime_env</code> as development-only.</b> Shipping code or dependencies at replica start is refused by standing ruling — a stack resolved at submit time is not a reproducible build.</li>
+    <li><b>It was once <em>not</em> baked, and the failure was invisible.</b> Every submitted job died with <code>can't open file '/home/ray/jobs/ray_stage_job.py'</code> and exit code 2, which surfaced as <em>missing data</em> rather than a missing file. The cascade's success path had never once run. A test now reads the entrypoint defaults out of the config and asserts the image bakes each one.</li>
+  </ul>
+  <p>So “baked” is correct. What is <em>not</em> correct is that the <b>catalog</b> knows the baked list — see §2's dotted line.</p>
+</section>
+
+
+<section id="lane">
+  <h2>5 · What a “lane” actually is</h2>
+  <p class="lede">You suspected this was doing more than one job. It is doing <b>six</b> — and the estate already knew: commit <code>5cb121b9</code> is literally titled “rename the declared LANE to a TRANSFORM, one meaning at a time”, and says <em>“The word carries THREE unrelated meanings in this repo and only one of them is the target.”</em> That rename fixed the governed one and deliberately left the rest.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Sense</th><th>What it means <em>there</em></th></tr></thead>
+    <tbody>
+      <tr><td>The declared record</td><td><b>Renamed away.</b> It is now a <code>TransformSpec</code>. <code>lane</code> survives only as a read-compat alias so pre-rename records still parse — a migration shim, not vocabulary.</td></tr>
+      <tr><td>A mover Deployment</td><td><b>Never actually called a lane in code</b> — the chart key is <code>name</code>. The word appears only in comments around it. A mover is a <code>(from-ns, to-ns, sub-topic, pub-topic, identity)</code> tuple.</td></tr>
+      <tr><td><code>lane_key(project, id)</code></td><td>Genuinely named lane, and a <b>misnomer</b>: it strips the tenant prefix, turning <code>acme-bronze$events</code> into <code>bronze$events</code>. It is a de-qualified catalog identifier.</td></tr>
+      <tr><td><code>&lt;tier&gt;-&lt;lane&gt;</code> naming</td><td>A directory suffix (<code>bronze-media</code>). <b>This one causes real bugs</b> — the catalog composes the opposite order (<code>acme-bronze</code>), so a parser reducing from the wrong end returns a tier that does not exist.</td></tr>
+      <tr><td>“Which code branch ran”</td><td>Three unrelated uses: <code>lane=full|delta</code> in the job, <code>durable|inline</code> in flows, <code>BUS|FEED</code> in notifications. None relate to the medallion.</td></tr>
+      <tr><td>A UI strip</td><td>The annotator’s text column beside the image. Different domain entirely.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note bad">
+    <div class="h">The verdict</div>
+    <p><b>“Lane” is not an abstraction — it is residue.</b> Of ~1,350 occurrences, roughly 1,170 are prose. It is overwhelmingly narration, not code. The one governed meaning has already been renamed; what is left should be finished, not designed around.</p>
+  </div>
+
+  <h3>So what actually keeps two pipelines apart at runtime?</h3>
+  <p>This is the part worth knowing, and it surprised me:</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  T["trigger on medallion.bronze<br/>carries a dataset field"]
+  T --> M1["mover A"]
+  T --> M2["mover B"]
+  T --> M3["mover C"]
+  M1 --> C1{"is dataset in MY<br/>accepted_input_names?"}
+  M2 --> C2{"same string test"}
+  M3 --> C3{"same string test"}
+  C1 -->|yes| RUN["runs the hop"]
+  C2 -->|no| DROP["dropped<br/>counter: other_lane"]
+  C3 -->|no| DROP
+
+  style T fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style M1 fill:#ececec,stroke:#666,color:#1a1a1a
+  style M2 fill:#ececec,stroke:#666,color:#1a1a1a
+  style M3 fill:#ececec,stroke:#666,color:#1a1a1a
+  style C1 fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  style C2 fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  style C3 fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  style RUN fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style DROP fill:#fbdcd7,stroke:#9c2a20,color:#2b100c
+  </pre></div>
+  <p class="cap"><b>Topics are shared, not per-edge.</b> Every subscribed mover receives every trigger on its topic and decides by a <b>string comparison</b> on the payload’s <code>dataset</code> field. That <code>in</code> test is the only thing separating pipelines — not a queue, not a namespace, not a Deployment boundary.</p>
+
+  <div class="note bad">
+    <div class="h">The silent failure this creates</div>
+    <p>Declaring a transform <b>silently changes the ingest head’s behaviour</b>: its <code>from_id</code> becomes a cascade entry point, so arrivals on that table now publish a trigger — <b>even when no mover is bound to that declaration</b>. The trigger goes out, every mover compares the string, they all drop it as “another lane’s”, and the run is over. You get a counter tick and a debug log. <b>Nothing is red.</b></p>
+    <p>So a declaration alone does nothing useful, and is <em>not obviously inert</em>. Making it real still needs a chart edit and a <code>helm upgrade</code> — which is precisely the deploy-time step the declared record was invented to escape.</p>
+  </div>
+
+  <h3>Does it weld ingest, batch and the gate together?</h3>
+  <p>Mostly no, and the parts are more separable than you feared:</p>
+  <ul class="tight">
+    <li><b>Ingest works with zero declarations.</b> The head recognises the chart-configured bronze pair directly.</li>
+    <li><b>The cascade works with zero declarations.</b> Unset, the mover uses its Deployment’s own settings — and <b>no shipped mover row sets one</b>, so declarations are not in use in the deployed estate at all.</li>
+    <li><b>The gate is keyed by PROJECT, not by pipeline</b> — <code>gate_specs.py</code> says so in capitals. One spec per tenant, resolved on every stage write, falling back to chart settings when absent. That is the <em>opposite</em> policy from a transform, which refuses rather than falls back.</li>
+  </ul>
+  <p>So the welding is not ingest↔batch. It is <b>batch↔gate</b> (§9.4), plus the fact that a hop is a Deployment rather than a declaration (§9.5) — which is the one you have chosen to fix.</p>
+</section>
+
+<section id="dapr">
+  <h2>6 · What Dapr Workflow gives us — and why Ray, Kueue and CRDs don’t replace it</h2>
+  <p class="lede">The clearest way to see this: list what happens <em>around</em> the job, and ask who would do it otherwise.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart LR
+  T["trigger arrives<br/>at-least-once"] --> D
+  subgraph D["DAPR WORKFLOW owns this"]
+    A1["exactly-one submission<br/>deterministic instance id"]
+    A2["survive the pod dying<br/>resume on another replica"]
+    A3["wait hours without<br/>holding a queue ack"]
+    A4["retry the PUBLISH<br/>after the job succeeded"]
+    A5["hold a 72h human<br/>approval, racing a timer"]
+  end
+  D --> K
+  subgraph K["KUEUE owns this"]
+    Q["admit / queue / quota<br/>gang-schedule"]
+  end
+  K --> R
+  subgraph R["RAY owns this"]
+    X["run the job<br/>distribute the work"]
+  end
+  R --> P["next tier wakes"]
+
+  style A1 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style A2 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style A3 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style A4 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style A5 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style Q fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  style X fill:#dcefe3,stroke:#1f6b3f,color:#12241a
+  style T fill:#ececec,stroke:#666,color:#1a1a1a
+  style P fill:#ececec,stroke:#666,color:#1a1a1a
+  </pre></div>
+  <p class="cap"><b>Nothing in the blue box is covered by Ray, Kueue or a CRD.</b> They own admission and execution; Dapr Workflow owns everything between “a trigger arrived” and “the next tier woke up”.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Guarantee</th><th>What it survives</th><th>What breaks without it</th></tr></thead>
+    <tbody>
+      <tr><td>Exactly-one submission</td><td>The same trigger delivered twice (NATS is at-least-once)</td><td>Two Ray jobs write the same output table, concurrently.</td></tr>
+      <tr><td>Durable waiting</td><td>The mover pod being killed mid-wait</td><td>Nothing is watching the job. It succeeds and the next tier never wakes.</td></tr>
+      <tr><td>The ack is not held</td><td>A job outliving the queue’s redelivery window</td><td>The broker redelivers forever because the handler never returned.</td></tr>
+      <tr><td>Publish retry</td><td>The catalog being briefly unreachable <em>after</em> the job succeeded</td><td>Good data lands and the cascade stops, with nothing red.</td></tr>
+      <tr><td>72-hour approval</td><td>Days passing, pods restarting</td><td>You cannot have a human in the loop at all.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note ok">
+    <div class="h">The short answer</div>
+    <p><b>Ray runs the job. Kueue decides when it may run. A CRD says it should exist. Dapr Workflow is what makes the <em>waiting</em> survivable.</b> Those are four different problems, and the last one does not disappear when you solve the first three.</p>
+  </div>
+</section>
+
+<section id="primitives">
+  <h2>7 · Actors, KV, NATS, cron — when each is used, and why</h2>
+  <p class="lede">Scoped to the lakehouse plane, which is narrower than you might expect.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  subgraph BUS["NATS JetStream — every hop between services"]
+    E1["lineage.events.v1<br/>writes announced"]
+    E2["medallion.bronze / .silver / .media<br/>stage triggers"]
+    E3["table_published<br/>control"]
+  end
+  subgraph KVS["Dapr state store — NOT application data"]
+    K1["workflow history<br/>one row per checkpoint"]
+    K2["actor runtime<br/>required by the workflow engine"]
+  end
+  subgraph CRON["cron bindings — convergence work"]
+    C1["maintenance sweep"]
+    C2["maintenance reconcile"]
+    C3["lineage reconcile"]
+    C4["control relay"]
+    C5["NONE on the medallion"]
+  end
+  subgraph SEC["secrets"]
+    S1["OpenBao<br/>sole source, fail-closed"]
+  end
+  subgraph ACT["actors — NOT used here"]
+    A1["annotator: per-project, per-task"]
+    A2["notifications: per-subject inbox"]
+  end
+  PROD["producer"] --> E1
+  E1 --> PROD
+  PROD --> E2
+  E2 --> MOV["movers"]
+  MOV --> WF["Dapr Workflow"]
+  WF --> K1
+  K1 --- K2
+  CAT["catalog"] --> E3
+  E3 --> MOV
+  S1 --> MOV
+  S1 --> CAT
+
+  style E1 fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style E2 fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style E3 fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style K1 fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  style K2 fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  style C1 fill:#e6ece3,stroke:#4a6b3f,color:#14200f
+  style C2 fill:#e6ece3,stroke:#4a6b3f,color:#14200f
+  style C3 fill:#e6ece3,stroke:#4a6b3f,color:#14200f
+  style C4 fill:#e6ece3,stroke:#4a6b3f,color:#14200f
+  style C5 fill:#fbdcd7,stroke:#9c2a20,stroke-width:2px,color:#2b100c
+  style S1 fill:#ece3ef,stroke:#6b3c7b,color:#1e1226
+  style A1 fill:#ececec,stroke:#888,stroke-dasharray:4 3,color:#333
+  style A2 fill:#ececec,stroke:#888,stroke-dasharray:4 3,color:#333
+  style PROD fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style MOV fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style CAT fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style WF fill:#eaeef2,stroke:#5b6775,color:#16202b
+  </pre></div>
+  <p class="cap"><b>Grey dashed = exists in the estate but not in this plane.</b> The red box is the finding: four cron reconcilers converge other planes, and the medallion has none — which is why a missed hop is undetectable. Note the KV store holds <em>workflow history</em>, not business data; the lakehouse writes no application state to it.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Primitive</th><th>Used in the lakehouse?</th><th>Why / why not</th></tr></thead>
+    <tbody>
+      <tr><td>Actors</td><td><b>No</b> — none at all</td><td>Actors give you a turn-based lock per entity. The cascade has no per-entity mutable state to serialise, so there is nothing to be an actor. They are used only in the <b>annotator</b> (per-project, per-task) and <b>notifications</b> (per-subject inbox). <em>That is the right call.</em></td></tr>
+      <tr><td>State store (KV)</td><td><b>Yes — but not by the application</b></td><td>This is the subtle one. The lakehouse writes no application state to KV. But <b>Dapr’s workflow engine is itself built on the actor runtime</b>, and the actor runtime requires a state store the app-id can load. So the KV holds <em>workflow history</em>, not business data. Unscope it and the sidecar logs “actor hosting disabled” and every run 500s — a healthy-looking pod with a permanently broken feature.</td></tr>
+      <tr><td>Pub/sub (NATS JetStream)</td><td><b>Yes — it is the nervous system</b></td><td>Every hop between services is a topic, never a direct call: <code>lineage.events.v1</code> (writes announced), <code>medallion.bronze</code> / <code>medallion.silver</code> / <code>medallion.media</code> (triggers), <code>table_published</code> (control). Durable and replayable, so a mover can be down when data lands and still process it when it returns.</td></tr>
+      <tr><td>Bindings (cron)</td><td><b>Yes — five of them</b></td><td>Maintenance sweep, maintenance reconcile, lineage reconcile, notifications reconcile, job prune. All are <b>convergence</b> work — idempotent, self-healing, late-is-free — which is the textbook case for a reconcile loop rather than a scheduler. <b>Zero on the medallion</b>, which is §9’s biggest finding.</td></tr>
+      <tr><td>Secrets</td><td><b>Yes</b></td><td>OpenBao is the sole source, fail-closed, no env fallback. The Ray pods have no sidecar, so their credential is injected by the submitting service — which fetches it from the store first.</td></tr>
+      <tr><td>Workflow</td><td><b>Yes</b> — 5 of them</td><td>See §6.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="target2">
+  <h2>8 · Where Dagster, Spark and Kueue would live</h2>
+  <p class="lede">Same picture, with the alternatives placed. The point of drawing it is to show they occupy <em>different</em> slots — they are not competing for one.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  subgraph L1["DECLARE — what should exist (GitOps)"]
+    CR["Transform CR in git<br/>from_id, to_id, task, params"]
+    DAG["Dagster / Airflow<br/>WOULD LIVE HERE<br/>(asset graph + UI)"]
+  end
+  subgraph L2["ORCHESTRATE — how a run proceeds durably"]
+    DW["Dapr Workflow<br/>submit, wait, publish, approve"]
+  end
+  subgraph L3["ADMIT — may it run now?"]
+    KU["Kueue<br/>quota, gang scheduling"]
+  end
+  subgraph L4["EXECUTE — run it"]
+    RJ["RayJob CR"] --> KR["KubeRay"]
+    SP["SparkApplication CR<br/>WOULD LIVE HERE"]
+  end
+  ST[("Lance on S3")]
+  CR --> DW
+  DAG -.->|"alternative entry"| DW
+  DW --> KU
+  KU --> RJ
+  KU -.-> SP
+  KR --> ST
+  SP -.-> ST
+
+  style CR fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style DAG fill:#e8e2f0,stroke:#553c7b,stroke-dasharray:5 3,color:#1e1630
+  style DW fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style KU fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  style RJ fill:#fbe4dc,stroke:#a4501f,stroke-width:2px,color:#2b1409
+  style KR fill:#fbe4dc,stroke:#a4501f,color:#2b1409
+  style SP fill:#e8e2f0,stroke:#553c7b,stroke-dasharray:5 3,color:#1e1630
+  style ST fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  </pre></div>
+  <p class="cap"><b>Purple dashed = would be added, not replacing anything.</b> Dagster sits at the <em>declaration</em> layer and would give you an asset graph and a UI — it does not replace Dapr Workflow, which sits a layer below it. Spark sits beside RayJob as a second executor. <b>Kueue is already in the chart and currently sees nothing</b>, because jobs are submitted through Ray’s REST API, which creates no custom resource for Kueue to admit.</p>
+</section>
+
+<section id="cr">
+  <h2>9 · The cascade as a custom resource — what that actually means</h2>
+  <p class="lede">You asked what “declare the cascade in a CR” means. Here it is concretely, because the difference is not cosmetic: today <b>the cascade exists nowhere as an object</b>. It is an emergent property of three Deployments’ environment variables plus a string comparison.</p>
+
+  <h3>Today: the cascade is implicit</h3>
+  <p>There is no file, no record and no API that says “bronze flows to silver flows to gold”. To learn the shape you must read three Deployments’ env vars and infer it:</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart LR
+  subgraph D1["Deployment: bronze-to-silver"]
+    E1["SUB_TOPIC=medallion.bronze<br/>PUB_TOPIC=medallion.silver<br/>FROM=bronze TO=silver"]
+  end
+  subgraph D2["Deployment: silver-to-gold"]
+    E2["SUB_TOPIC=medallion.silver<br/>PUB_TOPIC= (empty=terminal)<br/>FROM=silver TO=gold"]
+  end
+  subgraph D3["Deployment: media-to-silver"]
+    E3["SUB_TOPIC=medallion.media<br/>PUB_TOPIC= (empty)<br/>FROM=bronze-media TO=silver-media"]
+  end
+  E1 -.->|"the edge exists ONLY because<br/>these two strings happen to match"| E2
+  style E1 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style E2 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style E3 fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  </pre></div>
+  <p class="cap"><b>The edge bronze→silver→gold is not declared anywhere.</b> It exists because one Deployment’s <code>PUB_TOPIC</code> equals another’s <code>SUB_TOPIC</code>. Nothing validates that. Mistype one and the chain silently ends — no error, no red, just a tier that never fills.</p>
+
+  <h3>Proposed: the cascade is an object you can read</h3>
+  <p>Each hop becomes a <code>Transform</code> custom resource in git. The graph is then explicit, diffable, reviewable, and <code>kubectl get transforms</code> shows the whole cascade:</p>
+
+<pre class="code" style="background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--ok);border-radius:4px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;box-shadow:var(--sh)"><span style="color:var(--ink3)"># transforms/bronze-to-silver.yaml — in git, synced by ArgoCD</span>
+apiVersion: rask.io/v1
+kind: Transform
+metadata:
+  name: bronze-to-silver
+spec:
+  project: acme
+  from: acme-bronze$events      <span style="color:var(--ink3)"># the EDGE, declared</span>
+  to:   acme-silver$features
+  task: stage-transform         <span style="color:var(--ink3)"># a registered task key, NOT a Ray path</span>
+  cardinality: one_to_one
+  params:
+    threshold: "0.8"
+  gate:                         <span style="color:var(--ink3"># per-hop, not per-tenant</span>
+    structural: required        <span style="color:var(--ink3"># rows exist, blobs resolve — never optional</span>
+    policy: none                <span style="color:var(--ink3"># THIS is how you run batch with no gate</span>
+  executor:
+    kind: RayJob                <span style="color:var(--ink3"># or SparkApplication later</span>
+    queue: acme-batch           <span style="color:var(--ink3"># Kueue admits it</span>
+</pre>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  subgraph GIT["git — the desired state"]
+    T1["Transform<br/>bronze to silver"]
+    T2["Transform<br/>silver to gold"]
+    T3["Transform<br/>media to silver"]
+  end
+  ARGO["ArgoCD syncs"]
+  subgraph CLU["cluster"]
+    CTRL["controller<br/>reconciles CR to catalog record"]
+    RUN["ONE generic runner<br/>executes any declared transform"]
+    WF["Dapr Workflow<br/>per run"]
+    RJ["RayJob CR"]
+    KU["Kueue admits"]
+  end
+  T1 --> ARGO
+  T2 --> ARGO
+  T3 --> ARGO
+  ARGO --> CTRL
+  CTRL --> RUN
+  RUN --> WF
+  WF --> RJ
+  RJ --> KU
+
+  style T1 fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style T2 fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style T3 fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style ARGO fill:#e8e2f0,stroke:#553c7b,color:#1e1630
+  style CTRL fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style RUN fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style WF fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style RJ fill:#fbe4dc,stroke:#a4501f,stroke-width:2px,color:#2b1409
+  style KU fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  </pre></div>
+  <p class="cap"><b>Three Deployments become one runner plus three declarations.</b> That is the change you picked. Adding a hop becomes a git commit instead of a chart edit plus two new topics plus a rollout.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th></th><th>Today</th><th>With a Transform CR</th></tr></thead>
+    <tbody>
+      <tr><td>Where the cascade shape lives</td><td>Nowhere — inferred from env vars</td><td>In git, as objects</td></tr>
+      <tr><td>Add a hop</td><td>New Deployment + 2 topics + chart edit + rollout</td><td>One YAML file, one commit</td></tr>
+      <tr><td>A broken edge</td><td>Silent — the chain just ends</td><td>The controller can refuse a <code>from</code> nothing produces</td></tr>
+      <tr><td>Run without a gate</td><td>Impossible — publish always asserts</td><td><code>gate.policy: none</code>, structural checks kept</td></tr>
+      <tr><td>Kueue</td><td>Sees nothing</td><td>Admits every run</td></tr>
+      <tr><td>Second engine</td><td>Cannot be declared</td><td><code>executor.kind: SparkApplication</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note warn">
+    <div class="h">One thing this does not change</div>
+    <p>The CR declares that a hop <b>should exist</b>. It does not run it. When bronze actually receives data, something still has to submit a job, wait for it without holding a queue ack, retry the publish, and wake the next tier. <b>That is Dapr Workflow’s job and it stays</b> — the CR replaces the chart, not the orchestrator.</p>
+  </div>
+</section>
+
+<section id="smells">
+  <h2>10 · What looks wrong</h2>
+  <p class="lede">Ranked by how much damage each can do.</p>
+
+  <div class="note bad">
+    <div class="h">1 · The output contract is unwritten — and is already being violated</div>
+    <p>Twelve obligations a job must satisfy (governance columns, provenance carry-forward, cardinality, stable row ids, delta semantics…) exist <b>only as control flow inside one Python file</b>. The platform verifies three of them after the write. Nothing anywhere asserts a published tier carries <code>stage</code>, <code>lineage</code>, or a non-null <code>source_rowid</code>.</p>
+    <p>And this is not theoretical: <code>runners/dummy</code> is a declarable, baked, <em>accepted</em> lane whose output has no <code>stage</code> column, no <code>lineage</code> column, an <code>int64</code> <code>source_rowid</code> where the platform mints <code>uint64</code>, and fabricated parents. Nothing is red.</p>
+  </div>
+
+  <div class="note bad">
+    <div class="h">2 · The governance door knows what Ray is</div>
+    <p>The allowlist — the literal string <code>/home/ray/jobs/</code> and three filenames — lives in the <b>shared platform library</b>, and the <b>catalog</b> enforces it when a transform is declared. The word “Ray” is in the catalog’s published OpenAPI and regenerated into the TypeScript client. A Spark lane cannot be declared. Meanwhile the compute zone carries a comment saying <em>“A TRANSFORM IS NOT A RAY JOB”</em> — which the backend falsifies.</p>
+  </div>
+
+  <div class="note bad">
+    <div class="h">3 · The cascade is forward-only and unrepairable</div>
+    <p><b>Zero cron reconcilers on the medallion</b>, while five exist elsewhere. The operator surface is list, inspect, terminate — <b>there is no re-run verb</b>. The incremental machinery exists (the delta lane, addressed by Lance version, verified running), but no door triggers it. So when a hop is missed, nothing notices and nothing can re-drive it.</p>
+  </div>
+
+  <div class="note warn">
+    <div class="h">4 · Two quality gates that disagree, one of them dead</div>
+    <p><code>MEDALLION_QUALITY_ENABLED</code> exists in code, defaults to <code>false</code>, and <b>renders nowhere in the chart</b> — dead config. Meanwhile the catalog’s publish door asserts <b>unconditionally, with no toggle</b>. So the gate you can configure is off, and the gate you cannot configure is mandatory.</p>
+    <p><b>You asked to run batch without a gate. Today you cannot.</b> The honest fix is to split them: <code>row_count_positive</code> and <code>blob_resolves</code> are <em>structural integrity</em> — publishing an empty table or one with dangling blob pointers is a bug, not a policy — so they stay mandatory. <code>not_null</code> on a caller-named column is <em>policy</em>, and that becomes opt-in per declaration.</p>
+  </div>
+
+  <div class="note warn">
+    <div class="h">5 · A hop is a Deployment, not a declaration</div>
+    <p>Adding a processing step means a new Deployment, two new topics and a chart edit. You have chosen the fix — <b>one generic runner executing N declarations</b> — which is also what makes RayJob CRs and Kueue land naturally.</p>
+  </div>
+
+  <div class="note warn">
+    <div class="h">6 · Kueue is wired and structurally bypassed</div>
+    <p>The queue templates exist and are gated on a flag. Every job goes through Ray’s Jobs REST API, which creates no custom resource — so Kueue has nothing to admit, queue or preempt. It is not misconfigured; it is unreachable.</p>
+  </div>
+
+  <div class="note">
+    <div class="h">7 · Smaller, but real</div>
+    <p><code>use_ray</code> is a <b>boolean</b> where an engine selector belongs — the estate already runs two executors and the governed record can only describe one. Ray’s status vocabulary (<code>SUCCEEDED</code>/<code>FAILED</code>/<code>STOPPED</code>) is copied into the workflow body. Three <code>ray_*</code> fields ride the published trigger, which makes the engine’s name part of a <em>wire contract</em>. And ~1,367 orphan rows sit in the workflow state store with no TTL and no alert.</p>
+  </div>
+</section>
+
+
+
+<section id="dataflow">
+  <h2>11 · Where the bytes actually move</h2>
+  <p class="lede">Every diagram so far shows control. This one shows <b>data</b> — who reads and writes object storage, and who only ever passes pointers.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart LR
+  SRC["source data<br/>anywhere"]
+  subgraph S3["object storage — the ONLY place bytes live"]
+    B[("bronze<br/>Lance")]
+    SI[("silver<br/>Lance")]
+    G[("gold<br/>Lance")]
+    OB[("outbox prefixes<br/>staged events")]
+  end
+  ING["ingest workers"]
+  RAY["Ray job"]
+  CAT["catalog"]
+  MNT["maintenance"]
+  LIN["lineage / AGE"]
+  MOV["mover"]
+
+  SRC -->|"bytes"| ING
+  ING -->|"writes fragments"| B
+  RAY -->|"reads"| B
+  RAY -->|"writes"| SI
+  RAY -->|"reads"| SI
+  RAY -->|"writes"| G
+  MNT -->|"compacts, reindexes, prunes IN PROCESS"| B
+  MNT --> SI
+  MNT --> G
+  CAT -->|"commits, tags, vends locations"| B
+  CAT --> SI
+  CAT --> G
+  CAT -->|"stages on bus failure"| OB
+  OB -->|"relay drains"| LIN
+  MOV -.->|"pointers + status only<br/>NEVER row bytes"| RAY
+  CAT -.->|"metadata only"| LIN
+
+  style B fill:#f0dcc4,stroke:#96591f,stroke-width:2px,color:#2b1707
+  style SI fill:#dfe4ea,stroke:#5d6b7a,stroke-width:2px,color:#141a20
+  style G fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  style OB fill:#ece3ef,stroke:#6b3c7b,color:#1e1226
+  style RAY fill:#fbe4dc,stroke:#a4501f,stroke-width:2px,color:#2b1409
+  style MNT fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style CAT fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style ING fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style MOV fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style LIN fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style SRC fill:#ececec,stroke:#888,color:#333
+  </pre></div>
+  <p class="cap"><b>Only three things touch row bytes: ingest, the Ray job, and maintenance.</b> The mover — the thing people assume is “the pipeline” — never sees a row. It passes URIs and reads a status. That is why swapping the compute engine is a smaller change than it looks: the engine is the only component on the data path that would move.</p>
+
+  <div class="note ok">
+    <div class="h">Why this matters for decoupling</div>
+    <p>Maintenance reads and writes the same tables the Ray job does, <b>in its own process</b>. So the estate already proves the point: <b>two different execution models operate on the same governed tables today</b>, and the tables do not care. The lakehouse is genuinely storage-and-governance; what is coupled is the <em>submission</em> path, not the data path.</p>
+  </div>
+</section>
+
+<section id="target">
+  <h2>12 · The target state, in one picture</h2>
+  <p class="lede">Everything above says what is wrong piecemeal. This is what it looks like when it is right — with the changes marked.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  subgraph GIT["git — desired state"]
+    TR["Transform CRs<br/>from, to, task, gate, executor"]
+  end
+  subgraph GOV["governance — knows NO engine"]
+    CAT["catalog<br/>hierarchy, locations, credentials"]
+    GATE["publish gate<br/>structural + declared policy"]
+    REG["task registry<br/>published BY the compute plane"]
+    LIN["lineage to AGE"]
+  end
+  subgraph ORCH["orchestration"]
+    RUN["ONE generic runner"]
+    WF["Dapr Workflow<br/>submit, wait, publish, approve"]
+    RECON["reconciler + rerun door<br/>NEW"]
+  end
+  subgraph EXEC["execution — swappable"]
+    KU["Kueue admits"]
+    RJ["RayJob CR"]
+    SP["SparkApplication CR<br/>later"]
+  end
+  ST[("Lance on S3")]
+
+  TR --> CAT
+  CAT --> REG
+  REG -.->|"catalog only checks membership"| CAT
+  CAT --> RUN
+  RUN --> WF
+  WF --> KU
+  KU --> RJ
+  KU -.-> SP
+  RJ --> ST
+  SP -.-> ST
+  ST --> GATE
+  GATE --> CAT
+  CAT --> LIN
+  RECON -->|"detects a missed hop"| RUN
+
+  style TR fill:#dcefe3,stroke:#1f6b3f,stroke-width:3px,color:#12241a
+  style REG fill:#dcefe3,stroke:#1f6b3f,stroke-width:3px,color:#12241a
+  style RECON fill:#dcefe3,stroke:#1f6b3f,stroke-width:3px,color:#12241a
+  style RUN fill:#dcefe3,stroke:#1f6b3f,stroke-width:3px,color:#12241a
+  style CAT fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style GATE fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style LIN fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style WF fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style KU fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  style RJ fill:#fbe4dc,stroke:#a4501f,stroke-width:2px,color:#2b1409
+  style SP fill:#ece3ef,stroke:#6b3c7b,stroke-dasharray:5 3,color:#1e1226
+  style ST fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  </pre></div>
+  <p class="cap"><b>Thick green = the four things that change.</b> Everything else stays exactly as it is. Note what is <em>absent</em>: no second control plane, no Argo, no Airflow, no Dagster, no Temporal. The catalog no longer knows what Ray is — it checks membership in a registry the compute plane publishes.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th></th><th>Today</th><th>Target</th></tr></thead>
+    <tbody>
+      <tr><td>Cascade shape</td><td>Inferred from 3 Deployments' env vars</td><td>Objects in git</td></tr>
+      <tr><td>Hops</td><td>3 Deployments</td><td>1 runner + N declarations</td></tr>
+      <tr><td>Catalog knows Ray?</td><td>Yes — a hardcoded path + 3 filenames</td><td>No — membership in a published registry</td></tr>
+      <tr><td>Kueue</td><td>Wired, sees nothing</td><td>Admits every run</td></tr>
+      <tr><td>Second engine</td><td>Cannot be declared</td><td><code>executor.kind</code></td></tr>
+      <tr><td>Missed hop</td><td>Undetectable, unrepairable</td><td>Reconciler + rerun door</td></tr>
+      <tr><td>Output contract</td><td>Control flow in one file; already violated</td><td>Checked; a violation cannot publish</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="promotion">
+  <h2>13 · The one flow nobody else can run: human promotion</h2>
+  <p class="lede">Worth drawing on its own, because it is the single strongest argument against swapping the orchestrator.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+sequenceDiagram
+  autonumber
+  participant J as Job finishes
+  participant G as Quality gate
+  participant W as Dapr Workflow
+  participant H as A human
+  participant N as Next tier
+
+  J->>G: here is the written version
+  G->>G: rows exist? key not null? blobs resolve?
+  alt clean
+    G-->>N: publish, wake the next tier
+  else inside the review band
+    G->>W: start promotion_review
+    W->>H: this needs a decision
+    Note over W: create_timer(72h) RACING<br/>wait_for_external_event
+    alt a human answers in time
+      H-->>W: approve or reject
+      W-->>N: publish, or stop
+    else nobody answers
+      W-->>W: timer wins, run expires
+    end
+  end
+  </pre></div>
+  <p class="cap"><b>Steps 8–12 are the part no data orchestrator does well.</b> A 72-hour wait that survives pod restarts, holds no queue ack, races a durable timer, and resumes on a different replica. Airflow sensors poll. Argo suspend nodes park a pod-shaped object. Dapr Workflow and Temporal are the two things that hold this natively — which is why the choice is between <em>those two</em>, not between Dapr and Dagster.</p>
+</section>
+
+<section id="maint">
+  <h2>14 · Maintenance on Ray — the correction</h2>
+  <p class="lede">You believed compaction, reindex and pruning could be configured to run on lance-ray in the Ray cluster. They cannot, and the reason is worth knowing.</p>
+
+  <div class="note bad">
+    <div class="h">Two facts, both checked</div>
+    <p><b>There is no Ray path in <code>services/maintenance</code> at all.</b> No import, no setting, no branch. Compaction, <code>optimize_indices</code> and <code>cleanup_old_versions</code> run <b>in-process on pylance</b>, one ordered pass per dataset, on a cron binding. <code>scripts/ray_lance_job.py</code> is a standalone demo that proves the distributed Lance path works; it is not wired to maintenance and nothing calls it from there.</p>
+    <p><b>And the distributed compaction is broken upstream.</b> Measured on lance-ray 0.5.0 + pylance 10.0.0: <code>lance_ray.compact_files</code> reports <code>fragments 4->4</code> — it does not compact. Native <code>dataset.optimize.compact_files</code> on the identical shape, same options, reduces <code>4->2</code>. So it is not misuse and it is not Lance. It is pinned with a <em>strict</em> xfail, so the suite will go red the day upstream fixes it.</p>
+  </div>
+
+  <p><b>Is in-process the wrong answer?</b> Not today, and this is the one place the estate is more decoupled than you assumed — maintenance is the <em>most</em> engine-agnostic component in the system. But it will not scale forever: a single pod compacting every dataset in every warehouse is bounded by one process. When it stops keeping up, the fix is to give maintenance the <b>same executor contract</b> the cascade gets — “compact this dataset” becomes a work order any engine can run — rather than importing <code>lance_ray</code> into the sweep. That way the scaling answer and the decoupling answer are the same change.</p>
+</section>
+
+<section id="tooling">
+  <h2>15 · Are we using the right tooling?</h2>
+  <p class="lede">You asked directly, so here is a direct answer, tool by tool, with what each would actually buy and cost.</p>
+
+  <div class="big">We are not solving too much with the wrong tooling. We are solving the right things on top of an unwritten contract — and no orchestrator fixes that.</div>
+
+  <div class="tw"><table>
+    <thead><tr><th>Tool</th><th>What it would genuinely buy</th><th>What it costs</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Temporal</td><td><b>The one real gap: a versioning seam.</b> Plus instance list/query and a mature UI. It is the like-for-like peer of what we run.</td><td>A second stateful control plane with its own cluster and database.</td><td><b>The only credible upgrade — but not yet.</b> Revisit when replay versioning causes a production incident rather than deploy-time caution.</td></tr>
+      <tr><td>Dagster</td><td>An asset graph and backfill ergonomics. Asset-oriented thinking genuinely suits a lakehouse.</td><td>Own control plane + DB; configured in Python, not CRs; and its asset model would <b>duplicate the catalog + OpenLineage</b> — two lineage systems disagreeing is worse than one.</td><td><b>No.</b> The one thing it adds we could add ourselves far cheaper.</td></tr>
+      <tr><td>Prefect</td><td>Nice Python ergonomics, dynamic flows.</td><td>Own server + DB; weaker durability semantics than what we have; no good answer for a 72-hour human wait.</td><td><b>No</b> — a downgrade in the dimension that matters here.</td></tr>
+      <tr><td>Airflow</td><td>Ubiquity, a big operator ecosystem.</td><td>Scheduler-first and date-partition-shaped. This lakehouse is <b>version-addressed</b>, so its signature feature — backfill a date range — does not even map.</td><td><b>No.</b> Wrong model, not merely heavy.</td></tr>
+      <tr><td>Metaflow</td><td>Data-scientist ergonomics for ML pipelines.</td><td>Not an infrastructure orchestrator; no multi-tenant governance story; no event-driven reaction.</td><td><b>No.</b> Wrong shape entirely.</td></tr>
+      <tr><td>Argo Workflows</td><td>CR-native and GitOps-shaped, no extra database — it uses Kubernetes as its store. Closest to your stated direction.</td><td>Container-per-step; suspend nodes are clumsy for long human waits; and we would <b>still</b> need Dapr Workflow for ingest and promotion, so it becomes a second orchestrator, not a replacement.</td><td><b>Not as an orchestrator.</b> But its <em>idea</em> — the run is a cluster object — is exactly right, and we get that from RayJob CRs without adopting Argo.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Why the answer is “stay”</h3>
+  <p>The estate’s orchestration need is unusual, and naming it precisely is what settles the question. It is <b>not</b> “run a DAG on a schedule”. It is:</p>
+  <ul class="tight">
+    <li>react to <b>data arriving</b>, not to a clock;</li>
+    <li>wait on external compute for hours <b>without holding a queue ack</b>;</li>
+    <li>turn <b>at-least-once</b> delivery into <b>exactly-one</b> submission;</li>
+    <li>hold a <b>72-hour human approval</b> racing a timer;</li>
+    <li>and do all of it inside a multi-tenant governance model.</li>
+  </ul>
+  <p>That is a <b>workflow engine</b> need, not a <b>data orchestrator</b> need. Dagster, Prefect, Airflow and Metaflow are data orchestrators. Temporal and Dapr Workflow are workflow engines. <b>We are in the right category</b>, running the option that does not require a second control plane.</p>
+
+  <div class="note ok">
+    <div class="h">The honest bottom line</div>
+    <p>Swapping the orchestrator today would put a better UI on top of the same three problems: <b>the output contract is unwritten, the cascade is not an object, and there is no way to re-drive a hop.</b> Fix those and the tooling question mostly dissolves — and if it does not, Temporal is the answer, not Dagster.</p>
+  </div>
+</section>
+
+<section id="next">
+  <h2>16 · What to do now</h2>
+  <p class="lede">Ordered so each step is independently landable and independently valuable. Steps 1–2 are prerequisites: do not start 3 before them.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>#</th><th>Do</th><th>Why it is first</th><th>Proof it worked</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><b>Write the output contract</b> — what a conforming transform must produce, as a checked structure rather than control flow in one file. <b>Provenance mandatory (Decision 1).</b></td><td>Everything else assumes it. And it is <b>already being violated</b> by an accepted lane, silently. <code>TIER_COLUMNS</code> names the contract and its only real importer is a test — in the job itself the name appears only inside a comment.</td><td><code>runners/dummy</code> is refused, or made to conform, and a test proves a non-conforming output cannot publish.</td></tr>
+      <tr><td>2</td><td><b>Make the existing second executor conform.</b></td><td>The cheapest possible proof the contract is real — the second engine already exists behind <code>use_ray</code>.</td><td>Both executors produce byte-identical governance columns for the same input.</td></tr>
+      <tr><td>3</td><td><b>Submit as a <code>RayJob</code> CR</b> instead of the Jobs REST API.</td><td>Runs become cluster objects, and it is the <b>only</b> thing that makes Kueue reachable.</td><td><code>kubectl get rayjobs</code> lists a run; a Kueue queue shows it admitted.</td></tr>
+      <tr><td>4</td><td><b>Turn Kueue on</b> — quota + gang scheduling.</td><td>Impossible before 3.</td><td>A job waits in a queue when quota is exhausted, then runs.</td></tr>
+      <tr><td>5</td><td><b>Split the gate</b>: structural integrity mandatory, data-quality policy opt-in.</td><td>Your explicit requirement — “run batch without a quality gate” — is impossible today.</td><td>A declaration with <code>policy: none</code> publishes; an empty table still cannot.</td></tr>
+      <tr><td>6</td><td><b><code>Transform</code> CRD + one generic runner</b>, replacing three movers.</td><td>The shape you chose. Depends on 1–3 being settled.</td><td>Adding a hop is a git commit; <code>kubectl get transforms</code> shows the cascade.</td></tr>
+      <tr><td>7</td><td><b>A reconciler and a re-run verb.</b></td><td>The cascade is forward-only and unrepairable today.</td><td>A deliberately missed hop is detected and re-driven.</td></tr>
+      <tr><td>6b</td><td><b>Named-task validation</b> — the catalog stops seeing filesystem paths (Decision 2).</td><td>Removes the layering violation without building a registry.</td><td><code>grep -r "/home/ray/jobs" services/catalog packages/service-kit</code> is empty, and a bad task name still 422s.</td></tr>
+      <tr><td>8</td><td><b>Finish the “lane” rename.</b></td><td>Pure hygiene, no risk, and it stops six meanings sharing a word.</td><td>The word survives only where it means a code branch.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>The decisions — settled 2026-08-31</h3>
+  <p>The design session happened, and it was short. All three are answered; none of the work below is waiting on anything.</p>
+
+  <div class="note ok">
+    <div class="h">Decision 1 · Provenance is MANDATORY</div>
+    <p>A published tier must carry <code>source_rowid</code> that traces to <b>real parent rows</b>. Today one shipped lane writes <code>0, 1, 2, 3…</code> — the row’s <em>position</em> — so the column is present, queryable and false. That lane now either conforms or is refused.</p>
+    <p><b>What this obliges:</b> a transform that aggregates (100 rows → 1 summary) must declare how it maps parents, or declare “no provenance” <em>out loud</em>. The silent opt-out is what this ruling ends. The deciding case: after a corrupt ingest, <em>“which gold rows are contaminated?”</em> must not answer confidently and wrongly.</p>
+  </div>
+
+  <div class="note ok">
+    <div class="h">Decision 2 · Ray is forever — and the catalog still does not get to know that</div>
+    <p>Both extremes were rejected, correctly. <b>Not</b> a full task registry: that is a new moving part for an engine that is not changing. <b>Not</b> the status quo either: a governance service should not ship <code>/home/ray/jobs/</code> in its public API documentation.</p>
+    <p><b>The middle:</b> the catalog validates <code>task</code> against a <b>named list handed to it as config</b> — <code>stage-transform</code>, not a filesystem path. Declaration-time refusal survives untouched, which is the property actually worth keeping: a typo fails when you declare it, not at 3am as <code>exit 2</code> that looks like missing data.</p>
+  </div>
+
+  <div class="note ok">
+    <div class="h">Decision 3 · Withdrawn — I was wrong about the urgency</div>
+    <p>I raised this believing “run batch with no gate” was impossible. It is not: a delta run that finds nothing new <b>exits before publishing</b> (<code>rows_in == 0</code> → <code>delta_empty=1</code>), deliberately, so a redelivered event cannot fire a publication for data nobody added.</p>
+    <p>So only <code>not_null</code> on the key column becomes opt-in — <em>which</em> column is “the key” is policy. <code>row_count_positive</code> and <code>blob_resolves</code> stay mandatory: an empty table or a dangling blob pointer is a broken table, not a policy choice.</p>
+  </div>
+
+  <div class="note warn">
+    <div class="h">What must be true before implementing anything</div>
+    <p>Two items in the backlog are <b>blocked on you</b>, not on me: the OpenBao Kubernetes auth backend (ExternalSecrets cannot work without it), and a ruling on <code>dedicatedServiceCredentials</code> — today every mover holds <code>owner</code> on every warehouse and the control that bounds it is unrendered. Neither blocks steps 1–2, but both should be settled before more of the estate is built on top of the current posture.</p>
+  </div>
+</section>
+
+
+<section id="blobs">
+  <h2>17 · Where a million images physically live</h2>
+  <p class="lede">Large payloads — images, audio, video — do <b>not</b> live inside your Lance tables. Knowing where they do live explains most of what follows.</p>
+
+  <p>A blob column stores a small fixed-size <b>descriptor</b> per row — <code>{kind, position, size, blob_id, blob_uri}</code> — and the bytes go somewhere else. <b>Which</b> somewhere is decided by the payload’s size at write time, and there are four answers, not one:</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  W["a payload is written"] --> Q1{"how big?"}
+  Q1 -->|"under 64 KiB"| INL["INLINE<br/>inside the .lance data file<br/>with the ordinary columns"]
+  Q1 -->|"64 KiB to 4 MiB"| PACK["PACKED<br/>many payloads concatenated<br/>into ONE shared .blob sidecar"]
+  Q1 -->|"over 4 MiB"| DED["DEDICATED<br/>its own .blob file,<br/>one per payload"]
+  W --> EXT["EXTERNAL<br/>Blob.from_uri — bytes never enter<br/>the lakehouse, the column holds a URI"]
+
+  style INL fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style PACK fill:#dfe8f3,stroke:#1f4d7a,stroke-width:2px,color:#111c28
+  style DED fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  style EXT fill:#ece3ef,stroke:#6b3c7b,stroke-width:2px,color:#1e1226
+  style W fill:#ececec,stroke:#888,color:#333
+  style Q1 fill:#e6ece3,stroke:#4a6b3f,color:#14200f
+  </pre></div>
+  <p class="cap"><b>Why both packed and dedicated exist:</b> packed stops a million mid-sized images becoming a million S3 objects — listing cost, per-GET overhead, rate limits. Dedicated stops a 100 MB audio file being physically re-copied every time Lance compacts the fragment it shares; a dedicated file is <em>referenced</em> by compaction, not rewritten.</p>
+
+  <div class="note warn">
+    <div class="h">The thresholds are pinned, and the numbers everyone believed were wrong</div>
+    <p>64 KiB / 4 MiB, fixed in code. The estate previously believed Lance’s defaults were 16 KiB / 2 MiB and therefore believed every scanned page got its own file. Measured on pylance 10: a 20 KB payload landed <b>inline</b>; a 3 MB scanned page landed <b>packed</b>. They are pinned because <b>Lance stores these thresholds in the dataset schema</b> and refuses an append declaring different ones — so a library upgrade that retuned defaults would split an existing table’s writes from its reads with no code change anywhere.</p>
+  </div>
+
+  <h3>The sidecar, and the 29 MB it nearly deleted</h3>
+  <p>On object storage a table is a directory. The payload bytes sit in a directory <em>named after</em> the data file:</p>
+<pre class="code" style="background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--warn);border-radius:4px;padding:14px 18px;overflow-x:auto;font-size:12.5px;line-height:1.6;box-shadow:var(--sh)">s3://lance-catalog/bronze/pages.lance/
+  _versions/*.manifest        <span style="color:var(--ink3)">← which files are live</span>
+  data/&lt;stem&gt;.lance           <span style="color:var(--ink3)">← tabular columns + blob DESCRIPTORS</span>
+  data/&lt;stem&gt;/0100….blob      <span style="color:var(--ink3)">← THE SIDECAR: the actual bytes</span>
+  data/&lt;stem&gt;/1000….blob</pre>
+
+  <div class="note bad">
+    <div class="h">Lance’s own API does not name the sidecar</div>
+    <p><code>fragment.data_files()</code> returns the <code>.lance</code> file and <b>not</b> the sidecar directory. The orphan scan’s method is “list everything under the prefix, subtract what the manifests reference, report the rest as reclaimable” — so on its first live run it reported <b>29 MB of real page images as garbage</b>. Fixed by marking each data file’s sidecar directory as referenced too.</p>
+    <p><b>One honest residual:</b> a sidecar whose parent data file is referenced by no live version <em>is</em> still reported — and legitimately, because Lance’s own <code>cleanup_old_versions</code> reclaims the <code>.lance</code> and <b>leaves the sidecar behind</b>. That is a real reclamation gap in Lance, named rather than papered over.</p>
+  </div>
+
+  <h3>Three ways bytes get in — and one deliberate refusal</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Mode</th><th>What happens</th><th>Used where</th></tr></thead>
+    <tbody>
+      <tr><td><b>Managed copy</b></td><td>Lance takes the bytes and places them per the thresholds above.</td><td>The medallion’s media door and the ingest worker’s no-base branch.</td></tr>
+      <tr><td><b>External pointer</b></td><td>Nothing is copied; the column holds a URI. Measured on a 4 MB / 20-row corpus: <b>3,232 bytes against 4,002,901</b>.</td><td>The ingest worker’s with-base branch; the model registry.</td></tr>
+      <tr><td><b>Pointer carry-forward</b></td><td>A stage reads the upstream’s <em>descriptors</em> and rewrites them downstream, so silver and gold hold pointers rather than second and third copies.</td><td>The in-process executor.</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>The refusal:</b> the medallion’s media door <em>rejects</em> external pointers on purpose — “bronze must OWN its bytes; a pointer-only bronze dangles the moment the source bucket’s lifecycle deletes or migrates an object.” Note that external mode still <em>fetches</em> the bytes at ingest, because validation and the <code>sha256</code> fixity column read them. Fetching to hash is not copying into the lakehouse.</p>
+</section>
+
+<section id="flow11">
+  <h2>18 · Flow A — a million images to embeddings (1:1)</h2>
+  <p class="lede">You asked for this as a worked example. Here is what actually happens, and where it stops being real.</p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  subgraph DOORS["THREE doors, and they are not equals"]
+    DA["POST /produce<br/>synthetic tabular demo"]
+    DB["POST /ingest-media<br/>CAPPED: 10,000 objects / 1 GiB<br/>synchronous, NOT gateway-exposed"]
+    DC["POST /v1/ingests<br/>durable workflow, chunks of 10,000<br/>THE only viable door for a million"]
+  end
+  DC --> BR[("bronze<br/>NOT bronze-media")]
+  DB --> BM[("bronze-media")]
+  BR --> M1["bronze-to-silver mover"]
+  BM --> M2["media-to-silver mover<br/>pubTopic empty = TERMINAL"]
+  M1 --> SI[("silver")]
+  M2 --> SM[("silver-media<br/>never reaches gold")]
+  SI --> M3["silver-to-gold"] --> GO[("gold")]
+
+  style DA fill:#ececec,stroke:#888,color:#333
+  style DB fill:#fbdcd7,stroke:#9c2a20,stroke-width:2px,color:#2b100c
+  style DC fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style BR fill:#f0dcc4,stroke:#96591f,stroke-width:2px,color:#2b1707
+  style BM fill:#f0dcc4,stroke:#96591f,color:#2b1707
+  style SI fill:#dfe4ea,stroke:#5d6b7a,stroke-width:2px,color:#141a20
+  style SM fill:#dfe4ea,stroke:#5d6b7a,color:#141a20
+  style GO fill:#f2ead6,stroke:#8a6d13,stroke-width:2px,color:#2b2308
+  style M1 fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style M2 fill:#eaeef2,stroke:#5b6775,color:#16202b
+  style M3 fill:#eaeef2,stroke:#5b6775,color:#16202b
+  </pre></div>
+  <p class="cap"><b>The consequence nobody would guess from the names:</b> a million images ingested properly land in <code>bronze</code>, not <code>bronze-media</code> — so they do <b>not</b> flow down the “media lane”. They flow down the events lane, which does continue to gold. The media mover is reachable only from the small, capped, un-exposed door.</p>
+
+  <div class="note bad">
+    <div class="h">Five things that would bite a real million-image run</div>
+    <p><b>1 · The embedding is not an embedding.</b> It is 8 floats — the image’s greyscale luminance downsampled to 8 columns, computed by Pillow. Honestly labelled in its own docstring (“no ML-model dependency”), but the silver <code>embedding</code> column has no retrieval value, and nothing else in the estate produces an image embedding.</p>
+    <p><b>2 · The media transform is not distributed.</b> It runs on the Ray <em>driver</em> as a plain Python loop, because <code>lance_ray</code>’s write strips blob typing. A million images is one process doing a million decodes and pulling every full-size payload through one pod.</p>
+    <p><b>3 · Commit storm.</b> One Lance commit per 128-row batch — roughly <b>7,800 object-store commits</b> for a single stage over a million rows.</p>
+    <p><b>4 · The bytes are copied at every tier</b> on the Ray path. Bronze + silver + gold = three full copies. The in-process executor has a pointer-preserving branch; the Ray path — <em>the default</em> — has none.</p>
+    <p><b>5 · The 24-hour watch ceiling.</b> At even 30 ms per image, decode alone plausibly exceeds it, after which the watch stops and the stage never advances even if the job later succeeds.</p>
+  </div>
+</section>
+
+<section id="flow1n">
+  <h2>19 · Flow B — transcription to subtitle chunks (1:many)</h2>
+  <p class="lede">And here is the surprise: <b>1:1 and 1:N are not two code paths.</b></p>
+
+  <div class="dia"><pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
+flowchart TB
+  IN["the stage job starts"] --> L{"which lane?<br/>chosen by the DATA,<br/>NOT by cardinality"}
+  L -->|"upstream has a blob column"| LM["MEDIA lane<br/>driver-side pylance round-trip"]
+  L -->|"else, BASE_VERSION given"| LD["DELTA lane<br/>incremental merge"]
+  L -->|"else, no source_rowid yet"| LH["CASCADE-HEAD lane<br/>mints provenance"]
+  L -->|"otherwise"| LX["DISTRIBUTED lane<br/>Ray workers"]
+  LM --> WR["the write lands"]
+  LD --> WR
+  LH --> WR
+  LX --> WR
+  WR --> AC["_assert_stage_contract<br/>runs AFTER the write"]
+  AC --> C1["parentless rows? REFUSE<br/>always, BOTH cardinalities"]
+  AC --> C2["1:1 only —<br/>rows_out must equal rows_in"]
+
+  style L fill:#e6ece3,stroke:#4a6b3f,stroke-width:2px,color:#14200f
+  style LM fill:#f2ead6,stroke:#8a6d13,color:#2b2308
+  style LD fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style LH fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style LX fill:#dfe8f3,stroke:#1f4d7a,color:#111c28
+  style AC fill:#eaeef2,stroke:#5b6775,stroke-width:2px,color:#16202b
+  style C1 fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
+  style C2 fill:#ece3ef,stroke:#6b3c7b,color:#1e1226
+  style WR fill:#ececec,stroke:#888,color:#333
+  style IN fill:#ececec,stroke:#888,color:#333
+  </pre></div>
+  <p class="cap"><b>Cardinality selects no lane at all.</b> It is read once and threaded to a single check that runs <em>after</em> the write. <code>1:1</code> additionally asserts the row counts match; <code>1:N</code> skips that one assertion. <b>Nothing else in the machinery differs.</b></p>
+
+  <div class="note ok">
+    <div class="h">That asymmetry is a tightening, not a loosening</div>
+    <p>The check this replaced was a bare <code>rows_out == rows_in</code> on every lane. It forbade fan-out estate-wide, and it was never really about counting — it stood in for <em>“no row lands in a governed tier without a parent”</em>, which counting only approximates. A transform swapping two rows for two unrelated rows passed the old check. So counting was demoted to the lanes that claim it, and the real property was promoted to <b>unconditional</b>.</p>
+  </div>
+
+  <h3>How provenance survives 1 → 500</h3>
+  <p>All 500 subtitle chunks carry <b>the same</b> <code>source_rowid</code>: the stable row id of the one <em>bronze</em> audio row they descend from — not their immediate parent. That is the join key back to the bytes, and it is why a chunk can always be traced to the audio it came from however many hops later.</p>
+
+  <div class="note bad">
+    <div class="h">But no fan-out transform exists anywhere in the platform</div>
+    <p>The generic stage job’s only transform is the provenance stamp, which is 1:1 by construction. <b>Declaring <code>1:N</code> today disables an assertion and produces no extra rows.</b> The capability is declarable, wired end to end from the catalog to the job — and unreachable. Real fan-out has to come from a sealed runner.</p>
+    <p><b>Three more that would bite a real transcription lane:</b> (a) <b>an audio bronze can never take the delta lane</b> — the blob test precedes the delta test, so every audio hop full-rescans the whole tier however small the change, and <code>BASE_VERSION</code> is exported, forwarded and then ignored on exactly the lane multimodal data uses; (b) <b>the merge has no delete-by-source clause</b>, so a re-run producing 480 chunks where the last produced 500 leaves 20 orphans that carry a valid parent and therefore pass the contract silently; (c) <b>nothing mints unique child ids</b> — if 500 chunks inherit the parent’s id the merge join is many-to-many, and if they get new ids, no part of the platform generates them.</p>
+  </div>
+</section>
+
+<section id="decouple">
+  <h2>20 · Where to decouple — ranked</h2>
+  <p class="lede">You asked whether this is clear. It was not — the coupling was mixed in with unrelated defects. Here it is on its own, ranked, with the fix.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>#</th><th>The coupling</th><th>Why it is wrong</th><th>The fix</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><b>The catalog validates Ray filesystem paths</b></td><td>A governance service should not know a compute engine’s directory layout, and the word “Ray” reaches every API client through the published OpenAPI. A Spark lane cannot be <em>declared</em>.</td><td>Named tasks validated against a config list (Decision 2).</td></tr>
+      <tr><td>2</td><td><b>The output contract lives in one Python file</b></td><td>It is not a contract if only one implementation knows it. A second executor already violates it silently.</td><td>Step 1 — checked at publish.</td></tr>
+      <tr><td>3</td><td><b><code>use_ray</code> is a boolean</b></td><td>Two executors exist; the governed record can describe one. A boolean is a selector with room for exactly two engines forever.</td><td>An executor field on the declaration.</td></tr>
+      <tr><td>4</td><td><b>Ray’s status vocabulary is copied into the workflow</b></td><td><code>SUCCEEDED</code>/<code>FAILED</code>/<code>STOPPED</code> are Ray’s words living in generic orchestration.</td><td>Map at the adapter boundary.</td></tr>
+      <tr><td>5</td><td><b>Three <code>ray_*</code> fields ride the published trigger</b></td><td>This makes the engine’s name part of a <em>wire contract</em> — the most expensive kind to change, because it needs a compatibility window.</td><td>Rename generically, with a compat window.</td></tr>
+      <tr><td>6</td><td><b>Submission bypasses the CRD</b></td><td>Not engine coupling but the same shape: the run is not a cluster object, so Kueue cannot see it.</td><td>Step 3 — RayJob CR.</td></tr>
+      <tr><td>7</td><td><b>A hop is a Deployment</b></td><td>The cascade’s shape exists nowhere as an object; an edge is two matching strings.</td><td>Step 8 — Transform CR + one runner.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note">
+    <div class="h">What is NOT coupling, and should be left alone</div>
+    <p>Maintenance running in-process. The catalog owning locations and credentials. The gate running at publish. Lance, OpenFGA, OpenLineage and the Dapr building blocks. And <b>Dapr Workflow owning the wait</b> — that is not coupling to a compute engine, it is the thing that makes the compute engine swappable.</p>
+  </div>
+</section>
+
+<footer>rask · verified against the running estate and HEAD · 2026-08-31</footer>
+
+</div>
+
+

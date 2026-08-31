@@ -130,3 +130,18 @@ close live defects, 3 is the only thing that makes the already-deployed Kueue re
 `TODO.md` holds the frontend/IA backlog (zone routes, Projects views, Explorer and annotator work).
 It is a separate list with a separate owner conversation, deliberately excluded from this file so the
 platform backlog does not absorb it.
+
+---
+
+## 7. The living documents
+
+| Document | Where | What it is |
+| --- | --- | --- |
+| **The stack explainer** | `open_stack.html` (source, in this repo) → published at **https://claude.ai/code/artifact/0e2d5495-5c90-4704-954a-60cf7465634b** | 20 sections, 14 diagrams: what each component is for, how batch actually runs, where blob bytes physically live, the 1:1 and 1:many worked flows, and the ranked decoupling list. **The URL is stable** — republishing the source updates that same page. Iterate on the file, republish, the link never changes. |
+| **The decoupling spec** | `open_compute-decoupling.md` | The executor contract and the migration, in implementable detail. |
+| **This backlog** | `open_backlog.md` | What is outstanding and what is actually PROVEN. |
+
+The HTML source is version-controlled deliberately: it was authored in a session scratchpad, which does
+not survive the session, and a document we intend to keep iterating on cannot live somewhere that
+disappears. `open_`-prefixed, like every other working document here, so it is deleted when the work it
+describes has landed rather than drifting into `docs/` as settled architecture.
