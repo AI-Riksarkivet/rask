@@ -22,7 +22,7 @@ import re
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from typing import Any
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
@@ -54,6 +54,8 @@ from lance_namespace import (
     DropTableRequest,
     GetTableTagVersionRequest,
     GetTableTagVersionResponse,
+    InsertIntoTableRequest,
+    InsertIntoTableResponse,
     InvalidInputError,
     LanceNamespace,
     LanceNamespaceError,
@@ -62,6 +64,8 @@ from lance_namespace import (
     ListTableIndicesRequest,
     ListTableTagsRequest,
     ListTableTagsResponse,
+    MergeInsertIntoTableRequest,
+    MergeInsertIntoTableResponse,
     ServiceUnavailableError,
     TableAlreadyExistsError,
     TableColumnNotFoundError,
@@ -941,6 +945,66 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     return DeleteFromTableResponse(version=dataset.version)
 
 
+def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes) -> InsertIntoTableResponse:
+    """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES.
+
+    The worst of this family, because it is a WRITE that succeeds. Measured live 2026-08-31 against the
+    object store: `POST /insert?branch=work` answered 200, main gained the row and the branch did not —
+    and `?branch=ghost-never-made` also answered 200 and wrote to main a second time. A branch exists so
+    work can be staged without touching main; appending to main instead is the one outcome that makes
+    the feature worse than not having it, and nothing in the response says which dataset was written.
+
+    `LanceDataset.insert` is the same operation the upstream path performs, taken against a handle
+    opened on the branch — so this is the operation honoured, not a re-derivation of it. `mode` carries
+    the spec's own value through unchanged.
+    """
+    if req.branch is None:
+        return cast(InsertIntoTableResponse, native.call(ns, "insert_into_table", req, data))
+    dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
+    reader = pa.ipc.open_stream(pa.BufferReader(data))
+    before = dataset.count_rows()
+    # `mode` PASSES THROUGH UNTRANSFORMED, matching the main path exactly. Hand-lowering it here would
+    # make the branch door accept spellings the branchless one rejects, which is a second vocabulary in
+    # everything but name — and `test_constrained_values_are_enums.py` refuses that idiom on sight.
+    dataset.insert(reader, mode=req.mode or "append")
+    return InsertIntoTableResponse(version=dataset.version, num_inserted_rows=max(dataset.count_rows() - before, 0))
+
+
+def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeInsertIntoTableRequest, data: bytes) -> MergeInsertIntoTableResponse:
+    """Run the spec's merge-insert against the ref the request NAMES.
+
+    Same defect and same severity as `insert_into_table`: verified live, a merge naming `work` applied
+    its update to MAIN and left the branch untouched, reporting `num_updated_rows: 1` for a row it had
+    not changed on the dataset the caller asked about.
+
+    Every spec parameter has a `MergeInsertBuilder` method of the same name, so the mapping is
+    transcription rather than interpretation — which is exactly why this door is HONOURED where `query`
+    is refused. There is no vector search, no full-text query and no index-selection surface here to
+    re-derive and get subtly wrong.
+    """
+    if req.branch is None:
+        return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
+    dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
+    builder = dataset.merge_insert(req.on)
+    if req.when_matched_update_all:
+        builder.when_matched_update_all(req.when_matched_update_all_filt)
+    if req.when_not_matched_insert_all:
+        builder.when_not_matched_insert_all()
+    if req.when_not_matched_by_source_delete:
+        builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
+    if req.use_index is not None:
+        builder.use_index(req.use_index)
+    with _user_sql("invalid merge_insert filter"):
+        stats = builder.execute(pa.ipc.open_stream(pa.BufferReader(data)))
+    counts = stats if isinstance(stats, dict) else {}
+    return MergeInsertIntoTableResponse(
+        version=dataset.version,
+        num_updated_rows=int(counts.get("num_updated_rows", 0)),
+        num_inserted_rows=int(counts.get("num_inserted_rows", 0)),
+        num_deleted_rows=int(counts.get("num_deleted_rows", 0)),
+    )
+
+
 def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str) -> None:
     """Refuse a branch-scoped read the upstream implementation answers from MAIN.
 
@@ -1363,7 +1427,7 @@ def delete_branch(ns: LanceNamespace, so: StorageOptions, req: DeleteTableBranch
     return DeleteTableBranchResponse()
 
 
-def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | None, *, branch: str | None = None) -> None:
+def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | None, *, so: StorageOptions | None = None, branch: str | None = None) -> None:
     """Best-effort BTREE index on a merge key, built AFTER the first ``/merge_insert`` commits (§4).
 
     pylance's ``use_index=True`` default only helps *"if an index is available"*, and no automatic
@@ -1373,10 +1437,16 @@ def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | No
 
     LIST FIRST is required, not an optimization: pylance's ``create_scalar_index`` defaults
     ``replace=True``, so an unconditional build would full-scan and REBUILD the column on every upsert
-    — turning the fix into a regression. The build goes through the native op path
-    (``create_table_scalar_index``) because it is the only path that carries ``branch``.
-    NOTE: whether the dir backend honors ``branch`` on an index build is unverified at pylance 8.0.0
-    (branch surfaces are dataplane-backed) — flagged for the live pass; the param is forwarded either way.
+    — turning the fix into a regression.
+
+    A BRANCH BUILDS THROUGH THE DATASET HANDLE, and that is the answer to the note that stood here.
+    It said the dir backend's handling of ``branch`` on an index build was unverified at pylance 8.0.0
+    and the param was forwarded either way. The live pass it asked for happened 2026-08-31 and the
+    answer is NO: the native op accepts ``branch`` and builds on MAIN, so a branch-scoped
+    ``/merge_insert`` merged correctly into the branch and then committed an index version to main —
+    the write isolated, its accelerator not. Measured against pylance 8.0.0: the same build through
+    ``checkout_version((branch, None))`` leaves main at its version and puts the index on the branch.
+    Main keeps the native op, which is already correct.
 
     Best-effort by contract: an index-build failure or a CreateIndex commit conflict must never fail
     the write that already committed — any failure logs and returns.
@@ -1384,6 +1454,13 @@ def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | No
     if not on:
         return
     try:
+        if branch is not None and so is not None:
+            dataset = open_dataset(ns, so, segments, branch=branch)
+            if any(on in (index.get("fields") or []) for index in dataset.list_indices()):
+                return
+            dataset.create_scalar_index(on, index_type="BTREE")
+            log.info("merge_key_index_built", extra={"table": "/".join(segments), "column": on, "branch": branch})
+            return
         listing = native.call(ns, "list_table_indices", ListTableIndicesRequest(id=segments, branch=branch))
         for index in listing.indexes or []:
             if on in (index.columns or []):

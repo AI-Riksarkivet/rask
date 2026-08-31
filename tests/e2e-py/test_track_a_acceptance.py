@@ -566,10 +566,125 @@ def test_a_read_door_that_cannot_scope_to_a_branch_refuses_instead_of_answering(
     """
     name = f"refuse_{door}"
     estate.create(name, pa.table({"id": pa.array([0], pa.int64()), "text": pa.array(["a"], pa.string())}))
-    body = {"branch": "work", "vector": {"single_vector": [1.0, 0.0]}, "k": 10}
+    # Each door validates a different body, and an invalid one 422s BEFORE the guard is reached — which
+    # is a test that proves nothing while looking like it failed for the right reason. `explain_plan`
+    # takes a `query`; the other two take a vector search.
+    body: dict[str, Any] = {"branch": "work"}
+    search: dict[str, Any] = {"vector": {"single_vector": [1.0, 0.0]}, "k": 10}
+    body |= {"query": search} if door == "explain_plan" else search
     response = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/{door}", json=body, headers=_auth(), timeout=60)
     assert response.status_code == 501, (
         f"/{door} answered a branch-scoped read with {response.status_code} instead of 501 Unsupported: "
         f"{response.text[:200]}. Returning main's rows under the caller's branch name is worse than not "
         "supporting branches at all, because nothing in the response says which dataset was read."
+    )
+
+
+def _insert(estate: Estate, name: str, table: pa.Table, *, branch: str | None = None) -> requests.Response:
+    query = f"?branch={branch}" if branch else ""
+    return requests.post(
+        f"{CATALOG}/v1/table/{estate.table_id(name)}/insert{query}",
+        data=_arrow_ipc(table),
+        headers={**_auth(), "content-type": ARROW_STREAM},
+        timeout=120,
+    )
+
+
+def test_a_branch_scoped_insert_appends_to_the_branch_and_not_to_main(estate: Estate) -> None:
+    """The most damaging member of the family, because it is a WRITE that succeeds.
+
+    Measured live before the fix: `POST /insert?branch=work` answered 200, MAIN gained the row and the
+    branch did not. `insert` carries `branch` as a spec-0.9 query parameter (Arrow-IPC-body operations
+    cannot put it in the envelope), the route read it, filled it into the request — and the upstream
+    implementation disregarded it, so the row landed in the dataset the caller was deliberately staying
+    out of.
+
+    Both halves are asserted from the object store, because either alone is satisfiable by a broken
+    route: a write that reaches main passes "the branch has the row" if the branch inherits it, and a
+    write that reaches nothing passes "main is untouched".
+    """
+    uri = estate.create("insert_branch", _rowed(("a", "one"), ("b", "two")))
+    estate.branch("insert_branch", "work")
+    main_before = _open_main(uri)
+
+    response = _insert(estate, "insert_branch", _rowed(("z", "ONBRANCH")), branch="work")
+    assert response.status_code == 200, response.text
+
+    main_after = _open_main(uri)
+    assert main_after.version == main_before.version, "a branch-scoped insert committed a new version on MAIN"
+    assert _content(main_after) == {"a": "one", "b": "two"}, "the branch's row landed on MAIN"
+    assert _content(_open_branch(uri, "work")) == {"a": "one", "b": "two", "z": "ONBRANCH"}, "the branch-scoped insert did not reach the branch"
+
+
+def test_a_branch_scoped_merge_insert_applies_to_the_branch_and_not_to_main(estate: Estate) -> None:
+    """`merge_insert` with a branch must merge into the branch.
+
+    Verified live before the fix: a merge naming `work` applied its update to MAIN, left the branch
+    untouched, and reported `num_updated_rows: 1` — a truthful count of a change made to a dataset the
+    caller had not named.
+    """
+    uri = estate.create("merge_branch", _rowed(("a", "one"), ("b", "two")))
+    estate.branch("merge_branch", "work")
+    main_before = _open_main(uri)
+
+    response = requests.post(
+        f"{CATALOG}/v1/table/{estate.table_id('merge_branch')}/merge_insert?on=id&when_matched_update_all=true&branch=work",
+        data=_arrow_ipc(_rowed(("a", "MERGED"))),
+        headers={**_auth(), "content-type": ARROW_STREAM},
+        timeout=120,
+    )
+    assert response.status_code == 200, response.text
+
+    main_after = _open_main(uri)
+    assert main_after.version == main_before.version, "a branch-scoped merge_insert committed a new version on MAIN"
+    assert _content(main_after) == {"a": "one", "b": "two"}, "the branch's merge landed on MAIN"
+    assert _content(_open_branch(uri, "work")) == {"a": "MERGED", "b": "two"}, "the branch-scoped merge did not reach the branch"
+
+
+def test_a_write_to_a_branch_that_does_not_exist_is_refused(estate: Estate) -> None:
+    """A ref nobody created cannot be written to, and the alternative is not "nothing happens".
+
+    Before the fix this answered 200 and appended to MAIN — so a typo in a branch name silently
+    polluted the dataset the branch existed to protect. Spec error 22 `TableBranchNotFound`.
+    """
+    uri = estate.create("insert_ghost", _rowed(("a", "one")))
+    before = _open_main(uri).count_rows()
+
+    response = _insert(estate, "insert_ghost", _rowed(("z", "GHOST")), branch="no-such-branch-was-ever-created")
+
+    assert response.status_code == 404, f"inserting on a nonexistent branch answered {response.status_code}: {response.text[:200]}"
+    assert _open_main(uri).count_rows() == before, (
+        "a write to a nonexistent branch was absorbed by MAIN — the typo case, and the reason this is a 404 rather than a no-op"
+    )
+
+
+def test_the_merge_key_index_built_after_a_branch_merge_lands_on_the_branch(estate: Estate) -> None:
+    """The accelerator must follow the write, and it did not.
+
+    `/merge_insert` builds a BTREE on the merge key afterwards so later upserts stop full-scanning. That
+    build went through the native op, which accepts `branch` and builds on MAIN — so a branch-scoped
+    merge was isolated and then committed an index version to main immediately after. The source
+    carried a note saying this was unverified at pylance 8.0.0 and forwarded the parameter anyway; this
+    test is the verification, and the answer was no.
+
+    Asserted as MAIN's VERSION rather than as the index listing, because the version is what a
+    concurrent reader of main sees move. An index is a legitimate thing to build on main — what is not
+    legitimate is main advancing as a side effect of a write that named a branch.
+    """
+    uri = estate.create("index_branch", _rowed(("a", "one"), ("b", "two")))
+    estate.branch("index_branch", "work")
+    main_before = _open_main(uri)
+
+    response = requests.post(
+        f"{CATALOG}/v1/table/{estate.table_id('index_branch')}/merge_insert?on=id&when_matched_update_all=true&branch=work",
+        data=_arrow_ipc(_rowed(("a", "MERGED"))),
+        headers={**_auth(), "content-type": ARROW_STREAM},
+        timeout=120,
+    )
+    assert response.status_code == 200, response.text
+
+    assert _open_main(uri).version == main_before.version, (
+        "MAIN advanced a version after a branch-scoped merge_insert. The merge itself is isolated, so "
+        "this is the index build that follows it — the accelerator going to a dataset the caller did "
+        "not name."
     )

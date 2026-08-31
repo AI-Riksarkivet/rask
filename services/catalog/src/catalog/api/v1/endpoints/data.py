@@ -179,7 +179,7 @@ async def insert_into_table(
     # on the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
     data = await run_in_threadpool(dataplane.coerce_insert_arrow, ns, so, segments, data)
     req = InsertIntoTableRequest(id=segments, mode=mode, branch=branch)
-    response: InsertIntoTableResponse = await run_in_threadpool(native.call, ns, "insert_into_table", req, data)
+    response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data)
     # Insert's response carries only a transaction_id, not the Lance version it produced — the shared
     # trailer reads version + schema off ONE reopen (best-effort) so the WROTE edge records the real version.
     await lineage_deps.emit_measured_write(
@@ -261,7 +261,7 @@ async def merge_insert_into_table(
         use_index=use_index,
         branch=branch,
     )
-    response: MergeInsertIntoTableResponse = await run_in_threadpool(native.call, ns, "merge_insert_into_table", req, data)
+    response: MergeInsertIntoTableResponse = await run_in_threadpool(dataplane.merge_insert_into_table, ns, so, req, data)
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
     # PINNED at the version this merge produced so a concurrent writer can't smuggle in a later schema.
     await lineage_deps.emit_measured_write(
@@ -282,7 +282,7 @@ async def merge_insert_into_table(
     # exception reaches this response (the merge above already committed). use_index=False is the
     # caller's explicit opt-out of index acceleration → also skips the implicit build.
     if use_index is not False:
-        await run_in_threadpool(dataplane.ensure_merge_key_index, ns, segments, on, branch=branch)
+        await run_in_threadpool(dataplane.ensure_merge_key_index, ns, segments, on, so=so, branch=branch)
     return response
 
 
