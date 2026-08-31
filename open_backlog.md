@@ -268,6 +268,38 @@ class across the whole estate. Two confirmed and fixed already, both in code lan
   returned 200 and a plan, for a real branch and a never-created one alike. A guard covering one of two
   channels is worse than none — it is why the door looked settled.
 
+### THE SWEEP'S YIELD — six more doors, all found by driving
+
+| door | was | now |
+| --- | --- | --- |
+| `create_index`, `create_scalar_index` | 200; MAIN advanced a version and took the index, branch got none | 501 |
+| `explain_plan` (branch nested in `query`) | 200 + main's plan, ghost branch too | 501 (both channels) |
+| `describe` (`?branch=`, query channel) | 200 + main, ghost branch too | 400 (both channels) |
+| `describe` (`?version=9999`) | 200, byte-identical — every version number confirmed | 404 error 11 |
+| `stats` | `num_rows: 4` for a branch holding 1, ghost too | 501 |
+| `index/list`, `index/{n}/stats` | `[]` for a branch carrying a BTREE main lacks | 501 |
+
+**Three lessons the fixes encode, each of which cost a real mistake:**
+
+1. **A guard on one of two channels is worse than none** — it is why the door reads as settled. Both
+   `explain_plan` and `describe` had a correct refusal on one channel and nothing on the other. The
+   `describe` one even carried a comment stating exactly the right reason.
+2. **Not accepting a parameter is not refusing it.** `stats` and `index/list` declared no `branch` at
+   all, which read as safe; a caller who sent one got 200 and main's answer. They now DECLARE it in
+   order to refuse it — the smallest honest fix.
+3. **The line for serve-vs-refuse is the OPTION SURFACE, not the verb.** `ensure_merge_key_index`
+   builds one fixed BTREE shape and is served on the branch; the public index door carries a full-text
+   option surface where a silently-defaulted setting is the same quiet wrongness as the wrong dataset,
+   so it is refused. Same for `stats` and `index/list`: `FragmentStats.lengths` and an index's
+   `status`/`size_bytes` cannot be assembled honestly from a branch handle, and filling a required
+   field with a plausible value is the failure this sweep is about.
+
+### OPEN — serve, don't just refuse
+
+Everything refused 501 above is honest but incomplete. Named so a 501 does not read as finished:
+branch-scoped `query`/`explain_plan`/`analyze_plan`, the index CREATE doors, `stats`, `index/list`,
+`index/{name}/stats`. Each needs a faithful mapping and its own tests.
+
 ### OPEN — faithful branch-scoped `query`
 
 The 501 is honest, not complete. Serving a branch-scoped query properly means re-deriving vector
