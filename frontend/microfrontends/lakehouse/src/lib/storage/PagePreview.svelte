@@ -19,6 +19,16 @@
 	let detail = $state('');
 	let settled = $state(false);
 
+	// THREE-STATE, not boolean. `has_payload` is `true` (bytes are there), `false` (the harvest
+	// produced none) or `null` — which the viewer returns for a plain `large_binary` corpus, where
+	// answering the question at all would mean reading every blob to serve a metadata listing.
+	// `null` therefore means UNKNOWN, and the only correct move is to ATTEMPT the image and let
+	// `/api/page` settle it: treating unknown as absent disables every thumbnail on exactly the
+	// corpora that do have images.
+	function mayHavePayload(page: { has_payload?: boolean | null; has_image?: boolean | null }): boolean {
+		return (page.has_payload ?? page.has_image) !== false;
+	}
+
 	async function load(): Promise<void> {
 		settled = false;
 		const want = table;
@@ -27,11 +37,11 @@
 		settled = true;
 		if (res.ok) {
 			pages = res.data.pages;
-			// Land on the first page that actually has bytes — selecting a failed harvest by default
-			// would open the viewer on a broken image.
+			// Land on the first page that MIGHT have bytes — selecting a known-empty harvest by
+			// default would open the viewer on a broken image.
 			// `has_payload ?? has_image`: the viewer emits both for one release, and web pods roll
 			// separately from it — so during an upgrade this may see either name.
-			selected = pages.find((p) => (p.has_payload ?? p.has_image))?.id ?? null;
+			selected = pages.find((p) => mayHavePayload(p))?.id ?? null;
 			status = 200;
 			detail = '';
 		} else {
@@ -70,11 +80,11 @@
 					<button
 						class="thumb"
 						class:active={page.id === selected}
-						disabled={!(page.has_payload ?? page.has_image)}
+						disabled={!mayHavePayload(page)}
 						onclick={() => (selected = page.id)}
-						title={page.has_image ? `Page ${page.id}` : `Page ${page.id} — no image payload`}
+						title={mayHavePayload(page) ? `Page ${page.id}` : `Page ${page.id} — no image payload`}
 					>
-						{#if page.has_image}
+						{#if mayHavePayload(page)}
 							<img src={pageImageUrl(table, page.id)} alt="Page {page.id}" loading="lazy" />
 						{:else}
 							<span class="missing"><FileWarning size={14} /></span>
@@ -87,7 +97,7 @@
 
 		{#if current}
 			<figure>
-				{#if current.has_image}
+				{#if mayHavePayload(current)}
 					<img class="full" src={pageImageUrl(table, current.id)} alt="Page {current.id}" />
 				{:else}
 					<p class="err">This page has no image payload — the harvest produced none.</p>
