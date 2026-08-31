@@ -116,6 +116,7 @@ footer{margin-top:72px;padding-top:18px;border-top:1px solid var(--rule);font-fa
     <li><a href="#blobs">Where a million images live</a></li>
     <li><a href="#flow11">Flow A — images to embeddings (1:1)</a></li>
     <li><a href="#flow1n">Flow B — transcription (1:many)</a></li>
+    <li><a href="#whatislakehouse">What “the lakehouse” actually is</a></li>
     <li><a href="#decouple">Where to decouple — ranked</a></li>
     <li><a href="#layers">The five orchestration layers</a></li>
     <li><a href="#bootstrap">Could we bootstrap elsewhere?</a></li>
@@ -1054,6 +1055,32 @@ flowchart TB
     <p>The generic stage job’s only transform is the provenance stamp, which is 1:1 by construction. <b>Declaring <code>1:N</code> today disables an assertion and produces no extra rows.</b> The capability is declarable, wired end to end from the catalog to the job — and unreachable. Real fan-out has to come from a sealed runner.</p>
     <p><b>Three more that would bite a real transcription lane:</b> (a) <b>an audio bronze can never take the delta lane</b> — the blob test precedes the delta test, so every audio hop full-rescans the whole tier however small the change, and <code>BASE_VERSION</code> is exported, forwarded and then ignored on exactly the lane multimodal data uses; (b) <b>the merge has no delete-by-source clause</b>, so a re-run producing 480 chunks where the last produced 500 leaves 20 orphans that carry a valid parent and therefore pass the contract silently; (c) <b>nothing mints unique child ids</b> — if 500 chunks inherit the parent’s id the merge join is many-to-many, and if they get new ids, no part of the platform generates them.</p>
   </div>
+</section>
+
+<section id="whatislakehouse">
+  <h2>20a · What “the lakehouse” actually is — a correction</h2>
+  <p class="lede">An earlier pass in this document proved self-sufficiency by booting the catalog with <b>no Dapr, NATS, Postgres, OpenFGA or S3</b>. That proves the wrong thing, and it is worth correcting rather than quietly deleting.</p>
+
+  <div class="note bad">
+    <div class="h">Why that test answered the wrong question</div>
+    <p><b>OpenFGA IS the governance. AGE IS the lineage. The object store IS where the data lives. Maintenance IS the lakehouse.</b> Showing the catalog runs without them shows it can run <em>degraded</em> — it says nothing about whether the lakehouse is independent of our <b>compute</b>.</p>
+    <p>What that test genuinely established is narrower and still worth having: the catalog has <b>no code dependency</b> on any compute-plane module, and its cross-plane features are opt-in and default off. That is a real property. It is just not the property the question was about.</p>
+  </div>
+
+  <div class="tw"><table>
+    <thead><tr><th>The lakehouse</th><th>Not the lakehouse — <em>our way</em> of doing ETL</th></tr></thead>
+    <tbody>
+      <tr><td>Catalog, Lance tables, versioning + tagging</td><td>The medallion <b>movers</b> (three Deployments)</td></tr>
+      <tr><td><b>Governance</b> — OpenFGA, the project→warehouse→namespace→table hierarchy</td><td>The cascade <b>choreography</b> (the topic chain)</td></tr>
+      <tr><td><b>Lineage</b> — OpenLineage → AGE</td><td>The <b>ingest plane</b></td></tr>
+      <tr><td><b>Maintenance</b> — compaction, GC, drift reconcile</td><td>Ray submission, Dapr Workflow, Kueue</td></tr>
+      <tr><td>The bronze / silver / gold <b>tiers</b>, and the object store</td><td>The gate being invoked <b>automatically</b></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="big">The real test is not “which processes can I switch off?” It is: <b>if I move the data myself — my own ETL, my own schedule, no mover and no Ray — do I still get governance, lineage, versioning, provenance and the quality gate?</b></div>
+
+  <p>That is a question about <b>who moves the data</b>, not about which services are running, and it is the one the next section's ranking should be read against.</p>
 </section>
 
 <section id="decouple">
