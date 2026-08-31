@@ -1644,6 +1644,24 @@ rustfs:
   storageClass: ""                    # Tenant PVCs; "" => the cluster's default StorageClass
   accessKey: rustfsadmin
   secretKey: rustfsadmin
+  # THE COMPUTE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
+  #
+  # The Ray pods ran on `accessKey`/`secretKey` — the RustFS TENANT ROOT — so anything able to run
+  # code there reached every tenant's bytes, the project registry, the protection records and the
+  # observability bucket. A prefix-conditioned RustFS user policy fixes that, and is ENFORCED
+  # (measured 2026-08-30: `medallion*` and `*-wh` allowed; `_projects/`, `_protection/`, `_policies/`
+  # and `rask-observability` all AccessDenied from the pod's own credential).
+  #
+  # BOTH HALVES LIVE TOGETHER because they are used apart: `submit_stage_job` exports S3_KEY into the
+  # job's runtime_env while the POD supplies S3_SECRET (the Jobs API echoes runtime_env to any
+  # reader, so the secret is deliberately not in it). Changing one without the other gives every job
+  # `SignatureDoesNotMatch` — measured, twice.
+  #
+  # EMPTY = the root credential, i.e. exactly today's behaviour, so this is inert until an operator
+  # provisions the user. `scripts/` has no provisioning step yet: create the policy and user with the
+  # `mc` image the mkbucket Job already uses, then set these.
+  rayComputeAccessKey: ""
+  rayComputeSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog

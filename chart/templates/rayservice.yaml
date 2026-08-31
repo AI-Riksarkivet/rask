@@ -186,11 +186,26 @@ spec:
                      put the credential in `helm get manifest`, the exact class the infra-credentials
                      header documents for the Dex secret. Any future workerGroupSpecs container needs
                      these entries too (jobs run on workers). */}}
+                {{- /* BOTH HALVES FROM ONE OBJECT, and that is the fix rather than tidiness. The key
+                     used to arrive only through the submitter's `runtime_env` while the secret came
+                     from here, so the pair had two owners: repointing the pod alone gave every job
+                     `SignatureDoesNotMatch`, and repointing the mover alone took the MOVER down
+                     (it does its own S3 work — `outbox.stage_event` issues a HeadBucket, which needs
+                     an unconditioned ListBucket a scoped policy refuses). Both measured 2026-08-30.
+                     `ray-compute-*` defaults to the root credential, so this is inert until an
+                     operator provisions the scoped RustFS user. The medallion still exports S3_KEY
+                     into runtime_env (`MEDALLION_RAY_S3_ACCESS_KEY_ID`) and the two must AGREE —
+                     the mover's value is the one the job actually signs with. */}}
+                - name: S3_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "lance.fullname" . }}-infra-credentials
+                      key: ray-compute-access-key
                 - name: S3_SECRET
                   valueFrom:
                     secretKeyRef:
                       name: {{ include "lance.fullname" . }}-infra-credentials
-                      key: rustfs-secret-key
+                      key: ray-compute-secret-key
                 - name: LINEAGE_SERVICE_TOKEN
                   valueFrom:
                     secretKeyRef:
