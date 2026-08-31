@@ -171,6 +171,56 @@ async def create_namespace(
     return response
 
 
+async def _drain_tables(ns: LanceNamespace, segments: list[str], *, include_declared: bool) -> tuple[ListTablesResponse, list[str]]:
+    """Every table under ``segments``, following the backend's cursor to exhaustion.
+
+    The twin of `_drain_namespaces` and for the identical reason: this route filters per item and then
+    applies its own cursor, so reading the backend's first page alone answers a short list whose
+    missing rows are indistinguishable from rows the caller may not read.
+    """
+    seen: list[str] = []
+    token: str | None = None
+    response = ListTablesResponse(tables=[])
+    for _ in range(_MAX_LIST_PAGES):
+        response = await run_in_threadpool(native.call, ns, "list_tables", ListTablesRequest(id=segments, include_declared=include_declared, page_token=token))
+        seen.extend(response.tables or [])
+        token = response.page_token or None
+        if not token:
+            break
+    else:
+        log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "tables"})
+    return response, sorted(set(seen))
+
+
+async def _drain_namespaces(ns: LanceNamespace, segments: list[str]) -> tuple[ListNamespacesResponse, list[str]]:
+    """Every child namespace under ``segments``, following the backend's own cursor to exhaustion.
+
+    THE BACKEND'S PAGINATION IS NOT THE CALLER'S. This route applies its own keyset cursor AFTER the
+    authorization filter — correct and deliberate, because a backend `limit` truncates BEFORE the
+    filter, so a page could answer short and hand out a cursor that skips everything the filter
+    removed. But reading only the backend's first page has the same failure in a different place:
+    against a paginating backend the route answers a short list with a cursor that looks complete, and
+    the dropped rows are indistinguishable from rows the caller may not read.
+
+    `_collect_descendants` in this module already drains correctly; the two walkers over one tree
+    disagreed, and the DESTRUCTIVE one was the careful one.
+    """
+    seen: list[str] = []
+    token: str | None = None
+    response = ListNamespacesResponse(namespaces=[])
+    for _ in range(_MAX_LIST_PAGES):
+        response = await run_in_threadpool(native.call, ns, "list_namespaces", ListNamespacesRequest(id=segments, page_token=token))
+        seen.extend(response.namespaces or [])
+        token = response.page_token or None
+        if not token:
+            break
+    else:
+        # A token still outstanding at the ceiling is a PARTIAL enumeration, and a partial listing that
+        # answers 200 is exactly the silence this drain exists to remove. Logged like its sibling.
+        log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "namespaces"})
+    return response, sorted(set(seen))
+
+
 @router.get("/{id}/list", response_model_exclude_none=True)
 async def list_namespaces(
     id: str,
@@ -206,9 +256,7 @@ async def list_namespaces(
     filter removed.
     """
     segments = parse_identifier(id, settings.delimiter)
-    req = ListNamespacesRequest(id=segments)
-    response: ListNamespacesResponse = await run_in_threadpool(native.call, ns, "list_namespaces", req)
-    names = sorted(set(response.namespaces or []))
+    response, names = await _drain_namespaces(ns, segments)
 
     if settings.fga_enabled and token is not None and client is not None:
         listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="namespace")
@@ -715,9 +763,7 @@ async def list_tables(
     stable only over an ordered one.
     """
     segments = parse_identifier(id, settings.delimiter)
-    req = ListTablesRequest(id=segments, include_declared=include_declared)
-    response: ListTablesResponse = await run_in_threadpool(native.call, ns, "list_tables", req)
-    names = sorted(set(response.tables or []))
+    response, names = await _drain_tables(ns, segments, include_declared=include_declared)
     # When FGA is on and the caller is known, keep only the tables they may actually read. The object
     # id is the table's PATH under this namespace, built with `canonical_object_id` — the same joiner
     # the grant path uses, so a check here cannot address an id a grant never wrote.
