@@ -29,8 +29,17 @@ though the estate were one product. It is two, and they have different acceptanc
 
 | Track | What it is | Its acceptance test |
 | --- | --- | --- |
-| **A · The lakehouse** | Lance Namespace catalog, the file/table layer, versioning + tagging, governance (OpenFGA), lineage (OpenLineage→AGE), credential vending, maintenance | **Can a person drive it by hand, with their own code, moving their own data, with NO rask compute plane at all?** If yes, it stands alone. |
-| **B · Compute & workflow** | The medallion cascade, the movers, Dapr Workflow, the Ray submission path, Kueue, the executor contract | Does a unit of work get submitted, watched, verified and published — and could a second engine do it? |
+| **A · The lakehouse** | Lance Namespace catalog, the file/table layer, versioning + tagging, governance (**OpenFGA**), lineage (**OpenLineage→AGE**), credential vending, maintenance, the bronze/silver/gold **tiers**, and the **object store** the bytes live in | **If a person does bronze→silver→gold THEMSELVES — their own ETL, their own schedule, no mover and no Ray — do they still get governance, lineage, versioning, provenance and the quality gate?** |
+| **B · Compute & workflow — OUR WAY of doing ETL** | The medallion **movers**, the cascade **choreography** (topic chains), the **ingest plane**, Dapr Workflow, the Ray submission path, Kueue, the executor contract, and the gate being invoked **automatically** | Does a unit of work get submitted, watched, verified and published — and could a second engine, or a person with a cron script, do the same? |
+
+**A CORRECTION I OWE THIS FILE.** An earlier verification pass "proved" self-sufficiency by booting the
+catalog with no Dapr, NATS, Postgres, OpenFGA or S3. That proves the wrong thing, and the owner said so:
+**OpenFGA IS the governance, AGE IS the lineage, the object store IS where the data lives, and
+maintenance IS the lakehouse.** Running without them shows the catalog can run DEGRADED — it says
+nothing about whether the lakehouse is independent of our COMPUTE. What that test genuinely established
+is narrower and still worth having: the catalog has no code dependency on any compute-plane module, and
+its cross-plane features are opt-in. The acceptance test is the one in the table above, and it is about
+who MOVES THE DATA, not which processes are running.
 
 **Track B is a CONSUMER of Track A, never the other way round.** Any finding where A depends on B is a
 defect in A by definition — that is what `BAKED_JOBS_DIR` is (the catalog validating Ray paths), and it
