@@ -55,7 +55,13 @@ spec:
             # tenant Service is `rask-rustfs-io`. The live pod had been hand-patched to it; applying
             # this file put the stale name back and broke Ray's object store.
             - { name: S3_ENDPOINT, value: "http://rask-rustfs-io:9000" }
-            - { name: S3_KEY, value: "rustfsadmin" }
+            # THE SCOPED COMPUTE CREDENTIAL, never the tenant root. This read "rustfsadmin" — the
+            # RustFS root key — so re-applying this file silently reverted the credential scoping that
+            # took the root key off the Ray plane, and the revert is invisible: the cascade keeps
+            # working, because root can do everything the scoped key can. Verified live 2026-08-31:
+            # the running head uses `rask-ray-compute`, whose policy reaches the medallion prefix and
+            # is AccessDenied against the control plane.
+            - { name: S3_KEY, value: "rask-ray-compute" }
             # BY REFERENCE, not a literal — and these two exist because the submission body no
             # longer carries them (open_python-audit P0: the Ray Jobs API echoes runtime_env back to
             # any reader, so the S3 secret and the estate's service token were readable off
@@ -64,7 +70,11 @@ spec:
             # off) the job omits the header, which is the auth-off ingest's correct behaviour.
             - name: S3_SECRET
               valueFrom:
-                secretKeyRef: { name: rask-infra-credentials, key: rustfs-secret-key }
+                # Paired with S3_KEY above: the scoped compute credential's own secret, in its own
+                # Secret object. Pointing at `rask-infra-credentials/rustfs-secret-key` here would
+                # hand the ROOT secret to a pod whose key is the scoped one — a mismatch that fails
+                # closed with an unhelpful SignatureDoesNotMatch rather than saying which half is wrong.
+                secretKeyRef: { name: rask-ray-compute-s3, key: secretkey }
             - { name: S3_REGION, value: "us-east-1" }
             - { name: RAY_DEDUP_LOGS, value: "0" }
             - name: LINEAGE_SERVICE_TOKEN
