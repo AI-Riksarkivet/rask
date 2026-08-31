@@ -40,7 +40,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import is_person_subject
 from catalog.core.namespace import open_dataset
 from catalog.schemas import PublishRequest, PublishResult
-from catalog.services import publication
+from catalog.services import publication, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
@@ -187,7 +187,21 @@ async def resolve_effective_gate(
     `acme` from `acme-bronze`, and a declaration is keyed by project. An unresolvable binding leaves
     the request governing — there is no declaration to find without a project id.
     """
-    project = await lineage.project_for(segments[0]) if segments else None
+    # THE EMITTER FIRST, THE BINDING AS THE FLOOR — and the floor is the fix.
+    #
+    # This read the emitter alone. With `LANCE_LINEAGE_EMIT_ENABLED=false` that is a `NoopEmitter` whose
+    # `project_for` returns None unconditionally, so no project resolved, no declaration loaded, and
+    # every project's declared gate silently did not apply while publish still answered 200. Measured by
+    # flipping that one variable. Turning off telemetry must not turn off a governance control.
+    #
+    # The emitter is kept as the fast path rather than replaced, because its resolver is
+    # `project_for_namespace` PLUS the request-scoped binding cache (`main.py::_resolve_project`) — so
+    # reading the registry directly would answer identically and pay a warehouse read on every publish
+    # of a hot namespace. The fallback runs only when the emitter cannot answer, which is exactly the
+    # emit-off case and a cold cache.
+    project = (await lineage.project_for(segments[0]) if segments else None) or None
+    if project is None and segments:
+        project = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, so, segments[0])
     spec = await run_in_threadpool(publication.declared_gate, settings.registry_root, so, project or "")
     return publication.effective_gate(spec, key_column=body.key_column, required_columns=body.required_columns)
 
