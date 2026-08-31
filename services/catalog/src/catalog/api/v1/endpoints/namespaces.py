@@ -172,16 +172,51 @@ async def create_namespace(
 
 
 @router.get("/{id}/list", response_model_exclude_none=True)
-def list_namespaces(
+async def list_namespaces(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
     page_token: str | None = None,
     limit: int | None = None,
 ) -> ListNamespacesResponse:
-    """List the child namespaces under ``id`` via ``list_namespaces`` (page_token/limit paged)."""
-    req = ListNamespacesRequest(id=parse_identifier(id, settings.delimiter), page_token=page_token, limit=limit)
-    return native.call(ns, "list_namespaces", req)
+    """List the child namespaces under ``id``; when FGA is on, filtered to what the caller can see.
+
+    **THE SAME SPLIT ``list_tables`` BELOW APPLIES, and this route is why it is a split rather than a
+    one-off.** ``authorize`` resolves this route's ``list`` action to ``can_get_metadata``, which C1
+    redefined on a container as ``reader or can_get_metadata from child`` — correct for what it was
+    for, since without it a grantee cannot resolve the breadcrumb to their own table. The consequence
+    is that holding ``reader`` on ONE deep leaf opens this route on every ancestor, and the body
+    answered with every sibling child-namespace name. Measured against the live store 2026-08-31: a
+    holder of one leaf table checked ``can_get_metadata`` True on the parent and False on its sibling,
+    and the sibling's NAME came back regardless.
+
+    A namespace name is not a harmless header. ``viewer.api.security`` states the estate's position —
+    "A corpus LIST is itself sensitive: it names data someone may not know exists" — and a namespace
+    name additionally leaks how a tenant organises data.
+
+    So: the ROUTE still opens (narrowing it to 403 would restore the broken breadcrumb C1 fixed) and
+    each ITEM is checked on the object itself, on ``can_get_metadata`` — the relation that governs
+    seeing a namespace, where the table listing filters on ``can_read_data`` because reading a table's
+    NAME and reading its ROWS are the same disclosure there.
+
+    Pagination is applied AFTER the filter for the reason ``list_tables`` records: a backend ``limit``
+    truncates first, so a page could answer short and hand out a cursor that skips everything the
+    filter removed.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    req = ListNamespacesRequest(id=segments)
+    response: ListNamespacesResponse = await run_in_threadpool(native.call, ns, "list_namespaces", req)
+    names = sorted(set(response.namespaces or []))
+
+    if settings.fga_enabled and token is not None and client is not None:
+        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="namespace")
+        allowed = set(listing.objects)
+        names = [name for name in names if f"namespace:{fga.canonical_object_id([*segments, name], delimiter=settings.delimiter)}" in allowed]
+
+    response.namespaces, response.page_token = paginate(names, page_token, limit)
+    return response
 
 
 @router.post("/{id}/describe", response_model_exclude_none=True)
