@@ -69,3 +69,37 @@ def test_a_training_404_before_the_job_was_seen_is_still_survivable() -> None:
     ctx = _TCtx({"poll_train": [None, "RUNNING", "SUCCEEDED"]})
     out = _tdrive(ctx, cast("Any", _tspec(max_polls=10)))
     assert out["verdict"] == "succeeded"
+
+
+def test_a_submission_that_never_registers_is_bounded_far_below_the_running_ceiling() -> None:
+    """The race grace is a SHORT budget, not the whole 24-hour ceiling.
+
+    Found by the live probe that was supposed to test the clause above: the head was restarted in the
+    30 s gap between submit and the first poll, so no poll ever saw a status, `seen` stayed False, and
+    the watch fell straight back into the full ceiling. `seen` alone therefore leaves a window open —
+    narrow in time, but with the identical 24-hour cost.
+
+    The two waits are not the same question. "Has the dashboard registered this id yet" resolves in
+    seconds; "is this job still running" can honestly take hours. Giving the first the second's budget
+    is what made a lost submission indistinguishable from a long one.
+    """
+    ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": [None] * 200})
+    out = _drive(ctx, cast("Any", _spec(max_polls=2880)))
+
+    assert out["verdict"] == "abandoned"
+    polls = ctx.actions.count("call_activity(poll_stage)")
+    assert polls <= 6, f"waited {polls} polls for an id the dashboard never registered"
+    assert polls >= 2, "must still tolerate a slow registration, not die on the first 404"
+
+
+def test_a_training_submission_that_never_registers_is_bounded_too() -> None:
+    """Both watches carry the same two budgets, because both poll the same job table."""
+    from .test_train_workflow import _Ctx as _TCtx
+    from .test_train_workflow import _drive as _tdrive
+    from .test_train_workflow import _spec as _tspec
+
+    ctx = _TCtx({"poll_train": [None] * 200})
+    out = _tdrive(ctx, cast("Any", _tspec(max_polls=2880)))
+
+    assert out["verdict"] == "abandoned"
+    assert ctx.actions.count("call_activity(poll_train)") <= 6

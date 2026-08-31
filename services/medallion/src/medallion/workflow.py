@@ -90,6 +90,19 @@ POLL_INTERVAL_SECONDS: Final = 30
 #: the lineage reconciler still catches a job that dies (A13's argument, which stays true).
 MAX_POLLS: Final = 2880
 
+#: How many polls may answer 404 before the id is declared NEVER REGISTERED.
+#:
+#: A SECOND, much shorter budget, because the two waits answer different questions. "Has the dashboard
+#: registered this submission yet" resolves in seconds — the Jobs API writes the record as part of the
+#: submit call, and the only reason a poll can miss it is the round trip. "Is this job still running"
+#: can honestly take hours, which is what `MAX_POLLS` is sized for. Handing the first question the
+#: second's budget is what let a submission the head lost look exactly like a slow one for a full day.
+#:
+#: Measured 2026-08-31: a head restart landing in the 30 s gap between submit and the first poll leaves
+#: every subsequent poll a 404 with no status ever seen — so the `seen` clause cannot fire there and
+#: this ceiling is the only thing that ends the watch.
+MAX_UNSEEN_POLLS: Final = 4
+
 #: Assertion failures that are CORRUPTION rather than a judgement call. A blob pointer that does not
 #: resolve and a null key column are structurally wrong — no approval makes the data right, so nobody
 #: is asked. Every other failure is the archive's call.
@@ -175,6 +188,22 @@ class StageJobOutcome(BaseModel):
     #: status: `abandoned` means the ceiling was hit with the job still RUNNING, which is neither a
     #: success nor a job failure and must not be reported as either.
     verdict: str = "failed"
+
+
+def _abandon_reason(*, vanished: bool, never_registered: bool) -> str:
+    """Why the watch stopped, for the operator reading the log.
+
+    All three arms report the same `abandoned` VERDICT — the closed vocabulary is right, because in
+    none of them do we know the job's outcome. They differ in what an operator should do next, which
+    is the whole reason they are named apart: `job_vanished` and `never_registered` both mean the head
+    lost the record and waiting longer could not have helped, while `poll_ceiling` means the job was
+    alive and still running when we ran out of patience.
+    """
+    if vanished:
+        return "job_vanished"
+    if never_registered:
+        return "never_registered"
+    return "poll_ceiling"
 
 
 def _watch_seconds(ctx: DaprWorkflowContext, started_at: str) -> float | None:
@@ -271,10 +300,11 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # on a `publish_stage_ready` that only the success branch reaches.
     seen = spec.seen or status is not None
     vanished = spec.seen and status is None and not watch_lost
+    never_registered = not seen and not watch_lost and polls >= MAX_UNSEEN_POLLS
 
     # STILL RUNNING and budget left: hand the rest to a fresh turn. Everything above is awaited, which
     # matters — `continue_as_new` restarts immediately and DISCARDS any task started but not awaited.
-    if not watch_lost and not vanished and not _is_terminal(status) and polls < spec.max_polls:
+    if not watch_lost and not vanished and not never_registered and not _is_terminal(status) and polls < spec.max_polls:
         ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls, "started_at": started_at, "seen": seen}).model_dump())
         return {}
 
@@ -288,7 +318,12 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         if not ctx.is_replaying:
             log.warning(
                 "medallion_stage_watch_abandoned",
-                extra={"submission_id": submission_id, "status": status, "polls": polls, "reason": "job_vanished" if vanished else "poll_ceiling"},
+                extra={
+                    "submission_id": submission_id,
+                    "status": status,
+                    "polls": polls,
+                    "reason": _abandon_reason(vanished=vanished, never_registered=never_registered),
+                },
             )
         yield ctx.call_activity(report_stage_outcome, input=StageReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
         return outcome.model_dump()
@@ -843,8 +878,9 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
 
     seen = spec.seen or status is not None
     vanished = spec.seen and status is None and not watch_lost
+    never_registered = not seen and not watch_lost and polls >= MAX_UNSEEN_POLLS
 
-    if not watch_lost and not vanished and not _is_terminal(status) and polls < spec.max_polls:
+    if not watch_lost and not vanished and not never_registered and not _is_terminal(status) and polls < spec.max_polls:
         ctx.continue_as_new(spec.model_copy(update={"polls_done": polls, "seen": seen}).model_dump())
         return {}
 
@@ -857,7 +893,12 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         if not ctx.is_replaying:
             log.warning(
                 "medallion_train_watch_abandoned",
-                extra={"submission_id": spec.submission_id, "status": status, "polls": polls, "reason": "job_vanished" if vanished else "poll_ceiling"},
+                extra={
+                    "submission_id": spec.submission_id,
+                    "status": status,
+                    "polls": polls,
+                    "reason": _abandon_reason(vanished=vanished, never_registered=never_registered),
+                },
             )
         # REPORTED, where it used to return in silence. A lost or ceiling-hit watch told nobody: no
         # metric, no log an operator polls, nothing. Somebody's four-hour GPU run simply stopped being
