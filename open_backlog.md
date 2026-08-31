@@ -26,6 +26,7 @@ A row does not move to LIVE because it looks right. It moves when someone drives
 | 1.2 | The cascade proves it may WRITE before it submits | **LIVE.** 200 + audit record observed; a refusal stops the run before the job exists. |
 | 1.3 | The Ray plane runs on a scoped S3 credential; the tenant root key is off the pod | **LIVE.** Cascade succeeds; the control plane is `AccessDenied` from that credential. |
 | 1.4 | No credential rides the Ray submission body | **LIVE.** The Jobs API echoes `runtime_env` to any reader; the key is gone from both submission paths. |
+| 1.7 | **Step 1 — a governed tier must carry its provenance** | **SUITE (7,388 tests, no regression).** RED first: the `runners/dummy` shape published with `published: true` and two assertions, neither about provenance. The check lives at PUBLISH because the job-side contract cannot see it — it counts parentless rows only `if SOURCE_ROWID_COLUMN in out.schema.names`, so a table that DROPS the column reports zero and passes the check meant to catch it. Opt-in by CLAIM: a table carrying none of the three columns is untouched; one carrying any must carry all three, correctly typed. `runners/dummy` now conforms AND refuses to invent a parent id. Not yet driven in the estate. |
 | 1.6 | **ExternalSecrets works end to end** | **LIVE.** Was "manifests correct, server dry-run accepted" and had never been driven. Driving it found TWO defects, and the first masked the second. (a) The `SecretStore` address was a BARE service name — correct for every Dapr sidecar, which sits in this namespace, and wrong for the ESO operator, which runs in `external-secrets`: login failed `lookup rask-openbao ... server misbehaving`, a DNS failure that reads as an OpenBao outage. (b) OpenBao's own ServiceAccount lacked `system:auth-delegator`, so it could not submit the TokenReview that validates a caller — every login answered `403 permission denied`, which reads as a bad role and sends you auditing the Vault side, when OpenBao never got far enough to evaluate the role. Both fixed in the chart. Verified: `SecretStore Ready=True "store validated"`, `ExternalSecret Ready=True SecretSynced`, value arrived from OpenBao. Driven against a THROWAWAY target so a wrong value could not overwrite a working credential — which mattered: the Ray credential lives in its own secret, not in `infra-credentials`, so the first KV write used a placeholder that had to be corrected before anything consumed it. |
 | 1.5 | **Bounded stage resubmit after the head loses a job** | **LIVE, end to end.** Took four attempts, and the first three failed for a reason worth recording: the `seen`→vanished branch is effectively UNREACHABLE for these jobs — a stage transform is a column stamp over Lance and completes inside one 30 s poll interval even at 400,000 rows, so the head restart always landed after the job was already terminal. The branch that actually fires here is `never_registered`. Driven at 09:21: job submitted, head restarted before the first poll, four 404 polls at 09:21:44 / 09:22:14 / 09:22:44 / 09:23:14, then `medallion_stage_resubmitting` at 09:23:14, a new submission at 09:23:15, `200 OK` at 09:23:45, terminal success the same second — and **silver→gold woke at 09:24:16 with `medallion_stage_moved`**. The cascade survived a head restart that previously killed it silently for 24 hours. |
 
@@ -130,6 +131,31 @@ close live defects, 3 is the only thing that makes the already-deployed Kueue re
 `TODO.md` holds the frontend/IA backlog (zone routes, Projects views, Explorer and annotator work).
 It is a separate list with a separate owner conversation, deliberately excluded from this file so the
 platform backlog does not absorb it.
+
+---
+
+## 6b. Bootstrap on a fresh machine — NOT complete
+
+Asked 2026-08-31; the answer is no, and checking it found a security regression waiting to happen.
+
+| Piece | Chart-owned? |
+| --- | --- |
+| The fleet, the lakehouse services, the zones, the infra toggles | **Yes** |
+| ExternalSecrets wiring | **Yes, and now correct** — the FQDN and `system:auth-delegator` both landed today |
+| Kueue queues | Yes, and structurally bypassed — nothing creates a CR for them to admit |
+| **The Ray head the cascade actually runs on** | **NO** — hand-applied `deploy/ray-lance-demo.yaml`, diverged from the chart's own RayService |
+| OpenBao's Kubernetes auth backend, policy, role | **NO** — configured by hand (commands recorded, but a runbook is not a manifest) |
+| The KV secret values | **NO** — seeded by hand |
+
+**The regression, now fixed:** `deploy/ray-lance-demo.yaml` set `S3_KEY: rustfsadmin` — the RustFS ROOT
+key — while the live pod runs the scoped `rask-ray-compute`. Re-applying it silently undid the
+credential scoping, and the undo is INVISIBLE: the cascade keeps working, because root can do
+everything the scoped key can. The only way to notice is to read the pod. The file now matches the
+live pod exactly.
+
+**Remaining:** reconcile the hand-applied head with the chart's RayService, and make the OpenBao
+bootstrap a job rather than a runbook. Until then "it is all in the chart" is false, and the gap is
+precisely where the security posture lives.
 
 ---
 

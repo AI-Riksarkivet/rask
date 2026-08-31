@@ -117,6 +117,9 @@ footer{margin-top:72px;padding-top:18px;border-top:1px solid var(--rule);font-fa
     <li><a href="#flow11">Flow A — images to embeddings (1:1)</a></li>
     <li><a href="#flow1n">Flow B — transcription (1:many)</a></li>
     <li><a href="#decouple">Where to decouple — ranked</a></li>
+    <li><a href="#layers">The five orchestration layers</a></li>
+    <li><a href="#bootstrap">Could we bootstrap elsewhere?</a></li>
+    <li><a href="#lancedocs">The Lance docs this rests on</a></li>
   </ol></nav>
 </header>
 
@@ -1074,6 +1077,88 @@ flowchart TB
     <div class="h">What is NOT coupling, and should be left alone</div>
     <p>Maintenance running in-process. The catalog owning locations and credentials. The gate running at publish. Lance, OpenFGA, OpenLineage and the Dapr building blocks. And <b>Dapr Workflow owning the wait</b> — that is not coupling to a compute engine, it is the thing that makes the compute engine swappable.</p>
   </div>
+</section>
+
+
+<section id="layers">
+  <h2>21 · The five orchestration layers — and where rask sits</h2>
+  <p class="lede">A framework worth adopting, from <a href="http://gopikrishnatummala.com/posts/mlops/ml-pipeline-orchestration-layers/" style="color:var(--accent)">Gopi Krishna Tummala’s post on ML pipeline orchestration layers</a>. It separates five layers that are routinely confused with each other, and mapping rask onto it settles most of the tooling argument.</p>
+
+  <div class="big">“Airflow, Kubeflow, Ray, Temporal — they all orchestrate steps. Aren’t they basically the same thing? No. They sit at completely different layers.”</div>
+
+  <div class="tw"><table>
+    <thead><tr><th>Layer</th><th>The post’s tools</th><th>rask uses</th><th>Fit</th></tr></thead>
+    <tbody>
+      <tr><td><b>1 · Durable backend orchestration</b><br/>crash-resistant coordination, exactly-once</td><td>Temporal</td><td><b>Dapr Workflow</b></td><td>Same layer, same category. Temporal is the peer, which is exactly the conclusion §15 reached independently.</td></tr>
+      <tr><td><b>2 · Data pipeline schedulers</b><br/>scheduling and DAG execution</td><td>Airflow 3, Prefect 3, Dagster</td><td><b>nothing — deliberately</b></td><td>The cascade is event-driven, not scheduled. This is the layer you kept asking about, and rask genuinely has no occupant.</td></tr>
+      <tr><td><b>3 · ML-native pipeline frameworks</b><br/>typed component contracts, artifact lineage</td><td>Kubeflow v2, TFX, Metaflow, ZenML</td><td><b>the sealed runners</b></td><td>Roughly. A runner owns its own stage graph and models — the same job, without a framework.</td></tr>
+      <tr><td><b>4 · Distributed compute engines</b><br/>execute one step across machines</td><td>Ray, Spark, PyTorch DDP</td><td><b>Ray (KubeRay)</b></td><td>Exact match.</td></tr>
+      <tr><td><b>5 · Storage &amp; metadata</b><br/>artifacts and lineage</td><td>object storage, MLMD, MLflow</td><td><b>Lance + catalog + OpenLineage→AGE</b></td><td>Exact match, and unusually complete — governance sits here too.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note ok">
+    <div class="h">The quote that settles the Kueue/CRD question</div>
+    <p><b>“Ray is not a workflow scheduler: it does not handle scheduling, retries, or complex dependency graphs.”</b></p>
+    <p>That is the whole answer to “if we add RayJob CRs and Kueue, what is left for Dapr Workflow?” Ray is layer 4. Kueue admits work <em>into</em> layer 4. Neither touches layer 1, and layer 1 is where the retry, the exactly-once submission, the 72-hour approval and the wake-the-next-tier all live.</p>
+  </div>
+
+  <div class="note bad">
+    <div class="h">And it names our defect better than §20 did</div>
+    <p>The post’s failure mode is <b>conflating layers</b>. That is exactly what <code>BAKED_JOBS_DIR</code> is: <b>layer 5 knowing about layer 4</b>. The catalog — storage and metadata — validates a compute engine’s filesystem paths. Stated in these terms it is not a style preference; it is a layer violation, and it is why a Spark lane cannot be declared.</p>
+    <p>It also reframes the Dagster question cleanly: adopting Dagster would put a <b>layer-2</b> tool in to solve a problem that lives at layers 1 and 4. That is the confusion the post opens with.</p>
+  </div>
+
+  <div class="note warn">
+    <div class="h">One thing to steal</div>
+    <p>Airflow 3 shipped <b>full DAG versioning</b> — “each DAG run is pinned to the exact DAG version that created it.” That is precisely the gap we have at layer 1: no Dapr Workflow versioning seam, two replay divergences already shipped, and “drain before deploying” as the only safe answer. Worth tracking as the concrete thing Temporal would buy, rather than a vague “maturity”.</p>
+  </div>
+</section>
+
+<section id="bootstrap">
+  <h2>22 · Could we bootstrap this on another machine today?</h2>
+  <p class="lede">You asked. The answer is <b>no, not faithfully</b> — and finding out turned up a security regression waiting to happen.</p>
+
+  <div class="note bad">
+    <div class="h">The Ray head the cascade runs on is not chart-owned</div>
+    <p>The live head is a hand-applied <code>deploy/ray-lance-demo.yaml</code>, labelled <code>app: ray-lance-head</code>. The chart ships a <em>different</em> thing — a KubeRay <code>RayService</code> — and <code>ray.enabled</code> is <code>true</code>, so a fresh <code>make k3s-up</code> produces a cluster that is not what is running here.</p>
+    <p><b>The regression:</b> that hand-applied file set <code>S3_KEY: rustfsadmin</code> — the RustFS <b>root</b> key — while the live pod runs the scoped <code>rask-ray-compute</code>. So re-applying it silently undid the work that took the root credential off the Ray plane, <em>and the undo is invisible</em>: the cascade keeps working, because root can do everything the scoped key can. The only way to notice is to read the pod. Fixed — the file now matches the live pod exactly.</p>
+  </div>
+
+  <p>So the honest bootstrap answer, for a fresh machine:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Piece</th><th>Chart-owned?</th></tr></thead>
+    <tbody>
+      <tr><td>Catalog, lineage, medallion, maintenance, ingest, gateway, the zones</td><td><b>Yes</b></td></tr>
+      <tr><td>CloudNativePG, RustFS, OpenFGA, NATS, OpenBao, the Dapr components</td><td><b>Yes</b>, behind toggles</td></tr>
+      <tr><td>ExternalSecrets wiring</td><td><b>Yes, and now correct</b> — the FQDN and the <code>system:auth-delegator</code> binding both landed today</td></tr>
+      <tr><td>Kueue queues</td><td>Yes, and structurally bypassed — nothing creates a CR for them to admit</td></tr>
+      <tr><td><b>The Ray head the cascade actually uses</b></td><td><b>No</b> — hand-applied, and diverged from the chart’s own RayService</td></tr>
+      <tr><td>OpenBao’s Kubernetes auth backend, policy and role</td><td><b>No</b> — configured by hand today (the commands are recorded, but they are not a manifest)</td></tr>
+      <tr><td>The KV secret values themselves</td><td><b>No</b> — seeded by hand</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note warn">
+    <div class="h">What that means practically</div>
+    <p>A fresh machine gets a <em>working-looking</em> estate whose compute plane is a different shape from this one. The fix is not large — reconcile the hand-applied head with the chart’s RayService, and make the OpenBao bootstrap a job rather than a runbook — but until then “it is all in the chart” is not true, and the gap is precisely where the security posture lives.</p>
+  </div>
+</section>
+
+<section id="lancedocs">
+  <h2>23 · The Lance documentation this is all built on</h2>
+  <p class="lede">Vendored in-repo at <code>lance_docs/</code>, and load-bearing for several claims above — the estate reads it rather than guessing, and several findings in this document came from checking behaviour against it.</p>
+  <div class="tw"><table>
+    <thead><tr><th>File</th><th>What it settles</th></tr></thead>
+    <tbody>
+      <tr><td><code>file_format.md</code></td><td>The on-disk layout: manifests, fragments, data files, and the <b>blob encoding</b> §17 describes.</td></tr>
+      <tr><td><code>namespace.md</code> + <code>ns_catalog/spec.yaml</code></td><td>The Lance Namespace spec — 54 operations, the 24 numeric error codes, the REST grammar. The catalog conforms to this, and its conformance is tested against the vendored spec so a shrunken spec cannot silently weaken the check.</td></tr>
+      <tr><td><code>guide.md</code></td><td>Why maintenance runs <b>compact → optimize_indices → cleanup</b> in that order — it is Lance’s own prescription, not a local invention. Also the source for <code>when_not_matched_by_source_delete</code>, which §19 notes the 1:many merge does not use.</td></tr>
+      <tr><td><code>ray.md</code></td><td>The <code>lance_ray</code> integration — the distributed read/write path §4 uses, and the context for the measured <code>compact_files</code> defect in §14.</td></tr>
+      <tr><td><code>lance_sdk.md</code></td><td>The Python surface: <code>merge_insert</code>, tags, stable row ids, <code>take_blobs</code>.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Two claims in this document rest directly on it: the compaction ORDER (§14) and the blob placement thresholds (§17), both of which were checked against the vendored docs and then <em>measured</em>, because the measured numbers turned out to differ from the ones everyone assumed.</p>
 </section>
 
 <footer>rask · verified against the running estate and HEAD · 2026-08-31</footer>
