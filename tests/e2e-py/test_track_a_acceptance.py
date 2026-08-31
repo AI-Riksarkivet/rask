@@ -736,3 +736,64 @@ def test_a_version_listing_scoped_to_a_branch_lists_that_branch(estate: Estate) 
 
     ghost = requests.post(f"{CATALOG}/v1/table/{estate.table_id('verlist')}/version/list?branch=no-such-branch-was-ever-created", headers=_auth(), timeout=60)
     assert ghost.status_code == 404, f"listing versions of a branch that does not exist returned {ghost.status_code}: {ghost.text[:200]}"
+
+
+def test_a_branch_scoped_index_build_does_not_land_on_main(estate: Estate) -> None:
+    """The index doors are WRITES, and they were writing to the wrong dataset with a 200.
+
+    Measured live 2026-08-31 before the fix: `create_scalar_index` with `branch=work` returned 200,
+    MAIN advanced a version and took the index, and the branch got none. An index on the wrong dataset
+    is not inert — it changes which plans the engine picks for every later reader of main.
+
+    501 rather than served, because `CreateTableIndexRequest` carries a whole full-text option surface
+    (`base_tokenizer`, `language`, `stem`, `ascii_folding`, `remove_stop_words`, `with_position`,
+    `max_token_length`, `lower_case`) plus vector parameters, and building an index with a DEFAULT
+    where the caller asked for a setting is the same quiet wrongness as building it on the wrong table.
+    The merge-key BTREE that `/merge_insert` builds internally IS served on the branch — one fixed
+    shape, no user options, nothing left to get wrong. The line is the option surface, not the verb.
+    """
+    uri = estate.create("idxbranch", _rowed(("a", "one"), ("b", "two")))
+    estate.branch("idxbranch", "work")
+    before = _open_main(uri).version
+
+    for door in ("create_scalar_index", "create_index"):
+        response = requests.post(
+            f"{CATALOG}/v1/table/{estate.table_id('idxbranch')}/{door}",
+            json={"column": "id", "index_type": "BTREE", "branch": "work"},
+            headers=_auth(),
+            timeout=120,
+        )
+        assert response.status_code == 501, f"/{door} accepted a branch-scoped build with {response.status_code}: {response.text[:200]}"
+
+    assert _open_main(uri).version == before, "MAIN advanced a version for an index build that named a branch"
+    assert not _open_main(uri).list_indices(), "MAIN took an index from a build that named a branch"
+
+
+def test_a_branch_nested_in_an_explain_query_is_refused_like_the_outer_one(estate: Estate) -> None:
+    """`explain_plan` nests the whole query, so `branch` has TWO channels and the guard covered one.
+
+    Measured live: with only `body.branch` guarded, a branch inside `query` returned 200 and a plan —
+    for a real branch and for one that had never been created, identically. A guard that covers one of
+    two channels reads as a guard while being none, which is worse than no guard: it is why this door
+    looked settled.
+    """
+    estate.create("explnest", _rowed(("a", "one")))
+    search: dict[str, Any] = {"vector": {"single_vector": [1.0, 0.0]}, "k": 5}
+
+    outer = requests.post(
+        f"{CATALOG}/v1/table/{estate.table_id('explnest')}/explain_plan",
+        json={"branch": "work", "query": search},
+        headers=_auth(),
+        timeout=60,
+    )
+    nested = requests.post(
+        f"{CATALOG}/v1/table/{estate.table_id('explnest')}/explain_plan",
+        json={"query": {**search, "branch": "work"}},
+        headers=_auth(),
+        timeout=60,
+    )
+    assert outer.status_code == 501, f"top-level branch: {outer.status_code} {outer.text[:150]}"
+    assert nested.status_code == 501, (
+        f"a branch nested inside `query` answered {nested.status_code} — the outer channel is guarded and "
+        f"the inner one is not, so the door serves main's plan under a branch name: {nested.text[:150]}"
+    )

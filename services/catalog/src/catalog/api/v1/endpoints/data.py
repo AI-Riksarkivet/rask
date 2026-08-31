@@ -465,7 +465,11 @@ def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: Stora
 def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="explain_table_query_plan")
+    # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
+    # the top level OR inside `query` — and guarding only the outer one left the inner one serving
+    # main's plan with a 200 for a branch that had never been created. A guard that covers one of two
+    # channels reads as a guard while being none.
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
     result = native.call(ns, "explain_table_query_plan", body)
     return PlainTextResponse(result if isinstance(result, str) else json.dumps(dump(result)))
 

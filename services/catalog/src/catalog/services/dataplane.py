@@ -1019,13 +1019,28 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str) ->
     do that" is correct, complete and spec-shaped — error code 0, `Unsupported` — where answering with
     another dataset's rows is neither.
 
+    THE INDEX DOORS ARE HERE TOO, and they are WRITES, which makes the refusal more urgent rather than
+    less. Measured live 2026-08-31: `create_scalar_index` with `branch=work` returned 200, MAIN advanced
+    a version and took the index, and the branch got none. An index on the wrong dataset is not inert —
+    it changes which plans the query engine picks for every later reader of main.
+
     NOT the same call as `count_rows`, which is honoured rather than refused: a count is a single
     documented operation over a dataset handle, so serving it branch-aware adds no second definition of
     anything. A faithful branch-scoped `query` would have to re-derive vector search, full-text search,
     prefilter, nprobes, refine_factor and distance_type against a handle, and a subtle divergence there
-    is a wrong answer wearing the right shape — the failure this whole file exists to stop. That
-    implementation is real work with its own tests; it is named in `open_backlog.md`, not smuggled in
-    behind a door that currently lies.
+    is a wrong answer wearing the right shape — the failure this whole file exists to stop. The index
+    doors sit on the same side of that line for the same reason: `CreateTableIndexRequest` carries a
+    whole full-text-search option surface (`base_tokenizer`, `language`, `stem`, `ascii_folding`,
+    `remove_stop_words`, `with_position`, `max_token_length`, `lower_case`) plus vector parameters, and
+    silently building an index with a DEFAULT where the caller asked for a setting is the same class of
+    quiet wrongness as building it on the wrong dataset.
+
+    `ensure_merge_key_index` is deliberately NOT refused, and the distinction is the option surface, not
+    the operation: it builds one fixed shape — a BTREE on the merge key, no user options — so it can be
+    served through the handle with nothing left to get wrong.
+
+    Both implementations are real work with their own tests; they are named in `open_backlog.md`, not
+    smuggled in behind a door that currently lies.
     """
     if branch is not None:
         raise UnsupportedOperationError(

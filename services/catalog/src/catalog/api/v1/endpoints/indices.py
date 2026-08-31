@@ -30,7 +30,7 @@ from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDe
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import CREATE_INDEX, DROP_INDEX
-from catalog.services import native
+from catalog.services import dataplane, native
 
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -59,6 +59,7 @@ async def create_index(
     CREATE_INDEX lineage event at the new version."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_index")
     response: CreateTableIndexResponse = await run_in_threadpool(native.call, ns, "create_table_index", body)
     await lineage_deps.emit_measured_write(
         emitter,
@@ -88,6 +89,7 @@ async def create_scalar_index(
     CREATE_INDEX lineage event at the new version."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_scalar_index")
     response: CreateTableScalarIndexResponse = await run_in_threadpool(native.call, ns, "create_table_scalar_index", body)
     await lineage_deps.emit_measured_write(
         emitter,
