@@ -167,6 +167,39 @@ platform backlog does not absorb it.
 
 ---
 
+## 4a. WHY GAPS KEEP APPEARING — measured, 2026-08-31
+
+The owner's challenge — *"we always still have a lot of gaps and holes because you are not testing
+stuff"* — has a number behind it, and the number is worse than the impression.
+
+| Measured | |
+| --- | --- |
+| Tests in a default run | **7,405** |
+| Marked `e2e` | 92 |
+| Of those, that EXECUTE with no environment set | **7 passed, 84 skipped, 1 xfailed** |
+| Of those 7, that drive a RUNNING system | **zero** — all seven read source or a dockerfile (does the image bake this script; is this signature named) |
+
+So a default run exercises **no running system at all**. Every live verification in this session — the
+Ray head restart, ExternalSecrets, the manual medallion, read-only mode — was performed BY HAND. That
+is the whole explanation for the pattern: the defects that matter are found by running, and nothing
+runs on its own.
+
+**CI is better than that, and the correction matters.** `make e2e-ci` and `make e2e-ray-ci` are real CI
+jobs; `scripts/e2e_stack.sh` stands up a governed kind stack and drives seven named suites. So the
+honest statement is "nothing drives a running system LOCALLY, and CI drives seven suites" — not
+"nothing runs".
+
+**And the estate already learned the sharper half of this lesson.** That script carries a strict
+no-silent-skips guard, written after two suites went unexecuted for the life of the job while it
+reported six passed and a green tick: *"A green tick over a suite that never ran is worse than a red
+one."*
+
+**Which makes the fix cheap.** A new live suite added to that script's list inherits the guard: CI
+drives it, and a misconfigured skip fails the build rather than passing quietly. That is the concrete
+form of "close the ratio" — not more unit tests, and not more hand-driving by me.
+
+---
+
 ## 5. TRACK A DRIVEN AFTER THE FIXES — 2026-08-31
 
 The owner's challenge, and it was correct: *"seems like always still have a lot of gaps and holes
