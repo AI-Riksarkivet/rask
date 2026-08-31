@@ -913,7 +913,12 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     updates = dict(req.updates or [])
     if not updates:
         raise InvalidInputError("update requires at least one [path, expression] pair")
-    dataset = open_dataset(ns, so, table_id)
+    # `branch=` is load-bearing and was MISSING. The request carries it, the served OpenAPI advertises
+    # it, and every sibling mutation on this object passes it — so a caller working on a branch mutated
+    # MAIN, got a 200, and the lineage WROTE edge recorded main's version. A branch exists precisely so
+    # work can be staged without touching main; silently writing to main is the one outcome that makes
+    # the feature worse than not having it.
+    dataset = open_dataset(ns, so, table_id, branch=req.branch)
     with _user_sql("invalid update expression or predicate"):
         result = dataset.update(updates, where=req.predicate)
     # pylance's update() returns an UpdateResult TypedDict (a plain dict at runtime); the row count is
@@ -927,7 +932,9 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
 def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTableRequest) -> DeleteFromTableResponse:
     """Delete rows matching the request predicate."""
     table_id = _table_id(req)
-    dataset = open_dataset(ns, so, table_id)
+    # Same omission as `update_table` above, and worse here: a wrong-target DELETE loses rows that were
+    # never meant to be touched, and returns 200.
+    dataset = open_dataset(ns, so, table_id, branch=req.branch)
     with _user_sql("invalid delete predicate"):
         dataset.delete(req.predicate)
     return DeleteFromTableResponse(version=dataset.version)
