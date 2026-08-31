@@ -103,6 +103,23 @@ MAX_POLLS: Final = 2880
 #: this ceiling is the only thing that ends the watch.
 MAX_UNSEEN_POLLS: Final = 4
 
+#: How many times a STAGE whose job the head lost may be submitted again.
+#:
+#: Safe because the submission id is deterministic in ``(stage, token, from->to, code)`` and
+#: ``ray_kit.submit_or_reattach`` runs the STAGE contract (``on_terminal_failure="resubmit"``): the same
+#: id either creates a fresh job, when the record is genuinely gone, or re-attaches to the one that
+#: turned out to be alive. A spurious 404 therefore costs a re-attach, never a duplicate job.
+#:
+#: TWO, because a head restart is one event but a rolling restart can bounce: the retry itself may be
+#: killed by the second bounce. Bounded rather than open-ended so a head that keeps losing jobs reports
+#: instead of resubmitting forever — at that point the cluster is the problem, not the run.
+#:
+#: STAGE ONLY. `train_run` deliberately does not have this: `submit_train_job` runs the D2 contract
+#: (``on_terminal_failure="report"``) because training compute is expensive and a failed run stays
+#: terminal until a human resubmits with a fresh token. Automatically retrying a four-hour GPU run is
+#: exactly what that policy exists to prevent.
+MAX_RESUBMITS: Final = 2
+
 #: Assertion failures that are CORRUPTION rather than a judgement call. A blob pointer that does not
 #: resolve and a null key column are structurally wrong — no approval makes the data right, so nobody
 #: is asked. Every other failure is the archive's call.
@@ -162,6 +179,10 @@ class StageJobSpec(BaseModel):
     #: after it has, the only way back to 404 is the head losing its job table — measured 2026-08-31,
     #: a head rollout leaves the new head answering `jobs: 0` while the watch polls on.
     seen: bool = False
+    #: How many times this stage has already been resubmitted after the head lost its job. Carried
+    #: across `continue_as_new` like `polls_done`, and for the same reason: a fresh turn has empty
+    #: history, so without it the retry budget would reset on every hand-off and never be reached.
+    resubmits: int = 0
     #: When the watch STARTED, as an ISO-8601 string, carried across `continue_as_new` for the same
     #: reason `polls_done` is: each turn begins with empty history and would otherwise re-stamp it.
     #:
@@ -302,6 +323,29 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     vanished = spec.seen and status is None and not watch_lost
     never_registered = not seen and not watch_lost and polls >= MAX_UNSEEN_POLLS
 
+    # THE JOB IS GONE AND WE MAY TRY AGAIN. Ahead of the abandoned path below, because reporting a
+    # recoverable loss as a terminal outcome is what leaves the tier behind it waiting on a
+    # `publish_stage_ready` that only the success branch reaches. The next turn re-enters the submit
+    # branch by handing forward `submission_id=None`, and resets the watch counters with it — the new
+    # job is a new watch, not a continuation of the lost one. `started_at` is NOT reset, so
+    # `duration_seconds` measures the whole saga rather than only its last attempt.
+    if (vanished or never_registered) and spec.resubmits < MAX_RESUBMITS:
+        if not ctx.is_replaying:
+            log.warning(
+                "medallion_stage_resubmitting",
+                extra={
+                    "submission_id": submission_id,
+                    "attempt": spec.resubmits + 1,
+                    "reason": _abandon_reason(vanished=vanished, never_registered=never_registered),
+                },
+            )
+        ctx.continue_as_new(
+            spec.model_copy(
+                update={"submission_id": None, "polls_done": 0, "seen": False, "resubmits": spec.resubmits + 1, "started_at": started_at}
+            ).model_dump()
+        )
+        return {}
+
     # STILL RUNNING and budget left: hand the rest to a fresh turn. Everything above is awaited, which
     # matters — `continue_as_new` restarts immediately and DISCARDS any task started but not awaited.
     if not watch_lost and not vanished and not never_registered and not _is_terminal(status) and polls < spec.max_polls:
@@ -312,8 +356,13 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         # The ceiling, with the job still running. Distinct from a failure ON PURPOSE: reporting a
         # slow job as FAILED would have the mover emit a failure for work that may still land, and
         # this estate's recurring defect is exactly that — a state reported as something it is not.
+        # `or ""` matches the submit-failure path above, and is load-bearing rather than defensive:
+        # a resubmit hands the next turn `submission_id=None`, so an activity that answers None leaves
+        # it None here — and `StageJobOutcome.submission_id` is `str`. Without the coercion the report
+        # this branch exists to send dies in its own constructor, which is the failure mode the
+        # abandoned path was written to prevent.
         outcome = StageJobOutcome(
-            submission_id=submission_id, status=status, polls=polls, verdict="abandoned", duration_seconds=_watch_seconds(ctx, started_at)
+            submission_id=submission_id or "", status=status, polls=polls, verdict="abandoned", duration_seconds=_watch_seconds(ctx, started_at)
         )
         if not ctx.is_replaying:
             log.warning(

@@ -19,19 +19,22 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from medallion.workflow import MAX_RESUBMITS, MAX_UNSEEN_POLLS
+
 from .test_stage_workflow import _Ctx, _drive, _spec
 
 
 def test_a_job_that_vanishes_after_being_seen_ends_the_watch_now_not_in_24_hours() -> None:
     """Seen RUNNING, then 404: the watch must END, not burn the rest of its ceiling."""
-    ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": ["RUNNING", None, None, None, None]})
+    ctx = _Ctx({"submit_stage": [f"sub-{n}" for n in range(6)], "poll_stage": ["RUNNING", None] * 6})
     out = _drive(ctx, _spec(max_polls=2880))
 
     assert out["verdict"] == "abandoned", "a vanished job is not a success and not a job failure"
-    # The whole point: it stopped on the poll AFTER the disappearance, not after 2880 of them.
-    assert ctx.actions.count("call_activity(poll_stage)") == 2, (
-        f"kept polling a job the dashboard has forgotten: {ctx.actions.count('call_activity(poll_stage)')} polls"
-    )
+    # The whole point: the watch ends in a handful of polls, not 2880. The exact count is the retry
+    # budget's business (`test_a_vanished_stage_is_resubmitted.py`) — what THIS test owns is that a
+    # forgotten job never costs the running-job ceiling, so it asserts the order of magnitude.
+    polls = ctx.actions.count("call_activity(poll_stage)")
+    assert polls <= 3 * (MAX_RESUBMITS + 1), f"kept polling a job the dashboard has forgotten: {polls} polls"
     assert "call_activity(report_stage_outcome)" in ctx.actions
 
 
@@ -83,12 +86,12 @@ def test_a_submission_that_never_registers_is_bounded_far_below_the_running_ceil
     seconds; "is this job still running" can honestly take hours. Giving the first the second's budget
     is what made a lost submission indistinguishable from a long one.
     """
-    ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": [None] * 200})
+    ctx = _Ctx({"submit_stage": [f"sub-{n}" for n in range(6)], "poll_stage": [None] * 200})
     out = _drive(ctx, cast("Any", _spec(max_polls=2880)))
 
     assert out["verdict"] == "abandoned"
     polls = ctx.actions.count("call_activity(poll_stage)")
-    assert polls <= 6, f"waited {polls} polls for an id the dashboard never registered"
+    assert polls <= MAX_UNSEEN_POLLS * (MAX_RESUBMITS + 1), f"waited {polls} polls for an id the dashboard never registered"
     assert polls >= 2, "must still tolerate a slow registration, not die on the first 404"
 
 
