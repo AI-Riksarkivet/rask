@@ -167,6 +167,49 @@ platform backlog does not absorb it.
 
 ---
 
+## 4b. WHAT DRIVING IT FOUND IMMEDIATELY — four read doors, 2026-08-31
+
+The live acceptance suite existed for under an hour before it found a defect class nobody had named,
+which is the argument for it in one line.
+
+**The finding.** `count_rows`, `query`, `explain_plan`, `analyze_plan` and the native half of
+`schema_metadata/update` all declare `branch`, hand the whole request to the upstream implementation,
+and get main's answer back. Measured against the deployed catalog with the object store as ground
+truth — main 3 rows, branch `work` 1 row:
+
+| call | correct | returned |
+| --- | --- | --- |
+| `count_rows branch=work` | 1 | **3** |
+| `count_rows branch=never-created` | 404 | **3** |
+| `query branch=work` | 1 row | **3 rows** |
+| `query branch=never-created` | 404 | **3 rows** |
+| `schema_metadata/update branch=work` (null-free body) | branch | **wrote MAIN** |
+
+The nonexistent-branch row is the one that proves it: an absent ref has no answer, so a 200 means the
+parameter was never read.
+
+**Why it was invisible until now.** It is the read-side twin of the write bug fixed earlier this
+session, and it could not be seen while that bug stood: whenever a branch-scoped write landed on main,
+the two refs held identical rows, so no read could be shown to be wrong. Fixing the writes is what
+made the reads falsifiable. That is a specific, repeatable lesson about ordering — a correctness fix
+can UNMASK a defect rather than reveal one, and the suite is what catches the newly-visible half.
+
+**Two shapes of fix, for two shapes of door.** `count_rows` and `schema_metadata/update` are HONOURED:
+each is one documented operation over a dataset handle, `open_dataset` already serves a branch and
+already raises spec error 22 for an absent one. `query`/`explain_plan`/`analyze_plan` are REFUSED 501
+`Unsupported` — not a deferral, because the defect was never "branch queries are missing" but that the
+parameter is accepted and disregarded. No caller passes `branch` to any of the three today.
+
+### OPEN — faithful branch-scoped `query`
+
+The 501 is honest, not complete. Serving a branch-scoped query properly means re-deriving vector
+search, full-text search, prefilter, `nprobes`, `refine_factor` and `distance_type` against a branch
+handle, and a subtle divergence there is a wrong answer wearing the right shape — the exact failure
+this suite exists to catch. It is real work with its own tests and it is NOT done. Recorded here rather
+than hidden behind a door that answers.
+
+---
+
 ## 4a. WHY GAPS KEEP APPEARING — measured, 2026-08-31
 
 The owner's challenge — *"we always still have a lot of gaps and holes because you are not testing
