@@ -34,7 +34,12 @@ EMBED_DIM = 8
 DUMMY_SILVER = pa.schema(
     [
         pa.field("id", pa.int64()),
-        pa.field("source_rowid", pa.int64()),
+        # uint64 and the two provenance columns beside it: owner ruling D1, 2026-08-31. The runner
+        # cannot import the platform's definition (it is sealed), so the catalog's publish door is the
+        # authority and this restatement is what keeps the two from drifting apart unnoticed.
+        pa.field("source_rowid", pa.uint64()),
+        pa.field("stage", pa.string()),
+        pa.field("lineage", pa.string()),
         pa.field("checksum", pa.string()),
         pa.field("word_count", pa.int64()),
         pa.field("embedding", pa.list_(pa.float32(), EMBED_DIM)),

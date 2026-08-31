@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lance_namespace import (
     CreateTableTagRequest,
@@ -51,7 +51,7 @@ from pydantic import BaseModel
 from catalog.core.namespace import open_dataset
 from catalog.services import dataplane
 from service_kit.lakehouse import gate_specs
-from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, passed
+from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, passed, tier_contract_violations
 
 
 if TYPE_CHECKING:
@@ -167,6 +167,33 @@ def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: 
     # back in a stable sequence a caller can diff between runs.
     union = list(spec.required_columns) + [column for column in required_columns if column not in spec.required_columns]
     return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project)
+
+
+def refuse_a_tier_without_provenance(schema: Any, *, version: int) -> None:
+    """Raise 400 when a table CLAIMS to be a governed tier and does not carry the provenance to be one.
+
+    Owner ruling D1, 2026-08-31: honest `source_rowid` provenance is mandatory. The case that decided
+    it is impact analysis — one document is corrupted at ingest, and "which rows downstream are
+    contaminated, so I re-run only those?" must not answer confidently and wrongly. A fabricated
+    parent id is worse than an absent one, because it is queryable.
+
+    AT THIS DOOR, because it is the one every publisher passes — the cascade's movers and an external
+    writer alike — and because the job-side contract has a hole this closes: it counts parentless rows
+    only `if SOURCE_ROWID_COLUMN in out.schema.names`, so a table that drops the column reports zero
+    and passes the check that exists to catch it.
+
+    Refuses on CLAIM, never on absence: a table carrying none of the three columns is not a governed
+    tier and is untouched. `tier_contract_violations` owns that rule; this function owns only the
+    door's answer to it.
+    """
+    problems = tier_contract_violations(schema)
+    if not problems:
+        return
+    raise InvalidInputError(
+        f"version {version} carries some governed-tier columns but is not a conforming tier: {'; '.join(problems)}. "
+        "A tier that carries any of `stage`, `lineage` or `source_rowid` is claiming to be governed and must carry all "
+        "three, so a row can always be traced to the source row it came from."
+    )
 
 
 def refuse_a_gate_that_cannot_run(assertions: Sequence[Assertion], *, key_column: str, version: int, declared_by: str = "") -> None:
@@ -376,6 +403,9 @@ def publish(
         )
         # BEFORE the verdict, so an unrunnable gate can never reach the tag move below.
         refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
+        # And before that verdict too: a tier with no provenance is not a weak publish, it is an
+        # untraceable one, and no assertion in the list above can see a column that is absent.
+        refuse_a_tier_without_provenance(candidate.schema, version=version)
 
         accepted: list[str] = []
         if not passed(assertions):

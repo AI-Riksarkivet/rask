@@ -101,7 +101,7 @@ def run(env: dict[str, str] | None = None) -> dict[str, Any]:
             _emit("COMPLETE", rows=0)
             return {"rows_in": 0, "rows_written": 0, "version": None, "skipped": True}
 
-        silver = transform_batch(delta)
+        silver = transform_batch(delta, stage=e.get("STAGE", "silver"), lineage=e.get("LINEAGE_JSON", ""))
         result = write_silver(to_uri, silver, run_id)
     except Exception as exc:
         # A FAIL carries no version, because the run committed nothing. Re-raised so the job still

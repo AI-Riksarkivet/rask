@@ -19,11 +19,14 @@ Both gate movement. The checks use ``count_rows`` (with a filter) so they never 
 
 from __future__ import annotations
 
+from typing import Final
+
 import lance
 import pyarrow as pa
 from pydantic import BaseModel
 
 from service_kit.lakehouse import blobs
+from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, SOURCE_ROWID_COLUMN, STAGE_COLUMN
 
 
 #: Assertion names — stable identifiers the ``dataQualityAssertions`` facet carries (and the gate keys on).
@@ -41,6 +44,53 @@ COLUMN_DECLARED = "column_declared"
 #: them — so a caller that bypasses the workflow cannot publish corrupt data either. One definition,
 #: two enforcement points, the same shape `blob_column_resolves` already has.
 STRUCTURAL_ASSERTIONS: frozenset[str] = frozenset({NOT_NULL, BLOB_RESOLVES})
+
+
+#: The provenance contract's verdict name. Reported as an assertion like every other gate answer, so a
+#: refusal is auditable in the same list a caller already reads rather than arriving as a bare error.
+PROVENANCE: Final = "provenance_complete"
+
+#: The three columns that make a row traceable. Named here rather than imported from the medallion,
+#: because the rule is the PLATFORM's and a service must not be the authority on what governs it.
+_TIER_PROVENANCE_COLUMNS: frozenset[str] = frozenset({STAGE_COLUMN, LINEAGE_COLUMN, SOURCE_ROWID_COLUMN})
+
+
+def tier_contract_violations(schema: pa.Schema) -> list[str]:
+    """Why this schema is not a conforming governed tier — empty when it is, or does not claim to be.
+
+    A governed row carries `stage` (which tier), `lineage` (the run that produced it) and
+    `source_rowid` (the bronze row it descends from). Owner ruling D1, 2026-08-31: honest provenance is
+    MANDATORY, because the case it serves is impact analysis — one document is corrupted at ingest, and
+    "which rows downstream are contaminated?" must not answer confidently and wrongly.
+
+    OPT-IN BY CLAIM, and that is the whole reason this is safe to apply at a door every publish passes
+    through. A table carrying NONE of the three is not a governed tier — a registered external dataset,
+    a user's own table — and is left alone. A table carrying ANY of them is claiming to be one, and must
+    then carry all three, correctly typed. That rule refuses exactly the shape that ships today
+    (`source_rowid` present, `stage` and `lineage` absent) without touching a plain table.
+
+    STRUCTURAL, not referential, and deliberately so: `publish` is handed a table id and a version and
+    does not know the parent table, so "does every value name a real parent row?" cannot be asked here
+    without new plumbing. It does not need to be — the referential half already runs in the stage job,
+    where both datasets are open. What the job CANNOT do is notice an absent column: it counts
+    parentless rows as `count_rows(filter="source_rowid IS NULL") if the column is in the schema else 0`,
+    so a table that drops the column reports zero and passes. Structure is the half that was missing.
+    """
+    names = set(schema.names)
+    claimed = names & _TIER_PROVENANCE_COLUMNS
+    if not claimed:
+        return []
+
+    problems = [f"missing {column!r}" for column in sorted(_TIER_PROVENANCE_COLUMNS - names)]
+
+    # A `source_rowid` of the wrong width is a DIFFERENT column wearing the right name, and it is the
+    # failure a reader is least likely to see: present, non-null, and passing every count-based check.
+    # `stamp_stage` mints uint64 because that is what Lance's own stable row id is.
+    if SOURCE_ROWID_COLUMN in names:
+        actual = schema.field(SOURCE_ROWID_COLUMN).type
+        if not pa.types.is_uint64(actual):
+            problems.append(f"{SOURCE_ROWID_COLUMN!r} is {actual}, not uint64 — the width Lance's stable row id uses")
+    return problems
 
 
 class Assertion(BaseModel):

@@ -55,12 +55,41 @@ def test_the_transform_is_deterministic() -> None:
     A random embedding would make an E5 replay produce a different silver from the same input, and
     "replay converges to identical content hashes" could never hold.
     """
-    batch = pa.table({"id": [1], "source_uri": ["u"], "payload": [b"a b c"]}, schema=BRONZE)
+    # `_rowid` is supplied because the transform now REFUSES to invent one — see the sibling test
+    # below. Real bronze always carries it: the cascade creates every dataset with stable row ids.
+    batch = pa.table({"id": [1], "source_uri": ["u"], "payload": [b"a b c"]}, schema=BRONZE).append_column("_rowid", pa.array([77], pa.uint64()))
     first = transform_batch(batch)
     second = transform_batch(batch)
     assert first.equals(second)
     assert first.column("word_count")[0].as_py() == 3
     assert len(first.column("embedding")[0].as_py()) == EMBED_DIM
+
+
+def test_the_transform_REFUSES_to_invent_provenance() -> None:
+    """Owner ruling D1: a fabricated parent id is worse than a missing one, because it is queryable.
+
+    This read `else list(range(len(ids)))` — the row's POSITION written into the column that means
+    "the bronze row this descends from". Asked which rows descend from a corrupted document, it
+    answered with whichever rows sat at those offsets: confident, and wrong.
+    """
+    batch = pa.table({"id": [1], "source_uri": ["u"], "payload": [b"a b c"]}, schema=BRONZE)
+
+    with pytest.raises(ValueError, match="provenance"):
+        transform_batch(batch)
+
+
+def test_the_silver_schema_carries_every_governed_column() -> None:
+    """What the catalog's publish door refuses a tier for not having.
+
+    Pinned here as well as at the door because this runner cannot import the platform's definition —
+    it is sealed — so the two must agree by test rather than by shared code.
+    """
+    batch = pa.table({"id": [1], "source_uri": ["u"], "payload": [b"a b c"]}, schema=BRONZE).append_column("_rowid", pa.array([77], pa.uint64()))
+    out = transform_batch(batch, stage="silver", lineage='{"run_id":"r1"}')
+
+    assert {"stage", "lineage", "source_rowid"} <= set(out.schema.names)
+    assert pa.types.is_uint64(out.schema.field("source_rowid").type), "uint64 is the width Lance's stable row id uses"
+    assert out.column("source_rowid").to_pylist() == [77], "the REAL parent, not the row's position"
 
 
 def test_silver_references_bronze_rather_than_copying_bytes() -> None:
