@@ -26,6 +26,7 @@ A row does not move to LIVE because it looks right. It moves when someone drives
 | 1.2 | The cascade proves it may WRITE before it submits | **LIVE.** 200 + audit record observed; a refusal stops the run before the job exists. |
 | 1.3 | The Ray plane runs on a scoped S3 credential; the tenant root key is off the pod | **LIVE.** Cascade succeeds; the control plane is `AccessDenied` from that credential. |
 | 1.4 | No credential rides the Ray submission body | **LIVE.** The Jobs API echoes `runtime_env` to any reader; the key is gone from both submission paths. |
+| 1.6 | **ExternalSecrets works end to end** | **LIVE.** Was "manifests correct, server dry-run accepted" and had never been driven. Driving it found TWO defects, and the first masked the second. (a) The `SecretStore` address was a BARE service name — correct for every Dapr sidecar, which sits in this namespace, and wrong for the ESO operator, which runs in `external-secrets`: login failed `lookup rask-openbao ... server misbehaving`, a DNS failure that reads as an OpenBao outage. (b) OpenBao's own ServiceAccount lacked `system:auth-delegator`, so it could not submit the TokenReview that validates a caller — every login answered `403 permission denied`, which reads as a bad role and sends you auditing the Vault side, when OpenBao never got far enough to evaluate the role. Both fixed in the chart. Verified: `SecretStore Ready=True "store validated"`, `ExternalSecret Ready=True SecretSynced`, value arrived from OpenBao. Driven against a THROWAWAY target so a wrong value could not overwrite a working credential — which mattered: the Ray credential lives in its own secret, not in `infra-credentials`, so the first KV write used a placeholder that had to be corrected before anything consumed it. |
 | 1.5 | **Bounded stage resubmit after the head loses a job** | **LIVE, end to end.** Took four attempts, and the first three failed for a reason worth recording: the `seen`→vanished branch is effectively UNREACHABLE for these jobs — a stage transform is a column stamp over Lance and completes inside one 30 s poll interval even at 400,000 rows, so the head restart always landed after the job was already terminal. The branch that actually fires here is `never_registered`. Driven at 09:21: job submitted, head restarted before the first poll, four 404 polls at 09:21:44 / 09:22:14 / 09:22:44 / 09:23:14, then `medallion_stage_resubmitting` at 09:23:14, a new submission at 09:23:15, `200 OK` at 09:23:45, terminal success the same second — and **silver→gold woke at 09:24:16 with `medallion_stage_moved`**. The cascade survived a head restart that previously killed it silently for 24 hours. |
 
 ---
@@ -73,9 +74,10 @@ These were the design-session questions. They are answered; nothing here is open
 
 ## 4. Blocked on the owner
 
+*(4.1 ExternalSecrets is CLOSED — see 1.6.)*
+
 | # | What | Blocked by |
 | --- | --- | --- |
-| 4.1 | **ExternalSecrets** — operator installed, OpenBao up, manifests correct and server-dry-run accepted | The Kubernetes auth backend does not exist in OpenBao (only `token/`), and writing auth policy into the secret store is blocked by the permission classifier. The exact command has been handed over; run it with `!`. Then: seed the 3 missing KV keys (`ray-compute-access-key`, `ray-compute-secret-key`, `ray-auth-token`), flip `externalSecrets.enabled`, verify the synced Secret matches what the infra tier consumes. |
 | 4.2 | **`dedicatedServiceCredentials: false`** — `LANCE_FGA_CASCADE_WRITERS` seeds `owner` on every warehouse for each mover, while `LANCE_PRIVILEGED_SUBJECTS` is deliberately unrendered | An owner ruling. The chart states the consequence in its own words: any holder of the shared `APP_API_TOKEN` could claim any name on `LANCE_SERVICE_SUBJECTS`, and those names hold `owner` on every warehouse. This is a posture, not a defect, so it is not mine to change. |
 
 ---
