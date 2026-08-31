@@ -59,6 +59,18 @@ that must shrink before any of it is called done.
 
 ---
 
+## 3b. Owner decisions — SETTLED 2026-08-31
+
+These were the design-session questions. They are answered; nothing here is open any more.
+
+| # | Decision | Ruling | What it means concretely |
+| --- | --- | --- | --- |
+| D1 | **Is honest `source_rowid` provenance mandatory?** | **MANDATORY** | A published tier must carry provenance that traces to real parent rows. `runners/dummy` fabricates them today (`list(range(len(ids)))` — the row's POSITION, not its parent), so it is in violation and must conform or be refused. An aggregating transform must declare how it maps parents, or declare "no provenance" explicitly — a silent opt-out is exactly what this ruling ends. The case that decided it: after a corrupt ingest, "which gold rows are contaminated?" must not return a confident wrong answer. |
+| D2 | **Is Ray forever, and does the catalog get to know it?** | **Ray forever; catalog ignorant** | The owner rejected both extremes. Not a full task registry (a new moving part for an engine that is not changing), and not the status quo (a governance service shipping `/home/ray/jobs/` in its public OpenAPI). The middle: the catalog validates `task` against a **named list given to it as config**, never a filesystem path. Declaration-time refusal — the property worth keeping, because it catches a typo at declare rather than at 3am as `exit 2` — survives unchanged. |
+| D3 | **Is structural integrity waivable?** | **WITHDRAWN by me, owner concurred** | I raised it believing "batch with no gate" was impossible. It is not: an empty delta run exits before publishing (`rows_in == 0` → `delta_empty=1`), deliberately, so a redelivered event cannot fire a publication for data nobody added. Only `not_null` on the key column becomes opt-in — *which* column is "the key" is policy. `row_count_positive` and `blob_resolves` stay mandatory. |
+
+---
+
 ## 4. Blocked on the owner
 
 | # | What | Blocked by |
@@ -85,10 +97,29 @@ Named so they do not read as done.
 | 5.10 | `/bronze-arrival`'s confinement is still project-only | With no project, `read_root` is a dataset URI, so a single-tenant ingest-first estate gets a vended location outside it and the mover DROPS it — visibly, with a counter, which beats the silent wrong-data success it replaces, but is not a fix. Widening to `MEDALLION_CATALOG_ROOT` would newly drop a legitimately zoned lane. |
 | 5.11 | The media lane has the same `from_uri` coupling, untouched | `media_produce.py` still composes the medallion path. |
 | 5.12 | The mover still sends chart values to the publish gate | So a declaration cannot RELAX a required column for cascade publishes — `required_columns` are UNIONED, so a project declaring a shorter list still gets the chart's columns asserted on top. |
-| 5.13 | **The work CONTRACT is unwritten, and the second engine already violates it** | Twelve output obligations exist only as control flow in `scripts/ray_stage_job.py`; the platform enforces three post-write. `runners/dummy` is a declarable, baked, ACCEPTED lane with no `stage` column, no `lineage` column, an `int64` `source_rowid` where the platform mints `uint64`, and fabricated parents. Nothing is red. This is `open_compute-decoupling.md` §2 and the reason it is step 1. |
+| 5.13 | **The work CONTRACT is unwritten, and the second engine already violates it** — NOW UNBLOCKED by D1 | Twelve output obligations exist only as control flow in `scripts/ray_stage_job.py`; the platform enforces three post-write. `TIER_COLUMNS` names the contract and has exactly ONE real importer, a test — in `ray_stage_job.py` the name appears only inside a COMMENT, never as an import or a check. `runners/dummy` is a declarable, baked, ACCEPTED lane with no `stage` column, no `lineage` column, an `int64` `source_rowid` where the platform mints `uint64`, and fabricated parents. Nothing is red. |
 | 5.14 | **Kueue is wired and structurally bypassed** | `chart/templates/kueue-queues.yaml` exists, gated on `kueue.enabled`; every job goes through Ray's Jobs REST API, which Kueue cannot admit. Fixing it means submitting `RayJob` CRs — which is also the first executor adapter, and what makes runs cluster objects. |
 | 5.15 | No re-run verb | The delta machinery exists (`BASE_VERSION`, verified live). The operator surface is list/inspect/terminate — there is no `POST /movers/{m}/stages/rerun`, so nobody can say "reprocess silver from version X". |
 | 5.9 | Multi-base dataset garbage is unreclaimable | Upstream-blocked in Lance, not a backlog item this estate can close. Recorded so it is not rediscovered. |
+
+---
+
+## 5b. The ordered plan — what to build, in order
+
+From `open_compute-decoupling.md` §7.4, with D1–D3 folded in. Steps 1, 3 and 7 are NOT preferences: 1 and 7
+close live defects, 3 is the only thing that makes the already-deployed Kueue reachable.
+
+| # | Step | Depends on | The test that proves it |
+| --- | --- | --- | --- |
+| 1 | **Write the output contract** and enforce it at publish (D1: provenance mandatory) | nothing | A table missing `stage`/`lineage`/a real `source_rowid` cannot publish. `runners/dummy` either conforms or is refused. |
+| 2 | Make the in-process executor conform | 1 | Both executors produce byte-identical governance columns for one input. |
+| 3 | **Submit as a `RayJob` CR** instead of the Jobs REST API | 1 | `kubectl get rayjobs` lists a run. |
+| 4 | Turn Kueue on — quota + gang scheduling | 3 | A job queues when quota is exhausted, then runs. |
+| 5 | `not_null` becomes opt-in per declaration (D3) | 1 | A declaration with no key column publishes; an empty table still cannot. |
+| 6 | Named-task validation (D2) — the catalog stops seeing paths | 1 | `grep -r "/home/ray/jobs" services/catalog packages/service-kit` is empty; a bad task name still 422s. |
+| 7 | **A reconciler and a re-run verb** | 1 | A deliberately missed hop is detected and re-driven. |
+| 8 | `Transform` CRD + one generic runner replacing three movers | 1,3,6 | Adding a hop is a git commit. |
+| 9 | Finish the "lane" rename | nothing | The word survives only where it means a code branch. |
 
 ---
 
