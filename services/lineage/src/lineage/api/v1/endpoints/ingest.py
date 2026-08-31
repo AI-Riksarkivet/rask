@@ -3,6 +3,19 @@
 The OpenLineage HTTP-transport default path: any producer (our emitter, Airflow, Spark, dbt, …)
 configured with ``OPENLINEAGE_URL`` pointed here ingests with no glue — the lightweight-Marquez
 contract. Durable catalog→lineage delivery rides the Dapr subscription (``lineage.api.dapr``) instead.
+
+**THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in AGE and the durable feed
+and drives NOTHING — the whole handler is authorize, ``ingest_event``, ``record_event_best_effort``,
+return, with no publish anywhere on the path. The medallion cascade's head is a Dapr subscription on
+the ``lineage.events.v1`` TOPIC (``medallion.api.bronze_arrival``), and nothing republishes from HTTP
+ingest onto that topic.
+
+The distinction is easy to miss and expensive: this is the one door an external orchestrator finds,
+and the sentence above markets it to exactly the tools that would expect a write here to start a run.
+It does not. The result is a perfect graph, zero compute, every pod green, and nothing to grep for.
+An external producer that means to DRIVE the cascade writes its rows through the catalog's data-plane
+door (``POST /v1/table/{id}/insert``), whose own emitter announces the write onto the topic — which is
+what ``services/ingest`` does, and why it publishes no lineage event of its own.
 """
 
 from __future__ import annotations
