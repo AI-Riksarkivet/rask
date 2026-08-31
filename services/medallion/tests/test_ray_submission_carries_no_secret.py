@@ -122,10 +122,25 @@ async def test_the_train_submission_carries_no_secret_material(train_body: dict[
 async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage_body: dict[str, Any]) -> None:
     """The failure mode that would hide the fix: stripping everything also passes above.
 
-    Endpoint, key id and region are configuration, not secrets — the job still needs them per
-    submission (they vary by warehouse), and `LINEAGE_SERVICE_ID` is an identity NAME, not a
-    credential."""
+    Endpoint and region are configuration, not secrets — the job needs them per submission (they vary
+    by warehouse) — and `LINEAGE_SERVICE_ID` is an identity NAME, not a credential.
+
+    `S3_KEY` USED TO BE IN THIS LIST, on the same reasoning: an access key id is not secret. That
+    reasoning still holds, and it is not why the key left. It left because Ray merges
+    `runtime_env.env_vars` OVER the worker's process env, so a key sent here BEATS the one the pod
+    mounts — which gave the credential two owners. Repointing the Ray pod at a scoped RustFS user
+    produced `SignatureDoesNotMatch` on every job (its new secret paired with the submission's old
+    key), and repointing the mover instead took the MOVER down: it does its own S3 work
+    (`outbox.stage_event` → `create_dir` → HeadBucket), which needs an unconditioned `s3:ListBucket`
+    that a prefix-scoped policy correctly refuses. Both measured on the live estate 2026-08-30.
+
+    So the pod now mounts BOTH halves from `infra-credentials` (`chart/templates/rayservice.yaml`)
+    and the submission carries neither. The job's `os.environ` contract is unchanged — it still reads
+    `S3_KEY`/`S3_SECRET` from the environment, which is asserted in
+    `tests/unit/test_no_credential_rides_the_submission.py` so that removing them here can never
+    quietly leave the job with nothing to read."""
     await ray_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
     env = stage_body["body"]["runtime_env"]["env_vars"] if "body" in stage_body else stage_body["runtime_env"]["env_vars"]
-    for key in ("S3_ENDPOINT", "S3_KEY", "S3_REGION", "LINEAGE_URL", "LINEAGE_SERVICE_ID"):
+    for key in ("S3_ENDPOINT", "S3_REGION", "LINEAGE_URL", "LINEAGE_SERVICE_ID"):
         assert key in env, f"`{key}` was stripped with the secrets — the job cannot run without its non-secret config"
+    assert "S3_KEY" not in env, "the key must come from the pod alone, or runtime_env overrides it and the pair has two owners"

@@ -193,9 +193,9 @@ spec:
                      (it does its own S3 work — `outbox.stage_event` issues a HeadBucket, which needs
                      an unconditioned ListBucket a scoped policy refuses). Both measured 2026-08-30.
                      `ray-compute-*` defaults to the root credential, so this is inert until an
-                     operator provisions the scoped RustFS user. The medallion still exports S3_KEY
-                     into runtime_env (`MEDALLION_RAY_S3_ACCESS_KEY_ID`) and the two must AGREE —
-                     the mover's value is the one the job actually signs with. */}}
+                     operator provisions the scoped RustFS user. NOTHING credential-shaped rides the
+                     submission any more, so this pod is the single source and there is no second
+                     value to keep in agreement. */}}
                 - name: S3_KEY
                   valueFrom:
                     secretKeyRef:
