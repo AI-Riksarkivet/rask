@@ -19,6 +19,7 @@ Lance/object-store IO and runs in a threadpool, like every other Lance-touching 
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Annotated, Any, Protocol
 
@@ -167,6 +168,27 @@ async def publication_extra(
     return extra
 
 
+log = logging.getLogger(__name__)
+
+
+async def _project_from_binding(settings: Settings, so: dict[str, str], top_ns: str) -> str | None:
+    """The tenant from the warehouse binding, SWALLOWING failure — the emitter's own contract.
+
+    Swallowing is not defensive padding here, it is the property this fallback has to preserve. The
+    emitter states it outright: resolution "cannot raise", so a registry blip costs the watchers their
+    tenant and never costs the caller their request. A fallback that raised would turn an unreachable
+    or absent registry into a failed publish — which is strictly worse than the defect it was added to
+    fix, because it converts a silently weaker gate into a broken door.
+
+    `None` degrades to exactly the pre-existing behaviour: the request's own gate governs.
+    """
+    try:
+        return await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, so, top_ns)
+    except Exception:
+        log.debug("gate project resolution failed for %r — the request's own gate governs", top_ns, exc_info=True)
+        return None
+
+
 async def resolve_effective_gate(
     settings: Settings,
     so: dict[str, str],
@@ -201,7 +223,7 @@ async def resolve_effective_gate(
     # emit-off case and a cold cache.
     project = (await lineage.project_for(segments[0]) if segments else None) or None
     if project is None and segments:
-        project = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, so, segments[0])
+        project = await _project_from_binding(settings, so, segments[0])
     spec = await run_in_threadpool(publication.declared_gate, settings.registry_root, so, project or "")
     return publication.effective_gate(spec, key_column=body.key_column, required_columns=body.required_columns)
 
