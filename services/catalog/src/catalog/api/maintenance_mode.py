@@ -25,10 +25,47 @@ PROBLEM_JSON = "application/problem+json"
 RETRY_AFTER_SECONDS = 60
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+#: The spec's READ actions, as trailing path segments.
+#:
+#: THE METHOD IS NOT ENOUGH HERE, and that is a property of the Lance Namespace grammar rather than an
+#: oversight in the middleware. The route shape is ``POST /v1/<object>/{id}/<action>`` — the spec puts
+#: the operation in the PATH, so `describe`, `count_rows`, `query` and every other read arrive as POST.
+#: Classifying by verb alone therefore refused the entire read surface, which is the outage a read-only
+#: window exists to avoid rather than cause.
+#:
+#: A SUFFIX ALLOWLIST, so classification is fail-closed: an action nobody has listed is treated as a
+#: write. A spec operation added tomorrow is refused during a window until someone judges it, which is
+#: the safe direction — the opposite default would make every future write a silent hole discovered
+#: only when it corrupted something mid-maintenance.
+_READ_ACTIONS: frozenset[str] = frozenset(
+    {
+        "describe",
+        "exists",
+        "list",
+        "count_rows",
+        "query",
+        "stats",
+        "explain_plan",
+        "analyze_plan",
+        "my-permissions",
+        "check",
+        "graph",
+        "tasks",
+        "preview",
+    }
+)
 
-def is_mutating(method: str) -> bool:
-    """True for HTTP methods that write (anything but GET/HEAD/OPTIONS)."""
-    return method.upper() not in _SAFE_METHODS
+
+def is_mutating(method: str, path: str = "") -> bool:
+    """True when this request WRITES — by action where the spec names one, else by method.
+
+    ``path`` is optional so existing callers keep working; without it the answer degrades to the
+    method rule, which is correct for the non-spec surface and merely insufficient for ``/v1``.
+    """
+    if method.upper() in _SAFE_METHODS:
+        return False
+    action = path.rstrip("/").rsplit("/", 1)[-1] if path else ""
+    return action not in _READ_ACTIONS
 
 
 def maintenance_response() -> JSONResponse:
@@ -58,6 +95,6 @@ async def maintenance_middleware(
     """Short-circuit mutating ``/v1`` requests with 503 when read-only is on."""
     settings = getattr(request.app.state, "settings", None)
     read_only = bool(getattr(settings, "maintenance_read_only", False))
-    if read_only and is_mutating(request.method) and request.url.path.startswith("/v1"):
+    if read_only and request.url.path.startswith("/v1") and is_mutating(request.method, request.url.path):
         return maintenance_response()
     return await call_next(request)
