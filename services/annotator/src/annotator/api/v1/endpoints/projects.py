@@ -12,9 +12,10 @@ decides *what* — they are deliberately separate.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
@@ -46,6 +47,12 @@ CREATE_RELATION = "can_create_annotation_project"
 #: member a viewer of every project below — so member-gates-the-list and can_view-gates-the-item
 #: agree by construction.
 LIST_RELATION = "member"
+
+#: How many project-actor reads the landing keeps in flight at once. One actor id PER project, so
+#: these genuinely parallelise rather than queueing on a single actor's turn lock. Matches the send
+#: path's seed fan-out cap (`_ACTOR_FANOUT`) and the publish path's (`_COLLECT_FANOUT`); the bound
+#: exists because the alternative is one sidecar channel per project in the tenant.
+_LISTING_FANOUT: Final[int] = 16
 
 ProjectId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
 
@@ -179,8 +186,13 @@ async def list_projects(tenant: Annotated[str, Query(min_length=1)], checker: Ch
 
     Gated on tenant MEMBERSHIP, and a refusal is a 403, never an empty 200: "you may not look"
     and "there is nothing here" are different answers, and collapsing them hides the former.
-    Fans out to each project's own actor for the document; an id whose actor holds no state (a
-    lost partition) is skipped rather than taking the whole landing down.
+    Fans out to each project's own actor for the document, with concurrency bounded by
+    `_LISTING_FANOUT`; an id whose actor holds no state (a lost partition) is skipped rather than
+    taking the whole landing down.
+
+    This is the estate's hottest actor fan-out — one call per page load — and each id addresses a
+    DIFFERENT actor, so the reads are independent. Awaited in series the landing's wall clock is one
+    sidecar round-trip per project in the tenant.
     """
     parent = f"project:{tenant}"
     if not await checker(user=subject, relation=LIST_RELATION, obj=parent):
@@ -188,11 +200,18 @@ async def list_projects(tenant: Annotated[str, Query(min_length=1)], checker: Ch
         raise ForbiddenError(f"{subject} lacks {LIST_RELATION} on {parent}")
 
     listing = await _tenant_actor(tenant).list_projects()
-    projects: list[dict[str, Any]] = []
-    for project_id in listing["project_ids"]:
-        doc = await _create_actor(str(project_id)).get()
-        if doc is not None:
-            projects.append(doc)
+    gate = asyncio.Semaphore(_LISTING_FANOUT)
+
+    async def _document(project_id: str) -> dict[str, Any] | None:
+        async with gate:
+            return await _create_actor(project_id).get()
+
+    # `gather` preserves INPUT order, so the landing renders in the tenant index's order. It also
+    # propagates the first failure rather than collecting it, which is deliberate: a listing that
+    # silently omits a project the caller may see is indistinguishable from one that was deleted, so
+    # an unreachable actor must be an error and not a shorter page.
+    docs = await asyncio.gather(*(_document(str(project_id)) for project_id in listing["project_ids"]))
+    projects = [doc for doc in docs if doc is not None]
     return ProjectListing(projects=[AnnotationProject.model_validate(doc) for doc in projects], total=len(projects))
 
 
