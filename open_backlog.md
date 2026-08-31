@@ -167,6 +167,39 @@ platform backlog does not absorb it.
 
 ---
 
+## 6a. Track A finding — a hand-written dataset can be registered with provenance that can never work
+
+Found 2026-08-31 while auditing every Lance create path against `lance_docs/file_format.md`.
+
+`enable_stable_row_ids` is **create-time only** — set it later and it is a silent no-op. Every
+`source_rowid` in silver and gold is a reference to a stable `_rowid`, so a dataset created without the
+flag can never carry honest provenance, and cannot be fixed short of rewriting it.
+
+Three doors, and only two are guarded:
+
+| Door | Behaviour |
+| --- | --- |
+| The catalog CREATES a table (`dataplane.py:214`) | Sets the flag. Correct. |
+| The INGEST plane registers (`ingest/catalog.py:238`, gate A14) | REFUSES a dataset without it. Correct. |
+| **`register_table` — the door for data written elsewhere** | **No check at all.** |
+
+That third door is precisely the manual path: a person writes their own Lance dataset and registers
+it. It is accepted, `_rowid` is unstable, and the provenance contract added at the publish door cannot
+see the problem — it verifies the COLUMNS exist, not that the dataset underneath can produce honest
+values for them.
+
+**A prose correction that came with it:** `ingest/lander.py:68` says "gate A14 makes the CATALOG refuse
+a governed dataset created without them." The gate is real, but it lives in `services/ingest`, so it
+guards the ingest path only. The catalog refuses nothing. Reading that comment, one would reasonably
+conclude the third door is covered.
+
+**Not yet fixed, because the right shape needs a decision:** `register_table` also exists for genuinely
+external datasets that may never be a governed tier, so refusing outright may be wrong. The consistent
+shape with D1 is opt-in by claim — refuse when the registration is into a governed tier, accept
+otherwise — but that requires knowing at registration time which it is.
+
+---
+
 ## 6b. Bootstrap on a fresh machine — NOT complete
 
 Asked 2026-08-31; the answer is no, and checking it found a security regression waiting to happen.
