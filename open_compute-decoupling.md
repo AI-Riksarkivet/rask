@@ -624,3 +624,89 @@ work item, and it is not a decoupling task.**
 10. **Does maintenance get a Protocol now (~1 day, no dispatch) or nothing?** My recommendation is the
     Protocol plus the catalog-door convergence work, and explicitly **no** distributed maintenance path
     until `lance-ray` compaction and distributed index build are functional upstream.
+
+---
+
+## 7. Owner direction, 2026-08-31 — GitOps + CRs + Ray/Kueue
+
+Recorded because it settles three questions this spec had left open, and it changes section 4's
+ordering rather than sections 1-3's findings.
+
+### 7.1 Keep Dapr Workflow. Add two CRDs.
+
+The orchestrator question was posed as "swap Dapr Workflow for Airflow or Dagster". The answer is no,
+and the reason is not loyalty to Dapr — it is that the question mixes two layers that GitOps keeps
+apart:
+
+**GitOps governs DESIRED STATE, not a running process instance.** Argo works the same way: a
+`WorkflowTemplate` lives in git; a `Workflow` — a run — is created dynamically and is not in git.
+So "Dapr Workflow is imperative code" is not a GitOps failure. Dapr Workflow sits at the layer of
+Argo's CONTROLLER, not at the layer of Argo's templates, and the declarative half is a CRD either way.
+
+Three orthogonal layers, and the estate can have all three:
+
+| Layer | What it is | Where it belongs |
+| --- | --- | --- |
+| **Declaration** — what should exist | the lane / `TransformSpec` | a **`Transform` CR** in git, synced by ArgoCD. Replaces `POST /v1/project/{id}/transform/set` as the WRITE path; the catalog record becomes the reconciled projection. |
+| **Run orchestration** — how a run proceeds durably | submit → poll → terminal → publish; approval waits | **Dapr Workflow**, unchanged |
+| **Execution unit** — the compute | one job | a **`RayJob` CR**, which is what Kueue can admit |
+
+Airflow and Dagster were rejected on evidence, not taste. Both bring a second scheduler and a second
+database, both are configured in Python rather than in cluster objects — so both move the estate AWAY
+from CRs — and neither holds what these workflows actually do: `promotion_review` is a 72-hour
+`wait_for_external_event` racing `create_timer`, and `ingest_run` is a cancel event racing a
+`max_run_hours` deadline. That is durable human-and-deadline state, the category those tools are
+weakest at. Argo Workflows is the CR-native one and can express a suspend node, but it cannot hold a
+durable timer that carries no JetStream ack, which is the reason the poll cannot live in the HTTP
+handler in the first place.
+
+### 7.2 Runs BECOME custom resources without adopting an orchestrator
+
+This is the part the earlier draft missed. A `RayJob` **is** a CR. Submitting through it rather than
+through Ray's Jobs REST API means:
+
+- `kubectl get rayjobs` lists every run — runs are cluster objects, visible to GitOps tooling.
+- **Kueue can finally see them.** `chart/templates/kueue-queues.yaml` already exists, gated on
+  `kueue.enabled` — and every job today goes through the Jobs REST API, which Kueue cannot admit,
+  queue or preempt. Kueue is wired and structurally bypassed.
+- Gang scheduling and per-tenant quota become available, which is what a multi-node Ray job needs and
+  what a shared cluster needs.
+
+**This is the same seam as the executor adapter in §2.** A `RayJobExecutor` that creates a `RayJob` CR
+and watches its status is one implementation of the `Executor` protocol; the Jobs-REST submitter is
+another. So the CR move is not extra work beside the decoupling — it IS the first adapter, and it is
+the one that pays for itself immediately.
+
+### 7.3 Backfill — what is true, stated precisely
+
+The earlier draft was imprecise and the owner was right to challenge it.
+
+- **`catalog/services/cascade_backfill.py` is NOT data backfill.** It re-asserts FGA GRANTS over
+  every registered warehouse. Different concern; do not cite it as reprocessing.
+- **Incremental reprocessing EXISTS and lives in the lakehouse:** the delta lane, `BASE_VERSION` +
+  `_delta_filter` in `scripts/ray_stage_job.py`, addressed by **Lance dataset VERSION**. Verified
+  running live 2026-08-31 (`lane=delta` off `BASE_VERSION=106`). It is not tied to `lance_ray` —
+  that import appears only in `scripts/ray_lance_job.py`, a separate demo — and it is engine-neutral
+  in concept: any executor that can push a predicate can honour it.
+- **What is missing is a RE-RUN VERB, not a mechanism.** The mover operator surface is list, inspect,
+  terminate; there is no `POST /movers/{m}/stages/rerun`. So an operator cannot say "reprocess silver
+  from version X" even though the machinery to do it exists.
+- **Airflow-style backfill would not transfer.** Its backfill is a SCHEDULER concept — re-run a DAG
+  over a DATE RANGE. This lakehouse is version-addressed, not date-partitioned, so adopting Airflow
+  would supply a date axis the data does not have rather than the version-range re-drive it does need.
+
+### 7.4 Revised order
+
+1. **Write the contract** (§2) — `WorkOrder`, `Executor`, the attestation. Nothing else is safe until
+   the platform can state what a conforming output is; `runners/dummy` already violates it silently.
+2. **Make the existing second executor conform** — the in-process branch behind `use_ray`. This is
+   the cheapest possible proof the contract is real, because the second engine already exists.
+3. **`RayJobExecutor` — submit as a `RayJob` CR** rather than the Jobs REST API. First adapter, and
+   the thing that makes Kueue functional.
+4. **Kueue admission** — queues, quota, gang scheduling. Unblocked by (3), impossible before it.
+5. **`Transform` CRD + reconciler** — the declaration moves to git; the catalog record becomes the
+   projection.
+6. **The re-run door** — `POST /movers/{m}/stages/rerun` over the existing delta machinery.
+
+Steps 1-3 are required for a second engine. Steps 4-6 are required for the GitOps/cloud-native goal.
+Nothing here needs Argo, Airflow, Dagster, Temporal, or a second control plane.
