@@ -688,3 +688,51 @@ def test_the_merge_key_index_built_after_a_branch_merge_lands_on_the_branch(esta
         "this is the index build that follows it — the accelerator going to a dataset the caller did "
         "not name."
     )
+
+
+def test_a_version_listing_scoped_to_a_branch_lists_that_branch(estate: Estate) -> None:
+    """`version/list` honours `branch`, and this test exists to keep it that way — and to pin the CHANNEL.
+
+    It is here because of a mistake worth encoding. `branch` on this route is a QUERY parameter, not a
+    body field; a probe that sent it in the JSON body was silently ignored by FastAPI, the door answered
+    for main, and that is indistinguishable from the defect this file hunts. The door was correct all
+    along. A regression that moved `branch` into the body, or dropped the query parameter, would
+    reproduce that false reading — so asserting through the query string is the assertion.
+
+    The sibling doors on the same module honour it too (`version/describe`, `version/delete`), while
+    `count_rows` and `query` did not. Upstream is right or wrong PER OPERATION, so each door is pinned
+    by driving it rather than by inheriting a verdict from its neighbour.
+    """
+    uri = estate.create("verlist", _rowed(("a", "one"), ("b", "two"), ("c", "three")))
+    estate.branch("verlist", "work")
+    for row in ("a", "b", "c"):
+        r = requests.post(
+            f"{CATALOG}/v1/table/{estate.table_id('verlist')}/delete",
+            json={"predicate": f"id = '{row}'", "branch": "work"},
+            headers=_auth(),
+            timeout=120,
+        )
+        assert r.status_code == 200, r.text
+
+    main_versions = _open_main(uri).version
+    branch_versions = _open_branch(uri, "work").version
+    assert branch_versions > main_versions, (
+        f"the branch did not diverge (main={main_versions}, branch={branch_versions}); nothing here can tell the two refs apart"
+    )
+
+    on_main = requests.post(f"{CATALOG}/v1/table/{estate.table_id('verlist')}/version/list", headers=_auth(), timeout=60)
+    on_branch = requests.post(f"{CATALOG}/v1/table/{estate.table_id('verlist')}/version/list?branch=work", headers=_auth(), timeout=60)
+    assert on_main.status_code == 200, on_main.text
+    assert on_branch.status_code == 200, on_branch.text
+
+    assert len(on_main.json().get("versions", [])) == main_versions
+    listed = on_branch.json().get("versions", [])
+    assert len(listed) == branch_versions, f"?branch=work listed {len(listed)} versions; the branch has {branch_versions} and main has {main_versions}"
+    for entry in listed:
+        assert "/tree/work/_versions/" in (entry.get("manifest_path") or ""), (
+            f"a branch version's manifest_path is {entry.get('manifest_path')!r} — not under `tree/work/`, so the row "
+            "describes a MAIN version wearing a branch listing's shape."
+        )
+
+    ghost = requests.post(f"{CATALOG}/v1/table/{estate.table_id('verlist')}/version/list?branch=no-such-branch-was-ever-created", headers=_auth(), timeout=60)
+    assert ghost.status_code == 404, f"listing versions of a branch that does not exist returned {ghost.status_code}: {ghost.text[:200]}"
