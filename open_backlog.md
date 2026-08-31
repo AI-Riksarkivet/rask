@@ -36,7 +36,7 @@ that must shrink before any of it is called done.
 
 | # | What | Level | What "proven" would require |
 | --- | --- | --- | --- |
-| 2.1 | **Bounded stage resubmit** on `job_vanished` / `never_registered` (owner ruling: auto-resubmit, no Redis) | **SUITE** | Deploy, restart the head mid-job **after a poll has succeeded**, and observe a resubmit followed by a completed cascade. The earlier probe accidentally landed in the pre-first-poll window and did NOT exercise this path — that miss is exactly why this row is not LIVE. |
+| 2.1 | **Bounded stage resubmit** on `job_vanished` / `never_registered` (owner ruling: auto-resubmit, no Redis) | **SUITE** | **THREE ATTEMPTS, THREE MISSES.** Deployed, and each probe's job finished inside one poll interval — the last completed at 08:45:43, the same second as its first 200 poll — so the head restart always landed after the job was already done. Proving this needs a deliberately SLOW job (a lane that sleeps, or a dataset large enough to outlast 30s), not another retry of the same shape. Until then the path is unit-proven only. |
 | 2.2 | `VS-07` — a dropped search leg logs or raises; a fusion with every leg rejected no longer answers an empty 200 | **SUITE** | Drive a real search with a leg forced to fail and observe the log/5xx rather than a silent 200. |
 | 2.3 | `ANN-03` — the project listing reads its actors concurrently | **SUITE** | Observe the listing latency and the peak concurrent actor reads against a real actor plane. |
 | 2.4 | `VS-05` — the plain-binary listing stops reading every blob | **SUITE** | Measure bytes read serving `/api/pages` on a real plain-binary corpus. |
@@ -50,11 +50,12 @@ that must shrink before any of it is called done.
 
 | # | What | Level |
 | --- | --- | --- |
-| 3.1 | Wire the catalog's `LANCE_LINEAGE_OUTBOX_URI` (verified absent from the render: 4× `MEDALLION_*`, zero `LANCE_*`) | in flight |
-| 3.2 | Write the control-lane relay — `table_published` is the only silver→gold trigger and nothing stages or replays it | in flight |
-| 3.3 | `/bronze-arrival` carries `from_uri` resolved through the catalog | in flight |
-| 3.4 | Gate parity — a `key_column` naming a nonexistent column must be refused, not silently dropped | in flight |
-| 3.5 | Compute-engine coupling audit + `open_compute-decoupling.md` | in flight |
+| 3.1 | Catalog's `LANCE_LINEAGE_OUTBOX_URI` wired | **SUITE** — render-pinned by a new invariant; a real bus outage not exercised |
+| 3.2 | Control-lane relay written + wired on a private `_control_outbox` prefix | **SUITE** — never `_lineage_outbox`, which the lineage relay would treat as poison |
+| 3.3 | `/bronze-arrival` carries the vended `from_uri` | **SUITE** — the ingest-first ordering hazard is closed; see 5.10 for the remaining limit |
+| 3.4 | Gate parity — a `key_column` naming no column is refused | **SUITE** |
+| 3.5 | `MAINTENANCE_LINEAGE_OUTBOX_URI` — the same defect on a second service | **SUITE** — found only because an agent named it in its own `left_undone` |
+| 3.6 | `open_compute-decoupling.md` — the audit and the executor contract | **WRITTEN** — 3 seams engine-bound, 2 leaky, 2 neutral |
 
 ---
 
@@ -81,6 +82,12 @@ Named so they do not read as done.
 | 5.6 | Annotator project listing has no `limit`/`cursor` | The fan-out bounds CONCURRENCY, not COUNT. A thousand projects is still a thousand actor round-trips. Needs a wire-contract change and a frontend change. |
 | 5.7 | `attach_captions` logs rather than raising on an estate fault | A deliberate call — the hits are complete when it runs — but if a caption-scan outage should be a hard 503, it is one line at the same site. |
 | 5.8 | No tree-wide gate forbidding `boto3` outside `packages/storage` | Per-module AST guards exist. A tree-wide gate needs an allowlist for legitimate test-side use (moto fixtures, runner tests), which is a larger decision. |
+| 5.10 | `/bronze-arrival`'s confinement is still project-only | With no project, `read_root` is a dataset URI, so a single-tenant ingest-first estate gets a vended location outside it and the mover DROPS it — visibly, with a counter, which beats the silent wrong-data success it replaces, but is not a fix. Widening to `MEDALLION_CATALOG_ROOT` would newly drop a legitimately zoned lane. |
+| 5.11 | The media lane has the same `from_uri` coupling, untouched | `media_produce.py` still composes the medallion path. |
+| 5.12 | The mover still sends chart values to the publish gate | So a declaration cannot RELAX a required column for cascade publishes — `required_columns` are UNIONED, so a project declaring a shorter list still gets the chart's columns asserted on top. |
+| 5.13 | **The work CONTRACT is unwritten, and the second engine already violates it** | Twelve output obligations exist only as control flow in `scripts/ray_stage_job.py`; the platform enforces three post-write. `runners/dummy` is a declarable, baked, ACCEPTED lane with no `stage` column, no `lineage` column, an `int64` `source_rowid` where the platform mints `uint64`, and fabricated parents. Nothing is red. This is `open_compute-decoupling.md` §2 and the reason it is step 1. |
+| 5.14 | **Kueue is wired and structurally bypassed** | `chart/templates/kueue-queues.yaml` exists, gated on `kueue.enabled`; every job goes through Ray's Jobs REST API, which Kueue cannot admit. Fixing it means submitting `RayJob` CRs — which is also the first executor adapter, and what makes runs cluster objects. |
+| 5.15 | No re-run verb | The delta machinery exists (`BASE_VERSION`, verified live). The operator surface is list/inspect/terminate — there is no `POST /movers/{m}/stages/rerun`, so nobody can say "reprocess silver from version X". |
 | 5.9 | Multi-base dataset garbage is unreclaimable | Upstream-blocked in Lance, not a backlog item this estate can close. Recorded so it is not rediscovered. |
 
 ---
