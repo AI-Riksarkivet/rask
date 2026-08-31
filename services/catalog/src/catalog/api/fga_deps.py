@@ -108,6 +108,23 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "branches/create": "can_create_branch",
         "tags/create": "can_create_tag",
         "tags/update": "can_update_tag",
+        # DELETE completes the tag lifecycle, and leaving it unmapped was the hole. An unmapped suffix
+        # falls to the writer rung, so a plain data writer could remove the pin that `published` is —
+        # and then defeat the owner-tier rollback guard, since publication refuses to move `published`
+        # BACKWARDS but has nothing to say about republishing after the tag is gone.
+        #
+        # `can_drop` rather than a new relation: the bar it has to clear is the one already carried by
+        # `maintenance/run`, which reclaims version history and EXEMPTS tagged versions. The door that
+        # respects the tag cannot be the expensive one while the door that removes it is cheap.
+        "tags/delete": "can_drop",
+        # Same rung, same reason, one step more direct: this destroys the VERSION rather than the pin,
+        # so `published` is left naming bytes that no longer exist. `version/list` and the read-side
+        # siblings still fall through to the reader tier — only the destructive verb is lifted.
+        #
+        # This rung carries more weight here than it would in an Iceberg catalog, and deliberately:
+        # Lance keeps the CAS in the object store, so the serving pointer is a tag INSIDE the dataset
+        # rather than a row a catalog transaction owns. Authorization is the only thing guarding it.
+        "version/delete": "can_drop",
         # #50 maintenance policies: a retention policy authorizes destroying this table's version
         # history over time — the drop rung, not a plain write. `policy/describe` falls through to
         # the reader tier via its trailing segment.
