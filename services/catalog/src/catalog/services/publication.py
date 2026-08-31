@@ -169,6 +169,19 @@ def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: 
     return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project)
 
 
+def _open_for_schema(uri: str, storage_options: dict[str, str], version: int) -> object:
+    """The schema of ``version`` at ``uri`` — the gate's half of the provenance check.
+
+    `publish` already holds an opened dataset and passes its schema straight in; `gate` is handed a URI
+    and has to open one. Pinned to the same `version` the assertions ran against, never `latest`, for
+    the reason `assert_quality` records: another writer may have committed since, and answering about a
+    version this call is not gating is the failure the pin exists to prevent.
+    """
+    import lance
+
+    return lance.dataset(uri, storage_options=storage_options, version=version).schema
+
+
 def refuse_a_tier_without_provenance(schema: Any, *, version: int) -> None:
     """Raise 400 when a table CLAIMS to be a governed tier and does not carry the provenance to be one.
 
@@ -327,6 +340,12 @@ def gate(
         version=version,
     )
     refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
+    # THE SAME REFUSAL `publish` RAISES, and it belongs here for the reason the docstring above gives:
+    # a gate that under-reports sends the promotion review an approval the ACT will then refuse, and
+    # the reviewer has no way to see it coming. Opening the dataset a second time is the cost of
+    # answering the same question — `assert_quality` above opened it for the assertions, and the
+    # contract is a schema read, not a scan.
+    refuse_a_tier_without_provenance(_open_for_schema(uri, storage_options or {}, version), version=version)
     failed = [a.assertion for a in assertions if not a.success]
     return PublicationResult(
         table=uri,
