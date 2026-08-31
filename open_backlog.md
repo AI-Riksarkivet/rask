@@ -26,6 +26,7 @@ A row does not move to LIVE because it looks right. It moves when someone drives
 | 1.2 | The cascade proves it may WRITE before it submits | **LIVE.** 200 + audit record observed; a refusal stops the run before the job exists. |
 | 1.3 | The Ray plane runs on a scoped S3 credential; the tenant root key is off the pod | **LIVE.** Cascade succeeds; the control plane is `AccessDenied` from that credential. |
 | 1.4 | No credential rides the Ray submission body | **LIVE.** The Jobs API echoes `runtime_env` to any reader; the key is gone from both submission paths. |
+| 1.5 | **Bounded stage resubmit after the head loses a job** | **LIVE, end to end.** Took four attempts, and the first three failed for a reason worth recording: the `seen`→vanished branch is effectively UNREACHABLE for these jobs — a stage transform is a column stamp over Lance and completes inside one 30 s poll interval even at 400,000 rows, so the head restart always landed after the job was already terminal. The branch that actually fires here is `never_registered`. Driven at 09:21: job submitted, head restarted before the first poll, four 404 polls at 09:21:44 / 09:22:14 / 09:22:44 / 09:23:14, then `medallion_stage_resubmitting` at 09:23:14, a new submission at 09:23:15, `200 OK` at 09:23:45, terminal success the same second — and **silver→gold woke at 09:24:16 with `medallion_stage_moved`**. The cascade survived a head restart that previously killed it silently for 24 hours. |
 
 ---
 
@@ -36,7 +37,6 @@ that must shrink before any of it is called done.
 
 | # | What | Level | What "proven" would require |
 | --- | --- | --- | --- |
-| 2.1 | **Bounded stage resubmit** on `job_vanished` / `never_registered` (owner ruling: auto-resubmit, no Redis) | **SUITE** | **THREE ATTEMPTS, THREE MISSES.** Deployed, and each probe's job finished inside one poll interval — the last completed at 08:45:43, the same second as its first 200 poll — so the head restart always landed after the job was already done. Proving this needs a deliberately SLOW job (a lane that sleeps, or a dataset large enough to outlast 30s), not another retry of the same shape. Until then the path is unit-proven only. |
 | 2.2 | `VS-07` — a dropped search leg logs or raises; a fusion with every leg rejected no longer answers an empty 200 | **SUITE** | Drive a real search with a leg forced to fail and observe the log/5xx rather than a silent 200. |
 | 2.3 | `ANN-03` — the project listing reads its actors concurrently | **SUITE** | Observe the listing latency and the peak concurrent actor reads against a real actor plane. |
 | 2.4 | `VS-05` — the plain-binary listing stops reading every blob | **SUITE** | Measure bytes read serving `/api/pages` on a real plain-binary corpus. |
