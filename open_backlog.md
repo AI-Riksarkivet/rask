@@ -200,6 +200,34 @@ already raises spec error 22 for an absent one. `query`/`explain_plan`/`analyze_
 `Unsupported` — not a deferral, because the defect was never "branch queries are missing" but that the
 parameter is accepted and disregarded. No caller passes `branch` to any of the three today.
 
+### THE WRITE HALF, found the same way and worse
+
+Driving the read fixes surfaced three more, all writes, all answering 200:
+
+| call | correct | actual (before) |
+| --- | --- | --- |
+| `insert?branch=work` | row on branch | **row on MAIN, branch untouched** |
+| `insert?branch=never-created` | 404 | **200, row on MAIN** |
+| `merge_insert?branch=work` | branch updated | **MAIN updated, `num_updated_rows: 1`** |
+| merge's BTREE index build | index on branch | **version committed on MAIN** |
+
+The index one had been **flagged in the source and never checked**: `ensure_merge_key_index` carried a
+note reading *"whether the dir backend honors `branch` on an index build is unverified at pylance 8.0.0
+— flagged for the live pass; the param is forwarded either way."* This was that live pass. It does not
+honour it, so a branch-scoped merge isolated correctly and then advanced main as a side effect. The
+note is now the answer.
+
+All three are HONOURED, not refused, and the reason is the line that separates them from `query`:
+each is transcription rather than interpretation. `LanceDataset.insert` is the same operation the
+native path performs; every `merge_insert` spec parameter has a `MergeInsertBuilder` method of the same
+name; `create_scalar_index` through a branch handle leaves main at its version (measured, pylance
+8.0.0).
+
+**Nine doors in this family, all found by driving.** `update` and `delete` (fixed earlier this
+session), then `count_rows`, `schema_metadata/update`, `insert`, `merge_insert` and the index build
+(honoured), and `query`/`explain_plan`/`analyze_plan` (501). A static audit of 304 findings named none
+of them.
+
 ### OPEN — faithful branch-scoped `query`
 
 The 501 is honest, not complete. Serving a branch-scoped query properly means re-deriving vector
