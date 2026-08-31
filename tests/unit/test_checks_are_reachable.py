@@ -408,15 +408,18 @@ def test_the_gate_leaves_legitimate_guards_alone(why: str) -> None:
     assert findings_in_source(_LEGITIMATE[why]) == [], f"false positive — {why}"
 
 
-#: Guards whose vacuous branch is COMPENSATED by a caller-facing refusal, keyed `path:line` to the
-#: control that compensates. An entry here is a claim that the check is unreachable-but-covered, and the
-#: staleness test below refuses one whose compensating control has gone.
+#: Guards whose vacuous branch is COMPENSATED by a caller-facing refusal, keyed `path::subject` to the
+#: control that compensates.
+#:
+#: KEYED BY SUBJECT, NOT BY LINE. The first cut keyed on `path:line`, and adding six lines above one of
+#: these silently invalidated both exemptions — the gate then reported two long-settled guards as new
+#: findings. An exemption that moves when unrelated code moves is not an exemption, it is a tripwire on
+#: editing the file.
 #:
 #: The distinction this list encodes is the whole point of the gate: skipping a check is fine when
 #: SOMEONE ELSE refuses; it is a hole only when nobody does.
 COMPENSATED: dict[str, str] = {
-    "packages/service-kit/src/service_kit/lakehouse/quality.py:135": "refuse_a_gate_that_cannot_run",
-    "packages/service-kit/src/service_kit/lakehouse/quality.py:189": "refuse_a_gate_that_cannot_run",
+    "packages/service-kit/src/service_kit/lakehouse/quality.py::key_column": "refuse_a_gate_that_cannot_run",
 }
 
 
@@ -433,5 +436,5 @@ def test_a_compensating_control_still_exists() -> None:
 
 
 def test_no_check_passes_because_its_subject_is_absent() -> None:
-    findings = [f for f in vacuous_pass_findings() if f"{f.path}:{f.line}" not in COMPENSATED]
+    findings = [f for f in vacuous_pass_findings() if f"{f.path}::{f.subject}" not in COMPENSATED]
     assert not findings, "checks defeated by dropping the very column they inspect:\n" + "\n".join(f.render() for f in findings)

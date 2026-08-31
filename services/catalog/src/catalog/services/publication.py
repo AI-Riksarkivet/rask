@@ -169,7 +169,7 @@ def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: 
     return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project)
 
 
-def _open_for_schema(uri: str, storage_options: dict[str, str], version: int) -> object:
+def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) -> tuple[object, bool | None]:
     """The schema of ``version`` at ``uri`` — the gate's half of the provenance check.
 
     `publish` already holds an opened dataset and passes its schema straight in; `gate` is handed a URI
@@ -179,10 +179,14 @@ def _open_for_schema(uri: str, storage_options: dict[str, str], version: int) ->
     """
     import lance
 
-    return lance.dataset(uri, storage_options=storage_options, version=version).schema
+    dataset = lance.dataset(uri, storage_options=storage_options, version=version)
+    # BOTH READINGS FROM ONE OPEN. The schema answers the column half of the contract and
+    # `has_stable_row_ids` answers the half the columns cannot show; opening twice would let a
+    # concurrent commit put the two halves on different versions.
+    return dataset.schema, getattr(dataset, "has_stable_row_ids", None)
 
 
-def refuse_a_tier_without_provenance(schema: Any, *, version: int) -> None:
+def refuse_a_tier_without_provenance(schema: Any, *, version: int, has_stable_row_ids: bool | None = None) -> None:
     """Raise 400 when a table CLAIMS to be a governed tier and does not carry the provenance to be one.
 
     Owner ruling D1, 2026-08-31: honest `source_rowid` provenance is mandatory. The case that decided
@@ -199,7 +203,7 @@ def refuse_a_tier_without_provenance(schema: Any, *, version: int) -> None:
     tier and is untouched. `tier_contract_violations` owns that rule; this function owns only the
     door's answer to it.
     """
-    problems = tier_contract_violations(schema)
+    problems = tier_contract_violations(schema, has_stable_row_ids=has_stable_row_ids)
     if not problems:
         return
     raise InvalidInputError(
@@ -345,7 +349,8 @@ def gate(
     # the reviewer has no way to see it coming. Opening the dataset a second time is the cost of
     # answering the same question — `assert_quality` above opened it for the assertions, and the
     # contract is a schema read, not a scan.
-    refuse_a_tier_without_provenance(_open_for_schema(uri, storage_options or {}, version), version=version)
+    contract_schema, stable_ids = _open_for_contract(uri, storage_options or {}, version)
+    refuse_a_tier_without_provenance(contract_schema, version=version, has_stable_row_ids=stable_ids)
     failed = [a.assertion for a in assertions if not a.success]
     return PublicationResult(
         table=uri,
@@ -424,7 +429,7 @@ def publish(
         refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
         # And before that verdict too: a tier with no provenance is not a weak publish, it is an
         # untraceable one, and no assertion in the list above can see a column that is absent.
-        refuse_a_tier_without_provenance(candidate.schema, version=version)
+        refuse_a_tier_without_provenance(candidate.schema, version=version, has_stable_row_ids=getattr(candidate, "has_stable_row_ids", None))
 
         accepted: list[str] = []
         if not passed(assertions):

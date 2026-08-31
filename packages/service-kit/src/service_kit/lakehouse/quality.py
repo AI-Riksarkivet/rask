@@ -55,7 +55,7 @@ PROVENANCE: Final = "provenance_complete"
 _TIER_PROVENANCE_COLUMNS: frozenset[str] = frozenset({STAGE_COLUMN, LINEAGE_COLUMN, SOURCE_ROWID_COLUMN})
 
 
-def tier_contract_violations(schema: pa.Schema) -> list[str]:
+def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | None = None) -> list[str]:
     """Why this schema is not a conforming governed tier — empty when it is, or does not claim to be.
 
     A governed row carries `stage` (which tier), `lineage` (the run that produced it) and
@@ -90,6 +90,20 @@ def tier_contract_violations(schema: pa.Schema) -> list[str]:
         actual = schema.field(SOURCE_ROWID_COLUMN).type
         if not pa.types.is_uint64(actual):
             problems.append(f"{SOURCE_ROWID_COLUMN!r} is {actual}, not uint64 — the width Lance's stable row id uses")
+
+    # THE DEEPER FAILURE THE COLUMNS CANNOT SHOW. `source_rowid` holds a Lance STABLE row id, and
+    # `enable_stable_row_ids` is CREATE-TIME ONLY — set later it is a silent no-op. So a dataset
+    # created without it carries a perfectly well-typed column of values that are not stable, and the
+    # estate measured the cost: after compaction the ids moved from `0..5` to `4294967296..`, silently
+    # naming rows that no longer exist. Every impact-analysis query over that tier answers confidently
+    # and wrongly, which is the outcome ruling D1 exists to prevent.
+    #
+    # `None` means the caller could not read the property (a schema-only check, or a backend that does
+    # not expose it) and is treated as "not asserted" rather than as a violation — refusing on an
+    # unreadable property would fail closed against callers who cannot answer, which is a different
+    # and worse failure than the one being prevented.
+    if has_stable_row_ids is False:
+        problems.append("the dataset was created without stable row ids, so `source_rowid` can never name a row that survives compaction")
     return problems
 
 
