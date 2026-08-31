@@ -35,6 +35,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.fga_deps import require_relation
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import is_person_subject
 from catalog.core.namespace import open_dataset
@@ -166,6 +167,31 @@ async def publication_extra(
     return extra
 
 
+async def resolve_effective_gate(
+    settings: Settings,
+    so: dict[str, str],
+    lineage: ProjectSource,
+    segments: list[str],
+    body: PublishRequest,
+) -> publication.EffectiveGate:
+    """The gate this publish runs under: the project's DECLARED record where one exists, else the request.
+
+    THE DECLARATION IS CONSULTED HERE BECAUSE THIS DOOR IS THE ONE EVERY WRITER SHARES. A mover
+    resolves the same `GateSpec` for itself before it ever calls the catalog; an external writer —
+    Spark, an Argo step, a person with credentials — resolves nothing, so a door trusting the request
+    alone gave the least-trusted writer the weakest gate. The composition rules and why the two fields
+    compose differently live on `publication.EffectiveGate`.
+
+    The project comes from the same request-scoped binding `publication_extra` names the tenant with,
+    for the same reason: `PROJECT_PATTERN` permits `-` inside a project id, so no string rule recovers
+    `acme` from `acme-bronze`, and a declaration is keyed by project. An unresolvable binding leaves
+    the request governing — there is no declaration to find without a project id.
+    """
+    project = await lineage.project_for(segments[0]) if segments else None
+    spec = await run_in_threadpool(publication.declared_gate, settings.registry_root, so, project or "")
+    return publication.effective_gate(spec, key_column=body.key_column, required_columns=body.required_columns)
+
+
 @router.post("/{id}/publish")
 async def publish_table(
     id: str,
@@ -199,6 +225,10 @@ async def publish_table(
             relation="can_promote",
             obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         )
+    # THE GATE THIS PUBLISH RUNS, composed before either path: the project's DECLARED record where one
+    # exists, the request's own values where none does. Resolved here rather than inside `publish` so
+    # the gate_only QUESTION and the publish ACT cannot end up under different policy.
+    gate = await resolve_effective_gate(settings, so, lineage, segments, body)
     if body.gate_only:
         # A QUESTION: the same assertions on the same version, tag untouched, no control event. It
         # returns before the publish so nothing here can advance `published` by accident — a caller
@@ -207,10 +237,11 @@ async def publish_table(
         verdict = await run_in_threadpool(
             publication.gate,
             candidate.uri,
-            key_column=body.key_column,
+            key_column=gate.key_column,
             version=body.version,
-            required_columns=tuple(body.required_columns),
+            required_columns=tuple(gate.required_columns),
             storage_options=so,
+            declared_by=gate.declared_by,
         )
         return PublishResult(
             table=verdict.table,
@@ -219,6 +250,7 @@ async def publish_table(
             to_version=verdict.to_version,
             assertions=[a.model_dump() for a in verdict.assertions],
             reason=verdict.reason,
+            gate_source=verdict.gate_source,
         )
     result = await run_in_threadpool(
         publication.publish,
@@ -226,9 +258,10 @@ async def publish_table(
         so,
         table_id=segments,
         version=body.version,
-        key_column=body.key_column,
-        required_columns=tuple(body.required_columns),
+        key_column=gate.key_column,
+        required_columns=tuple(gate.required_columns),
         accept_assertions=tuple(body.accept_assertions),
+        declared_by=gate.declared_by,
     )
     # The NOTIFICATION, and only after the tag actually moved (D-R2). A refused gate announces
     # nothing: there is no new readiness to wake anyone for, and an event on a rejection would train
@@ -277,4 +310,5 @@ async def publish_table(
         to_version=result.to_version,
         assertions=[a.model_dump() for a in result.assertions],
         reason=result.reason,
+        gate_source=result.gate_source,
     )

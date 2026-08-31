@@ -115,6 +115,18 @@ spec:
             - { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }
             - { name: LANCE_DAPR_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
             - { name: LANCE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            {{- if .Values.services.lineage.outbox.enabled }}
+            # #4 transactional outbox on the catalog's LINEAGE lane. The emit is inline-awaited and
+            # best-effort AFTER the Lance write commits, so without staging a crash between the commit and
+            # the publish loses the write announcement outright — and medallion's /bronze-arrival reacts to
+            # that announcement, so the loss is not a provenance hole but a bronze->silver->gold run that
+            # silently never happens.
+            #
+            # The SAME prefix `LINEAGE_OUTBOX_URI` names below, because that is the only thing that drains
+            # it: lineage's reconcile cron re-ingests and re-publishes what it finds there. A private prefix
+            # would stage objects nothing ever reads, which looks like durability and is not.
+            - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            {{- end }}
             # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). ON →
             # mutations publish a CatalogControlEvent onto a DEDICATED broadcast pubsub (no queueGroupName)
             # under topic catalog.control.v1; every replica buffers every event for GET /v1/events. hasKey+
@@ -122,6 +134,19 @@ spec:
             # `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
+            # #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. `table_published` is
+            # the only thing that wakes silver->gold (nothing re-reads the `published` tag), so a publish
+            # lost to a NATS blip ended the cascade with every pod green. Staged here, re-published by
+            # `catalog/api/control_relay.py` on the schedule in catalog-control-relay-cron.yaml.
+            #
+            # A PRIVATE PREFIX, never `_lineage_outbox`: lineage's reconcile cron parses everything in
+            # its prefix as an OpenLineage RunEvent and DELETES what it cannot, so a shared prefix
+            # destroys these events rather than relaying them (the catalog refuses to boot on equality).
+            - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_control_outbox" }
+            # The binding name IS the route this app serves it on — one string with the Component above.
+            - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
+            {{- end }}
             {{- if .Values.dapr.sidecars }}
             # Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar
             # stamps on /control-events delivery → a forged direct in-cluster POST is 403'd. Without it the

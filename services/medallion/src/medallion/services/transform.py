@@ -603,10 +603,18 @@ def _confine_from_uri(
     TENANT'S WAREHOUSE for a project trigger, which is what makes I2 work — the vended
     ``<root>/<hash>_<ns>$<name>`` sits directly under it. With NO project the root is
     ``MEDALLION_FROM_URI`` itself — a dataset URI, not a warehouse — so only that URI or a path
-    beneath it can be named, and I2 is effectively project-only. That costs nothing today: the one
-    publisher that sets ``from_uri`` (``publication_trigger``) always carries the project, because the
-    mover cannot resolve its tiers without it. A single-tenant deployment that ever needs a vended
-    location must resolve a root here rather than widen the check.
+    beneath it can be named, and I2 is effectively project-only.
+
+    THAT LIMIT IS NOW REACHABLE, and it is a stated cost rather than an accident. Both heads name an
+    upstream: ``publication_trigger`` always carries the project (the mover cannot resolve its tiers
+    without one), but ``ingest_trigger`` fires for a single-tenant estate too. There the vended
+    ``<catalog root>/<hash>_<ns>$<name>`` is OUTSIDE ``MEDALLION_FROM_URI`` unless the two happen to
+    coincide — which they do for a produce-first estate, where the chart renders the head's write URI
+    and this one from a single expression. When they do not, the answer is this refusal: a visible
+    DROP with the ``unconfined_uri`` counter, rather than the silent transform of whatever sits at the
+    composed path. Making it WORK single-tenant means resolving a real storage root here — the
+    catalog's connection root is the candidate, and it is not free, because ``lance.stageBucket`` can
+    zone a namespace into a bucket that root does not contain.
     """
     # A trigger that NAMES the upstream wins over any path composed above. The catalog vends a
     # table's location (`s3://<warehouse>/<hash>_<ns>$<name>`); this composed

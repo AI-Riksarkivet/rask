@@ -27,11 +27,16 @@ TWO DOORS, AND WHICH ONE A WRITER USES IS DECIDED BY WHO OWNS ITS LOCATION. A MO
 (`ensure_stage_output`): nothing else names where its output lives, so the catalog's answer is the
 only answer. The CASCADE HEAD tells (`register_written_dataset`): `POST /produce` writes to
 `MEDALLION_BRONZE_URI`, which `chart/templates/medallion.yaml` renders from the same expression as the
-bronze->silver mover's `MEDALLION_FROM_URI`, and the `medallion.bronze` trigger carries no `from_uri`
-for that mover to follow — so a head that took a vended location would leave the cascade's first leg
-opening a path nothing writes to, with nothing red. `register_table` is the door built for exactly
-that case (bytes written outside the catalog's own doors), and it needs no WAREHOUSE, which is why it
-reaches the medallion path in the reserved platform bucket that no warehouse may ever claim.
+bronze->silver mover's `MEDALLION_FROM_URI` — the head's location is a DEPLOYMENT CONTRACT the chart
+already states, not something the catalog has to be asked for. `register_table` is the door built for
+exactly that case (bytes written outside the catalog's own doors), and it needs no WAREHOUSE, which is
+why it reaches the medallion path in the reserved platform bucket that no warehouse may ever claim.
+
+A THIRD, READ-ONLY DOOR sits beside them: `describe_table_location`, which asks where a table that
+ALREADY EXISTS lives and creates nothing. It is what lets a consumer — the cascade head, which writes
+no table of its own — name the upstream a mover should open instead of leaving it to compose a path,
+and it is what keeps the ingest/produce creation ORDER from deciding whether the cascade's first leg
+reads anything.
 
 This paragraph used to say the telling form was GONE, and for a while it was: `register_stage_output`
 outlived its last caller when the movers' ordering was fixed, and three suites went on stubbing a door
@@ -320,13 +325,66 @@ def ensure_stage_output(
         return _vended(created, table_id)
 
 
+def _stated_location(response: httpx.Response) -> str:
+    """The location a catalog response states, or ``""`` — ``table_uri`` first, then ``location``.
+
+    ONE reading of that precedence, because the create/describe doors do not agree on the key and two
+    spellings of "where does this table live" is exactly how a caller ends up reading the field the
+    other door does not set. What a caller does with an empty answer is its own decision.
+    """
+    payload = response.json() or {}
+    return str(payload.get("table_uri") or payload.get("location") or "")
+
+
 def _vended(response: httpx.Response, table_id: str) -> str:
     """The location the catalog stated, or an error naming that it stated none."""
-    payload = response.json() or {}
-    location = str(payload.get("table_uri") or payload.get("location") or "")
+    location = _stated_location(response)
     if not location:
         raise RegisterError(f"the catalog returned no location for {table_id!r} — refusing to compose one, which is the defect this call replaces")
     return location
+
+
+def describe_table_location(
+    *,
+    catalog_url: str,
+    table_id: str,
+    token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
+    timeout_seconds: float = 30.0,
+    client: httpx.Client | None = None,
+) -> str | None:
+    """Where the catalog says ``table_id`` lives, or ``None`` when it governs no such table.
+
+    THE READ SIDE OF I2, for a caller that WRITES NOTHING. `ensure_stage_output` is the write-side
+    question ("where should I put my output, create it if absent"); this is the read-side one ("where
+    is the table that already exists"), and it must never create: a cascade head asking where a bronze
+    table lives has no business minting one, and a create here would attach a `table:` object to bytes
+    nobody has written.
+
+    ``None`` IS AN ANSWER, NOT A FAILURE. The catalog answers 4xx for a table it does not govern (and
+    `describe` answers 403 rather than 404 for an absent one, which is why the status is not
+    interrogated further) — an external OpenLineage producer writing an unregistered dataset is a real
+    and supported case, and the caller's composed-path fallback is the right behaviour for it.
+
+    Raises :class:`RegisterError` only when the catalog could not be ASKED — an unreachable service or
+    a 5xx. That is a different thing from "no such table", and collapsing the two would let an outage
+    read as a governance answer.
+    """
+    if not catalog_url:
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this caller cannot ask where a table lives")
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
+        try:
+            described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable resolving where {table_id!r} lives: {exc}") from exc
+        if described.status_code >= 500:
+            raise RegisterError(f"catalog could not say where {table_id!r} lives: HTTP {described.status_code} — {described.text[:300]}")
+        if described.status_code >= 400:
+            return None
+        return _stated_location(described) or None
 
 
 def relative_location(dataset_uri: str, catalog_root: str) -> str:

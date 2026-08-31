@@ -386,6 +386,33 @@ class Settings(GovernedAuthSettings, BaseSettings):
     #: delivered mutation into a 500 — which meant a NATS blip cancelled the cascade outright with
     #: every pod green. Staged, the event survives to be re-published.
     control_outbox_uri: str = Field(default="", alias="LANCE_CONTROL_OUTBOX_URI")
+    #: The cron binding that DRAINS `control_outbox_uri` — `catalog/api/control_relay.py`. Empty = the
+    #: relay route is not mounted (staging still happens; nothing republishes it).
+    #:
+    #: THIS STRING IS THE ROUTE. Dapr delivers an input binding to `POST /<component name>` at the pod
+    #: ROOT, so the Component's `metadata.name`, this value and the served path are one string; a
+    #: component named one thing and a route mounted at another is a cron that ticks into a 404 while
+    #: both halves look right in isolation. Pinned by `tests/unit/test_the_control_lane_relay_is_wired.py`.
+    control_relay_binding_name: str = Field(default="", alias="LANCE_CONTROL_RELAY_BINDING_NAME")
+
+    @model_validator(mode="after")
+    def _validate_outbox_prefixes(self) -> Self:
+        """Refuse to boot with the two lanes sharing one outbox prefix.
+
+        Not a tidiness rule. `lineage/api/reconcile_cron.py` drains the lineage prefix by parsing every
+        staged object as an OpenLineage `RunEvent`; a `CatalogControlEvent` cannot validate, so that
+        drain classifies it POISON and DELETES it. Sharing the prefix therefore does not give the
+        control lane a relay — it hands the control lane's only durable copy to something that destroys
+        it, which is strictly worse than staging nowhere. Fail loudly at boot rather than lose a
+        `table_published` per outage in a log nobody reads.
+        """
+        if self.control_outbox_uri and self.control_outbox_uri.rstrip("/") == self.lineage_outbox_uri.rstrip("/"):
+            raise ValueError(
+                f"LANCE_CONTROL_OUTBOX_URI must not equal LANCE_LINEAGE_OUTBOX_URI ({self.control_outbox_uri!r}): "
+                "the lineage relay parses every object in its prefix as an OpenLineage RunEvent and DELETES "
+                "what it cannot parse, so a shared prefix destroys the staged control events instead of relaying them"
+            )
+        return self
 
     def storage_options(self) -> dict[str, str]:
         """Return the ``storage.*`` properties with the prefix stripped, for pylance."""

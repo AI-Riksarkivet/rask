@@ -8439,6 +8439,11 @@
             ],
             "title": "From Version"
           },
+          "gate_source": {
+            "default": "request",
+            "title": "Gate Source",
+            "type": "string"
+          },
           "published": {
             "title": "Published",
             "type": "boolean"

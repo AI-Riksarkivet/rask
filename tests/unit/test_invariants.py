@@ -80,6 +80,13 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # (a transport publishes whatever its caller chose). The control lane's durability question moved
     # with it: a dropped `table_published` is no longer merely "a refresh hint" — under the tag-driven
     # cascade it is the ONLY thing that wakes the next hop — and staging is what answers that now.
+    # CONTROL-RELAY — the control outbox's OWN redelivery, and the twin of `lineage-relay` above rather
+    # than a plain "control" producer. The event it publishes was already staged (that is where the drain
+    # read it from), so this is the durable path's delivery half, not a producer skipping the outbox.
+    # It publishes the STAGED BYTES verbatim, before dropping the object, because `event_id` is what the
+    # cascade's deterministic workflow instance id is derived from — re-minting the event would drive the
+    # hop twice instead of re-attaching to it.
+    ("services/catalog/src/catalog/api/control_relay.py", "CONTROL_TOPIC"): "control-relay",
     # TRIGGER — an instruction to DO work. Correctly bare: the outbox re-ingests lineage, it never
     # re-fires triggers. Their durability question is a different one, and is DECIDED: the caller-retry
     # idempotency-token contract is the carrier (docs/architecture/medallion-cascade.md, the dropped obligation-carrier ruling).
@@ -5917,3 +5924,96 @@ def test_the_ingest_pod_gets_the_SAME_external_blob_bases_as_the_catalog() -> No
         f"the ingest deployment does not carry LANCE_EXTERNAL_BLOB_BASES, so every ingest copies the "
         f"corpus instead of referencing it; deployments that do carry it: {sorted(carriers)}"
     )
+
+
+def _env_by_component(docs: list[dict], component: str) -> dict[str, str]:
+    """The merged container env of the Deployment carrying ``app.kubernetes.io/component: <component>``.
+
+    Selected by LABEL rather than by name because `_helm_template` renders without a release name, so a
+    name-prefix match would encode helm's `release-name` placeholder.
+    """
+    for doc in docs:
+        if doc.get("kind") != "Deployment":
+            continue
+        labels = ((doc["spec"]["template"].get("metadata") or {}).get("labels")) or {}
+        if labels.get("app.kubernetes.io/component") != component:
+            continue
+        env: dict[str, str] = {}
+        for container in doc["spec"]["template"]["spec"].get("containers") or []:
+            env |= _env_of(container)
+        return env
+    return {}
+
+
+def test_the_MAINTENANCE_service_stages_its_lineage_the_same_way_the_catalog_does() -> None:
+    """The sibling of the catalog test below, and it was the same defect on a second service.
+
+    `services/maintenance` builds a lineage emitter with `outbox_uri=settings.lineage_outbox_uri`
+    (`service.py`), whose alias is `MAINTENANCE_LINEAGE_OUTBOX_URI` — and the chart rendered nothing, so
+    the emitter fell back to a plain publish exactly as the catalog's did.
+
+    Cheaper to lose than a write announcement, and still worth staging: a maintenance run is only
+    emitted when the sweep does MATERIAL work (`sweep.py::_did_material_work` gates on
+    `fragments_removed or old_versions_removed`), so a dropped publish loses the record of the one tick
+    that actually rewrote bytes, and the graph then shows a dataset whose files changed with nothing
+    saying what changed them.
+
+    Same prefix as the catalog and the movers, for the same reason: `lineage/api/reconcile_cron.py` is
+    the only thing that drains it. Found because the agent that wired the catalog said plainly that it
+    had left this one — an honest `left_undone` is what turned a second silent hole into a test.
+    """
+    docs = _rendered_docs()
+    env = _env_by_component(docs, "maintenance")
+    lineage_env = _env_by_component(docs, "lineage")
+    assert env, "no maintenance Deployment rendered"
+
+    staged = env.get("MAINTENANCE_LINEAGE_OUTBOX_URI", "")
+    assert staged, (
+        "the maintenance Deployment renders no MAINTENANCE_LINEAGE_OUTBOX_URI, so its lineage emitter "
+        "degrades to a plain publish and a bus blip loses the record of the sweep tick that rewrote bytes"
+    )
+    drained = lineage_env.get("LINEAGE_OUTBOX_URI", "")
+    assert staged == drained, f"maintenance stages into {staged!r} but the relay drains {drained!r} — nothing would ever collect it"
+
+
+def test_the_catalog_STAGES_its_write_announcement_into_the_prefix_the_relay_DRAINS() -> None:
+    """The catalog's lineage outbox must be rendered, and must name the prefix the lineage relay reads.
+
+    `LANCE_LINEAGE_OUTBOX_URI` exists in `catalog/core/config.py` and is threaded all the way to
+    `outbox.publish_lineage_with_outbox` in `lineage_emit.py` — and rendered NOWHERE, so on every shipped
+    chart the catalog's emit degraded to the pre-#4 plain publish. This is the same failure class as the
+    `MEDALLION_LINEAGE_OUTBOX_URI` dead-env above, mirrored: there the chart set what no code read, here
+    the code reads what no chart sets. Only a RENDER can tell either of them apart from a working feature.
+
+    What it costs on the catalog specifically: the emit is inline-awaited and best-effort AFTER the Lance
+    write commits, and medallion's `/bronze-arrival` subscription reacts to that announcement — so a lost
+    publish does not merely under-report provenance, the whole bronze->silver->gold run silently never
+    happens.
+
+    THE PREFIX EQUALITY IS THE LOAD-BEARING HALF. Staging is only durable because
+    `lineage/api/reconcile_cron.py` drains `LINEAGE_OUTBOX_URI` and re-publishes what it finds; a catalog
+    staging anywhere else would write objects that nothing on the estate ever reads, which looks exactly
+    like durability and is not.
+    """
+    docs = _rendered_docs()
+    catalog_env = _env_by_component(docs, "catalog")
+    lineage_env = _env_by_component(docs, "lineage")
+    assert catalog_env, "no catalog Deployment rendered"
+
+    staged = catalog_env.get("LANCE_LINEAGE_OUTBOX_URI", "")
+    assert staged, (
+        "the catalog Deployment renders no LANCE_LINEAGE_OUTBOX_URI, so `publish_lineage_with_outbox` "
+        "degrades to a plain publish: a crash between the Lance commit and the publish loses the write "
+        "announcement, and with it the bronze->silver->gold run that announcement triggers"
+    )
+    drained = lineage_env.get("LINEAGE_OUTBOX_URI", "")
+    assert staged == drained, (
+        f"the catalog stages to {staged!r} but the lineage relay drains {drained!r} — staged events would "
+        "sit in a prefix nothing re-ingests or re-publishes, which is indistinguishable from durability "
+        "until an outage"
+    )
+
+    # The pair is ONE mechanism behind ONE switch: staging with the drain off leaves objects nothing
+    # collects, so an operator turning the chain off must turn off both halves, not one.
+    off = _env_by_component(_rendered_docs("services.lineage.outbox.enabled=false"), "catalog")
+    assert "LANCE_LINEAGE_OUTBOX_URI" not in off, "services.lineage.outbox.enabled=false must also stop the catalog staging (the drain is off with it)"

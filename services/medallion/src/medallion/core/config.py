@@ -296,8 +296,8 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: A mover needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER
     #: cannot, because where it writes is a deployment contract — `chart/templates/medallion.yaml`
     #: renders `MEDALLION_BRONZE_URI` and the bronze->silver mover's `MEDALLION_FROM_URI` from one
-    #: expression, and the `medallion.bronze` trigger carries no `from_uri` for that mover to follow. So
-    #: the head keeps its URI and ATTACHES it through `register_table`, which on the dir backend refuses
+    #: expression, so the location is stated by the chart rather than asked for. The head therefore
+    #: keeps its URI and ATTACHES it through `register_table`, which on the dir backend refuses
     #: an absolute location and accepts only a path RELATIVE to this root (the #75 lesson, re-measured
     #: 2026-08-29: `"Absolute URIs are not allowed for register_table"`).
     #:

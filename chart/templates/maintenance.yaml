@@ -97,6 +97,18 @@ spec:
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
             - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            {{- if .Values.services.lineage.outbox.enabled }}
+            # Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when the
+            # sweep does MATERIAL work (`sweep.py::_did_material_work` gates on fragments or versions
+            # removed), so a dropped publish loses the record of the one tick that actually rewrote
+            # bytes — the graph then shows a dataset whose files changed with nothing saying what
+            # changed them.
+            #
+            # The SAME prefix the catalog, the movers and the drain name, because `lineage`'s reconcile
+            # cron is the only thing that reads it. A private prefix here would stage objects nothing
+            # ever collects, which reads as durability and is not.
+            - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            {{- end }}
             {{- end }}
             {{- /* #79 reclamation. OFF unless explicitly asked for: with it on, a drop past
                    LANCE_TRASH_GRACE_DAYS becomes permanently unrecoverable, and the purge is gated on

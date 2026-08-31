@@ -129,9 +129,15 @@ async def produce(
         # IT TELLS RATHER THAN ASKS, and this is the ONE place the head departs from a mover. A mover
         # takes the location `ensure_stage_output` vends because nothing else names where its output
         # lives. This URI is a DEPLOYMENT CONTRACT: the chart renders it and the bronze->silver mover's
-        # `MEDALLION_FROM_URI` from one expression, and the `medallion.bronze` trigger carries no
-        # `from_uri`, so a vended location would leave that mover opening a path nothing writes to —
-        # the cascade's first leg dead, with nothing red.
+        # `MEDALLION_FROM_URI` from one expression, so the location is already stated where both sides
+        # read it. `register_table` is the door for exactly that writer, and it needs no warehouse —
+        # which is what lets the head reach the medallion path in the reserved platform bucket.
+        #
+        # The cascade does not depend on this URI matching the mover's composed path: `/bronze-arrival`
+        # resolves the arrived table's location through the catalog and names it on the trigger
+        # (`ingest_trigger._vended_upstream`), so a bronze table created by ANOTHER writer — `ingest`,
+        # which creates through the catalog's door and takes the vended `{root}/{hash}_{ns}${name}` —
+        # cascades from where its rows actually are.
         #
         # A REFUSAL FAILS THE REQUEST, deliberately, and it is not a new failure mode for the cascade:
         # nothing has been written and nothing has been emitted at this point, so the run did not

@@ -33,6 +33,7 @@ having two spellings of it would be the drift this module exists to prevent.
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import TYPE_CHECKING
 
 from lance_namespace import (
@@ -49,13 +50,19 @@ from pydantic import BaseModel
 
 from catalog.core.namespace import open_dataset
 from catalog.services import dataplane
-from service_kit.lakehouse.quality import STRUCTURAL_ASSERTIONS, Assertion, assert_quality, passed
+from service_kit.lakehouse import gate_specs
+from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, passed
 
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from lance_namespace import LanceNamespace
+
+    from service_kit.lakehouse.gate_specs import GateSpec
+
+
+log = logging.getLogger(__name__)
 
 
 #: The pointer a consumer reads. One flat name per dataset — tag names cannot contain `/`, so a
@@ -77,6 +84,115 @@ PUBLISHED_TAG = "published"
 PUBLISHING_TAG = "publishing"
 
 
+#: The two authorities that can name a gate's key column, as the result reports them.
+DECLARED_GATE = "declared"
+REQUESTED_GATE = "request"
+
+
+def gate_source_for(declared_by: str) -> str:
+    """Name the authority behind a key column, from the project that declared it (or `""`).
+
+    ONE definition, because every result on both paths reports this field and a second spelling is how
+    the wire ends up claiming a source the assertions did not run under.
+    """
+    return DECLARED_GATE if declared_by else REQUESTED_GATE
+
+
+class EffectiveGate(BaseModel):
+    """The assertions this publish actually runs, and on WHOSE authority.
+
+    Two parties describe the gate at this door and they are not equals. The project's `GateSpec` is
+    POLICY — declared through an admin-gated door, readable by anyone, and the same record the
+    medallion's movers resolve for themselves. The request's `key_column`/`required_columns` are a
+    REQUEST, sent by whoever holds `can_update_tag`, up to and including an external writer the estate
+    trusts least. A door that consulted only the request handed the least-trusted writer the weakest
+    gate, which is exactly backwards.
+
+    Composition follows from that, and the two fields compose differently ON PURPOSE:
+
+    * `key_column` — only one column can carry the identity check, so the two authorities CONFLICT and
+      policy wins whole. This is the medallion's own "a declared gate is not a merge" rule
+      (`medallion/services/gate.py`), applied to the same record from the other side.
+    * `required_columns` — these do not conflict. A declared column is a dependency the project
+      mandates; a requested one is a dependency the caller's own consumer declares; both are real, and
+      a gate satisfying both is what the union means. It is also the only composition that cannot
+      WEAKEN an existing publish: every column either authority names is still asserted.
+    """
+
+    key_column: str
+    required_columns: list[str]
+    #: The project whose DECLARED record supplied `key_column`, or `""` when the request did. Not a
+    #: free-text label: `gate_source` derives from it, so the attribution cannot disagree with the
+    #: record that actually governed.
+    declared_by: str = ""
+
+    @property
+    def gate_source(self) -> str:
+        """`"declared"` or `"request"` — which authority named the key column.
+
+        A property rather than a field for the reason `GateSpec.gate_source` states: a source a caller
+        could set is a source a caller could lie about, and the whole value of the field is that it
+        cannot be.
+        """
+        return gate_source_for(self.declared_by)
+
+
+def declared_gate(registry_root: str, storage_options: dict[str, str], project: str) -> GateSpec | None:
+    """This project's declared gate settings, or `None` when nobody declared any.
+
+    NEVER RAISES, and the stance is the medallion's, held deliberately: an unresolvable declaration
+    falls back rather than refusing, because failing every publish for a tenant over a settings lookup
+    takes an estate down for a config blip, while the request's own values remain a real gate. Logged
+    at ERROR because it is still a defect — a declaration nobody can read is a policy nobody is under.
+
+    The two readers of this record (this door and `medallion.services.gate`) must not answer
+    differently, which is why both go through `service_kit.lakehouse.gate_specs` rather than either
+    growing its own reader.
+    """
+    if not project or not registry_root:
+        return None
+    try:
+        return gate_specs.get_spec(registry_root, storage_options, project)
+    except Exception:  # noqa: BLE001 — a settings lookup must not refuse an otherwise valid publish
+        log.exception("gate_spec_unresolvable", extra={"project": project})
+        return None
+
+
+def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: Sequence[str]) -> EffectiveGate:
+    """Compose the declared record with the request — see `EffectiveGate` for why each field composes
+    the way it does."""
+    if spec is None:
+        return EffectiveGate(key_column=key_column, required_columns=list(required_columns))
+    # Declared first, then the request's own additions — an order, not a set, so the assertions come
+    # back in a stable sequence a caller can diff between runs.
+    union = list(spec.required_columns) + [column for column in required_columns if column not in spec.required_columns]
+    return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project)
+
+
+def refuse_a_gate_that_cannot_run(assertions: Sequence[Assertion], *, key_column: str, version: int, declared_by: str = "") -> None:
+    """Raise 400 when the key column names nothing in the data, instead of publishing without it.
+
+    `assert_quality` SKIPS `not_null` when the column is absent — right for it, because a chart-wide
+    key column legitimately does not exist in every tier it runs against. At THIS door it is wrong: the
+    key column arrived from a request or a declaration that names this very table, so an absent one is
+    a typo or a stale declaration, and honouring it publishes with the gate's identity assertion
+    missing and a 200 that never mentions it. Silently applying a weaker gate than was asked for is the
+    one outcome a gate must not have.
+
+    Derived from the ASSERTIONS rather than from the schema on purpose: absence of `not_null` is
+    exactly the condition being refused, so there is one definition of "the gate did not run" and no
+    second schema read to disagree with it.
+    """
+    if not key_column or any(a.assertion == NOT_NULL for a in assertions):
+        return
+    authority = f"declared by project {declared_by!r}" if declared_by else "named by the request"
+    raise InvalidInputError(
+        f"key_column {key_column!r} ({authority}) is not a column of this table at version {version}, so the "
+        f"{NOT_NULL} assertion cannot run and publishing would apply a WEAKER gate than was asked for. Name a "
+        f"column the data carries, or change the gate that names it."
+    )
+
+
 class PublicationResult(BaseModel):
     """What a publish attempt did, and to what.
 
@@ -95,6 +211,11 @@ class PublicationResult(BaseModel):
     #: Failed assertions a validator explicitly accepted. Empty on every ordinary publish — the field
     #: means "waved through", never "was asked for".
     accepted: list[str] = []
+    #: Which authority named the key column these assertions ran on — see `EffectiveGate`. Carried on
+    #: the RESULT, not merely logged, because two sources with one shape is how nobody can tell what
+    #: governed their data: a caller whose requested key column was superseded by the project's
+    #: declaration reads an identical body otherwise.
+    gate_source: str = REQUESTED_GATE
 
     @property
     def advanced(self) -> bool:
@@ -148,6 +269,7 @@ def gate(
     version: int,
     required_columns: Sequence[str] = (),
     storage_options: dict[str, str] | None = None,
+    declared_by: str = "",
 ) -> PublicationResult:
     """Run the publish gate's assertions and return the verdict WITHOUT touching the tag.
 
@@ -163,6 +285,12 @@ def gate(
 
     The same `assert_quality` call the real publish makes, on the same pinned `version` — a gate that
     answered differently from the publish would be worse than no gate, because a caller would trust it.
+    That equality includes the REFUSAL: an unrunnable key column is a 400 here too, or a caller could
+    ask the question, be told the gate would pass, and then be refused by the act.
+
+    `declared_by` names the project whose declared record supplied `key_column`; empty means the
+    request did. It only describes the values — this function never reads a declaration itself, so the
+    two doors cannot resolve one differently.
     """
     assertions = assert_quality(
         uri,
@@ -171,6 +299,7 @@ def gate(
         required_columns=tuple(required_columns),
         version=version,
     )
+    refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
     failed = [a.assertion for a in assertions if not a.success]
     return PublicationResult(
         table=uri,
@@ -178,6 +307,7 @@ def gate(
         from_version=None,
         to_version=version,
         assertions=list(assertions),
+        gate_source=gate_source_for(declared_by),
         reason=f"gate only: {', '.join(failed)}" if failed else None,
     )
 
@@ -192,6 +322,7 @@ def publish(
     required_columns: Sequence[str] = (),
     accept_assertions: Sequence[str] = (),
     tag: str = PUBLISHED_TAG,
+    declared_by: str = "",
 ) -> PublicationResult:
     """Gate `version`, then advance `published` to it. Returns the range the notification should carry.
 
@@ -202,6 +333,10 @@ def publish(
 
     The caller is already authorized; this decides only whether the DATA is good enough, which is the
     validator half of governance. FGA decides who MAY publish.
+
+    `declared_by` names the project whose declared `GateSpec` supplied `key_column`, or `""` when the
+    request did — see `EffectiveGate`. It is composed by the door, never resolved here, so `gate` and
+    `publish` cannot end up under different policy.
     """
     if version < 1:
         raise InvalidInputError(f"version must be >= 1, got {version}")
@@ -239,6 +374,8 @@ def publish(
             # publishing — in both directions, and silently in the one that matters.
             version=version,
         )
+        # BEFORE the verdict, so an unrunnable gate can never reach the tag move below.
+        refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
 
         accepted: list[str] = []
         if not passed(assertions):
@@ -255,6 +392,7 @@ def publish(
                     from_version=previous,
                     to_version=version,
                     assertions=assertions,
+                    gate_source=gate_source_for(declared_by),
                     reason=f"quality gate failed: {', '.join(unaccepted)}",
                 )
             accepted = sorted(set(failed))
@@ -267,6 +405,7 @@ def publish(
             to_version=version,
             assertions=assertions,
             accepted=accepted,
+            gate_source=gate_source_for(declared_by),
         )
     finally:
         # Suppressed on purpose: a failure to unpin must never mask the publish outcome, and the worst

@@ -783,6 +783,12 @@ class PublishResult(BaseModel):
     to_version: int
     assertions: list[dict[str, object]] = Field(default_factory=list)
     reason: str | None = None
+    #: WHICH gate ran — ``"declared"`` when the project's declared ``GateSpec`` supplied the key column,
+    #: ``"request"`` when this request's own fields did. A publish under a declaration is a different
+    #: governance fact from one under a caller's parameters, and the two are otherwise byte-identical:
+    #: a caller whose ``key_column`` was superseded reads the same body either way and cannot tell
+    #: which record governed its data.
+    gate_source: str = "request"
 
 
 # --------------------------------------------------------------------------- #

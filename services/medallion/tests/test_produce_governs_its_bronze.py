@@ -9,12 +9,14 @@ no FGA grant could name it. The same tier was governed or not purely by which do
 THE PRODUCER REGISTERS RATHER THAN ASKS, and that is the ONE place it departs from the movers. A mover
 takes the location the catalog vends (`ensure_stage_output`) because nothing else names where its output
 lives. The producer's write location is a DEPLOYMENT CONTRACT: `chart/templates/medallion.yaml` renders
-`MEDALLION_BRONZE_URI` and the bronze->silver mover's `MEDALLION_FROM_URI` from the same expression, and
-the `medallion.bronze` trigger carries no `from_uri` for the mover to follow. Moving the seed to a vended
-path would leave that mover opening the composed path and finding nothing — the cascade's first leg, dead,
-with nothing red. So the head keeps its URI and ATTACHES it through `register_table`, the door built for
-bytes written outside the catalog's own doors: it needs no warehouse, which is why it works in the
-reserved platform bucket the medallion lives in.
+`MEDALLION_BRONZE_URI` and the bronze->silver mover's `MEDALLION_FROM_URI` from the same expression, so
+the location is stated by the chart rather than asked for. The head keeps its URI and ATTACHES it through
+`register_table`, the door built for bytes written outside the catalog's own doors: it needs no warehouse,
+which is why it works in the reserved platform bucket the medallion lives in.
+
+Which writer created the table no longer decides whether the cascade reads anything: `/bronze-arrival`
+resolves the arrived table's location through the catalog and names it on the trigger
+(`tests/unit/test_bronze_arrival_carries_the_vended_location.py`).
 
 The ORDERING rule is kept: registration strictly precedes the first row, so there is no window in which
 bronze rows exist that the catalog has no record of.

@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
 
+from catalog.api.control_relay import mount_control_relay
 from catalog.api.dapr import register_control_dapr
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
@@ -88,7 +89,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Fail closed if control eventing is on but the ingest route (api/dapr.py /control-events) would be
     # unauthenticated: require_dapr_token silently no-ops on a blank APP_API_TOKEN, so an unset token with
     # the subscription live is a misconfiguration a forged in-cluster POST could exploit — refuse to boot.
-    assert_app_token_configured(dapr_enabled=settings.control_emit_enabled)
+    # The relay's cron route (api/control_relay.py) is a SECOND sidecar-delivered door on this app and
+    # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
+    # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
+    assert_app_token_configured(dapr_enabled=settings.control_emit_enabled or bool(settings.control_relay_binding_name))
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
     # of truth, NOT a fallback. With secrets_from_dapr on, the chart does not put the secret in pod env,
@@ -177,6 +181,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # built (plain memory, fed by the broadcast subscription in api/dapr.py); the emitter is a no-op when off.
     if settings.control_emit_enabled and dapr_client is None:
         dapr_client = DaprClient()
+    # The sidecar client itself, published for callers that are not the emitter. The control relay
+    # (api/control_relay.py) re-publishes STAGED BYTES verbatim, so it cannot go through
+    # `control_emitter` — that would re-serialize the event from the model and re-stage it. One client
+    # per process, closed by this lifespan; `None` when this deployment has no Dapr transport at all.
+    app.state.dapr_client = dapr_client
     app.state.control_buffer = ControlEventBuffer(settings.control_buffer_size)
     app.state.control_emitter = make_control_emitter(
         enabled=settings.control_emit_enabled,
@@ -272,6 +281,12 @@ app = build_lance_service_app(
 # Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
 # adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
 register_control_dapr(app)
+# THE CONTROL LANE'S RELAY (POST /<binding name> at the pod root, on the chart's cron schedule): drain
+# LANCE_CONTROL_OUTBOX_URI and re-publish what a bus outage left staged. Without it the staging that
+# `make_control_emitter` already does above is a durable copy nothing ever reads — and `table_published`
+# is the ONLY thing that wakes silver->gold, so a NATS blip ends the cascade with every pod green.
+# Mounted only when the chart names a binding, exactly like lineage's reconcile route.
+mount_control_relay(app, _settings.control_relay_binding_name)
 # ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
 # Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)

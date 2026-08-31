@@ -912,6 +912,34 @@ catalog:
   # affinity (so a client's polls stick to one replica) or a shared buffer — else a load-balanced poll gets
   # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
   controlEmit: true
+  # #4 transactional outbox on the CONTROL lane, and the RELAY that drains it — one switch for both,
+  # because half of this is worse than neither. Staging without a relay leaves a durable copy nothing
+  # reads; a relay without staging drains an empty prefix.
+  #
+  # Why the control lane needs durability at all, when the events are documented as refresh hints: most
+  # of them are, and `table_published` is not. The mover does not fire the next stage's topic and the
+  # medallion plane runs no cron, so nothing ever re-reads the `published` tag — `/publication-arrival`
+  # receiving this event is the ONLY thing that wakes silver->gold. A 5s publish timeout during a NATS
+  # blip ended the cascade outright with every pod green.
+  #
+  # THE PREFIX MUST DIFFER FROM `_lineage_outbox`. Lineage's reconcile cron parses every object in its
+  # own prefix as an OpenLineage RunEvent and DELETES what it cannot parse, so pointing this lane at
+  # that prefix destroys the staged control events instead of relaying them. The catalog refuses to boot
+  # on equal prefixes rather than trusting this comment.
+  #
+  # Cost is one S3 PUT + DELETE per catalog MUTATION (not per row) against the already-provisioned
+  # rustfs.bucket. Requires catalog.controlEmit (nothing stages when emission is off).
+  controlOutbox:
+    enabled: true
+    # ONE STRING: the Dapr Component's name (catalog-control-relay-cron.yaml), the app's
+    # LANCE_CONTROL_RELAY_BINDING_NAME, and the route the catalog serves at its pod root. Dapr delivers
+    # an input binding to the route matching the COMPONENT NAME, so a second literal anywhere is a cron
+    # that ticks into a 404 while both halves look right in isolation.
+    bindingName: catalog-control-relay-cron
+    # Bounds how long a cascade stays halted after a bus outage. Tighter than lineage's 300s sweep
+    # because that one re-reads Lance manifests estate-wide while this one is a LIST over a prefix that
+    # is empty in the healthy case.
+    schedule: "@every 60s"
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
 # gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy
