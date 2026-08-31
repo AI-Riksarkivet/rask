@@ -167,6 +167,92 @@ platform backlog does not absorb it.
 
 ---
 
+## 5a. SESSION LEDGER — everything fixed, and what remains
+
+### Fixed and VERIFIED LIVE (driven on the running estate)
+
+| # | What |
+| --- | --- |
+| L1 | The stage watch tells a LOST job from a slow one (`seen`, `MAX_UNSEEN_POLLS`) |
+| L2 | Bounded stage resubmit — proven end to end, cascade completed off the retry |
+| L3 | The cascade proves it may WRITE before submitting |
+| L4 | The Ray plane runs on a scoped S3 credential |
+| L5 | No credential rides the Ray submission body |
+| L6 | ExternalSecrets works — two chart bugs (bare hostname, missing `system:auth-delegator`) |
+
+### Fixed, SUITE-verified (committed, gates green, not yet driven in the estate)
+
+| # | What | Class |
+| --- | --- | --- |
+| S1 | `branch` ignored on Update/Delete → **writes hit main** | table format |
+| S2 | `branch` ignored on `schema_metadata/update` → **rewrites main** | table format |
+| S3 | `list_namespaces` disclosed sibling names | governance |
+| S4 | `list_warehouse_namespaces` — same, third instance, found by the gate | governance |
+| S5 | `tags/delete` + `version/delete` at writer tier | governance |
+| S6 | A tier could publish with no provenance columns | contract |
+| S7 | A tier whose dataset has no **stable row ids** could publish | contract |
+| S8 | `gate` did not refuse what `publish` refuses *(my own regression)* | contract |
+| S9 | The declared gate was **silently disabled** by an observability switch | governance |
+| S10 | `parentless` counted 0 when the column was **absent** | contract |
+| S11 | Read-only maintenance mode **503'd the entire read surface** | availability |
+| S12 | A declared promotion review was **never honoured** (and was logged as if it were) | governance |
+| S13 | The rate limiter keyed on one value — **one bucket for the estate** | availability |
+| S14 | `dapr.sidecars=false` rendered **13 unstartable Deployments** | deploy |
+| S15 | Filtered listings read **page one only** | correctness |
+| S16 | `deploy/` re-applied the **root** S3 key over the scoped one | security |
+| S17 | Catalog + maintenance lineage outboxes rendered nowhere | durability |
+| S18 | No control-lane relay existed for `table_published` | durability |
+| S19 | `/bronze-arrival` resolved its source by a Helm path convention | correctness |
+| S20 | A typo'd `key_column` silently weakened the gate | governance |
+| S21-25 | The five genuine `open_python-audit` remainders (VS-07, ANN-03, VS-05, DUP-04, ingest-flow-03) | mixed |
+| S26 | Lakehouse `PagePreview` disabled every thumbnail on plain-binary corpora | frontend |
+
+### Structural gates built — they catch the CLASS
+
+| Gate | Found |
+| --- | --- |
+| `test_siblings_agree.py` | S4, and S2 after I widened it |
+| `test_checks_are_reachable.py` | S10, plus two compensated guards |
+| `test_invariants.py` (code→chart, missing-secret across toggles) | S17, and **three of S14's four sites after I had fixed the first** |
+| `test_a_filtered_listing_drains_the_backend.py` | S15 |
+
+---
+
+## 5b. WHAT REMAINS
+
+### Track A — the lakehouse
+
+| Priority | Item |
+| --- | --- |
+| Medium | **No index is ever built** on a governed table, while search tunes `nprobes` for one that is not there — semantic search is a brute-force scan |
+| Medium | **Compression never configured** anywhere; no decision record. Thresholds are schema-resident, so this gets more expensive with corpus size |
+| Medium | **Memory**: 53 `lance.dataset()` call sites, 5 pass a `session`. Defaults are 1 GiB + 6 GiB per instance against 512Mi pods; only per-request opens keep it alive today |
+| Medium | `_row_last_updated_at_version` unused → publication deltas miss in-place updates, and the annotator's whole write path is `merge_insert` |
+| Low | Body-id reconciliation on 4 routes — a real spec violation whose consequence is a confused client, not data loss. **Deliberately deferred** |
+| Low | `delimiter` silently ignored rather than refused (recorded deviation #6; a 400 would be strictly better) |
+| Low | Subchart naming: a subchart uses `{{ .Release.Name }}-x` while this chart's Secrets use `lance.fullname` — they agree only when the release is named `rask` |
+| Low | `can_promote` buys nothing on `table` (`validator ⊇ owner`) |
+| Doc | **The DIY provenance recipe is written down nowhere** — `grep -rln "stamp_stage" docs/ .claude/` matches nothing |
+
+### Track B — compute & workflow
+
+| Priority | Item |
+| --- | --- |
+| **In progress** | **The executor contract** — the piece the agnosticism claim rests on. `BAKED_JOBS_DIR` + `BAKED_CLUSTER_JOBS` live in the SHARED library and the CATALOG enforces them, so a non-Ray lane cannot be declared and the word "Ray" reaches every API client through the published OpenAPI |
+| High | **No cascade reconciler and no re-run verb** — a missed hop is undetectable and unrepairable |
+| High | **No Dapr Workflow versioning seam** — two replay divergences already shipped; "drain before deploying" is the only safe answer |
+| Medium | Submission bypasses the `RayJob` CRD, so **Kueue sees nothing** |
+| Medium | 1,367 orphan rows in `daprstate`, no TTL, no alert |
+| Medium | The workflow status metric reports success on a dying path |
+
+### Blocked on the owner
+
+| Item |
+| --- |
+| `dedicatedServiceCredentials: false` — every mover holds `owner` on every warehouse; the bounding control is unrendered. A posture, not a defect |
+
+---
+
 ## 5c. TRACK A — the lakehouse, verified 2026-08-31
 
 Four questions, answered by DRIVING rather than reading. The manual probe stood up real OpenFGA
