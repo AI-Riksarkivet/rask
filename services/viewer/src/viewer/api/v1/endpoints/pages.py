@@ -13,8 +13,8 @@ listing reads only the blob DESCRIPTORS, which arrive in the same scan as the ta
 the byte route resolves ``id`` -> stable ``_rowid`` -> ``take_blobs(ids=[rowid])``, where ``None`` in
 the slot IS the null signal. ``blobs.py`` says the same in its own words — "the take-path remains
 correct for single-row serving (``ids=[rowid]``, where an empty result IS the null signal)". A plain
-``large_binary`` payload has no take-path at all; both routes decide that shape from ``ds.schema``
-and serve it from the request-bounded filtered scan instead (see ``_page_rows`` / ``_take_page``).
+``large_binary`` payload has neither a take-path nor a descriptor; both routes decide that shape from
+``ds.schema`` (see ``_page_rows`` / ``_take_page``).
 
 READS MUST BE BOUNDED BY THE REQUEST, NOT BY THE DATASET (VS-05). Both routes used to run one
 unfiltered, unbounded ``read_aligned_table`` at ``blob_handling="all_binary"``, which materialises
@@ -22,7 +22,10 @@ EVERY row's bytes: serving one page cost the whole corpus, and the listing's ``l
 only after the scan, so a ``can_get_metadata`` route's memory was bounded by the volume. A blob
 column scanned at DEFAULT ``blob_handling`` yields ``struct<kind, position, size, blob_id,
 blob_uri>`` and reads no object bytes at all, so ``size`` and ``has_payload`` are answerable for
-free; the bytes are fetched for one row, by row id, only on the route that serves them.
+free; the bytes are fetched for one row, by row id, only on the route that serves them. A PLAIN
+``large_binary`` column has no descriptor, so there is nothing free to read: the listing leaves the
+column out of its projection entirely and reports presence and length as unknown, because paying a
+corpus read to fill in two fields is the exact cost this rung exists to refuse.
 
 See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind both rules, and
 ``docs/architecture/document-viewer.md`` for how this endpoint came to exist.
@@ -73,25 +76,38 @@ class Page(BaseModel):
     #: The payload's length in bytes, read from the blob DESCRIPTOR rather than from the bytes — the
     #: listing must never dereference a payload (VS-05).
     #:
-    #: ONE CASE WHERE THAT IS NOT A BYTE COUNT, stated rather than smuggled: for an EXTERNAL
-    #: descriptor (``kind == EXTERNAL_KIND``) ``size == 0`` means THE WHOLE OBJECT, whose length the
-    #: dataset does not carry — see ``carry_external_descriptor`` in ``service_kit.lakehouse.blobs``.
-    #: Such a row reports 0 here. Resolving it would mean a per-row HEAD against the object store,
-    #: which is exactly the IO this listing exists to avoid; no consumer branches on ``size`` (the
-    #: lakehouse zone renders it as a caption), so an honest 0 beats a scan.
+    #: TWO CASES WHERE THAT IS NOT A BYTE COUNT, stated rather than smuggled, and both report 0:
+    #:
+    #: * an EXTERNAL descriptor (``kind == EXTERNAL_KIND``), where ``size == 0`` means THE WHOLE
+    #:   OBJECT, whose length the dataset does not carry — see ``carry_external_descriptor`` in
+    #:   ``service_kit.lakehouse.blobs``. Resolving it would mean a per-row HEAD against the object
+    #:   store.
+    #: * a payload column that is plain ``large_binary`` rather than blob-v2, which carries no
+    #:   descriptor at all. Resolving it would mean reading the payload of every listed row.
+    #:
+    #: Both resolutions are exactly the IO this listing exists to avoid, and no consumer branches on
+    #: ``size`` (the lakehouse zone renders it as a caption), so an honest 0 beats a scan.
     size: int
     #: False when this row's payload is null. Surfaced rather than hidden: a row that failed to
     #: acquire is a real state of the dataset, and a viewer that silently skips it reports a corpus as
     #: complete when it is not.
     #:
+    #: None means UNKNOWN, and only a payload column that is plain ``large_binary`` rather than
+    #: blob-v2 produces it: that shape records presence nowhere but in the bytes, so the listing
+    #: cannot answer without reading the corpus it is forbidden to read (`_page_rows` carries the
+    #: measurement). None rather than an optimistic True because this is the field consumers BRANCH
+    #: on — ``GET /api/page`` is the authority on presence for that shape, and a guess here would
+    #: report a failed harvest as a servable page, which is the misreport `has_payload` exists to
+    #: prevent.
+    #:
     #: MODALITY-FREE. This was `has_image`, and the route it describes serves an ARBITRARY governed
     #: table — audio, video and PDF corpora included. CLAUDE.md's test for a shared seam is "would this
     #: be right for audio?", and `has_image` is not.
-    has_payload: bool
+    has_payload: bool | None
 
     @computed_field
     @property
-    def has_image(self) -> bool:
+    def has_image(self) -> bool | None:
         """Deprecated alias for `has_payload`. REMOVE after one release.
 
         A rename is a wire change, and the web zones are their own Deployments — during a rolling
@@ -262,17 +278,29 @@ def _page_rows(ds: lance.LanceDataset, limit: int) -> tuple[pa.Table, bool]:
     VS-05: capped at 500 by the query model but never handed to Lance, the read was bounded by the
     volume, so ~10k pages at ~1 MB was ~10 GB materialised to return 100 metadata rows.
 
-    DEFAULT ``blob_handling``, so a blob-v2 ``payload`` arrives as ``struct<kind, position, size,
-    blob_id, blob_uri>`` and no object bytes are read at all.
+    THE PAYLOAD COLUMN IS PROJECTED ONLY WHERE PROJECTING IT IS FREE. At DEFAULT ``blob_handling`` a
+    blob-v2 ``payload`` arrives as ``struct<kind, position, size, blob_id, blob_uri>`` and no object
+    bytes are read at all, so ``size`` and ``has_payload`` come for nothing. ``table`` is a free
+    caller-supplied catalog id, though, so a ``payload`` that is a plain ``large_binary`` column is a
+    reachable shape — and there the same scan returns the BYTES. Projecting it would hand a route
+    gated at the metadata rung the payload of every listed row: 500 rows at ~1 MB is half a gigabyte
+    materialised to answer a listing (VS-05, and the same OOM as the unbounded scan above). So that
+    shape is scanned without the column, and `list_pages` reports what a metadata read can know.
 
-    The flag exists because ``table`` is a free caller-supplied catalog id: a ``payload`` that is a
-    plain ``large_binary`` column rather than blob-v2 is a reachable shape, and there the same scan
-    returns real bytes that must be measured with ``len``. Asked of ``ds.schema``, not of the result:
-    the scan strips the Arrow extension marker from the returned field (measured on pylance 10.0.0),
-    so ``is_blob_field`` answers False for a blob column read back out of a table.
+    THE FIDELITY THAT COSTS IS FORCED, NOT CHOSEN — measured 2026-08-31 with ``/proc/self/io`` rchar
+    over a 260 MB plain corpus on pylance 10.0.0, at ``data_storage_version`` 2.1 and 2.2 alike:
+    projecting ``payload`` reads 260 MB, and so does every candidate that would recover presence or
+    length more cheaply (``payload IS NOT NULL`` as a scan expression, a ``payload IS NULL`` filter,
+    ``count_rows`` over that filter; ``octet_length`` is refused outright on a binary column).
+    Dropping the column reads 10 KB. There is no third answer to buy back.
+
+    The shape is asked of ``ds.schema``, not of the result: the scan strips the Arrow extension marker
+    from the returned field (measured on pylance 10.0.0), so ``is_blob_field`` answers False for a blob
+    column read back out of a table — and for the plain shape there is now no returned field to ask.
     """
-    rows = ds.to_table(columns=[*_PAGE_COLUMNS, "payload"], limit=limit)
-    return rows, is_blob_field(ds.schema.field("payload"))
+    descriptors = is_blob_field(ds.schema.field("payload"))
+    columns = [*_PAGE_COLUMNS, "payload"] if descriptors else list(_PAGE_COLUMNS)
+    return ds.to_table(columns=columns, limit=limit), descriptors
 
 
 def _take_page(ds: lance.LanceDataset, table: str, page_id: int) -> tuple[BlobFile | BytesIO, int, str]:
@@ -354,17 +382,19 @@ async def list_pages(
     rows, descriptors = await run_in_threadpool(_page_rows, ds, limit)
     pages: list[Page] = []
     for i in range(rows.num_rows):
-        cell = rows.column("payload")[i]
         if descriptors:
             # Cell validity is the null signal for a descriptor column (correct from pylance 9;
             # lance-blob-v2-findings.md records that it is wrong only at 8.0.0, and every manifest
             # pins >= 10.0.0). No payload is dereferenced to answer either field.
-            has_payload = bool(cell.is_valid)
+            cell = rows.column("payload")[i]
+            has_payload: bool | None = bool(cell.is_valid)
             size = int(cell.as_py()["size"]) if has_payload else 0
         else:
-            payload = cell.as_py()
-            has_payload = payload is not None
-            size = len(payload) if payload else 0
+            # A plain `large_binary` payload was never scanned (`_page_rows`), so neither field is
+            # answerable here at any price this rung may pay. The row itself is still listed: which
+            # rows exist IS metadata, and dropping them would report the corpus as shorter than it is.
+            has_payload = None
+            size = 0
         pages.append(
             Page(
                 id=rows.column("id")[i].as_py(),

@@ -8,6 +8,11 @@ Adversarial re-audit of VS-05's fix (8834b95a): ``table`` is a free caller-suppl
 table answered 200 on ``/api/pages`` and 500 on ``/api/page``. A listing that advertises pages the
 byte route then refuses to serve is worse than either route failing alone.
 
+The listing branch is here too, and what it must NOT do is the other half of VS-05: this shape carries
+no blob descriptor, so the only place its per-row length and validity exist is the payload itself, and
+reading that to answer a ``can_get_metadata`` call is the corpus-sized read the finding is about. It
+therefore reports both unknown; the byte route below stays the authority on presence.
+
 A REAL dataset rather than a mock, for the reason the sibling suites give: the branch condition is a
 measured pylance behaviour (a scan strips the Arrow extension marker, so the shape question must be
 asked of ``ds.schema``), and a double would restate the assumption instead of testing it.
@@ -119,16 +124,30 @@ def _plain_dataset(dataset_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("_plain_dataset")
-def test_the_listing_answers_for_a_plain_binary_payload() -> None:
-    """The `descriptors=False` branch of the listing, pinned: `size` is `len(bytes)` and the null
-    signal is the cell's own validity — no descriptor struct exists to read either from."""
+def test_the_listing_answers_for_a_plain_binary_payload_without_reading_it() -> None:
+    """The `descriptors=False` branch of the listing, pinned: every ROW is listed, and its payload's
+    presence and length are reported UNKNOWN rather than read.
+
+    No descriptor struct exists on this shape to read `size` or validity from, and the only thing
+    that carries either is the payload itself — which a route gated at the metadata rung may not
+    touch (VS-05; `services/viewer/tests/test_page_reads_are_bounded.py` measures the bytes, this
+    file pins the contract that measurement forces).
+
+    `has_payload is None`, not `False`: the consumer branches on this field, so "unknown" and "this
+    row failed to acquire" must not collapse into one answer — `GET /api/page` is what settles
+    presence for this shape, and it still 404s on the null row below. `size == 0` is the same answer
+    the field already gives for an EXTERNAL descriptor, for the same reason: resolving it is IO this
+    listing exists to avoid.
+    """
     r = TestClient(_app()).get("/api/pages", params={"table": TABLE})
 
     assert r.status_code == 200
     pages = {p["id"]: p for p in r.json()["pages"]}
-    assert pages[0]["has_payload"] is True
-    assert pages[0]["size"] == len(_JPEG)
-    assert pages[NULL_ROW_ID]["has_payload"] is False
+    assert set(pages) == {0, NULL_ROW_ID}, "which rows exist IS metadata — dropping them would report the corpus as shorter than it is"
+    assert pages[0]["has_payload"] is None
+    assert pages[0]["has_image"] is None, "the deprecated alias mirrors rather than defaults, so it must carry the unknown too"
+    assert pages[0]["size"] == 0
+    assert pages[NULL_ROW_ID]["has_payload"] is None
     assert pages[NULL_ROW_ID]["size"] == 0
 
 

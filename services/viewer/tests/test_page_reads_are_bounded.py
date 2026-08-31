@@ -366,3 +366,73 @@ def test_an_absent_id_is_still_a_404(counted: _CountingDataset) -> None:
 
     assert r.status_code == 404
     assert "no page with id 999" in r.text
+
+
+#: 1 MiB per row across 8 rows = an 8 MiB PLAIN corpus, the shape the measurement below is stated in.
+#: Bigger per row than the blob-v2 fixture because a plain column is read whole or not at all: there
+#: is no descriptor to make a partial read cheap, so the only signal is the corpus total.
+PLAIN_PAYLOAD_BYTES = 1024 * 1024
+PLAIN_ROWS_WITH_PAYLOAD = 8
+PLAIN_CORPUS_BYTES = PLAIN_PAYLOAD_BYTES * PLAIN_ROWS_WITH_PAYLOAD
+
+
+@pytest.fixture(scope="module")
+def plain_dataset_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A bronze-shaped dataset whose ``payload`` is a PLAIN ``large_binary`` column, not blob-v2.
+
+    ``table`` is a free caller-supplied catalog id, so this shape is reachable on the same route as
+    the blob-v2 fixture above — and it is the shape with no descriptor to read, which is what makes
+    the listing's projection the only thing standing between a metadata request and the corpus.
+    """
+    ids = [*range(PLAIN_ROWS_WITH_PAYLOAD), NULL_ROW_ID]
+    payloads: list[bytes | None] = [_JPEG_MAGIC + bytes([i % 251]) * (PLAIN_PAYLOAD_BYTES - len(_JPEG_MAGIC)) for i in range(PLAIN_ROWS_WITH_PAYLOAD)]
+    payloads.append(None)
+    table = pa.table(
+        {
+            "id": pa.array(ids, pa.int64()),
+            "source_uri": pa.array([f"iiif://vol/{i}" for i in ids], pa.string()),
+            "stage": pa.array(["bronze"] * len(ids), pa.string()),
+            "payload": pa.array(payloads, pa.large_binary()),
+        }
+    )
+    path = tmp_path_factory.mktemp("plainpages") / "pages.lance"
+    lance.write_dataset(table, str(path))
+    return path
+
+
+@pytest.fixture
+def counted_plain(plain_dataset_path: Path, monkeypatch: pytest.MonkeyPatch) -> _CountingDataset:
+    """The plain-shaped dataset behind the same counting wrapper the blob-v2 fixtures use."""
+    counter = _CountingDataset(lance.dataset(str(plain_dataset_path)))
+    monkeypatch.setattr(pg.lance, "dataset", lambda *_a, **_kw: counter)
+    return counter
+
+
+def test_the_listing_reads_no_payload_bytes_from_a_plain_binary_column(counted_plain: _CountingDataset) -> None:
+    """The metadata rung must cost no payload bytes on EITHER shape, not just on blob-v2.
+
+    A blob-v2 ``payload`` is free to project because a default-``blob_handling`` scan hands back the
+    descriptor struct. A plain ``large_binary`` ``payload`` has no descriptor: projecting it hands
+    back the bytes themselves, so the listing's ``limit`` bounds the read by the REQUEST and nothing
+    bounds it by the payload — 500 rows of a megabyte each is half a gigabyte materialised to answer
+    a ``can_get_metadata`` call. Measured before this test existed: an 8 MiB plain corpus read
+    8.0 MiB of payload for 8 metadata rows.
+
+    Verified independently of this counter (``/proc/self/io`` rchar over a 260 MB plain corpus, 2026-08-31):
+    projecting ``payload`` reads the whole column, and NO cheaper projection exists — ``payload IS NOT
+    NULL`` as a scan expression, a ``payload IS NULL`` filter and ``count_rows`` on that filter each
+    read all 260 MB on both ``data_storage_version`` 2.1 and 2.2, while dropping the column from the
+    projection reads 10 KB. So the only read that satisfies this assertion is the one that leaves the
+    column out, which is why the assertion is ``== 0`` rather than a budget.
+    """
+    client = TestClient(_app())
+
+    r = client.get("/api/pages", params={"table": TABLE, "limit": 500})
+
+    assert r.status_code == 200
+    pages = r.json()["pages"]
+    assert [p["id"] for p in pages] == [*range(PLAIN_ROWS_WITH_PAYLOAD), NULL_ROW_ID], "the listing must still enumerate every row it was asked for"
+    assert counted_plain.payload_bytes == 0, (
+        f"listing {len(pages)} metadata rows read {counted_plain.payload_bytes} payload bytes out of a "
+        f"{PLAIN_CORPUS_BYTES}-byte plain corpus; the payload column is still in the listing's projection"
+    )
