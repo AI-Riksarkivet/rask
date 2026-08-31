@@ -1,0 +1,27 @@
+{{- if .Values.externalSecrets.enabled }}
+{{/* OpenBao's Kubernetes auth backend validates a caller's ServiceAccount token by asking the
+     Kubernetes API to review it (a TokenReview). It performs that review AS ITS OWN ServiceAccount,
+     so that account needs `system:auth-delegator` — the cluster role whose entire purpose is
+     "may submit TokenReview and SubjectAccessReview".
+
+     Without it every login answers `Code: 403 ... permission denied`, which reads as a misconfigured
+     ROLE or a bad policy and sends you auditing the Vault side. It is neither: OpenBao never got far
+     enough to evaluate the role, because it could not verify who was calling. Measured on the live
+     cluster 2026-08-31, after the FQDN fix moved the failure from DNS to authorization.
+
+     Gated on externalSecrets.enabled because ESO is the only consumer of the kubernetes auth backend
+     — every other secret consumer reaches OpenBao through a Dapr sidecar with a token. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lance.fullname" . }}-openbao-auth-delegator
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.openbao.serviceAccountName | default "default" }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

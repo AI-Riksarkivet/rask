@@ -710,6 +710,18 @@ operator path) — otherwise externalize silently emits nothing. Non-empty strin
 {{- define "lance.vaultAddr" -}}
 {{- if .Values.openbao.externalAddr -}}{{ .Values.openbao.externalAddr }}{{- else -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}{{- end -}}
 {{- end -}}
+
+{{/* The SAME address, FULLY QUALIFIED — for a caller that is not in this namespace.
+
+     A bare service name resolves only within its own namespace. Every Dapr sidecar consuming
+     `lance.vaultAddr` sits beside the workload in this release's namespace, so the short form is
+     correct there. The ExternalSecrets OPERATOR does not: it runs in `external-secrets`, and its
+     SecretStore login failed with `lookup rask-openbao ... server misbehaving` — a DNS failure that
+     reads as an OpenBao outage rather than as a name that cannot resolve from where it is used.
+     Measured against the live cluster 2026-08-31. */}}
+{{- define "lance.vaultAddrFQDN" -}}
+{{- if .Values.openbao.externalAddr -}}{{ .Values.openbao.externalAddr }}{{- else -}}http://{{ include "lance.openbaoHost" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.openbao.port }}{{- end -}}
+{{- end -}}
 {{- define "lance.natsUrl" -}}
 {{- if .Values.nats.externalUrl -}}{{ .Values.nats.externalUrl }}{{- else -}}nats://{{ include "lance.natsHost" . }}:4222{{- end -}}
 {{- end -}}
