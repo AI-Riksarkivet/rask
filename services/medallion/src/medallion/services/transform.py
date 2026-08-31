@@ -1045,7 +1045,21 @@ async def _review_reasons(
     # that tag has moved cannot un-move it. Evaluated here and RULED ON by `gate_decision`, which
     # owns the ordering; it used to be an `elif` beneath the publish branch, where it never ran.
     band_reasons: list[str] = []
-    if result is not None and promotion_hold.review_enabled(settings):
+    # THE DECLARED GATE WINS, and it is resolved BEFORE the guard because the guard now asks it a
+    # question. A project that declared one through the catalog's admin-gated door governs its own
+    # band; one that declared nothing keeps the chart's settings, byte-for-byte. Resolved per-dispatch
+    # rather than at boot because the record is editable while the pod runs — that is the whole point
+    # of the door, and it is what makes a threshold change take effect without a `helm upgrade`.
+    gate = gate_svc.effective_gate(settings, await gate_svc.resolve_gate_async(settings, project=project))
+    # THE GATE'S OWN VALUE, not the chart flag. This read `promotion_hold.review_enabled(settings)`
+    # while the log below emitted `gate.review_enabled` — so a project that declared a review saw
+    # `review_enabled: true` in the mover's structured log and never had a promotion held. An operator
+    # checking whether the declaration took effect was shown exactly what they declared.
+    #
+    # `effective_gate` composes this already: the declared record WHOLE or the chart's settings WHOLE,
+    # with `gate_source` naming which won. `review_band` and `key_column` flowed from there; this was
+    # the one field the caller went around.
+    if result is not None and gate.review_enabled:
         # The comparison point comes from the WRITE, not from `version - 1`. That arithmetic is wrong
         # for this writer and was silently wrong in production: the data lands in one commit and the
         # lineage index in a SECOND, so the reported version is N+1 and `version - 1` is N — the
@@ -1067,12 +1081,6 @@ async def _review_reasons(
         # authoritative, while `pre_row_count` is pass 1's older reading of the same thing. Both
         # absent is still FIRST_PROMOTION, so an unreadable destination keeps asking.
         previous_rows = promotion_band.resolve_previous_row_count(observed=result.previous_row_count, carried=trigger.pre_row_count)
-        # THE DECLARED GATE WINS. A project that declared one through the catalog's admin-gated
-        # door governs its own band; one that declared nothing keeps the chart's settings,
-        # byte-for-byte. Resolved here rather than at boot because the record is editable while
-        # the pod runs — that is the whole point of the door, and reading it per-dispatch is what
-        # makes a threshold change take effect without a `helm upgrade`.
-        gate = gate_svc.effective_gate(settings, await gate_svc.resolve_gate_async(settings, project=project))
         band_reasons = promotion_band.review_reasons(
             row_count=result.row_count,
             previous_row_count=previous_rows,
@@ -1381,7 +1389,15 @@ async def _report_hold(
     # workflow (hosted by the producer, beside the door a person can answer on) splits corrupt
     # from unusual. A publish that does not land degrades to the permanent BLOCK below, which is
     # the safe direction: the output is written and the FAIL run is emitted either way.
-    if promotion_hold.review_enabled(settings):
+    # Same rule as `_review_reasons`: the gate that governs THIS run decides, not the chart-wide flag.
+    # A hold raised under a declared review must become a QUESTION, or the declaration buys a block
+    # rather than the person it asked for.
+    #
+    # Resolved here rather than threaded in, because this function is reached from more than one
+    # caller and a parameter would let one of them pass the chart's answer while the other passed the
+    # declaration — which is the split that produced the defect in the first place.
+    hold_gate = gate_svc.effective_gate(settings, await gate_svc.resolve_gate_async(settings, project=project))
+    if hold_gate.review_enabled:
         spec = promotion_hold.hold_spec(
             settings,
             token=token or "",

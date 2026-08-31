@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import lance
@@ -121,7 +122,15 @@ class TestARefusalBecomesTheHold:
             "publish_stage_output",
             lambda **_: PublishOutcome(published=False, failed_assertions=["row_count_positive"]),
         )
-        monkeypatch.setattr(transform.promotion_hold, "review_enabled", lambda _s: True)
+        # THE GATE ANSWERS THIS NOW, not a standalone predicate. Stubbing the resolved gate rather than
+        # `promotion_hold.review_enabled` is what keeps this test honest: the mover asks the gate that
+        # governs the run, so a declared record and the chart's settings reach the decision through one
+        # path. Stubbing the old predicate would pass while the real code consulted something else.
+        monkeypatch.setattr(
+            transform.gate_svc,
+            "effective_gate",
+            lambda _settings, _spec: SimpleNamespace(review_band=0.25, review_enabled=True, key_column="id", required_columns=(), gate_source="chart"),
+        )
         monkeypatch.setattr(transform.promotion_hold, "hold_spec", lambda *a, **k: holds.append(k) or k)
 
         async def _publish_hold(_dapr: Any, _settings: Any, _spec: Any) -> bool:
