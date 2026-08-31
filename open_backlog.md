@@ -167,6 +167,60 @@ platform backlog does not absorb it.
 
 ---
 
+## 5c. TRACK A — the lakehouse, verified 2026-08-31
+
+Four questions, answered by DRIVING rather than reading. The manual probe stood up real OpenFGA
+v1.18.3, real Apache AGE, real RustFS and a real OIDC issuer (all via Dagger, no docker) and performed
+bronze→silver→gold **by hand** — no mover, no Ray, no cascade.
+
+### Q1 · Is the lakehouse hard-coupled to compute? **No — VERIFIED. One coupling left, NOT fixed.**
+
+| | |
+| --- | --- |
+| Verified | The full manual hop worked: governed tables, provenance, gate, published pointer, governance, maintenance, lineage, and project>warehouse>namespace>table on real S3. Both registration seams (ASK and TELL) drove by hand with a plain bearer. |
+| The one coupling | `BAKED_JOBS_DIR` — the catalog validating Ray filesystem paths at the transform-declaration door. Decision D2 taken (named tasks from a config list); **not implemented**. |
+
+### Q2 · Bugs and missing features in the catalog / table layer
+
+**FIXED this session, each RED-first and regression-checked:**
+
+| Defect | Why it mattered |
+| --- | --- |
+| **`branch` ignored on Update/Delete** | A branch-scoped mutation hit MAIN, returned 200, and lineage recorded main's version. Silent wrong-target writes — the worst shape a table format can have. A REGRESSION; the suite that would have caught it quotes the correct pre-refactor line. |
+| **`list_namespaces` disclosed siblings** | One deep `reader` grant opened the route and returned every sibling namespace NAME, including ones the caller checks False on. Proven live. `list_tables` next door was already filtered. |
+| **`tags/delete` + `version/delete` at writer tier** | A plain writer could destroy or unpin the version `published` names, while `maintenance/run` — which EXEMPTS tagged versions — was owner-gated. The guarded door was expensive, the unguarded one cheap. |
+| **A tier could publish with no provenance** | `runners/dummy` shipped fabricated parent ids. Now refused at the publish door, opt-in by claim. |
+| **`gate` did not refuse what `publish` refuses** | MY OWN regression from the row above: the promotion review asks `gate` before the tag moves, so an under-reporting gate approves work the act will refuse. |
+
+**FOUND, NOT FIXED — ranked:**
+
+| # | Defect | Evidence |
+| --- | --- | --- |
+| 1 | **The declared GateSpec is resolved through the LINEAGE EMITTER.** With `LANCE_LINEAGE_EMIT_ENABLED=false` the noop emitter returns no project, so every project's declared gate is **silently not applied** and publish answers 200. Quality-gate policy depends on an observability switch. Live k3s has emit on, so it is latent. | Proven by flipping that one variable. `publication.py:177-195`. Fix: read the warehouse binding directly. |
+| 2 | **`register_table` accepts a dataset that can never carry provenance.** MEASURED: a `has_stable_row_ids=False, storage=2.1` dataset was registered 200 and announced into the graph; after compaction its `source_rowid` values went from `0..5` to `4294967296..` — silently naming rows that no longer exist. The flag is create-time-only and unrepairable. Gate A14 exists but lives in `services/ingest`, so it guards the ingest path only. | `tables.py` register door vs `ingest/catalog.py:238`. |
+| 3 | **Body-id reconciliation missing on 4 routes** — `describe_namespace`, `namespace_exists`, `table_exists`, `get_table_stats` accept a body `id` and never compare it to the path. Spec says a differing pair MUST 400. | Verified by hand. Not an authz hole (the path is authorized), a conformance gap. |
+| 4 | **The `delimiter` param is silently ignored** rather than refused. Already recorded as conscious deviation #6 with a good reason (honoring it per-request would let the FGA gate authorize a differently-parsed object). But **silently ignoring is strictly worse than 400-ing**, and a 400 does not reintroduce that hazard. | `docs/DECISIONS.md:294`. |
+| 5 | **Both list routes make ONE unpaginated native call** then apply a local cursor. Correct for a filtered listing — a backend limit truncates before the filter — but against a paginating backend it silently gets page one. `_collect_tables` shows the estate already knows how to loop. **My `list_namespaces` fix inherited this**, so there are now two instances. | `namespaces.py:85` (loops) vs `:218`, `:733`. |
+| 6 | **`can_promote` buys nothing on `table`** — `can_update_tag: owner` and `can_promote: validator` with `validator ⊇ owner`, measured on the live model. Either raise the publish door or lower `can_promote`. | Live model check. |
+| 7 | Two write sites drop the create-time flags: `runners/kg/adapter.py:453` (then destroys history on the next line, on an unpinned pylance) and `scripts/medallion_demo.py` ×3. | Verified by hand. |
+
+### Q3 · Do governance and lineage work? **Yes — both driven.**
+
+**Governance:** a hand-made table seeded the same tuples a mover's create does (`user:alice owner`, `namespace:gold parent`), and a second user got **403 on describe, on publish, and on write-authorization**. Audit records fired on every grant, denial and access review.
+
+**Lineage:** the catalog emitted `create_table.*` COMPLETE events; a person emitted their own runs through `lineage_kit.job_run`; `producers`, `upstream`, `downstream` and `/graph` all resolved with the right authors and edges.
+
+### Q4 · Is it a full lakehouse when driven by hand? **Yes — with effort.**
+
+Everything held. The "effort" is real and is documentation, not capability:
+
+- **The provenance recipe is written down NOWHERE.** `grep -rln "stamp_stage" docs/ .claude/` matches nothing. Three things a DIY user must know are oral tradition: that `stamp_stage` is the supported way to stamp a tier; that it needs `with_row_id=True` on the read or it mints nothing **and raises nothing**; and that `lineage=""` DELETES an inherited lineage column rather than carrying it.
+- **A person cannot mint their own project** — `POST /v1/projects` needs the estate-admin bar once. Everything below it is self-serve.
+- **The warehouse HTTP door is S3-only**, so a `file://`-rooted catalog has no HTTP path to the binding a declared gate needs.
+- **Credential vending was never exercised** — the probe read S3 with the endpoint's own credentials. `vending_mode` defaults to a mode that vends nothing.
+
+---
+
 ## 6a. Track A finding — a hand-written dataset can be registered with provenance that can never work
 
 Found 2026-08-31 while auditing every Lance create path against `lance_docs/file_format.md`.
