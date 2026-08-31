@@ -360,6 +360,19 @@ async def list_warehouse_namespaces(
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     bound = await run_in_threadpool(warehouses.namespaces_bound_to, settings.registry_root, so, warehouse_id)
+    # PER-ITEM, because the route's gate does not imply its contents. `can_get_metadata` on a container
+    # is `reader or can_get_metadata from child`, so holding `reader` on ONE namespace under this
+    # warehouse opens this route — and the unfiltered answer then named every SIBLING namespace bound
+    # to it. The same split `list_tables` and `list_namespaces` already carry, and the same one
+    # `estate_bindings` a few lines above applies to its own records: the ROUTE may open on the
+    # container, each ITEM is checked on itself.
+    #
+    # A namespace name discloses how a tenant organises data, which is why the answer is FILTERED
+    # rather than refused — refusing would break the breadcrumb the widened relation exists to serve.
+    if settings.fga_enabled and token is not None and client is not None:
+        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="namespace")
+        allowed = set(listing.objects)
+        bound = [name for name in bound if f"namespace:{name}" in allowed]
     return WarehouseNamespacesResponse(namespaces=bound)
 
 
