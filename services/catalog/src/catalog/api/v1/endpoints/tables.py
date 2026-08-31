@@ -966,7 +966,20 @@ async def restore_table(
 
 
 @router.post("/{id}/stats", response_model_exclude_none=True)
-def get_table_stats(id: str, ns: NamespaceDep, settings: SettingsDep) -> GetTableStatsResponse:
-    """Return storage/row statistics for the table at ``id`` via ``get_table_stats``."""
-    req = GetTableStatsRequest(id=parse_identifier(id, settings.delimiter))
+def get_table_stats(id: str, ns: NamespaceDep, settings: SettingsDep, branch: str | None = None) -> GetTableStatsResponse:
+    """Return storage/row statistics for the table at ``id`` via ``get_table_stats``.
+
+    ``branch`` is DECLARED here only so it can be refused, and the numbers are why. Verified live
+    2026-08-31 on a table whose branch held 1 row while main held 4: this door reported
+    ``num_rows: 4`` when asked for the branch, and again for a branch that had never been created —
+    through both the query string and the body. A row count is the most quoted number a catalog
+    produces; returning main's under a branch's name is the defect class at its most quotable.
+
+    Refused rather than served because the response cannot be assembled honestly from a branch handle:
+    ``FragmentStats.lengths`` and the per-index ``status``/``size_bytes`` are not what
+    ``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in
+    miniature. Serving it properly is named in `open_backlog.md`.
+    """
+    req = GetTableStatsRequest(id=parse_identifier(id, settings.delimiter), branch=branch)
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
     return native.call(ns, "get_table_stats", req)

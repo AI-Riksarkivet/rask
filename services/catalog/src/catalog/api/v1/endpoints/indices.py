@@ -111,16 +111,30 @@ def list_table_indices(
     settings: SettingsDep,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
+    branch: str | None = None,
 ) -> ListTableIndicesResponse:
-    """List the indices defined on a table (paged) — wraps the native ``list_table_indices`` op."""
-    req = ListTableIndicesRequest(id=parse_identifier(id, settings.delimiter), page_token=page_token, limit=limit)
+    """List the indices defined on a table (paged) — wraps the native ``list_table_indices`` op.
+
+    ``branch`` is DECLARED here only so it can be refused. The route did not accept it at all, which
+    read as safe and was not: a caller who asked for a branch's indices got 200 and MAIN's list.
+    Verified live 2026-08-31 against a table whose branch carried a BTREE on `id` that main did not —
+    this door reported an empty list for the branch, for main, and for a branch never created. Being
+    told "no indices" about the wrong dataset is a worse answer than an error, because it is actionable.
+    """
+    req = ListTableIndicesRequest(id=parse_identifier(id, settings.delimiter), page_token=page_token, limit=limit, branch=branch)
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="list_table_indices")
     return native.call(ns, "list_table_indices", req)
 
 
 @router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
-def describe_table_index_stats(id: str, index_name: str, ns: NamespaceDep, settings: SettingsDep) -> DescribeTableIndexStatsResponse:
-    """Report stats for a named index on a table — wraps the native ``describe_table_index_stats`` op."""
-    req = DescribeTableIndexStatsRequest(id=parse_identifier(id, settings.delimiter), index_name=index_name)
+def describe_table_index_stats(id: str, index_name: str, ns: NamespaceDep, settings: SettingsDep, branch: str | None = None) -> DescribeTableIndexStatsResponse:
+    """Report stats for a named index on a table — wraps the native ``describe_table_index_stats`` op.
+
+    ``branch`` is declared to be refused, for the same reason as the listing beside it: an index of the
+    same name can exist on both refs with different coverage, so answering from main is a plausible
+    wrong number rather than a visible failure."""
+    req = DescribeTableIndexStatsRequest(id=parse_identifier(id, settings.delimiter), index_name=index_name, branch=branch)
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe_table_index_stats")
     return native.call(ns, "describe_table_index_stats", req)
 
 

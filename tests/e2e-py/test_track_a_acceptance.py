@@ -797,3 +797,35 @@ def test_a_branch_nested_in_an_explain_query_is_refused_like_the_outer_one(estat
         f"a branch nested inside `query` answered {nested.status_code} — the outer channel is guarded and "
         f"the inner one is not, so the door serves main's plan under a branch name: {nested.text[:150]}"
     )
+
+
+@pytest.mark.parametrize(
+    ("door", "query"),
+    [("stats", "branch=work"), ("index/list", "branch=work"), ("index/id_idx/stats", "branch=work")],
+    ids=["table-stats", "index-list", "index-stats"],
+)
+def test_a_read_door_that_never_offered_a_branch_now_refuses_one(estate: Estate, door: str, query: str) -> None:
+    """Three doors did not ACCEPT `branch` at all, which read as safe and was not.
+
+    A route that declares no branch parameter still receives the request — it just ignores it — so a
+    caller asking for a branch got 200 and MAIN's answer. Verified live 2026-08-31:
+
+      * `/stats` reported num_rows 4 for a branch holding 1, and again for a branch never created
+      * `/index/list` reported an empty list for a branch carrying a BTREE that main did not have
+
+    Being told "4 rows" or "no indices" about the wrong dataset is worse than an error, because it is
+    actionable. Declaring the parameter in order to refuse it is the smallest honest fix: the caller
+    now learns the door cannot answer their question instead of receiving someone else's answer.
+
+    Refused rather than served because the responses cannot be assembled honestly from a branch handle
+    — `FragmentStats.lengths` and an index's `status`/`size_bytes` are not what `dataset_stats()` and
+    `list_indices()` report, and filling a required field with a plausible value is the failure this
+    file exists to catch.
+    """
+    # A NAME PER CASE. The estate is module-scoped, so a shared table name makes the second and third
+    # parameters 409 on create — a failure that looks like the guard and is the fixture.
+    name = f"readrefuse_{door.replace('/', '_')}"
+    estate.create(name, _rowed(("a", "one"), ("b", "two")))
+    estate.branch(name, "work")
+    response = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/{door}?{query}", headers=_auth(), timeout=60)
+    assert response.status_code == 501, f"/{door} answered a branch-scoped read with {response.status_code} instead of 501: {response.text[:200]}"
