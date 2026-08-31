@@ -167,6 +167,29 @@ platform backlog does not absorb it.
 
 ---
 
+## 5. TRACK A DRIVEN AFTER THE FIXES — 2026-08-31
+
+The owner's challenge, and it was correct: *"seems like always still have a lot of gaps and holes
+because you are not testing stuff."* Of the 26 Track A fixes, 6 were LIVE and 20 were SUITE-only. Every
+one had a RED-first test; none had been re-driven TOGETHER. Unit tests prove a change in isolation and
+say nothing about 26 changes composing.
+
+So the whole set was built from a clean worktree at `5d87a63f`, deployed to all ten workloads, and
+driven:
+
+| Check | Result |
+| --- | --- |
+| Every pod healthy after the rollout | **PASS** — no CrashLoopBackOff, zero catalog errors at boot |
+| The cascade end to end (`/produce` → bronze → silver → gold) | **PASS** — bronze→silver ran, silver→gold `medallion_stage_moved`. 26 changes to publication, namespaces, middleware, transform and the auth deps, and the pipeline still completes. |
+| **Read-only mode (S11), the riskiest change — it touches every request** | **PASS, decisively.** Flipped ON against the live catalog: `describe`, `count_rows`, `ns describe` (POST **reads**) answered **401** — through the middleware and into auth — while `insert`, `drop` and an unclassified action answered **503**. Before the fix all six were 503. Reverted; writes accepted again. |
+
+**What this does and does not establish.** It establishes that the fixes compose, that nothing
+crash-loops, that the cascade still runs, and that the one change touching every request behaves in
+both directions. It does NOT individually re-drive S1–S10 and S12–S26 in the estate; those remain
+suite-verified with a live smoke test over the whole set. Rows below keep their honest levels.
+
+---
+
 ## 5a. SESSION LEDGER — everything fixed, and what remains
 
 ### Fixed and VERIFIED LIVE (driven on the running estate)
