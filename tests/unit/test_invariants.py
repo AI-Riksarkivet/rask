@@ -22,8 +22,11 @@ import ast
 import json
 import pathlib
 import re
+import shutil
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 from urllib.parse import urlparse
 
 import pytest
@@ -330,6 +333,434 @@ def test_no_dead_chart_env_vars() -> None:
     assert not dead, (
         f"the chart injects these env vars but NO first-party code reads them (dead config → a feature "
         f"that is configured but inert): {dead}. Either wire them up or delete them from the chart."
+    )
+
+
+# --------------------------------------------------------------------------------------------------
+# 2b. No UNWIRED config — the MISSING DIRECTION of the guard above
+# --------------------------------------------------------------------------------------------------
+
+
+class _EnvSetting(NamedTuple):
+    """One pydantic-settings field whose falsy default is a control-flow SWITCH.
+
+    ``envs`` is every environment variable that can fill it (an ``alias``, each name in an
+    ``AliasChoices``, or the ``env_prefix`` + FIELD_NAME fallback pydantic derives when a field
+    declares no alias). ``guards`` names the identifiers whose truthiness the code actually branches
+    on, so a failure message can point at the branch rather than assert one exists.
+    """
+
+    envs: tuple[str, ...]
+    where: str
+    default: str
+    guards: tuple[str, ...]
+
+
+#: Where a first-party `BaseSettings` subclass may live. `runners/` is included because a sealed
+#: runner reads chart-injected env too (`ASSIST_FRAME_BASE`), and a runner is exactly the kind of
+#: component whose config nobody remembers to render.
+_SETTINGS_ROOTS: Final = (SERVICES, REPO / "packages", REPO / "runners")
+
+
+def _settings_trees() -> dict[str, ast.Module]:
+    """Parsed first-party Python, keyed by repo-relative path.
+
+    A sealed runner keeps its OWN `.venv` inside the tree, so a scan rooted above one would walk a
+    third-party site-packages — the same reason `_hierarchy_edge_call_sites` filters it. Read as
+    bytes so a file carrying a BOM parses.
+    """
+    trees: dict[str, ast.Module] = {}
+    for root in _SETTINGS_ROOTS:
+        if not root.exists():
+            continue
+        for py in sorted(root.rglob("*.py")):
+            posix = py.relative_to(REPO).as_posix()
+            if ".venv/" in posix or "/node_modules/" in posix or "/tests/" in posix or "/test_" in posix:
+                continue
+            try:
+                trees[posix] = ast.parse(py.read_bytes())
+            except SyntaxError:
+                continue
+    return trees
+
+
+def _leaf_name(node: ast.expr) -> str | None:
+    """The identifier a `settings.foo` / `foo` expression ends in, else None."""
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _settings_class_names(trees: dict[str, ast.Module]) -> set[str]:
+    """Every class that transitively subclasses `BaseSettings`, by NAME.
+
+    Resolved by base-class name across the whole estate rather than by import, because the estate's
+    settings hierarchies cross modules (`catalog.Settings` -> `GovernedAuthSettings` -> `BaseSettings`).
+    Restricting to these is what keeps ordinary pydantic MODELS out: `lineage_kit.schemas` gives its
+    fields camelCase wire aliases (`errorMessage`, `dataSource`), which are JSON field names and not
+    environment variables at all.
+    """
+    bases: dict[str, set[str]] = {}
+    for tree in trees.values():
+        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+            bases.setdefault(cls.name, set()).update(ast.unparse(b).rsplit(".", 1)[-1] for b in cls.bases)
+
+    def derives(name: str, seen: set[str]) -> bool:
+        if name in seen:
+            return False
+        seen.add(name)
+        return any(base == "BaseSettings" or derives(base, seen) for base in bases.get(name, ()))
+
+    return {name for name in bases if derives(name, set())}
+
+
+def _truthiness_guarded_names(trees: dict[str, ast.Module]) -> set[str]:
+    """Identifiers whose TRUTHINESS decides control flow somewhere in first-party code.
+
+    `if x`, `while x`, `x if … else`, `not x`, `x and y`, `assert x`, a comprehension's `if x`, and
+    `bool(x)`/`any(x)`/`all(x)`. A COMPARISON is deliberately not collected: `if x == "dapr"` reads a
+    value, it does not ask whether one was supplied, and only the latter is this gate's subject.
+    """
+    guarded: set[str] = set()
+    for tree in trees.values():
+        for node in ast.walk(tree):
+            tested: list[ast.expr] = []
+            if isinstance(node, (ast.If, ast.While, ast.IfExp)):
+                tested = [node.test]
+            elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                tested = [node.operand]
+            elif isinstance(node, ast.BoolOp):
+                tested = list(node.values)
+            elif isinstance(node, ast.Assert):
+                tested = [node.test]
+            elif isinstance(node, ast.comprehension):
+                tested = list(node.ifs)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("bool", "any", "all"):
+                tested = list(node.args)
+            for expr in tested:
+                if (name := _leaf_name(expr)) is not None:
+                    guarded.add(name)
+    return guarded
+
+
+def _keyword_flow(trees: dict[str, ast.Module]) -> dict[str, set[str]]:
+    """`{source identifier -> every keyword-parameter name it is passed as}`.
+
+    The one hop that matters, and without it this gate cannot see its own motivating bug. The catalog
+    branches on nothing: it passes `settings.lineage_outbox_uri` into
+    `publish_lineage_with_outbox(outbox_uri=…)`, and the branch (`staged = bool(outbox_uri)`) lives in
+    `service_kit.lakehouse.outbox`, one package away and under a different name. Matching the KEYWORD
+    is what carries the field to the branch that decides whether the feature happens.
+    """
+    flow: dict[str, set[str]] = {}
+    for tree in trees.values():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg and (source := _leaf_name(kw.value)) is not None:
+                    flow.setdefault(source, set()).add(kw.arg)
+    return flow
+
+
+_ENV_NAME: Final = re.compile(r"[A-Z][A-Z0-9_]*")
+_ENV_PREFIX: Final = re.compile(r"env_prefix=['\"]([A-Z][A-Z0-9_]*)['\"]")
+
+
+def _field_env_names(prefix: str | None, field: str, value: ast.expr) -> tuple[str, ...]:
+    """Every env var that can fill one settings field.
+
+    UPPER_SNAKE only: `MedallionSettings.transform` also answers to a lowercase `"transform"` alias,
+    which is a payload key rather than an environment variable and no chart would ever render it.
+    """
+    aliases: list[str] = []
+    if isinstance(value, ast.Call):
+        fn = value.func
+        if (fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)) == "Field":
+            for kw in value.keywords:
+                if kw.arg not in ("alias", "validation_alias"):
+                    continue
+                if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                    aliases.append(kw.value.value)
+                elif isinstance(kw.value, ast.Call):  # AliasChoices("A", "B")
+                    aliases += [a.value for a in kw.value.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+    if not aliases and prefix is not None:
+        aliases = [f"{prefix}{field.upper()}"]
+    return tuple(a for a in aliases if _ENV_NAME.fullmatch(a))
+
+
+def _falsy_default(value: ast.expr) -> str | None:
+    """The field's default rendered for a message when that default is FALSY, else None.
+
+    `default_factory=list/dict/set` counts (an empty collection is the same silence as `""`), and so
+    does a `SecretStr("")`-shaped wrapper around an empty literal — the estate spells an optional
+    secret that way, and reading only bare literals would let every one of them past.
+    """
+    if not isinstance(value, ast.Call):
+        return None
+    fn = value.func
+    if (fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)) != "Field":
+        return None
+    for kw in value.keywords:
+        if kw.arg == "default_factory":
+            source = ast.unparse(kw.value)
+            return f"{source}()" if source in ("list", "dict", "set") else None
+        if kw.arg == "default":
+            if isinstance(kw.value, ast.Call) and kw.value.args and isinstance(arg := kw.value.args[0], ast.Constant) and arg.value in ("", 0, False, None):
+                return ast.unparse(kw.value)
+            try:
+                literal = ast.literal_eval(kw.value)
+            except (ValueError, TypeError, SyntaxError):
+                return None
+            return repr(literal) if not literal else None
+    return None
+
+
+def _inert_if_absent_settings() -> list[_EnvSetting]:
+    """Every settings field whose default is falsy AND whose falsiness steers the code.
+
+    Both halves are load-bearing. A falsy default alone says nothing — `max_concurrent_writes=0`
+    disables a limiter on purpose. A truthiness branch alone says nothing either — a field with a
+    working default is never absent. Together they name the one shape that fails silently: the value
+    is missing, some `if` takes the other road, and the process reports success while doing less.
+    """
+    trees = _settings_trees()
+    settings_classes = _settings_class_names(trees)
+    guarded = _truthiness_guarded_names(trees)
+    flow = _keyword_flow(trees)
+
+    found: list[_EnvSetting] = []
+    for posix, tree in trees.items():
+        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+            if cls.name not in settings_classes:
+                continue
+            prefix: str | None = None
+            for stmt in cls.body:
+                is_model_config = isinstance(stmt, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "model_config" for t in stmt.targets)
+                if is_model_config and (match := _ENV_PREFIX.search(ast.unparse(stmt.value))):
+                    prefix = match.group(1)
+            for stmt in cls.body:
+                if not isinstance(stmt, ast.AnnAssign) or not isinstance(stmt.target, ast.Name) or stmt.value is None:
+                    continue
+                envs = _field_env_names(prefix, stmt.target.id, stmt.value)
+                default = _falsy_default(stmt.value)
+                if not envs or default is None:
+                    continue
+                field = stmt.target.id
+                guards = tuple(sorted(({field} | flow.get(field, set())) & guarded))
+                if guards:
+                    found.append(_EnvSetting(envs, f"{posix}::{cls.name}.{field}", default, guards))
+    return sorted(found)
+
+
+def _chart_declared_envs() -> set[str]:
+    """Every env name a chart template names as CONFIG — an env-list entry or a ConfigMap/Secret key.
+
+    Two patterns because the chart injects env two ways and a scan that knows one of them reports the
+    other as unwired: `- { name: FOO, value: … }` in a container's `env`, and a bare `FOO: …` data key
+    in `configmap.yaml`, delivered by `envFrom`. `*.tpl` is walked with `*.yaml` for the same reason —
+    `rask.rayAuthEnv` emits `RAY_AUTH_TOKEN` from `_helpers.tpl` and nothing else in the chart names it.
+
+    Only the RENDER can say whether a declaration actually fires; this set says the operator HAS a
+    switch, which is what separates a deliberately-off feature from one nobody wired.
+    """
+    envs: set[str] = set()
+    for tpl in sorted(list((CHART / "templates").rglob("*.yaml")) + list((CHART / "templates").rglob("*.tpl"))):
+        text = tpl.read_text()
+        envs.update(re.findall(r"name:\s*([A-Z][A-Z0-9_]{2,})\b", text))
+        envs.update(re.findall(r"^\s{2,}([A-Z][A-Z0-9_]{2,}):\s", text, flags=re.MULTILINE))
+    return envs
+
+
+def _chart_rendered_envs() -> set[str]:
+    """Every env the DEFAULT render actually delivers into a container.
+
+    `envFrom` is resolved, not skipped: `RASK_DOCS`, `RASK_DAPR_ENABLED` and the notifications topics
+    reach their pods as ConfigMap keys through `envFrom.configMapRef`, so a reader of `env[]` alone
+    calls three live vars dead. Empty when helm is unavailable — the gate then decides on declarations
+    alone, which is weaker (it cannot see a declaration whose values toggle never fires) but never
+    wrong, since every first-party env the chart renders is named by one of its own templates.
+    """
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    if not Path(helm).exists():
+        return set()
+    argv = [helm, "template", "rask", str(CHART), "--set", "image.localImages=true"]
+    argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
+    out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+    docs = [doc for doc in yaml.safe_load_all(out) if isinstance(doc, dict)]
+    bundles = {
+        (doc["kind"], (doc.get("metadata") or {}).get("name")): set(doc.get("data") or {}) | set(doc.get("stringData") or {})
+        for doc in docs
+        if doc.get("kind") in ("ConfigMap", "Secret")
+    }
+
+    def containers(node: Any) -> Iterator[dict[str, Any]]:
+        if isinstance(node, dict):
+            for key in ("containers", "initContainers"):
+                yield from (c for c in node.get(key) or [] if isinstance(c, dict))
+            for value in node.values():
+                yield from containers(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from containers(value)
+
+    rendered: set[str] = set()
+    for doc in docs:
+        for container in containers(doc):
+            rendered.update(e["name"] for e in container.get("env") or [] if isinstance(e, dict) and isinstance(e.get("name"), str))
+            for source in container.get("envFrom") or []:
+                if not isinstance(source, dict):
+                    continue
+                for ref, kind in (("configMapRef", "ConfigMap"), ("secretRef", "Secret")):
+                    if name := (source.get(ref) or {}).get("name"):
+                        rendered |= bundles.get((kind, name), set())
+    return rendered
+
+
+#: Inert-if-absent settings the chart deliberately does not set, and WHY absence is the right state.
+#:
+#: Three honest reasons recur here, and none of them is "we forgot". A DERIVE — the falsy value means
+#: "compute it", not "skip it" (`registry_root`, `model_artifacts_root`, `clip_source_origin`), so
+#: rendering it would pin a second spelling of a value two components already agree on. An OVERRIDE —
+#: the estate's shared credential is the real path and the per-service variable exists to pin one
+#: service off it. A SAFE OFF — the feature must not be on until something else lands, and the chart
+#: staying silent is the mechanism, not an oversight.
+#:
+#: An entry here is a claim that the SHIPPED release is correct without the variable. It is not a
+#: parking space: a setting whose absence loses work belongs in `_UNWIRED_DEBT` below.
+_UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
+    # DERIVE. `Settings.registry_root` is `control_root or root`, so an unset control root puts the
+    # warehouse registry in the catalog's own bucket — which is where a single-bucket estate wants it.
+    "LANCE_CONTROL_ROOT": "empty derives the registry root from LANCE_REST_ROOT",
+    # SAFE OFF, and LOUD rather than silent: only the `http` transport reads this, the chart renders
+    # `LANCE_LINEAGE_TRANSPORT=dapr` (services.yaml), and `_validate_lineage` REFUSES TO BOOT on
+    # http-with-no-url. There is no configuration in which the absence quietly does less.
+    "LANCE_LINEAGE_URL": "the chart selects the dapr transport; the http transport fails closed without this",
+    # DERIVE. `model_artifacts_root` reconstructs the trainer's own layout from `models_root`, and the
+    # two are a byte-for-byte mirror on purpose — a rendered value is a second place for them to drift.
+    "LANCE_MODEL_ARTIFACTS_ROOT": "empty derives the artifact tree from LANCE_MODELS_REGISTRY_ROOT",
+    # OVERRIDE, and the weaker door of the two. The catalog verifies OIDC JWTs, so a static bearer is
+    # not an identity there; the estate's answer is the service door, and the chart renders
+    # `MEDALLION_CATALOG_SERVICE_IDENTITY` for the producer and every mover (medallion.yaml).
+    "MEDALLION_CATALOG_TOKEN": "superseded by the service-identity door, which the chart does render",
+    # DERIVE. `catalog_table_id` falls back to the dataset id, which is the identifier the annotation
+    # tables are already addressed by.
+    "MEDIA_CATALOG_NAMESPACE": "unset names annotation tables by their dataset id",
+    # SAFE OFF, and rendering it would BREAK the estate's rule rather than fix anything: the secret
+    # half comes from the Dapr store fail-closed (media/config.py `storage_options`), and a plaintext
+    # secret in pod env is the exact shape `feedback-secrets-via-secret-store-only` forbids.
+    "MEDIA_S3_SECRET_ACCESS_KEY": "the secret comes from the Dapr store; a rendered value would be an env-borne credential",
+    # OVERRIDE. `IngestSettings.catalog_app_token` is `catalog_app_token_override or app_api_token`,
+    # and the chart renders the shared `APP_API_TOKEN`. Absent means "use the estate credential".
+    "RASK_CATALOG_APP_TOKEN": "falls back to the shared APP_API_TOKEN the chart renders",
+    "RASK_LINEAGE_APP_TOKEN": "falls back to the shared APP_API_TOKEN the chart renders",
+    # SAFE OFF. `register_middleware` installs CORSMiddleware only for a non-empty list, and every zone
+    # reaches `/api` same-origin through the gateway — a rendered origin list would only widen what a
+    # browser is told to trust, for no caller that exists.
+    "RASK_CORS_ORIGINS": "no cross-origin caller exists; the fleet is reached same-origin through the gateway",
+    # SAFE OFF, and setting it would REINTRODUCE a known silent loss. A bearer api key does not
+    # authenticate a service at rask's ingest — `lineage.api.security` opens the service door on
+    # `dapr-api-token` + `x-lance-service-identity`, so a key 401s and `ClientEmitter` swallows it.
+    # The chart wires the pair that works (`LINEAGE_SERVICE_TOKEN` / `LINEAGE_SERVICE_ID`).
+    "RASK_LINEAGE_API_KEY": "the service door takes a token+identity pair, not a bearer key; a key would 401 silently",
+    # SAFE OFF, and it must STAY off until a different artefact changes. daprd rejects the whole
+    # transactional upsert when `ttlInSeconds` arrives with the `ActorStateTTL` feature disabled, and
+    # the chart's one Dapr `Configuration` carries no `features:` block — so rendering this true ahead
+    # of that block would fail EVERY inbox write. The compaction reminder is the authoritative bound.
+    "RASK_NOTIFICATIONS_ACTOR_STATE_TTL_ENABLED": "must not precede a Dapr Configuration carrying features:[ActorStateTTL]",
+    # DERIVE. `clip_source_origin` builds the pod's own loopback from `service_port`; the override is
+    # for a deployment that fronts the media route elsewhere.
+    "VIEWER_CLIP_SOURCE_ORIGIN": "empty derives the pod's own loopback origin from VIEWER_SERVICE_PORT",
+}
+
+#: Inert-if-absent settings NOTHING in the chart sets, where the absence costs something.
+#:
+#: The same debt `MEDALLION_LINEAGE_OUTBOX_URI` was before it was wired, and the ratchet is the same
+#: as `_KNOWN_BARE_LINEAGE`'s: this may SHRINK, it may not grow. Wiring one is a chart edit plus a
+#: values key, so it is not a change to make blind — but the cost of leaving it is stated here rather
+#: than nowhere, which is the whole difference between debt and a defect.
+_UNWIRED_DEBT: Final[dict[str, str]] = {
+    # Every STAGE job's own OpenLineage emission, off in every shipped release. `ray_submit` puts
+    # `LINEAGE_URL` into the job's `runtime_env.env_vars` only when this is set, and a runner's
+    # `emit()` returns False on an unset one — so a lane whose runner emits (the dummy runner does,
+    # and any workload runner may) records nothing, while the run itself succeeds and every pod is
+    # green. The sibling `MEDALLION_TRAIN_LINEAGE_URL` IS rendered (medallion.yaml), so the train lane
+    # emits and the stage lane does not: one asymmetry between two adjacent settings, invisible to
+    # every test that exercises either half on its own.
+    "MEDALLION_STAGE_LINEAGE_URL": "stage-lane Ray jobs emit no OpenLineage at all; the train lane's twin IS rendered",
+}
+
+
+def test_every_inert_if_absent_setting_is_wired_or_declared_unwired_on_purpose() -> None:
+    """The MISSING DIRECTION of `test_no_dead_chart_env_vars`: code reads an env NO chart sets.
+
+    The guard above catches a chart var no code reads. Its reverse has no guard, and that is how BOTH
+    `LANCE_LINEAGE_OUTBOX_URI` and `MAINTENANCE_LINEAGE_OUTBOX_URI` shipped: threaded through the
+    service into the outbox publisher, rendered nowhere, so `publish_lineage_with_outbox` took its
+    `staged = bool(outbox_uri)` branch to False and every release ran the emit as a plain publish. The
+    feature was fully implemented, fully tested, and never once happened.
+
+    THE RULE, and why it is this one. "Every setting must be rendered" is wrong — most defaults are
+    correct, and a chart that restates them is a second place for them to drift. The honest line is
+    narrower: a setting whose default makes the feature INERT must be rendered, or declared
+    default-off on purpose. Mechanically, "inert" is the conjunction of two facts a parser can see:
+
+      1. the default is FALSY — `""`, `None`, `False`, `0`, an empty collection, `SecretStr("")` — so
+         an unconfigured deployment gets exactly the same value as a deployment that tried and failed;
+      2. first-party code branches on that value's TRUTHINESS, directly or one keyword-argument hop
+         away, so the falsiness is a switch rather than a datum.
+
+    Either fact alone proves nothing. `max_concurrent_writes=0` is falsy and disables a limiter ON
+    PURPOSE; `lineage_job_namespace` is branched on nowhere and has a working default. Together they
+    name the one shape that fails silently — the value is missing, an `if` takes the other road, and
+    the service reports success while doing less than it claims. Every such setting is then either
+    wired (the default render sets it, or a template declares an injection site a values key controls)
+    or it is named below with a reason, which is the estate's `_PUBLISH_INTENT` idiom: a classification
+    a parser cannot make, made once by a human and re-checked on every run.
+
+    WHAT THIS GATE STILL CANNOT SEE, stated rather than implied: a setting consumed WITHOUT a
+    truthiness branch — interpolated straight into a URL, say, where empty yields a malformed request
+    instead of a skipped one — is not a candidate here, and a second hop (field -> local -> keyword)
+    is not followed. Both are false negatives; neither makes a reported violation wrong.
+    """
+    wired = _chart_rendered_envs() | _chart_declared_envs()
+    declared = _UNWIRED_BY_DESIGN.keys() | _UNWIRED_DEBT.keys()
+    undeclared = sorted(
+        f"{s.envs[0]} ({s.where}, default={s.default}, branched on via {'/'.join(s.guards)})"
+        for s in _inert_if_absent_settings()
+        if not (set(s.envs) & wired) and not (set(s.envs) & declared)
+    )
+    assert not undeclared, (
+        f"these settings disable a feature when unset and NOTHING in the chart sets them: {undeclared}. "
+        "Each one is the LANCE_LINEAGE_OUTBOX_URI shape — the code is written, the branch is there, and "
+        "no deployment ever takes it. Render it from the chart, or add it to `_UNWIRED_BY_DESIGN` with "
+        "the reason the absent state is the correct one (a derive, an override, or a safe off), or to "
+        "`_UNWIRED_DEBT` with what is silently lost until someone wires it."
+    )
+
+
+def test_the_unwired_registries_describe_settings_that_are_still_unwired() -> None:
+    """A registry entry is a claim about TODAY's chart, so it expires when the chart changes.
+
+    Both failures below are the same defect as a stale `_PUBLISH_INTENT` row: prose describing an
+    estate that is not there. An entry for a variable the chart now renders reads as "we decided not
+    to set this" beside a template that sets it, and an entry for a field that no longer branches on
+    its default is a reason preserved for a mechanism that is gone.
+    """
+    wired = _chart_rendered_envs() | _chart_declared_envs()
+    registries = {"_UNWIRED_BY_DESIGN": _UNWIRED_BY_DESIGN, "_UNWIRED_DEBT": _UNWIRED_DEBT}
+
+    now_wired = sorted(f"{name}[{env}]" for name, registry in registries.items() for env in registry if env in wired)
+    assert not now_wired, f"the chart now sets these, so the entry claiming it deliberately does not is false: {now_wired}. Delete the entry."
+
+    candidates = {env for s in _inert_if_absent_settings() for env in s.envs}
+    gone = sorted(f"{name}[{env}]" for name, registry in registries.items() for env in registry if env not in candidates)
+    assert not gone, (
+        f"these registered settings no longer disable anything when unset — the field, its falsy default or the branch on it is gone: {gone}. Delete the entry."
     )
 
 
@@ -5943,6 +6374,64 @@ def _env_by_component(docs: list[dict], component: str) -> dict[str, str]:
             env |= _env_of(container)
         return env
     return {}
+
+
+def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
+    """A `secretKeyRef` to a Secret nothing creates is a pod that never starts, and a GREEN render.
+
+    THE FAILURE THIS PINS. `dapr.sidecars=false` is a documented, supported toggle, and
+    `services.yaml`'s own fail message tells an operator to pair it with `catalog.controlEmit=false`.
+    That pair rendered cleanly — and left THIRTEEN Deployments (all seven zones, maintenance, the
+    producer, three movers and lineage) carrying a reference to `-dapr-app-token`, which is gated on
+    `dapr.sidecars` and therefore absent. Each fails with CreateContainerConfigError; nothing in the
+    render says why.
+
+    The cause was one Secret doing double duty under two different gates: the Dapr app token
+    (`dapr.sidecars`) and `LINEAGE_SERVICE_TOKEN`, the service credential for reading lineage
+    (`auth.enabled`).
+
+    Checked across the TOGGLE COMBINATIONS, not just the default render, because the default is the one
+    configuration this class cannot appear in — every consumer and its Secret are on together there.
+    """
+    combinations = [
+        ("default", []),
+        ("sidecars off", ["dapr.sidecars=false", "catalog.controlEmit=false"]),
+        ("auth off", ["auth.enabled=false"]),
+        ("both off", ["dapr.sidecars=false", "catalog.controlEmit=false", "auth.enabled=false"]),
+    ]
+    problems: list[str] = []
+    for label, extra in combinations:
+        docs = _rendered_docs(*extra)
+        secrets = {d["metadata"]["name"] for d in docs if d.get("kind") == "Secret"}
+        # SUBCHART NAMING is a separate concern and not this gate's. A subchart names its workloads
+        # `{{ .Release.Name }}-x` while this chart's own Secrets use `lance.fullname`, so the two agree
+        # only when the release is named `rask` — which it always is here, and which `_helm_template`
+        # does not pin. Filtered rather than asserted, so this gate reports the class it was built for
+        # instead of a rendering artefact; the naming mismatch is recorded in the backlog.
+        secrets |= {name.replace("release-name-", "rask-", 1) for name in secrets}
+        for doc in docs:
+            for name in _secret_refs(doc):
+                # A Dapr Component's secretKeyRef names a key in the SECRET STORE (OpenBao), not a
+                # Kubernetes Secret — a different namespace of names entirely.
+                if doc.get("kind") == "Component" or name in secrets:
+                    continue
+                problems.append(f"[{label}] {doc.get('kind')}/{doc['metadata']['name']} -> missing Secret {name!r}")
+    assert not problems, "workloads reference Secrets the render never creates:\n  " + "\n  ".join(sorted(set(problems)))
+
+
+def _secret_refs(doc: object) -> list[str]:
+    """Every `secretKeyRef` name anywhere in a rendered document."""
+    found: list[str] = []
+    if isinstance(doc, dict):
+        ref = doc.get("secretKeyRef")
+        if isinstance(ref, dict) and ref.get("name"):
+            found.append(str(ref["name"]))
+        for value in doc.values():
+            found.extend(_secret_refs(value))
+    elif isinstance(doc, list):
+        for value in doc:
+            found.extend(_secret_refs(value))
+    return found
 
 
 def test_the_MAINTENANCE_service_stages_its_lineage_the_same_way_the_catalog_does() -> None:

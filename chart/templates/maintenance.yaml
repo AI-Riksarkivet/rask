@@ -90,9 +90,14 @@ spec:
             # Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
             # symmetric with the lineage service (the audit's consistency fix).
             - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
+            {{- if .Values.dapr.sidecars }}
+            # Gated on the sidecar because that is what it VERIFIES — the token exists to check the
+            # `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
+            # to check and the reference dangles: the Secret is not rendered and the pod never starts.
             - name: APP_API_TOKEN  # verify the Dapr-stamped header on the cron route (forged-sweep guard)
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }

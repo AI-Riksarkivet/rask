@@ -1,4 +1,18 @@
-{{- if .Values.dapr.sidecars }}
+{{- /* RENDERED WHEN EITHER CONSUMER NEEDS IT, not only for the sidecar.
+
+     This Secret does DOUBLE DUTY and the two uses are gated differently. As the Dapr app token it is
+     injected by the sidecar and belongs to `dapr.sidecars`. But it is ALSO `LINEAGE_SERVICE_TOKEN` —
+     the credential the frontends and several services present to authenticate to lineage as a SERVICE
+     — and that use is gated on `auth.enabled`.
+
+     So `dapr.sidecars=false` with auth on left THIRTEEN Deployments (all seven zones, maintenance, the
+     producer, three movers and lineage) carrying a secretKeyRef to a Secret nothing created. Each of
+     them fails to start with CreateContainerConfigError — a documented, supported toggle producing a
+     dead estate, and the render is green so nothing says why.
+
+     Measured against the render 2026-08-31, with `catalog.controlEmit=false` — the combination
+     services.yaml's own fail message tells an operator to use. */}}
+{{- if or .Values.dapr.sidecars .Values.auth.enabled }}
 # Dapr app-API-token secret. A pod annotated `dapr.io/app-token-secret: <this>` gets APP_API_TOKEN
 # injected by Dapr, and Dapr stamps a `dapr-api-token` header on every request it delivers to the app.
 # The subscriber routes (/lineage-events, /medallion-event, the compaction cron route) verify it

@@ -153,9 +153,13 @@ spec:
             # guard silently no-ops and any pod could inject fabricated change-events into every replica's
             # buffer. Same secret + pattern as the lineage/medallion/compaction ingest apps; the catalog
             # lifespan also asserts it is set when control eventing is on (fail-closed, not silently open).
+            {{- if .Values.dapr.sidecars }}
+            # Same rule as the medallion's and maintenance's: this verifies the header the SIDECAR
+            # stamps, so without one there is nothing to verify and the Secret is not rendered.
             - name: APP_API_TOKEN
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            {{- end }}
             {{- end }}
             # Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
             # every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
@@ -347,11 +351,17 @@ spec:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
             {{- end }}
+            {{- if .Values.dapr.sidecars }}
             # Explicit APP_API_TOKEN (recommended k8s approach) so require_dapr_token can verify the
             # `dapr-api-token` header the sidecar stamps on delivery → forged direct POSTs are 403'd.
+            #
+            # Gated on the sidecar for the reason the guard exists: with no sidecar nothing stamps the
+            # header, so there is nothing to verify — and the Secret is not rendered, so the reference
+            # would dangle and the pod would never start.
             - name: APP_API_TOKEN
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            {{- end }}
             {{- if not (include "lance.secretsViaDapr" .) }}
             - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }
             {{- else }}
