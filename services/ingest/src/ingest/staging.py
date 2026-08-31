@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import heapq
 import json
 from functools import cache
 from pathlib import Path
@@ -356,6 +357,13 @@ class CoverResult(BaseModel):
 #: reported as ABANDONED, never as an overlap.
 _SEARCH_WORK_LIMIT = 20_000_000
 
+#: How many pivot-heap entries per remaining unit the search tolerates before rebuilding the heap.
+#: The heap is lazy — a superseded entry lives until it surfaces — so this is what keeps its size a
+#: function of the RUN rather than of `_SEARCH_WORK_LIMIT`. Above 1 so a rebuild is amortized over
+#: the pushes that caused it; low enough that the search's memory stays proportional to the units
+#: it is still covering. See `_CoreSearch.compact`.
+_PIVOT_HEAP_SLACK = 4
+
 
 def _exact_cover(sets: Sequence[frozenset[str]], universe: frozenset[str]) -> CoverResult:
     """Indices of a subset covering `universe` with NO unit counted twice.
@@ -471,72 +479,215 @@ def _propagate(sets: Sequence[frozenset[str]], owners: dict[str, list[int]]) -> 
     return _Propagation(forced=forced, covered=covered, core=sorted(live))
 
 
-def _search_core(sets: Sequence[frozenset[str]], core: Sequence[int], remaining: frozenset[str]) -> CoverResult:
-    """Backtracking over the fragments propagation could not decide, on an EXPLICIT stack.
+class _CoreSearch(BaseModel):
+    """The search's working state: what is still uncovered, and what each fragment and unit costs NOW.
 
-    Explicit rather than recursive even though the core is normally empty and never large: the old
-    solver recursed once per fragment it PICKED, and in the ordinary disjoint case exactly one is
-    picked per level, so stack depth equalled the run's manifest count. Around 950 manifests — a
-    ~970k-unit run at the default `fragment_rows=1024` — overflowed CPython's stack from inside the
-    finalize activity. A frame cost that scales with the run is the one thing this cannot afford,
-    whatever the search's own complexity is.
+    One model rather than four closures over the same four structures, because the correctness
+    argument is entirely about them staying consistent with one another — `take` and its `undo` are
+    the same walk in opposite directions, and a method that updates three of the four is a silently
+    wrong answer, not a crash.
 
-    Scans are restricted to the core, never the run's universe, so the per-step cost tracks how
-    AMBIGUOUS the staging is rather than how big the run is.
+    Built through `model_construct`, which is the one place this module skips validation and does it
+    deliberately. The fields are structures this module has just built from its own manifests, so
+    there is no foreign input to validate, and `core_holders` is the size of the staged unit
+    OCCURRENCES: validating it copies the whole index — measured 2026-08-31 at 0.32s and a full
+    duplicate for a 256-batch recovery shape (524,288 occurrences) — on the finalize path, which is
+    precisely the per-run cost this search is shaped to avoid.
     """
-    core_holders: dict[str, list[int]] = {}
-    for index in core:
-        for unit in sets[index]:
-            core_holders.setdefault(unit, []).append(index)
-    core_occurrences = sum(len(sets[index]) for index in core)
 
-    def candidates(rest: frozenset[str]) -> list[int]:
-        """Fragments that could cover the most-constrained unit left, in ascending index order.
+    #: Every staged fragment's unit set, indexed as `discover_staged` ordered them.
+    sets: list[frozenset[str]]
+    #: unit -> the core fragments holding it, ascending. Built once; never mutated by the search.
+    core_holders: dict[str, list[int]]
+    #: The units this branch has yet to cover.
+    rest: set[str]
+    #: fragment -> how many of its units `rest` no longer holds. A candidate is exactly a 0 here,
+    #: which is `sets[i] <= rest` decided in O(1) instead of by a scan.
+    missing: dict[int, int]
+    #: unit -> how many candidates hold it. The branching rule's "most constrained" is its minimum.
+    avail: dict[str, int]
+    #: A lazy heap of `(avail[unit], unit)`. Entries are pushed, never updated — a stale one is
+    #: discarded when it surfaces — so the invariant to keep is only that every unit still in `rest`
+    #: has an entry carrying its CURRENT count. The tuple order is the branching rule itself: fewest
+    #: holders first, ties to the smallest unit key.
+    pivots: list[tuple[int, str]]
+    #: Primitive steps charged so far, against `_SEARCH_WORK_LIMIT`.
+    spent: int
+
+    def compact(self) -> None:
+        """Rebuild the pivot heap from `rest` once its stale entries outnumber the units they describe.
+
+        Superseded entries are only discarded when they reach the top, so without this the heap is
+        bounded by the STEP BUDGET rather than by the input — tens of millions of tuples inside the
+        finalize pod, which trades an unbounded runtime for an unbounded allocation. A rebuild
+        restores exactly the invariant (one current entry per remaining unit) at O(rest), and the
+        slack is what amortizes it: a rebuild leaves one entry per remaining unit, so the next one
+        cannot trigger until three more per unit have been pushed.
+        """
+        if len(self.pivots) <= _PIVOT_HEAP_SLACK * max(len(self.rest), 1):
+            return
+        self.pivots = [(self.avail[unit], unit) for unit in self.rest]
+        heapq.heapify(self.pivots)
+        self.spent += len(self.pivots)
+
+    @classmethod
+    def build(cls, sets: Sequence[frozenset[str]], core: Sequence[int], remaining: frozenset[str]) -> _CoreSearch:
+        """Index the core ONCE — the only pass over the whole staged family the search may make."""
+        core_holders: dict[str, list[int]] = {}
+        for index in core:
+            for unit in sets[index]:
+                core_holders.setdefault(unit, []).append(index)
+
+        rest = set(remaining)
+        missing = {index: sum(1 for unit in sets[index] if unit not in rest) for index in core}
+        avail = dict.fromkeys(remaining, 0)
+        for index in core:
+            if missing[index] == 0:
+                for unit in sets[index]:
+                    avail[unit] += 1
+
+        pivots = [(avail[unit], unit) for unit in rest]
+        heapq.heapify(pivots)
+        return cls.model_construct(
+            sets=list(sets),
+            core_holders=core_holders,
+            rest=rest,
+            missing=missing,
+            avail=avail,
+            pivots=pivots,
+            spent=2 * sum(len(sets[index]) for index in core) + len(remaining),
+        )
+
+    def pivot(self) -> str | None:
+        """The most-constrained unit left. None when some unit left has no candidate holding it.
 
         Most-constrained first is what keeps the search small: a unit nothing can supply ends the
         branch here instead of after every other branch has been explored.
+
+        An empty heap cannot happen while `rest` is non-empty, since every member of it has a current
+        entry. Reading that as "unsuppliable" anyway keeps a broken invariant a REFUSAL — every byte
+        still staged, nothing committed — rather than a selection nobody checked.
         """
-        usable = {index for index in core if sets[index] <= rest}
-        best: list[int] | None = None
-        for unit in sorted(rest):
-            holders = [index for index in core_holders.get(unit, ()) if index in usable]
-            if not holders:
-                return []
-            if best is None or len(holders) < len(best):
-                best = holders
-        return best or []
+        while self.pivots:
+            count, unit = self.pivots[0]
+            if unit in self.rest and self.avail[unit] == count:
+                return unit if count else None
+            heapq.heappop(self.pivots)
+            self.spent += 1
+        return None
 
-    budget = _SEARCH_WORK_LIMIT
-    frames: list[tuple[frozenset[str], Iterator[int]]] = []
+    def candidates(self) -> list[int]:
+        """The fragments that could cover the pivot, in ascending index order."""
+        unit = self.pivot()
+        if unit is None:
+            self.spent += 1
+            return []
+        holders = self.core_holders.get(unit, ())
+        self.spent += len(holders) + 1
+        return [index for index in holders if self.missing[index] == 0]
+
+    def take(self, index: int) -> None:
+        """Commit fragment `index` on this branch: drop its units, then refresh only what that moves.
+
+        Only a fragment sharing a unit with this one can stop being a candidate, and only the units
+        of such a fragment can lose a holder — so the walk is over the delta, never over the family.
+        """
+        avail, missing, pivots, rest = self.avail, self.missing, self.pivots, self.rest
+        chosen = self.sets[index]
+        work = len(chosen)
+        for unit in chosen:
+            rest.discard(unit)
+        for unit in chosen:
+            holders = self.core_holders.get(unit, ())
+            work += len(holders)
+            for holder in holders:
+                missing[holder] += 1
+                if missing[holder] == 1:
+                    work += len(self.sets[holder])
+                    for held in self.sets[holder]:
+                        if held in rest:
+                            avail[held] -= 1
+                            heapq.heappush(pivots, (avail[held], held))
+        self.spent += work
+        self.compact()
+
+    def undo(self, index: int) -> None:
+        """`take` reversed. The units re-enter `rest` LAST, so both walks see the same membership.
+
+        That ordering is what makes the two exactly symmetric: the `held in rest` test decides which
+        counts move, and restoring `rest` first would move a different set of them.
+        """
+        avail, missing, pivots, rest = self.avail, self.missing, self.pivots, self.rest
+        chosen = self.sets[index]
+        work = len(chosen)
+        for unit in chosen:
+            holders = self.core_holders.get(unit, ())
+            work += len(holders)
+            for holder in holders:
+                missing[holder] -= 1
+                if missing[holder] == 0:
+                    work += len(self.sets[holder])
+                    for held in self.sets[holder]:
+                        if held in rest:
+                            avail[held] += 1
+                            heapq.heappush(pivots, (avail[held], held))
+        for unit in chosen:
+            rest.add(unit)
+            heapq.heappush(pivots, (avail[unit], unit))
+        self.spent += work
+        self.compact()
+
+
+def _search_core(sets: Sequence[frozenset[str]], core: Sequence[int], remaining: frozenset[str]) -> CoverResult:
+    """Backtracking over the fragments propagation could not decide, on an EXPLICIT stack.
+
+    **A NODE PAYS FOR ITS OWN PICK, never for the staged family.** Restricting the scan to the core
+    is not a bound, because the core IS the whole family on the shape a crashed worker stages: one
+    fragment per redelivered unit (`worker.py:495-517`) leaves every unit with two holders — its
+    batch and its redelivery — so propagation forces nothing and every manifest reaches this search.
+    A node that rescans the core, or re-sorts the units still uncovered, charges the whole staging
+    once per PICK, and the bill becomes the staging multiplied by the search's own depth. Measured
+    2026-08-31 against such a scan: 256 crashed batches at the default `fragment_rows=1024` —
+    262,144 units, inside the million-unit scale this module's docstrings advertise — spent the
+    entire 20M-step budget in 7.0s and came back ABANDONED, on a family whose batch fragments are a
+    perfectly good cover. `_CoreSearch` maintains the candidate set and the pivot across the descend
+    instead, and answers that same family in 1.9s; both are pinned by
+    `test_staging_cover_bounded_work.py`.
+
+    Explicit stack rather than recursion even though the core is normally empty and never large: the
+    disjoint case picks exactly one fragment per level, so a solver that recursed per pick would tie
+    its stack depth to the run's manifest count. Around 950 manifests — a ~970k-unit run at the
+    default `fragment_rows=1024` — overflows CPython's stack from inside the finalize activity. A
+    frame cost that scales with the run is the one thing this cannot afford, whatever the search's
+    own complexity is.
+    """
+    state = _CoreSearch.build(sets, core, remaining)
+    limit = _SEARCH_WORK_LIMIT
+    frames: list[Iterator[int]] = []
     picked: list[int] = []
+    if state.rest and state.spent < limit:
+        frames.append(iter(state.candidates()))
 
-    def descend(rest: frozenset[str]) -> bool:
-        """Open a frame for `rest`, charging what its candidate scan costs. False when spent."""
-        nonlocal budget
-        budget -= core_occurrences + len(rest)
-        if budget <= 0:
-            return False
-        frames.append((rest, iter(candidates(rest))))
-        return True
-
-    if not descend(remaining):
-        return CoverResult(exhausted=True)
-
-    while frames:
-        rest, untried = frames[-1]
-        if not rest:
+    while True:
+        # Budget first, so a search that ran out of it is reported as having run out even when the
+        # branch it stopped on happens to be complete. `discover_staged` renders the two verdicts
+        # differently, and one reached by an unfinished search is not a verdict about the fragments.
+        if state.spent >= limit:
+            return CoverResult(exhausted=True)
+        if not state.rest:
             return CoverResult(chosen=list(picked))
-        index = next(untried, None)
+        if not frames:
+            return CoverResult()
+        index = next(frames[-1], None)
         if index is None:
             frames.pop()
             if picked:
-                picked.pop()
+                state.undo(picked.pop())
             continue
         picked.append(index)
-        if not descend(rest - sets[index]):
-            return CoverResult(exhausted=True)
-
-    return CoverResult()
+        state.take(index)
+        if state.rest:
+            frames.append(iter(state.candidates()))
 
 
 def purge_staged(dataset_uri: str, run_id: str) -> int:
