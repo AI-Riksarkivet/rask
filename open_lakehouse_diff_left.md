@@ -28,8 +28,9 @@ search, flows, models, and every frontend zone.
 ## How this was produced
 
 Three multi-agent workflows (state + Lakekeeper diff, robotics lessons, Lance docs + 54-op conformance)
-with adversarial verifiers: 24 claims, 23 confirmed, 1 refuted, several tightened. Then seven
-single-service sweeps against one nine-point rubric (how it touches the lakehouse, authorization,
+with adversarial verifiers: 24 claims, 23 confirmed, 1 refuted, several tightened. Then five
+single-service sweeps against one nine-point rubric (two more, annotator and viewer/search, were started
+and stopped when the owner narrowed the scope) plus the zero-trust control diff (how it touches the lakehouse, authorization,
 lineage/events, state, Dapr coupling, format awareness, governance gaps, tests, top findings), each
 citing file:line. Live probes where a claim rested on runtime behaviour (the catalog app under the dir
 backend, pylance 10.0.0 `RestNamespace` against a logging stub, `DirectoryNamespace` version ops).
