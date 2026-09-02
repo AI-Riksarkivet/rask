@@ -211,9 +211,19 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
 
 
 def test_merge_insert_maps_spec_09_query_params(client: TestClient, fake_ns: MagicMock) -> None:
+    """The spec-0.9 query parameters reach the native op.
+
+    `branch` is deliberately NOT sent here any more. It used to be, and the assertion was
+    `req.branch == "exp"` — i.e. it pinned the branch reaching `native.call`, which is exactly the
+    defect fixed on 2026-09-01: the upstream accepted `branch` and merged into MAIN. A branch-scoped
+    merge now takes the branch-aware dataplane path and never reaches this mock at all, so asserting
+    the old shape would re-pin the bug. The branch behaviour is driven live instead, against the
+    object store, by `tests/e2e-py/test_track_a_acceptance.py::
+    test_a_branch_scoped_merge_insert_applies_to_the_branch_and_not_to_main`.
+    """
     fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
     client.post(
-        "/v1/table/db$t/merge_insert?on=id&when_matched_update_all=true&when_matched_update_all_filt=score>0.5&timeout=30s&use_index=true&branch=exp",
+        "/v1/table/db$t/merge_insert?on=id&when_matched_update_all=true&when_matched_update_all_filt=score>0.5&timeout=30s&use_index=true",
         content=b"A",
         headers=ARROW_STREAM,
     )
@@ -221,7 +231,6 @@ def test_merge_insert_maps_spec_09_query_params(client: TestClient, fake_ns: Mag
     assert req.when_matched_update_all_filt == "score>0.5"
     assert req.timeout == "30s"
     assert req.use_index is True
-    assert req.branch == "exp"
 
 
 def test_list_table_versions_maps_descending_and_branch(client: TestClient, fake_ns: MagicMock) -> None:

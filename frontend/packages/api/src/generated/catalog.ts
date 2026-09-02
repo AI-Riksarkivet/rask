@@ -663,7 +663,29 @@ export interface paths {
         };
         /**
          * List Namespaces
-         * @description List the child namespaces under ``id`` via ``list_namespaces`` (page_token/limit paged).
+         * @description List the child namespaces under ``id``; when FGA is on, filtered to what the caller can see.
+         *
+         *     **THE SAME SPLIT ``list_tables`` BELOW APPLIES, and this route is why it is a split rather than a
+         *     one-off.** ``authorize`` resolves this route's ``list`` action to ``can_get_metadata``, which C1
+         *     redefined on a container as ``reader or can_get_metadata from child`` — correct for what it was
+         *     for, since without it a grantee cannot resolve the breadcrumb to their own table. The consequence
+         *     is that holding ``reader`` on ONE deep leaf opens this route on every ancestor, and the body
+         *     answered with every sibling child-namespace name. Measured against the live store 2026-08-31: a
+         *     holder of one leaf table checked ``can_get_metadata`` True on the parent and False on its sibling,
+         *     and the sibling's NAME came back regardless.
+         *
+         *     A namespace name is not a harmless header. ``viewer.api.security`` states the estate's position —
+         *     "A corpus LIST is itself sensitive: it names data someone may not know exists" — and a namespace
+         *     name additionally leaks how a tenant organises data.
+         *
+         *     So: the ROUTE still opens (narrowing it to 403 would restore the broken breadcrumb C1 fixed) and
+         *     each ITEM is checked on the object itself, on ``can_get_metadata`` — the relation that governs
+         *     seeing a namespace, where the table listing filters on ``can_read_data`` because reading a table's
+         *     NAME and reading its ROWS are the same disclosure there.
+         *
+         *     Pagination is applied AFTER the filter for the reason ``list_tables`` records: a backend ``limit``
+         *     truncates first, so a page could answer short and hand out a cursor that skips everything the
+         *     filter removed.
          */
         get: operations["list_namespaces_v1_namespace__id__list_get"];
         put?: never;
@@ -1835,7 +1857,11 @@ export interface paths {
         put?: never;
         /**
          * Count Table Rows
-         * @description Count the table's rows (optionally filtered) — ``count_table_rows``; returns plain text.
+         * @description Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
+         *
+         *     Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
+         *     was not: the parameter reached the upstream implementation, which answered from main regardless,
+         *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
         post: operations["count_table_rows_v1_table__id__count_rows_post"];
         delete?: never;
@@ -2207,6 +2233,12 @@ export interface paths {
         /**
          * List Table Indices
          * @description List the indices defined on a table (paged) — wraps the native ``list_table_indices`` op.
+         *
+         *     ``branch`` is DECLARED here only so it can be refused. The route did not accept it at all, which
+         *     read as safe and was not: a caller who asked for a branch's indices got 200 and MAIN's list.
+         *     Verified live 2026-08-31 against a table whose branch carried a BTREE on `id` that main did not —
+         *     this door reported an empty list for the branch, for main, and for a branch never created. Being
+         *     told "no indices" about the wrong dataset is a worse answer than an error, because it is actionable.
          */
         post: operations["list_table_indices_v1_table__id__index_list_post"];
         delete?: never;
@@ -2248,6 +2280,10 @@ export interface paths {
         /**
          * Describe Table Index Stats
          * @description Report stats for a named index on a table — wraps the native ``describe_table_index_stats`` op.
+         *
+         *     ``branch`` is declared to be refused, for the same reason as the listing beside it: an index of the
+         *     same name can exist on both refs with different coverage, so answering from main is a plausible
+         *     wrong number rather than a visible failure.
          */
         post: operations["describe_table_index_stats_v1_table__id__index__index_name__stats_post"];
         delete?: never;
@@ -2627,6 +2663,17 @@ export interface paths {
         /**
          * Get Table Stats
          * @description Return storage/row statistics for the table at ``id`` via ``get_table_stats``.
+         *
+         *     ``branch`` is DECLARED here only so it can be refused, and the numbers are why. Verified live
+         *     2026-08-31 on a table whose branch held 1 row while main held 4: this door reported
+         *     ``num_rows: 4`` when asked for the branch, and again for a branch that had never been created —
+         *     through both the query string and the body. A row count is the most quoted number a catalog
+         *     produces; returning main's under a branch's name is the defect class at its most quotable.
+         *
+         *     Refused rather than served because the response cannot be assembled honestly from a branch handle:
+         *     ``FragmentStats.lengths`` and the per-index ``status``/``size_bytes`` are not what
+         *     ``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in
+         *     miniature. Serving it properly is named in `open_lakehouse_diff_left.md` §O1.
          */
         post: operations["get_table_stats_v1_table__id__stats_post"];
         delete?: never;
@@ -5529,6 +5576,22 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * DescribeNamespaceRequest
+         * @description DescribeNamespaceRequest
+         */
+        DescribeNamespaceRequest: {
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+        };
+        /**
          * DescribeNamespaceResponse
          * @description DescribeNamespaceResponse
          */
@@ -5547,6 +5610,37 @@ export interface components {
             properties?: {
                 [key: string]: string;
             } | null;
+        };
+        /**
+         * DescribeTableIndexStatsRequest
+         * @description DescribeTableIndexStatsRequest
+         */
+        DescribeTableIndexStatsRequest: {
+            /**
+             * Branch
+             * @description Branch to target. When not specified, the main branch is used.
+             */
+            branch?: string | null;
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+            /**
+             * Index Name
+             * @description Name of the index
+             */
+            index_name?: string | null;
+            /**
+             * Version
+             * @description Optional table version to get stats for
+             */
+            version?: number | null;
         };
         /**
          * DescribeTableIndexStatsResponse
@@ -5755,6 +5849,22 @@ export interface components {
             } | null;
             /** @description The table version information */
             version: components["schemas"]["TableVersion"];
+        };
+        /**
+         * DescribeTransactionRequest
+         * @description DescribeTransactionRequest
+         */
+        DescribeTransactionRequest: {
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
         };
         /**
          * DescribeTransactionResponse
@@ -6135,6 +6245,27 @@ export interface components {
             old_versions_removed: number;
         };
         /**
+         * GetTableStatsRequest
+         * @description GetTableStatsRequest
+         */
+        GetTableStatsRequest: {
+            /**
+             * Branch
+             * @description Branch to target. When not specified, the main branch is used.
+             */
+            branch?: string | null;
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+        };
+        /**
          * GetTableStatsResponse
          * @description GetTableStatsResponse
          */
@@ -6460,6 +6591,45 @@ export interface components {
              * @description An opaque token that allows pagination for list operations (e.g. ListNamespaces).  For an initial request of a list operation, if the implementation cannot return all items in one response, or if there are more items than the page limit specified in the request, the implementation must return a page token in the response, indicating there are more results available.  After the initial request, the value of the page token from each response must be used as the page token value for the next request.  Caller must interpret either `null`, missing value or empty string value of the page token from the implementation's response as the end of the listing results.
              */
             page_token?: string | null;
+        };
+        /**
+         * ListTableIndicesRequest
+         * @description ListTableIndicesRequest
+         */
+        ListTableIndicesRequest: {
+            /**
+             * Branch
+             * @description Branch to target. When not specified, the main branch is used.
+             */
+            branch?: string | null;
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Id
+             * @description The namespace identifier
+             */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+            /**
+             * Limit
+             * @description An inclusive upper bound of the number of results that a caller will receive.
+             */
+            limit?: number | null;
+            /**
+             * Page Token
+             * @description An opaque token that allows pagination for list operations (e.g. ListNamespaces).  For an initial request of a list operation, if the implementation cannot return all items in one response, or if there are more items than the page limit specified in the request, the implementation must return a page token in the response, indicating there are more results available.  After the initial request, the value of the page token from each response must be used as the page token value for the next request.  Caller must interpret either `null`, missing value or empty string value of the page token from the implementation's response as the end of the listing results.
+             */
+            page_token?: string | null;
+            /**
+             * Version
+             * @description Optional table version to list indexes from
+             */
+            version?: number | null;
         };
         /**
          * ListTableIndicesResponse
@@ -6869,6 +7039,22 @@ export interface components {
             subject: string;
         };
         /**
+         * NamespaceExistsRequest
+         * @description NamespaceExistsRequest
+         */
+        NamespaceExistsRequest: {
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+        };
+        /**
          * PhraseQuery
          * @description PhraseQuery
          */
@@ -7136,6 +7322,11 @@ export interface components {
             }[];
             /** From Version */
             from_version: number | null;
+            /**
+             * Gate Source
+             * @default request
+             */
+            gate_source: string;
             /** Published */
             published: boolean;
             /** Reason */
@@ -7724,6 +7915,27 @@ export interface components {
             num_fragments: number;
         };
         /**
+         * TableExistsRequest
+         * @description TableExistsRequest
+         */
+        TableExistsRequest: {
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+            /**
+             * Version
+             * @description Version of the table to check existence. If not specified, server should resolve it to the latest version.
+             */
+            version?: number | null;
+        };
+        /**
          * TableVersion
          * @description TableVersion
          */
@@ -7813,6 +8025,11 @@ export interface components {
          */
         TransformSpecRequest: {
             /**
+             * Cardinality
+             * @default 1:1
+             */
+            cardinality: string;
+            /**
              * Code Version
              * @default
              */
@@ -7832,6 +8049,11 @@ export interface components {
         };
         /** TransformSpecResponse */
         TransformSpecResponse: {
+            /**
+             * Cardinality
+             * @default 1:1
+             */
+            cardinality: string;
             /**
              * Code Version
              * @default
@@ -9327,7 +9549,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DescribeNamespaceRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -9404,7 +9630,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["NamespaceExistsRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -11628,7 +11858,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeregisterTableRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -11658,6 +11892,7 @@ export interface operations {
                 check_declared?: boolean | null;
                 version?: number | null;
                 tag?: string | null;
+                branch?: string | null;
                 vend_credentials?: boolean | null;
             };
             header?: {
@@ -11790,7 +12025,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TableExistsRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -11895,6 +12134,7 @@ export interface operations {
             query?: {
                 page_token?: string | null;
                 limit?: number | null;
+                branch?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -11906,7 +12146,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ListTableIndicesRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -11968,7 +12212,9 @@ export interface operations {
     };
     describe_table_index_stats_v1_table__id__index__index_name__stats_post: {
         parameters: {
-            query?: never;
+            query?: {
+                branch?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11980,7 +12226,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DescribeTableIndexStatsRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -12649,7 +12899,9 @@ export interface operations {
     };
     get_table_stats_v1_table__id__stats_post: {
         parameters: {
-            query?: never;
+            query?: {
+                branch?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12660,7 +12912,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["GetTableStatsRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -13236,7 +13492,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DescribeTransactionRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -19,9 +19,9 @@ router = APIRouter(prefix="/v1/transaction", tags=["transaction"])
 
 
 @router.post("/{id}/describe", response_model_exclude_none=True)
-def describe_transaction(id: str, ns: NamespaceDep, settings: SettingsDep) -> DescribeTransactionResponse:
+def describe_transaction(id: str, ns: NamespaceDep, settings: SettingsDep, body: DescribeTransactionRequest | None = None) -> DescribeTransactionResponse:
     """Report the current status of transaction ``id`` — wraps the backend ``describe_transaction`` op."""
-    req = DescribeTransactionRequest(id=parse_identifier(id, settings.delimiter))
+    req = DescribeTransactionRequest(id=reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None))
     return native.call(ns, "describe_transaction", req)
 
 

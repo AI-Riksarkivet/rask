@@ -420,9 +420,10 @@ def describe_table(
 
 
 @router.post("/{id}/exists", status_code=200)
-def table_exists(id: str, ns: NamespaceDep, settings: SettingsDep) -> None:
+def table_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: TableExistsRequest | None = None) -> None:
     """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error."""
-    native.call(ns, "table_exists", TableExistsRequest(id=parse_identifier(id, settings.delimiter)))
+    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    native.call(ns, "table_exists", TableExistsRequest(id=segments, version=body.version if body else None))
 
 
 @router.post("/{id}/drop", response_model_exclude_none=True)
@@ -547,6 +548,7 @@ async def deregister_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     token: CurrentToken,
+    body: DeregisterTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
     force: bool = False,
 ) -> DeregisterTableResponse:
@@ -556,7 +558,7 @@ async def deregister_table(
     Protection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance —
     the flag's whole jurisdiction — so leaving it ungated would make "deregister, then delete the
     files by hand" the unprotected path around the protected drop."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
@@ -982,7 +984,9 @@ async def restore_table(
 
 
 @router.post("/{id}/stats", response_model_exclude_none=True)
-def get_table_stats(id: str, ns: NamespaceDep, settings: SettingsDep, branch: str | None = None) -> GetTableStatsResponse:
+def get_table_stats(
+    id: str, ns: NamespaceDep, settings: SettingsDep, body: GetTableStatsRequest | None = None, branch: str | None = None
+) -> GetTableStatsResponse:
     """Return storage/row statistics for the table at ``id`` via ``get_table_stats``.
 
     ``branch`` is DECLARED here only so it can be refused, and the numbers are why. Verified live
@@ -996,6 +1000,9 @@ def get_table_stats(id: str, ns: NamespaceDep, settings: SettingsDep, branch: st
     ``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in
     miniature. Serving it properly is named in `open_lakehouse_diff_left.md` §O1.
     """
-    req = GetTableStatsRequest(id=parse_identifier(id, settings.delimiter), branch=branch)
+    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    if body is not None and "branch" in body.model_fields_set:
+        branch = body.branch
+    req = GetTableStatsRequest(id=segments, branch=branch)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
     return native.call(ns, "get_table_stats", req)

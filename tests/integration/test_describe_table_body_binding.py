@@ -28,6 +28,23 @@ from catalog.services import dataplane
 _LOCATION = "s3://lance-catalog/db$t"
 
 
+@pytest.fixture(autouse=True)
+def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the version-existence check this door grew on 2026-09-02.
+
+    `describe` now opens the pinned dataset when a `version` is named, so that `?version=9999` on a
+    two-version table answers spec error 11 rather than confirming every number a caller tries. These
+    tests mock the NAMESPACE and hand back a location with no dataset behind it — a state a real
+    catalog never reaches — so the open fails and every case 404s before the body binding under test
+    is reached. Stubbing the check keeps this file about the one thing it is for: which channel the
+    fields are read from. The check itself is driven against a real dataset by
+    `tests/e2e-py/test_track_a_acceptance.py::test_describe_refuses_a_branch_on_both_channels_and_an_impossible_version`.
+    """
+    from catalog.api.v1.endpoints import tables
+
+    monkeypatch.setattr(tables, "open_dataset", lambda *a, **k: MagicMock())
+
+
 @pytest.fixture
 def vendor(client: TestClient, fake_ns: MagicMock) -> Iterator[MagicMock]:
     fake_ns.describe_table.return_value = DescribeTableResponse(location=_LOCATION)

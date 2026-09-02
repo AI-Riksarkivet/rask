@@ -109,6 +109,7 @@ def list_table_indices(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
+    body: ListTableIndicesRequest | None = None,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
     branch: str | None = None,
@@ -121,19 +122,30 @@ def list_table_indices(
     this door reported an empty list for the branch, for main, and for a branch never created. Being
     told "no indices" about the wrong dataset is a worse answer than an error, because it is actionable.
     """
-    req = ListTableIndicesRequest(id=parse_identifier(id, settings.delimiter), page_token=page_token, limit=limit, branch=branch)
+    sent = body.model_fields_set if body else frozenset()
+    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    if body is not None:
+        page_token = body.page_token if "page_token" in sent else page_token
+        limit = body.limit if "limit" in sent else limit
+        branch = body.branch if "branch" in sent else branch
+    req = ListTableIndicesRequest(id=segments, page_token=page_token, limit=limit, branch=branch, version=body.version if body else None)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="list_table_indices")
     return native.call(ns, "list_table_indices", req)
 
 
 @router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
-def describe_table_index_stats(id: str, index_name: str, ns: NamespaceDep, settings: SettingsDep, branch: str | None = None) -> DescribeTableIndexStatsResponse:
+def describe_table_index_stats(
+    id: str, index_name: str, ns: NamespaceDep, settings: SettingsDep, body: DescribeTableIndexStatsRequest | None = None, branch: str | None = None
+) -> DescribeTableIndexStatsResponse:
     """Report stats for a named index on a table — wraps the native ``describe_table_index_stats`` op.
 
     ``branch`` is declared to be refused, for the same reason as the listing beside it: an index of the
     same name can exist on both refs with different coverage, so answering from main is a plausible
     wrong number rather than a visible failure."""
-    req = DescribeTableIndexStatsRequest(id=parse_identifier(id, settings.delimiter), index_name=index_name, branch=branch)
+    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    if body is not None and "branch" in body.model_fields_set:
+        branch = body.branch
+    req = DescribeTableIndexStatsRequest(id=segments, index_name=index_name, branch=branch, version=body.version if body else None)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe_table_index_stats")
     return native.call(ns, "describe_table_index_stats", req)
 

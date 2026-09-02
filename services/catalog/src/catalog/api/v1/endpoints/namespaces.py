@@ -268,9 +268,10 @@ async def list_namespaces(
 
 
 @router.post("/{id}/describe", response_model_exclude_none=True)
-def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep) -> DescribeNamespaceResponse:
+def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep, body: DescribeNamespaceRequest | None = None) -> DescribeNamespaceResponse:
     """Return the metadata/properties of namespace ``id`` via ``describe_namespace``."""
-    req = DescribeNamespaceRequest(id=parse_identifier(id, settings.delimiter))
+    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    req = DescribeNamespaceRequest(id=segments)
     return native.call(ns, "describe_namespace", req)
 
 
@@ -720,9 +721,9 @@ async def set_namespace_protection(
 
 
 @router.post("/{id}/exists", status_code=200)
-def namespace_exists(id: str, ns: NamespaceDep, settings: SettingsDep) -> None:
+def namespace_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: NamespaceExistsRequest | None = None) -> None:
     """Check that namespace ``id`` exists via ``namespace_exists`` — 200 on success (spec 0.9), else error."""
-    req = NamespaceExistsRequest(id=parse_identifier(id, settings.delimiter))
+    req = NamespaceExistsRequest(id=reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None))
     native.call(ns, "namespace_exists", req)
 
 
