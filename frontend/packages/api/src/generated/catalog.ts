@@ -8264,31 +8264,6 @@ export interface components {
             version: number;
         };
         /**
-         * UpdateTableSchemaMetadataResponse
-         * @description UpdateTableSchemaMetadataResponse
-         */
-        UpdateTableSchemaMetadataResponse: {
-            /**
-             * Context
-             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
-             */
-            context?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Metadata
-             * @description The updated schema metadata
-             */
-            metadata?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Transaction Id
-             * @description Optional transaction identifier
-             */
-            transaction_id?: string | null;
-        };
-        /**
          * UpdateTableTagRequest
          * @description UpdateTableTagRequest
          */
@@ -12883,7 +12858,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UpdateTableSchemaMetadataResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

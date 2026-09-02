@@ -18,6 +18,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableAddColumnsResponse,
@@ -188,7 +189,7 @@ async def update_field_metadata(
     return response
 
 
-@router.post("/{id}/schema_metadata/update", response_model_exclude_none=True)
+@router.post("/{id}/schema_metadata/update")
 async def update_table_schema_metadata(
     id: str,
     body: dict[str, Any],
@@ -198,7 +199,7 @@ async def update_table_schema_metadata(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
-) -> UpdateTableSchemaMetadataResponse:
+) -> JSONResponse:
     """Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
     UPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).
 
@@ -263,4 +264,10 @@ async def update_table_schema_metadata(
         operation=UPDATE_SCHEMA_METADATA,
         authorization=authorization,
     )
-    return response
+    # THE DIRECT MAP, per the spec's REST-only rule: the body IS the updated metadata, not an envelope
+    # around it. rask answered `{metadata, transaction_id}`, on which pylance's Rust client raises
+    # `invalid type: map, expected a string` — AFTER the write has committed, so a spec client sees a
+    # failure for a mutation that happened. `transaction_id` and the null-deletes dialect are rask
+    # extensions and belong on the management API (R2), not on a spec route whose response a stock
+    # client must be able to deserialise.
+    return JSONResponse(content=response.metadata or {})

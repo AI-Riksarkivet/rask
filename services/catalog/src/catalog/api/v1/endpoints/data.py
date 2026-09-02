@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Header, Query
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from lance_namespace import (
     AnalyzeTableQueryPlanRequest,
     CountTableRowsRequest,
@@ -458,7 +458,11 @@ def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: Stora
     """
     req = body or CountTableRowsRequest()
     req.id = reconcile_body_id(parse_identifier(id, settings.delimiter), req.id)
-    return PlainTextResponse(str(dataplane.count_rows(ns, so, req)))
+    # A JSON INTEGER, per `components.responses.CountTableRowsResponse`: "Row count serialized
+    # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
+    # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
+    # payload is a STRING, did not.
+    return JSONResponse(content=dataplane.count_rows(ns, so, req))
 
 
 @router.post("/{id}/explain_plan")
@@ -471,7 +475,12 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
     # channels reads as a guard while being none.
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
     result = native.call(ns, "explain_table_query_plan", body)
-    return PlainTextResponse(result if isinstance(result, str) else json.dumps(dump(result)))
+    # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
+    # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
+    # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to
+    # look like JSON round-trips as the opaque text it is rather than being mistaken for structure.
+    plan = result if isinstance(result, str) else json.dumps(dump(result))
+    return JSONResponse(content=plan)
 
 
 @router.post("/{id}/analyze_plan")
@@ -480,4 +489,9 @@ def analyze_table_query_plan(id: str, body: AnalyzeTableQueryPlanRequest, ns: Na
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     result = native.call(ns, "analyze_table_query_plan", body)
-    return PlainTextResponse(result if isinstance(result, str) else json.dumps(dump(result)))
+    # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
+    # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
+    # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to
+    # look like JSON round-trips as the opaque text it is rather than being mistaken for structure.
+    plan = result if isinstance(result, str) else json.dumps(dump(result))
+    return JSONResponse(content=plan)

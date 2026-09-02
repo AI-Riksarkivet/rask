@@ -250,11 +250,15 @@ def test_exists_returns_200(client: TestClient, fake_ns: MagicMock) -> None:
     assert client.post("/v1/table/db$t/exists").status_code == 200
 
 
-def test_count_rows_returns_plain_integer(client: TestClient, fake_ns: MagicMock) -> None:
+def test_count_rows_returns_a_json_integer(client: TestClient, fake_ns: MagicMock) -> None:
+    """The spec's `components.responses.CountTableRowsResponse` is `application/json` holding a bare
+    integer — "serialized transparently as a bare number for the REST namespace". This asserted
+    `text/plain` until 2026-09-02 (blocker A2); the media type was the deviation, and the payload
+    survived only because a bare number happens to parse as JSON either way."""
     fake_ns.count_table_rows.return_value = 7
     resp = client.post("/v1/table/db$t/count_rows", json={})
-    assert resp.headers["content-type"].startswith("text/plain")
-    assert resp.text == "7"
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json() == 7
 
 
 def test_query_returns_arrow_file_bytes(client: TestClient, fake_ns: MagicMock) -> None:

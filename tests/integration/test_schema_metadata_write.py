@@ -72,7 +72,7 @@ def test_null_value_deletes_the_key(real_ns_client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     assert _properties(real_ns_client, "t1") == {"owner": "alice"}
     # The response echoes the table's NEW full map, so a caller never has to re-read to know what stuck.
-    assert resp.json()["metadata"] == {"owner": "alice"}
+    assert resp.json() == {"owner": "alice"}  # the DIRECT map (A2): the body IS the updated metadata, not an envelope
 
 
 def test_omitting_a_key_is_a_merge_not_a_replace(real_ns_client: TestClient) -> None:
@@ -96,7 +96,7 @@ def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) ->
     resp = real_ns_client.post("/v1/table/m1$t3/schema_metadata/update", json={"owner": None})
     assert resp.status_code == 200, resp.text
     assert _properties(real_ns_client, "t3") == {}
-    assert resp.json()["metadata"] == {}  # the echo is filtered the same way the read twin is
+    assert resp.json() == {}  # the echo is filtered the same way the read twin is; direct map since A2
 
     on_disk = lance.dataset(_location(real_ns_client, "t3")).schema.metadata or {}
     assert on_disk.get(b"lineage.dataset_id") == b"m1$t3", on_disk
