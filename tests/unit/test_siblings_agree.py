@@ -195,14 +195,49 @@ def test_a_route_with_an_UNTYPED_body_still_reads_its_branch() -> None:
     )
 
 
+#: Source markers proving a door DECIDED about the branch instead of dropping it.
+#:
+#: Refusing is a legitimate answer, and the estate uses two shapes of it: the shared 501
+#: (`refuse_a_branch_this_door_cannot_honour`, for doors whose option surface is too large to serve
+#: faithfully — `query`, the index builders, `stats`) and `describe`'s own 400, which names the branch
+#: operations instead. A door that refuses cannot write to main under a branch's name, which is the
+#: only thing this gate exists to catch — so treating it as a violation would push an author toward
+#: passing `branch=` into an open that is unreachable, i.e. toward prose that lies about the door.
+#: `test_a_declared_branch_is_never_silently_dropped.py` makes the same allowance for the same reason.
+_BRANCH_DECIDED = ("refuse_a_branch_this_door_cannot_honour", "`branch` is not supported by")
+
+
+def _decides_about_the_branch(fn: Function) -> bool:
+    """Does this function REFUSE the branch rather than drop it?
+
+    Read off the AST rather than the source text, so an unrelated mention of the marker in a docstring
+    or a comment cannot excuse a door that in fact drops the branch — a source-substring check would
+    have been satisfied by this very module's own prose.
+    """
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call):
+            called = node.func
+            if isinstance(called, ast.Attribute) and called.attr == _BRANCH_DECIDED[0]:
+                return True
+            if isinstance(called, ast.Name) and called.id == _BRANCH_DECIDED[0]:
+                return True
+        if isinstance(node, ast.Raise):
+            for message in ast.walk(node):
+                if isinstance(message, ast.Constant) and isinstance(message.value, str) and _BRANCH_DECIDED[1] in message.value:
+                    return True
+    return False
+
+
 def test_a_branch_carrying_request_reaches_open_dataset() -> None:
-    """A door handed a branch must open the branch — the silent wrong-target write class."""
+    """A door handed a branch must open the branch, or refuse it — the silent wrong-target write class."""
     population = _branch_population()
     assert population, "no branch-carrying dataset opens found — the walk is looking in the wrong place"
 
     violations = []
-    for name, _fn, sources, opens in population:
+    for name, fn, sources, opens in population:
         if name in BRANCH_EXEMPT:
+            continue
+        if _decides_about_the_branch(fn):
             continue
         for call in opens:
             if not any(kw.arg == "branch" for kw in call.keywords):
