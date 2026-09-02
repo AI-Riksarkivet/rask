@@ -21,6 +21,9 @@ Source documents, committed under `docs/audits/lakehouse-2026-09/`:
 `lance-conformance-and-build-rules.md`, `verdict.md`, and the sweep reports `sweeps/{notifications,
 lineage, maintenance, gateway-compute-controlplane, packages}.md`. Zero-trust diff: `sweeps/zero-trust.md`, folded into §F.
 
+The control plane and the future `rask-operator` are a separate plan, `open_controller.md` (2026-09-02); this
+register stays on the lakehouse.
+
 Scope the owner set: catalog, compute, ingest, medallion, maintenance, lineage, notifications, gateway,
 controlplane, and the shared packages. **Not swept, on the owner's instruction:** annotator, viewer,
 search, flows, models, and every frontend zone.
@@ -113,6 +116,11 @@ Measured: 12 of 54 ops verbatim, 34 partial, 3 model-differs, 5 stub. With pylan
 v0.12.0. Details and evidence: `lance-conformance-and-build-rules.md` §2–§3, §9.
 
 ### A1 · Bodyless handlers ignore the required JSON body
+**Status 2026-09-02.** `DescribeTable` is done — `4c64046c` (2026-08-29) gave it `body: DescribeTableRequest | None`,
+reconciles the id and lets a present body field win. The other EIGHT stand, checked against HEAD and the
+vendored spec (every one of the nine declares a required JSON body and no query parameters):
+`ListTableIndices`, `GetTableStats`, `DescribeTableIndexStats`, `DescribeNamespace`, `NamespaceExists`,
+`TableExists`, `DeregisterTable`, `DescribeTransaction` take no body parameter at all.
 **What.** `DescribeTable`, `ListTableIndices`, `GetTableStats`, `DescribeTableIndexStats`, the exists/
 deregister/transaction ops read version/tag/branch/vend_credentials/pagination from the query string or
 not at all. The reference client sends `vend_credentials` only in the body, so **credential vending is
@@ -127,6 +135,7 @@ analyze answer `text/plain` (spec: JSON string); `count_rows` answers `text/plai
 JSON integer; the envelope dialect moves to the management API.
 
 ### A3 · GET vs POST on `count_rows` and `tags/list`
+**Status 2026-09-02.** Stands — both routes are `@router.post` only at HEAD.
 **What.** The spec and lance-namespace's generated client say POST at every tag since 0.9.0. **pylance's
 own bundled client and reference server use GET** (`lance` repo `rust/lance-namespace-impls/src/rest.rs`,
 `rest_adapter.rs`, at v10.0.0 and main). **Closes it.** Dual-mount both routes; file the upstream issue.
@@ -137,6 +146,8 @@ server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding
 `canonical_object_id`.
 
 ### A5 · Error bodies without `code`
+**Status 2026-09-02.** Stands — `ns_errors.py:29` still maps `UNSUPPORTED → 501` and the
+`RequestValidationError` handler still answers a code-less 422.
 **What.** 422, generic 500, FastAPI 404/405, maintenance 503, 413, 429 and draining 503 all collapse to
 `InternalError 18` in the client; tag/branch failures are unmapped 500s (codes 8/9/11/22/23 unreachable);
 column/data ops never mint 14/20; UNSUPPORTED answers 501 where the spec and Lance's reference server
@@ -161,13 +172,16 @@ maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R
 re-expressed with the spec's own code; `branch` honoured (plumbing at `dataplane.py:1085`).
 
 ### A8 · Stub status codes
+**Status 2026-09-02.** Stands — `views.py:24,58` and `columns.py:146` carry no `status_code`.
 **Where.** `views.py:24,58`, `columns.py:146` lack 201/202. One-line fix each.
 
 ### A9 · 0.12.0: merge_insert `on` is an array
+**Status 2026-09-02.** Stands — `data.py:208` declares `on: str | None`.
 **Where.** `data.py` merge handler declares `on: str | None`; the wire form is a repeated query
 parameter. **Closes it.** `on: list[str]`; pass through to pylance.
 
 ### A10 · 0.12.0: bump `lance-namespace` and re-vendor `lance_docs`
+**Status 2026-09-02.** Stands — `service-kit` pins `lance-namespace>=0.11.0` and 0.11.0 is installed.
 **What.** 0.11.1's vector index build params are dropped by the 0.11.0 pydantic model before the backend
 sees them; 0.12.0's `computed` columns + backfill are a spec-level data-evolution contract rask answers
 501 to; `header.*` context mapping is now specified both directions. **Closes it.** Pin 0.12.0, re-vendor
