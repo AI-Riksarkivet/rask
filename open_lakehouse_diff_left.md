@@ -87,10 +87,10 @@ explicit.
 | # | Question | Options | Default if unanswered |
 | --- | --- | --- | --- |
 | Q1 | Where the five analysis documents live. | Committed under `docs/audits/lakehouse-2026-09/` on `claude/flyte-2-dapr-audit-19cyc2` (the default was taken; move them if you prefer elsewhere). | done |
-| Q2 | Delete remote branch `claude/flyte-2-dapr-audit-19cyc2`? The proxy refuses the delete from the sandbox. | Owner deletes; or it becomes the branch for Q1. | Reuse it for Q1. |
-| Q3 | UNSUPPORTED error status: keep 501 or follow the spec's 406? | Either parses (the client dispatches on `code`). | Keep 501, document. |
+| Q2 | Delete remote branch `claude/flyte-2-dapr-audit-19cyc2`? | **Decided: delete.** Everything is on `main`. The sandbox proxy refuses `git push --delete`, so the owner runs it from a machine with push rights. | — |
+| Q3 | UNSUPPORTED error status: 501 or 406? | **Decided: 406, per the spec.** lance-namespace v0.12.0 `spec.yaml` defines `UnsupportedOperationErrorResponse` as status 406 ("Not Acceptable / Unsupported Operation") on every op that lists it, and Lance's own reference server maps `ErrorCode::Unsupported` to `NOT_ACCEPTABLE` (`rust/lance-namespace-impls/src/rest_adapter.rs:347`). rask's 501 (`service_kit/lakehouse/ns_errors.py:25`) parses in the client because it dispatches on `code`, but a spec-verbatim server answers 406. Folded into A5. | — |
 | Q4 | ~~`ratch` console script~~ | withdrawn: `packages/ratch` was dissolved 2026-08-28 and is not on `main`; the packages sweep read untracked residue on the sandbox. | — |
-| Q5 | Feature flag 32 (`DISABLE_TRANSACTION_FILE`): refuse (today), or support and move the replay marker off `.txn`? | Refuse / support. | Refuse until pylance writes it by default. |
+| Q5 | Feature flags 32 / 64 / 128? | **Decided, per the current format doc and `lance-table/src/feature_flags.rs`.** The rule is asymmetric: readers check `reader_feature_flags`, writers check `writer_feature_flags`, and an unknown bit on the side you are on is an "unsupported" error. So: (1) name all three bits in `features.py` (32 `FLAG_DISABLE_TRANSACTION_FILE`, writer-required only; 64 `FLAG_UNSTABLE_DATA_OVERLAY_FILES`, both, and release builds reject it unless `LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES` is set, so rask never sets that in a deployed image; 128 `FLAG_COVERED_INDEX_METADATA`, both, sticky). (2) Split the whitelist into a reader mask and a writer mask: report-only passes (orphan scan, reconcile, base-refs) proceed when only writer-required bits are unknown; compaction, cleanup and purge stay fail-closed on any unknown writer bit. (3) Support for 32 lands together with the pylance bump that can read manifest-recorded transactions, because rask's replay marker and `/history` read `.txn` files through `read_transaction`; pylance 10.0.0 predates 32 and 128 entirely (no symbol in the installed package), so today refusal is the only correct answer. Folded into C9. | — |
 | Q6 | Which service door authenticates producers on the lineage bus? | **Decided (owner delegated, 2026-09-02):** Dapr mTLS SPIFFE `dapr-caller-app-id` enforced by an `accessControl` policy while Dapr is the transport; a producer signature over the CloudEvent as the transport-independent form that survives the Dapr retreat (§K). The bus door applies `enforce_output_authz` as the stamped subject either way. | — |
 | Q7 | The `x-api-key` principal? | **Decided (owner delegated, 2026-09-02):** support both spec identity headers; keys are minted, scoped and revoked by the management API (a key = a `user`/service principal in FGA with an expiry), never by the spec surface. Both Q6 and Q7 stay in this backlog: the bus door is the integrity of the lakehouse's write record, and `x-api-key` is the spec's own identity contract. | — |
 
@@ -129,9 +129,11 @@ server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding
 ### A5 · Error bodies without `code`
 **What.** 422, generic 500, FastAPI 404/405, maintenance 503, 413, 429 and draining 503 all collapse to
 `InternalError 18` in the client; tag/branch failures are unmapped 500s (codes 8/9/11/22/23 unreachable);
-column/data ops never mint 14/20. **Where.** `service_kit/lakehouse/ns_errors.py:135-161`,
+column/data ops never mint 14/20; UNSUPPORTED answers 501 where the spec and Lance's reference server
+answer 406. **Where.** `service_kit/lakehouse/ns_errors.py:25,135-161`,
 `api/maintenance_mode.py:31-43`, `dataplane.py:1345-1418`. **Closes it.** One coded problem+json builder
-for every status (the four hand-built ones in `body_limit.py`, `load_shed.py`, `draining.py` fold in).
+for every status (the four hand-built ones in `body_limit.py`, `load_shed.py`, `draining.py` fold in), and
+`UNSUPPORTED → 406` (Q3, decided).
 
 ### A6 · Identity: `x-api-key` never read; bearer verified only with OIDC on
 **Where.** `api/security.py:36-49,168-181`, `core/config.py:181` (`LANCE_OIDC_ENABLED=False`).
@@ -250,10 +252,13 @@ opt-in; document `read_blob_ranges` as the batched client path once creds are ve
 under `tree/<branch>/` are never compacted, optimized or cleaned (`optimize.py:123-127`).
 **Closes it.** Discover branch datasets; add repack; pin that compaction does not rewrite dedicated blobs.
 
-### C9 · Feature flags 32 / 64 / 128
+### C9 · Feature flags 32 / 64 / 128 (Q5 decided)
 **What.** `features.py` whitelists 1|2|4|8 (+16 for GC), names 64, does not know 32 or 128; comments say
-the spec stops at 16. Refusal is fail-closed and correct; the decision is Q5. **Closes it.** Name the
-bits, decide 32, add 128 once an index declares covering columns.
+the spec stops at 16. Refusal is fail-closed and correct today. **Closes it.** Name the three bits with
+their reader/writer requirement; split `SUPPORTED` into a reader mask and a writer mask so report-only
+passes proceed on writer-only unknowns while compaction, cleanup and purge stay fail-closed; never set
+`LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES` in a deployed image; support 32 only with the pylance bump
+that reads manifest-recorded transactions (the replay marker and `/history` depend on `read_transaction`).
 
 ---
 
@@ -545,4 +550,4 @@ derived from the endpoint scheme; HTTP client timeouts.
 
 ## N. What was asked of the owner and is still open
 
-Q2, Q3 and Q5 above. Q1 taken (documents under `docs/audits/lakehouse-2026-09/`), Q4 withdrawn, Q6 and Q7 decided by delegation. Nothing else blocks §A–§C.
+Nothing. Q1 taken (documents under `docs/audits/lakehouse-2026-09/`), Q2 decided (owner deletes the branch), Q3 decided (406), Q4 withdrawn, Q5 decided (reader/writer masks, 32 with the pylance bump), Q6 and Q7 decided by delegation. R1–R11 stand unless the owner objects. Nothing blocks §A–§C.
