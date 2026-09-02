@@ -559,7 +559,7 @@ def test_a_read_door_that_cannot_scope_to_a_branch_refuses_instead_of_answering(
     staging work on a branch silently reads main. Saying "this backend does not do that" is a complete
     and honest answer. Serving it properly means re-deriving vector search, full-text search, prefilter,
     nprobes, refine_factor and distance_type against a branch handle — real work with its own tests,
-    named in `open_backlog.md`, and not something to smuggle in behind a door that currently lies.
+    named in `open_lakehouse_diff_left.md` §O1, and not something to smuggle in behind a door that currently lies.
 
     Parametrised so a fix applied to one door and not its siblings cannot leave this file green. Five
     of this session's defects were exactly that shape.

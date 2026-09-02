@@ -36,6 +36,15 @@ citing file:line. Live probes where a claim rested on runtime behaviour (the cat
 backend, pylance 10.0.0 `RestNamespace` against a logging stub, `DirectoryNamespace` version ops).
 Every number below is from those reports; nothing is from memory.
 
+## Freshness — read this before acting on any row
+
+This register was written against `feec956`, dated **2026-08-25**. On 2026-09-02, 359 commits
+separate it from `main`, and driving the estate showed at least one HIGH item already closed before
+the register existed. **Every row below is a claim about a tree that no longer exists; check it
+against HEAD, and where it is runtime behaviour drive it, before starting work.** Rows already
+re-checked carry a dated **Status** line. Known stale as of 2026-09-02: D1 (done 2026-08-26), the
+data-door half of A7/C2 (done 2026-08-31/09-01), the request-id half of D3.
+
 ---
 
 ## 0. The verdict, and the condition attached to it
@@ -141,6 +150,11 @@ for every status (the four hand-built ones in `body_limit.py`, `load_shed.py`, `
 **Closes it.** See §F; anonymous-by-default ends.
 
 ### A7 · Governance inside spec handlers
+**Status 2026-09-02.** The *"update/delete ignoring `branch`"* clause is closed and wider than
+written: `update`, `delete`, `insert`, `merge_insert`, the merge's index build, `schema_metadata/update`
+and `count_rows` honour `branch`; `query`, `explain_plan`, `analyze_plan`, `create_index`,
+`create_scalar_index`, `stats`, `index/list`, `index/{n}/stats` refuse it (see C2). The rest of A7
+stands.
 **What.** Warehouse-scoped namespace refusal, no root tables, trash soft-delete, protection 409/code 3,
 lineage keys injected into schema metadata, implicit BTREE on merge_insert, insert pre-coercion,
 maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R2; each refusal
@@ -206,6 +220,17 @@ of `base_paths` with per-base rights (read on inherited bases, write on `target_
 reference-only bases); expiry in the vended options.
 
 ### C2 · Branch-scoped operations, FGA, vending, protection, lineage
+**Status 2026-09-02 — the data doors are done, the governance half is not.** Nine data doors were
+driven against the live catalog with the object store as ground truth and fixed (commits `7dddbd94`
+… `34aad854`, `e61abc0a`); `tests/e2e-py/test_track_a_acceptance.py` pins them and runs in CI under
+`scripts/e2e_stack.sh`'s no-silent-skip guard; `services/catalog/tests/test_a_declared_branch_is_never_silently_dropped.py`
+refuses a new door that hands a branch to `native.call` undecided. Still standing: the FGA `branch`
+type, vending scoped to `tree/<b>/`, per-branch protection and trash, `parent_branch`/`parent_version`
+facets, and the branch/tag doors emitting no lineage.
+**A correction that A1 makes visible.** On `stats`, `index/list` and `index/{n}/stats` the refusal was
+added as a QUERY parameter. Those routes declare no body, so the spec's `{"branch": …}` body is still
+dropped by FastAPI and answered from main. The e2e tests send `?branch=` and are green over that open
+channel. The fix is A1 — declare the request model as the body — not a second patch here.
 **What.** The model has `can_create_branch: owner` on `table` and nothing else; branch writes fall through
 to the table's `can_write_data`; update/delete write main; vending, protection, trash and lineage are
 branch-blind; the catalog's branch and tag doors **emit no lineage at all**, so no notification ever
@@ -265,7 +290,13 @@ that reads manifest-recorded transactions (the replay marker and `/history` depe
 
 ## D. Edge and service doors (from the gateway/compute/controlplane sweep)
 
-### D1 · Two services fully open through the gateway — **HIGH**
+### D1 · Two services fully open through the gateway — **DONE 2026-08-26, verified live 2026-09-02**
+**Status.** Stale when written: `1e9acf06` (2026-08-26 19:17, one day after `feec956`) gave both
+services `security.py`, `routes.py`/`proxy.py`/the `projects` router carry `Depends(require_read)`
+(estate `reader` on the root object), both lifespans `attach_auth`, and the chart renders
+`governedAuth: true` for both. Driven 2026-09-02 through the deployed gateway with no token:
+`/api/ray/health`, `/api/ray/jobs`, `/api/serve/applications/`, `/api/projects/`, `/api/ray/cluster`
+all **401** with a coded problem body. Kept for the record; nothing to do.
 **What.** The gateway enforces no authn/authz on any row; `controlplane` (`GET /api/projects`: tenant
 names, teams, namespaces, hosts) and `compute` (`/api/ray/*`, `/api/serve`: topology, job entrypoints,
 node log files) have no door of their own; the Ingress routes `/api` to the gateway and the front-door
@@ -281,11 +312,17 @@ with `APP_API_TOKEN` unset the route guards no-op. **Closes it.** Invert to an a
 root-rewritten row (catalog `/v1/*`; lineage `/runs`, `/events`, `/v1/*`).
 
 ### D3 · No body cap, rate limit, request-id, forwarded-for, access log, or coded errors at the edge
+**Status 2026-09-02.** Half stale: the gateway now mounts `RequestIDMiddleware`
+(`gateway/__init__.py:513`) so one id reaches every hop. It still runs neither `register_middleware`
+nor a body cap, rate limit, access line or coded 404/502 — those stand.
 **Where.** `gateway/__init__.py:280,332,341,347`. **Closes it.** Streaming body-size middleware,
 token bucket per subject/IP, `RequestIDMiddleware`, strip inbound `X-Forwarded-*` and inject at the edge,
 one structured access line per request, problem+json with `code` for 404/413/429/502.
 
 ### D4 · Compute's prune route does not fail closed; Serve proxy path unbounded
+**Status 2026-09-02 — both stand at HEAD.** `services/compute` never calls
+`assert_app_token_configured` (its five siblings do); `ray_kit.dashboard.proxy` builds
+`f"{dashboard_url}/{path.lstrip('/')}"` and compute's `_canonical` only restores a trailing slash.
 **Where.** `compute/.../pruner.py:43-67`, `proxy.py:53`, `ray_kit/dashboard.py:674`. **Closes it.**
 `assert_app_token_configured` in compute's lifespan; reject dot-segments in `_canonical`.
 
@@ -552,3 +589,98 @@ derived from the endpoint scheme; HTTP client timeouts.
 ## N. What was asked of the owner and is still open
 
 Nothing. Q1 taken (documents under `docs/audits/lakehouse-2026-09/`), Q2 decided (owner deletes the branch), Q3 decided (406), Q4 withdrawn, Q5 decided (reader/writer masks, 32 with the pylance bump), Q6 and Q7 decided by delegation. R1–R11 stand unless the owner objects. Nothing blocks §A–§C.
+
+**Decided 2026-09-02:** this file is the single register — `open_backlog.md` is folded into §O below
+and deleted. Order of work: D1 (found already done) → §A spec-verbatim, A1–A5 with A11 as the RED gate
+→ B1 → C.
+
+---
+
+## O. Folded from `open_backlog.md` (sessions of 2026-08-31 / 09-01) — items not already above
+
+The session ledger that found and fixed the branch family. Rows already expressed by a lettered
+section above point at it rather than repeat it.
+
+### O1 · Lakehouse
+
+| Priority | Item | Note |
+| --- | --- | --- |
+| Medium | **No index is ever built on a governed table**; search tunes `nprobes` for one that is not there, so semantic search is a brute-force scan | J7 is the governed version of the fix |
+| Medium | **Compression never configured** anywhere, and no decision record; thresholds are schema-resident so it gets dearer with corpus size | |
+| Medium | **`register_table` accepts a dataset created without stable row ids**, so `source_rowid` provenance can never be honest and cannot be repaired short of a rewrite. The catalog's own create sets the flag and the ingest gate A14 refuses without it, but A14 guards the ingest path only — `ingest/lander.py:68` says the catalog refuses and it does not. Needs a decision: opt-in by claim (refuse when registering INTO a governed tier) is the shape consistent with D1 | Same door as F2·7 (location containment); fix both together |
+| Medium | `_row_last_updated_at_version` unused → publication deltas miss in-place updates, and the annotator's whole write path is `merge_insert` | |
+| Medium | 53 `lance.dataset()` call sites, 5 pass a `session` | = L (BR9) |
+| Low | Body-id reconciliation on four routes | = A1 |
+| Low | `delimiter` silently ignored | = A4; a 400 would be strictly better than silence |
+| Low | A subchart names `{{ .Release.Name }}-x` while this chart's Secrets use `lance.fullname`; they agree only when the release is named `rask` | |
+| Low | `can_promote` buys nothing on `table` (`validator ⊇ owner`) | |
+| Doc | The DIY provenance recipe (`stamp_stage`, `source_rowid`, the tier contract) is written down nowhere under `docs/` or `.claude/` | |
+| Open | **Refused, not served** (all 501 today): branch-scoped `query`/`explain_plan`/`analyze_plan`, `create_index`/`create_scalar_index`, `stats`, `index/list`, `index/{n}/stats`. Each needs a faithful mapping and its own tests; the line drawn was the OPTION SURFACE (a fixed-shape op is served, an open option surface is refused) | Named so a 501 never reads as finished |
+
+### O2 · Compute and workflow
+
+| Priority | Item | Note |
+| --- | --- | --- |
+| In progress | **The executor contract** — `BAKED_JOBS_DIR` + `BAKED_CLUSTER_JOBS` live in the shared library and the catalog enforces them, so a non-Ray lane cannot be declared and the word "Ray" reaches every API client through the published OpenAPI | The agnosticism claim rests on this; D5 is the BYO half |
+| High | **No cascade reconciler and no re-run verb** — a missed hop is undetectable and unrepairable | `open_estate-verification.md` row 35 (D) |
+| High | **No Dapr Workflow versioning seam** — two replay divergences already shipped; "drain before deploying" is the only safe answer | K sequences the retreat; this is the cost of staying meanwhile |
+| Medium | Submission bypasses the `RayJob` CRD, so Kueue admits nothing | |
+| Medium | 1,367 orphan rows in `daprstate`, no TTL, no alert | |
+| Medium | The workflow status metric reports success on a dying path | |
+| Owner | Ray GCS is not fault-tolerant: a head restart kills in-flight jobs. The platform now degrades in one poll interval instead of 24 h (row 34), but fault tolerance itself needs an external Redis, which this estate refuses by standing rule | |
+
+### O3 · Blocked on the owner
+
+`dedicatedServiceCredentials: false` — every mover holds `owner` on every warehouse, and the control
+that bounds it (`LANCE_PRIVILEGED_SUBJECTS`) is deliberately unrendered. A posture, not a defect;
+F2·3 is the same question from the zero-trust side.
+
+### O4 · Bootstrap on a fresh machine is NOT chart-complete
+
+| Piece | Chart-owned? |
+| --- | --- |
+| Fleet, lakehouse services, zones, infra toggles, ExternalSecrets | Yes |
+| Kueue queues | Yes, and structurally bypassed (O2) |
+| **The Ray head the cascade runs on** | **No** — hand-applied `deploy/ray-lance-demo.yaml`, diverged from the chart's own RayService. Re-applying an older copy silently reverted the scoped S3 credential to the root key once; the file now matches the live pod, but a manifest outside the chart is where the security posture drifts |
+| OpenBao's Kubernetes auth backend, policy, role | **No** — a runbook, not a manifest |
+| The KV secret values | **No** — seeded by hand |
+
+Until the head is reconciled with the chart's RayService and the OpenBao bootstrap is a Job, "it is
+all in the chart" is false, and the gap sits exactly where the security posture lives.
+
+---
+
+## P. The dropped-parameter sweep (2026-09-01) — partial, and why
+
+A six-lens sweep drove the live catalog for the class *"a door declares a parameter, accepts it,
+forwards it, and something downstream disregards it."* 22 distinct candidates, 53 verdicts returned
+(40 real). **Sixteen verify calls and the completeness critic failed on the weekly subagent limit**
+(resets 2026-09-04 06:00), so coverage is unassessed and the rows below are candidates, not a
+finished list. Re-run the critic when the limit lifts.
+
+Fixed the same day (8): `create_index`, `create_scalar_index`, `explain_plan` (branch nested in
+`query`), `describe` (`?branch=` and `?version=9999`), `stats`, `index/list`, `index/{n}/stats`,
+`insert?branch=`.
+
+Not addressed (14), by severity as reported:
+
+| Severity | Door | Parameter |
+| --- | --- | --- |
+| read-from-wrong-target | `POST /v1/table/{id}/publish` → control event `table_published` | `to_version` — the event carries the wrong version |
+| read-from-wrong-target | `POST /train` (medallion producer) | `features[].dataset` — the `$n` form is not resolved |
+| read-from-wrong-target | `POST /v1/table/{id}/version/list` | `page_token` |
+| read-from-wrong-target | `GET /api/search` (search :8102) | `dataset` |
+| silently-weaker | `POST /v1/namespace/{id}/create`, `POST /v1/table/{id}/register` | `mode` — 409 whatever the mode |
+| silently-weaker | `GET /movers/{mover}/stages/{instance_id}` and its POST | `mover` + `instance_id` — the wrong mover answers |
+| silently-weaker | `POST /produce` | the governed-tier claim in `settings` |
+| silently-weaker | `GET /api/search` | `mode` |
+| silently-weaker | `GET /projects/{project_id}/tasks` (annotator, out of scope) | `limit`, `cursor` |
+| cosmetic | `POST /v1/table/{id}/tags/create` | `branch` |
+| cosmetic | `POST /v1/table/{id}/branches/create` | `from_branch`, `from_version` |
+| cosmetic | `POST /v1/table/{id}/branches/delete` | `name` |
+
+The same session also re-learned two things worth keeping: `version/list` takes `branch` as a
+**query** parameter and was never broken — a probe that sent it in the body produced a false
+"defect" and a fix that was reverted; and upstream honours `branch` **per operation**
+(`describe_table_version` and `batch_delete_table_versions` do, `count_table_rows` did not), so no
+static rule can stand in for driving each door.

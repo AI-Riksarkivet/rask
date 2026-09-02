@@ -86,7 +86,7 @@ _ANSWERED: dict[str, str] = {
     "api/v1/endpoints/versions.py::create_table_version": (
         "UNDRIVEN, and recorded as such rather than assumed safe. Driving 2026-08-31 got 422 on the "
         "request shape before reaching any branch behaviour, so nothing is known about it. This entry "
-        "is a debt, not a clearance — it is in `open_backlog.md` under the branch sweep."
+        "is a debt, not a clearance — it is in `open_lakehouse_diff_left.md` §P."
     ),
 }
 

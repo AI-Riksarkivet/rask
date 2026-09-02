@@ -994,7 +994,7 @@ def get_table_stats(id: str, ns: NamespaceDep, settings: SettingsDep, branch: st
     Refused rather than served because the response cannot be assembled honestly from a branch handle:
     ``FragmentStats.lengths`` and the per-index ``status``/``size_bytes`` are not what
     ``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in
-    miniature. Serving it properly is named in `open_backlog.md`.
+    miniature. Serving it properly is named in `open_lakehouse_diff_left.md` §O1.
     """
     req = GetTableStatsRequest(id=parse_identifier(id, settings.delimiter), branch=branch)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
