@@ -333,10 +333,23 @@ nor a body cap, rate limit, access line or coded 404/502 — those stand.
 token bucket per subject/IP, `RequestIDMiddleware`, strip inbound `X-Forwarded-*` and inject at the edge,
 one structured access line per request, problem+json with `code` for 404/413/429/502.
 
-### D4 · Compute's prune route does not fail closed; Serve proxy path unbounded
-**Status 2026-09-02 — both stand at HEAD.** `services/compute` never calls
-`assert_app_token_configured` (its five siblings do); `ray_kit.dashboard.proxy` builds
-`f"{dashboard_url}/{path.lstrip('/')}"` and compute's `_canonical` only restores a trailing slash.
+### D4 · Compute's prune route does not fail closed; Serve proxy path unbounded — **DONE 2026-09-02, verified live**
+**Status.** Both halves were worse than written and both are closed (`a95ca7e5`). Measured on the
+deployed pod before the fix: the Dapr SIDECAR held `APP_API_TOKEN` and stamped every delivery while
+the APP container held none — the chart rendered it only for `daprIngest`/`lanceWriter` services —
+so `require_dapr_token` compared each delivery against an empty string and the prune route was open
+to any pod in the namespace. Now: compute's lifespan calls `assert_app_token_configured`, compute
+carries `daprIngest: true`, and `test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one`
+turned RED on the code change alone and green on the values change — the two halves cannot drift
+apart again. `ray_kit.dashboard.proxy` refuses any empty, `.`, `..` or dot-decoding segment with
+400 before a URL is built (reproduced offline first: `%2e%2e` was decoded and forwarded as
+`api/serve/../v0/logs/file/`). Driven on the deployed estate after the roll (image `d4-205851`,
+release rev 90): app container `APP_API_TOKEN` set, boot `startup_complete`, unsigned
+`POST /compute-prune-jobs-cron` → **403**, wrong token → 403, correctly signed → 200, and the
+encoded traversal now dies at authentication (401) before the proxy is reached.
+**Release note.** `helm upgrade --wait` timed out at the 9 min I gave it (`make k3s-up` allows 20)
+and left rev 90 marked `failed`; every release resource is ready and a `failed` (not `pending-*`)
+release does not block the next upgrade, which will clear it.
 **Where.** `compute/.../pruner.py:43-67`, `proxy.py:53`, `ray_kit/dashboard.py:674`. **Closes it.**
 `assert_app_token_configured` in compute's lifespan; reject dot-segments in `_canonical`.
 
@@ -645,9 +658,11 @@ section above point at it rather than repeat it.
 
 ### O3 · Blocked on the owner
 
-`dedicatedServiceCredentials: false` — every mover holds `owner` on every warehouse, and the control
-that bounds it (`LANCE_PRIVILEGED_SUBJECTS`) is deliberately unrendered. A posture, not a defect;
-F2·3 is the same question from the zero-trust side.
+`dedicatedServiceCredentials` — the CHART DEFAULT is `false` (`values.yaml:807`), under which every
+mover holds `owner` on every warehouse and the bounding control (`LANCE_PRIVILEGED_SUBJECTS`) is
+unrendered. **This estate's release sets it `true`** (verified 2026-09-02: the live catalog renders
+`LANCE_PRIVILEGED_SUBJECTS` with the five service subjects), so the question is the DEFAULT posture a
+fresh install ships with, not this estate's. F2·3 is the same question from the zero-trust side.
 
 ### O4 · Bootstrap on a fresh machine is NOT chart-complete
 
