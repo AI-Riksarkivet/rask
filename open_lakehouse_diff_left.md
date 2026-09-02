@@ -480,7 +480,7 @@ different scheme logic. **Closes it.** B3, R10, one `s3_client`, delete the dead
 
 ### I6 · Untested seams
 `objectfs.py`, `lakehouse/blobs.py`, `lancekit/store.py`, `lancekit/reader.py` REST path, `audit.py`,
-`middleware.py`; ratch's ingest/materialize/indexing/search/jobs; `submit_or_reattach`'s delete branch.
+`middleware.py`; `submit_or_reattach`'s delete branch.
 
 ---
 
