@@ -40,19 +40,22 @@ def test_an_unknown_code_still_defaults_to_500() -> None:
     assert status_for(9999) == 500
 
 
-def test_a_501_keeps_its_message_because_it_is_a_capability_answer() -> None:
-    """A 501's message names an operation and leaks nothing — it is the one thing that tells the caller to
+def test_an_unsupported_answer_keeps_its_message_because_it_is_a_capability_answer() -> None:
+    """An Unsupported message names an operation and leaks nothing — it is the one thing that tells the caller to
     stop asking. The blanket ``>= 500`` redaction replaced it with "Internal Server
     Error", so a user pressing the lakehouse's backfill button was told the server had broken (#101)."""
     status, body = problem_detail(UnsupportedOperationError("alter_table_backfill_columns not implemented"))
-    assert status == 501
+    assert (
+        status == 406
+    )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
     assert body["detail"] == "alter_table_backfill_columns not implemented"
     assert body["error"] == body["detail"]  # the spec-0.9 twin field carries the same text
 
 
 def test_every_other_5xx_is_still_redacted() -> None:
-    """The negative twin, and the reason the exemption is a SET rather than a ``!= 501``: a genuine fault's
-    message carries paths, DSNs and driver text. Exempting 501 must not open the class."""
+    """The negative twin. Unsupported is 4xx since Q3, so its detail survives by the ordinary 4xx rule and
+    needs no exemption at all — but a genuine 5xx fault's message carries paths, DSNs and driver text,
+    and that redaction is what this pins."""
     for exc in (InternalError("psycopg: connection to 10.0.0.4:5432 failed"), ServiceUnavailableError("s3://rask-work unreachable")):
         _, body = problem_detail(exc)
         assert body["detail"] == "Internal Server Error", body

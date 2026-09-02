@@ -68,6 +68,6 @@ def test_full_lifecycle(base: str) -> None:
     assert requests.post(f"{base}/v1/namespace/{ns}/drop").status_code == 200
 
 
-def test_unsupported_is_501(base: str) -> None:
+def test_unsupported_is_406(base: str) -> None:
     resp = requests.post(f"{base}/v1/materialized_view/x$mv/refresh", json={})
-    assert resp.status_code == 501
+    assert resp.status_code == 406

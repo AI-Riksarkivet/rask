@@ -285,18 +285,20 @@ def test_domain_conflict_maps_to_409(client: TestClient, fake_ns: MagicMock) -> 
     assert client.post("/v1/table/db$t/declare", json={}).status_code == 409
 
 
-def test_backend_stub_message_maps_to_501(client: TestClient, fake_ns: MagicMock) -> None:
-    # native.call laundering: a backend that stubs an op with "not implemented" surfaces as 501 (spec
+def test_backend_stub_message_maps_to_unsupported(client: TestClient, fake_ns: MagicMock) -> None:
+    # native.call laundering: a backend that stubs an op with "not implemented" surfaces as 406 (spec
     # "unsupported"), not a 500. rename_table is now implemented in-process (#5b), so register_table — a
     # still-native-delegated op — stands in for a genuinely-unwired backend op.
     fake_ns.register_table.side_effect = RuntimeError("register_table not implemented")
     resp = client.post("/v1/table/db$t/register", json={"location": "s3://b/db$t"})
-    assert resp.status_code == 501
-    assert resp.json()["status"] == 501
+    assert (
+        resp.status_code == 406
+    )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
+    assert resp.json()["status"] == 406
 
 
 def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatch) -> None:
-    # Branches are now backed in-process via pylance `ds.branches` (was a native 501).
+    # Branches are now backed in-process via pylance `ds.branches` (was a native Unsupported).
     dataset = MagicMock()
     dataset.branches.list.return_value = {"exp": {"parent_branch": None, "parent_version": 2, "create_at": 1, "manifest_size": 9}}
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
@@ -1034,11 +1036,13 @@ def test_project_policies_list_reports_an_unreadable_binding_instead_of_narrowin
 
 
 def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
-    # CONTRACT (#51): an auth-off stack has no grants to review — answer 501 honestly instead of an
-    # empty grant list that would read as "nobody has access".
+    # CONTRACT (#51): an auth-off stack has no grants to review — answer Unsupported honestly instead
+    # of an empty grant list that would read as "nobody has access".
     resp = client.post("/v1/table/db1$users/access/list")
-    # The problem handler masks 5xx details, so only the status is visible to the client.
-    assert resp.status_code == 501
+    # 406 since Q3 (2026-09-02) — the spec's status for Unsupported. The detail now survives too: it is
+    # a 4xx, so the 5xx redaction that used to mask it no longer applies, and the caller is told which
+    # capability is off rather than only that something is.
+    assert resp.status_code == 406
 
 
 def test_maintenance_policy_rejects_an_empty_policy(client: TestClient, fake_ns: MagicMock) -> None:

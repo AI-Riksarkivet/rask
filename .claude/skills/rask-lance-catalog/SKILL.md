@@ -52,7 +52,7 @@ bodies** (`application/problem+json`).
 (`InvalidInputError`, `NamespaceNotFoundError`, …) and lets
 `service_kit/lakehouse/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
-`PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → 501, `Throttling` → 429).
+`PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → **406** (the spec's own status; Q3, 2026-09-02), `Throttling` → 429).
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
 ships. `tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
 spec-added code fails a test instead of a client.

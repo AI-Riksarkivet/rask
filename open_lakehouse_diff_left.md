@@ -157,8 +157,16 @@ server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding
 `canonical_object_id`.
 
 ### A5 · Error bodies without `code`
-**Status 2026-09-02.** Stands — `ns_errors.py:29` still maps `UNSUPPORTED → 501` and the
-`RequestValidationError` handler still answers a code-less 422.
+**MOSTLY DONE 2026-09-02.** Two halves landed. `f1ee42d3`: FastAPI's own 404/405 went out as
+`{"detail": ...}` with no `code`, so the reference client reported `InternalError 18` — a
+`StarletteHTTPException` handler now stamps `Unsupported` (the honest code for "this backend does
+not serve that operation"), with a status→code fallback for the statuses the spec does have a code
+for, registered BELOW the domain handler so a `TableNotFound` still answers code 4. And Q3:
+`UNSUPPORTED` is **406**, the spec's own status and the one Lance's reference server uses; ten
+assertions and four prose sites that pinned 501 were rewritten. The 422 and the generic 500 were
+already coded — the register was stale on those. **Remaining:** the tag/branch dataplane failures
+that surface as unmapped 500s (codes 8/9/11/22/23 unreachable), and column/data ops never minting
+14/20.
 **What.** 422, generic 500, FastAPI 404/405, maintenance 503, 413, 429 and draining 503 all collapse to
 `InternalError 18` in the client; tag/branch failures are unmapped 500s (codes 8/9/11/22/23 unreachable);
 column/data ops never mint 14/20; UNSUPPORTED answers 501 where the spec and Lance's reference server

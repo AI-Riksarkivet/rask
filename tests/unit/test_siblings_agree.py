@@ -197,7 +197,7 @@ def test_a_route_with_an_UNTYPED_body_still_reads_its_branch() -> None:
 
 #: Source markers proving a door DECIDED about the branch instead of dropping it.
 #:
-#: Refusing is a legitimate answer, and the estate uses two shapes of it: the shared 501
+#: Refusing is a legitimate answer, and the estate uses two shapes of it: the shared 406
 #: (`refuse_a_branch_this_door_cannot_honour`, for doors whose option surface is too large to serve
 #: faithfully — `query`, the index builders, `stats`) and `describe`'s own 400, which names the branch
 #: operations instead. A door that refuses cannot write to main under a branch's name, which is the

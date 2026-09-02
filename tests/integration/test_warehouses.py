@@ -2,7 +2,7 @@
 
 Reuses the shared ``client`` fixture (mocked namespace backend). ``control_root`` points at a LOCAL temp
 dir so the registry round-trips on the local FS with no object storage. Covers: create → list → get
-(feature on, FGA off); the 501 when the feature is disabled; and the admin gate (FGA on) denying a
+(feature on, FGA off); the Unsupported answer when the feature is disabled; and the admin gate (FGA on) denying a
 non-project-admin with 403.
 """
 
@@ -167,10 +167,12 @@ def test_invalid_id_rejected_400(client: TestClient, tmp_path: Any, monkeypatch:
     assert client.post("/v1/warehouses", json={"id": "Bad_Name", "project": "acme"}).status_code == 400
 
 
-def test_disabled_returns_501(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_disabled_is_unsupported(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, enabled=False)
     _mk_projects(client, "acme")
-    assert client.post("/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 501
+    assert (
+        client.post("/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 406
+    )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
 
 
 def test_recreate_does_not_reactivate_a_deactivated_warehouse(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

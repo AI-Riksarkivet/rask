@@ -103,13 +103,13 @@ def test_list_table_indices_refuses_a_body_branch(client: TestClient, fake_ns: M
     """THE REOPENED HOLE. The 501 refusal was wired to the query channel only."""
     fake_ns.list_table_indices.return_value = ListTableIndicesResponse(indexes=[])
     resp = client.post("/v1/table/db$t/index/list", json={"branch": "work"})
-    assert resp.status_code == 501, f"a branch in the BODY was answered {resp.status_code} from main; the query-channel refusal never fired"
+    assert resp.status_code == 406, f"a branch in the BODY was answered {resp.status_code} from main; the query-channel refusal never fired"
 
 
 def test_index_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table_index_stats.return_value = DescribeTableIndexStatsResponse(num_indexed_rows=0, num_unindexed_rows=0)
     resp = client.post("/v1/table/db$t/index/i1/stats", json={"branch": "work"})
-    assert resp.status_code == 501, f"{resp.status_code}: {resp.text[:160]}"
+    assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
 def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:
@@ -120,7 +120,7 @@ def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: Magi
         fragment_stats=FragmentStats(num_fragments=0, num_small_fragments=0, lengths=FragmentSummary(min=0, max=0, mean=0, p25=0, p50=0, p75=0, p99=0)),
     )
     resp = client.post("/v1/table/db$t/stats", json={"branch": "work"})
-    assert resp.status_code == 501, f"{resp.status_code}: {resp.text[:160]}"
+    assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
 def test_deregister_table_reconciles_a_body_id(client: TestClient, fake_ns: MagicMock) -> None:

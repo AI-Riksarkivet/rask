@@ -3,7 +3,7 @@
 The check (`/access/check`) and mutate (`/access/grant|revoke`) doors guard the body's ``relation``
 against the compiled model, exactly as the estate-admin door does (``access_admin.py`` raises
 ``InvalidInputError`` → 400). The two per-object doors raised ``UnsupportedOperationError`` for the
-same class of input, which the spec taxonomy maps to HTTP **501** (``ns_errors.py``) — a
+same class of input, which the spec taxonomy maps to HTTP **406** (``ns_errors.py``) — a
 "server not implemented" answer to a caller's typo, and a different spec code than the sibling
 surface gives the identical mistake. Both doors must answer 400.
 
@@ -43,7 +43,7 @@ def _token() -> IDToken:
 
 
 def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``access/check`` with a relation the model does not define answers InvalidInput (400), not 501."""
+    """``access/check`` with a relation the model does not define answers InvalidInput (400), not 406."""
     monkeypatch.setattr(access, "_can_relations", lambda fga_type: ("can_get_metadata", "can_read_data"))
     body = access.AccessCheckRequest(user="gina", relation="not_a_real_relation")
     with pytest.raises(InvalidInputError) as exc:
@@ -60,7 +60,7 @@ def test_grant_with_an_unknown_rung_is_a_400(monkeypatch: pytest.MonkeyPatch) ->
     assert status_for(int(exc.value.code)) == 400
 
 
-def test_the_auth_off_answer_stays_a_501() -> None:
+def test_the_auth_off_answer_stays_unsupported() -> None:
     """The capability statement ("this stack runs auth-off") is genuinely UNSUPPORTED — it must NOT be
     swept into 400 by the bad-relation fix: the caller's request is well-formed, the deployment lacks
     the feature."""
@@ -68,4 +68,6 @@ def test_the_auth_off_answer_stays_a_501() -> None:
     body = access.AccessCheckRequest(user="gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
         asyncio.run(access._access_check(_client(), settings, _token(), "table", "db1$users", body))
-    assert status_for(int(getattr(exc.value, "code", ErrorCode.UNSUPPORTED))) == 501
+    assert (
+        status_for(int(getattr(exc.value, "code", ErrorCode.UNSUPPORTED))) == 406
+    )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.

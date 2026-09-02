@@ -27,7 +27,16 @@ if TYPE_CHECKING:
 __all__ = ["PROBLEM_JSON", "install_problem_handlers", "problem_body", "problem_detail", "status_for"]
 
 _STATUS: dict[ErrorCode, int] = {
-    ErrorCode.UNSUPPORTED: 501,
+    # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status
+    # 406 ("Not Acceptable / Unsupported Operation") on every op that lists it, and Lance's own
+    # reference server maps `ErrorCode::Unsupported` to NOT_ACCEPTABLE. Owner decision Q3, 2026-09-02.
+    #
+    # A generated client parses either, because it dispatches on `code` — but a spec-verbatim server
+    # answers 406, and the status matters to everything that is NOT that client: a 501 is retried by
+    # nothing and alerted on by most things, while 406 says plainly that the request asked for
+    # something this backend does not serve. It also stops an unsupported op being counted as a
+    # server fault in the RED metrics.
+    ErrorCode.UNSUPPORTED: 406,
     ErrorCode.NAMESPACE_NOT_FOUND: 404,
     ErrorCode.NAMESPACE_ALREADY_EXISTS: 409,
     ErrorCode.NAMESPACE_NOT_EMPTY: 409,
@@ -89,7 +98,11 @@ def as_unsupported_if_stub(exc: Exception) -> Exception:
 #: stop asking. Under the blanket ``>= 500`` rule it was replaced with "Internal Server Error", so a user who
 #: pressed a button the UI ships (backfill) read that the server had broken rather than that the backend does
 #: not implement the op (#101). Every other 5xx stays redacted: those ARE faults, and their text leaks.
-_UNREDACTED_5XX = frozenset({501})
+#: EMPTY since Q3 moved `Unsupported` from 501 to 406 (2026-09-02), and kept rather than deleted: the
+#: rule it encodes — a capability answer is not a fault and its detail must survive — is still the one
+#: any future 5xx-mapped capability error would need. `Unsupported` no longer needs it because 4xx
+#: details are never redacted.
+_UNREDACTED_5XX: frozenset[int] = frozenset()
 
 
 def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
@@ -146,10 +159,13 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
     @app.exception_handler(LanceNamespaceError)
     async def handle_domain_error(request: Request, exc: LanceNamespaceError) -> JSONResponse:
         status, body = problem_detail(exc)
-        # Same split as the redaction: a 501 is the backend answering "I don't do that", so it gets a plain
-        # info line. A traceback at ERROR is for faults — spending one on a capability answer is what makes
-        # an unsupported op look like an outage on the dashboard.
-        if status in _UNREDACTED_5XX:
+        # Same split as the redaction: Unsupported is the backend answering "I don't do that", so it gets
+        # a plain info line. A traceback at ERROR is for faults — spending one on a capability answer is
+        # what makes an unsupported op look like an outage on the dashboard.
+        if status == status_for(ErrorCode.UNSUPPORTED):
+            # A capability answer, not a fault: an info line, never a traceback. Keyed on the mapped
+            # status rather than a literal so it follows the map (it was `status in _UNREDACTED_5XX`,
+            # which stopped firing the moment Q3 moved that status out of the 5xx range).
             log.info("unsupported_operation", extra={"method": request.method, "path": request.url.path, "status": status})
         elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})

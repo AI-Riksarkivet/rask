@@ -554,7 +554,7 @@ def test_a_read_door_that_cannot_scope_to_a_branch_refuses_instead_of_answering(
     `/query` returned three rows for `branch=work` AND three for a branch that had never been created
     — main's answer, twice, under the caller's branch name.
 
-    501 `Unsupported` is the fix at this door rather than a deferral of one. The defect was never
+    406 `Unsupported` is the fix at this door rather than a deferral of one. The defect was never
     "branch queries are missing"; it was that the parameter is accepted and disregarded, so a caller
     staging work on a branch silently reads main. Saying "this backend does not do that" is a complete
     and honest answer. Serving it properly means re-deriving vector search, full-text search, prefilter,
@@ -573,8 +573,8 @@ def test_a_read_door_that_cannot_scope_to_a_branch_refuses_instead_of_answering(
     search: dict[str, Any] = {"vector": {"single_vector": [1.0, 0.0]}, "k": 10}
     body |= {"query": search} if door == "explain_plan" else search
     response = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/{door}", json=body, headers=_auth(), timeout=60)
-    assert response.status_code == 501, (
-        f"/{door} answered a branch-scoped read with {response.status_code} instead of 501 Unsupported: "
+    assert response.status_code == 406, (
+        f"/{door} answered a branch-scoped read with {response.status_code} instead of 406 Unsupported: "
         f"{response.text[:200]}. Returning main's rows under the caller's branch name is worse than not "
         "supporting branches at all, because nothing in the response says which dataset was read."
     )
@@ -745,7 +745,7 @@ def test_a_branch_scoped_index_build_does_not_land_on_main(estate: Estate) -> No
     MAIN advanced a version and took the index, and the branch got none. An index on the wrong dataset
     is not inert — it changes which plans the engine picks for every later reader of main.
 
-    501 rather than served, because `CreateTableIndexRequest` carries a whole full-text option surface
+    406 rather than served, because `CreateTableIndexRequest` carries a whole full-text option surface
     (`base_tokenizer`, `language`, `stem`, `ascii_folding`, `remove_stop_words`, `with_position`,
     `max_token_length`, `lower_case`) plus vector parameters, and building an index with a DEFAULT
     where the caller asked for a setting is the same quiet wrongness as building it on the wrong table.
@@ -763,7 +763,7 @@ def test_a_branch_scoped_index_build_does_not_land_on_main(estate: Estate) -> No
             headers=_auth(),
             timeout=120,
         )
-        assert response.status_code == 501, f"/{door} accepted a branch-scoped build with {response.status_code}: {response.text[:200]}"
+        assert response.status_code == 406, f"/{door} accepted a branch-scoped build with {response.status_code}: {response.text[:200]}"
 
     assert _open_main(uri).version == before, "MAIN advanced a version for an index build that named a branch"
     assert not _open_main(uri).list_indices(), "MAIN took an index from a build that named a branch"
@@ -792,8 +792,8 @@ def test_a_branch_nested_in_an_explain_query_is_refused_like_the_outer_one(estat
         headers=_auth(),
         timeout=60,
     )
-    assert outer.status_code == 501, f"top-level branch: {outer.status_code} {outer.text[:150]}"
-    assert nested.status_code == 501, (
+    assert outer.status_code == 406, f"top-level branch: {outer.status_code} {outer.text[:150]}"
+    assert nested.status_code == 406, (
         f"a branch nested inside `query` answered {nested.status_code} — the outer channel is guarded and "
         f"the inner one is not, so the door serves main's plan under a branch name: {nested.text[:150]}"
     )
@@ -828,7 +828,7 @@ def test_a_read_door_that_never_offered_a_branch_now_refuses_one(estate: Estate,
     estate.create(name, _rowed(("a", "one"), ("b", "two")))
     estate.branch(name, "work")
     response = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/{door}?{query}", headers=_auth(), timeout=60)
-    assert response.status_code == 501, f"/{door} answered a branch-scoped read with {response.status_code} instead of 501: {response.text[:200]}"
+    assert response.status_code == 406, f"/{door} answered a branch-scoped read with {response.status_code} instead of 406: {response.text[:200]}"
 
 
 def test_describe_refuses_a_branch_on_both_channels_and_an_impossible_version(estate: Estate) -> None:

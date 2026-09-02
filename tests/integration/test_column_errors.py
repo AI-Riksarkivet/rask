@@ -142,13 +142,15 @@ def test_a_valid_column_op_still_succeeds(table: TestClient) -> None:
     assert r.json()["version"] == 2, r.text
 
 
-def test_backfill_501_tells_the_caller_what_is_unsupported(table: TestClient) -> None:
-    """``backfill_columns`` is a genuine native stub, and 501 is the HONEST answer — but ``problem_detail``
+def test_backfill_tells_the_caller_what_is_unsupported(table: TestClient) -> None:
+    """``backfill_columns`` is a genuine native stub, and Unsupported is the HONEST answer — but ``problem_detail``
     redacted every ``>= 500`` detail, so the one sentence the caller needs ("this backend does not implement
     it") was replaced with "Internal Server Error". The lakehouse ships a backfill button, so a user pressed
-    it and was told the server had broken. 501 names an operation and leaks nothing; it is not redacted."""
+    it and was told the server had broken. It names an operation and leaks nothing; it is not redacted.
+    406 since Q3 (2026-09-02) — the spec's status for Unsupported, which also stops a capability answer
+    being counted as a server fault in the RED metrics."""
     r = table.post("/v1/table/c1$t/backfill_column", json={"column": "id"})
-    assert r.status_code == 501, r.text
+    assert r.status_code == 406, r.text
     body = _problem(r)
     assert body["code"] == 0, body  # UNSUPPORTED
     detail = str(body["detail"])
