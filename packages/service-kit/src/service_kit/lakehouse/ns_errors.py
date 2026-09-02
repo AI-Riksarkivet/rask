@@ -10,6 +10,7 @@ unsupported operations surface as a spec-correct 501.
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 from lance_namespace import ErrorCode, LanceNamespaceError, UnsupportedOperationError
@@ -113,6 +114,23 @@ def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
     return status, body
 
 
+#: The spec code to stamp on a status the framework produced, where the spec HAS one for it.
+#:
+#: The inverse of the `ErrorCode -> status` map above, and deliberately partial: a status with no
+#: domain meaning (404 on an unknown route, 405, 409 from app code) falls through to `Unsupported`,
+#: which is the truthful answer for "this backend does not do that". Guessing `TableNotFound` for a
+#: routing 404 would tell a client a table is missing when the OPERATION is.
+_STATUS_CODE_FALLBACK: dict[int, ErrorCode] = {
+    400: ErrorCode.INVALID_INPUT,
+    401: ErrorCode.UNAUTHENTICATED,
+    403: ErrorCode.PERMISSION_DENIED,
+    429: ErrorCode.THROTTLING,
+    500: ErrorCode.INTERNAL,
+    501: ErrorCode.UNSUPPORTED,
+    503: ErrorCode.SERVICE_UNAVAILABLE,
+}
+
+
 def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
     """Register the three problem+json exception handlers every service app shares.
 
@@ -123,6 +141,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
     from fastapi import Request
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
     @app.exception_handler(LanceNamespaceError)
     async def handle_domain_error(request: Request, exc: LanceNamespaceError) -> JSONResponse:
@@ -148,6 +167,32 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             | {"errors": [{"field": ".".join(str(p) for p in e["loc"]), "message": e["msg"], "type": e["type"]} for e in exc.errors()]},
             media_type=PROBLEM_JSON,
         )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_framework_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        """FastAPI's OWN 404/405 (and any explicit `HTTPException`), given the spec's `code`.
+
+        Every error body on a `/v1` route is parsed by a generated Lance client whose `ErrorResponse`
+        REQUIRES `code`. The three handlers above cover domain errors, validation and crashes; routing
+        failures went out as FastAPI's default `{"detail": "..."}`, which the reference client cannot
+        parse, so it reported `InternalError 18` — the server is told to be broken when in truth it
+        does not serve that route. A3's GET form of `count_rows` is exactly how that surfaced.
+
+        `Unsupported` is the honest default: neither "no such route" nor "wrong method" is a domain
+        condition, and code 0 means precisely "this backend does not do that operation". A status the
+        spec DOES have a code for keeps it, so an explicit `HTTPException(401)` still dispatches as
+        `Unauthenticated`. The exception's own `detail` survives — that is what an operator reads.
+
+        Registered BELOW the domain handler, which is what keeps a `TableNotFound` answering code 4
+        rather than being swallowed into a generic 404 by this catch-all.
+        """
+        code = _STATUS_CODE_FALLBACK.get(exc.status_code, ErrorCode.UNSUPPORTED)
+        detail = exc.detail if isinstance(exc.detail, str) else HTTPStatus(exc.status_code).phrase
+        phrase = HTTPStatus(exc.status_code).phrase
+        # An explicit slug, because the default derives the `type` URI from the title and the phrases
+        # carry spaces — `.../problems/method not allowed` is not a URI a client can key on.
+        body = problem_body(code, status=exc.status_code, title=phrase, detail=detail, slug=phrase.lower().replace(" ", "-"))
+        return JSONResponse(status_code=exc.status_code, content=body, headers=dict(exc.headers or {}), media_type=PROBLEM_JSON)
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
