@@ -11732,6 +11732,24 @@
         "operationId": "check_access_v1_access_check_post",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -11828,6 +11846,24 @@
         "description": "WHY a relation resolves \u2014 the userset tree, optionally followed through the cascade.\n\nCheck answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,\nso a permission derived over three objects is indistinguishable from a direct grant \u2014 and they have\nvery different blast radii. This returns the derivation itself, keeping OpenFGA's own operators\n(``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is\nfrequently the whole explanation for a surprising grant.\n\n``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited\nround trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and\none response.",
         "operationId": "expand_access_v1_access_expand_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -11926,6 +11962,24 @@
         "operationId": "list_access_objects_v1_access_list_objects_post",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -12022,6 +12076,24 @@
         "description": "\"Who can do this?\" \u2014 every subject holding ``relation`` on ``object``, effective access included.\n\nThe inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in\nthe hierarchy can revoke access for many principals at once, and \"are you sure?\" is not an answer to\n\"how many\". Subjects come back fully qualified so a userset is never mistaken for a user.",
         "operationId": "list_access_users_v1_access_list_users_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -12120,6 +12192,24 @@
         "operationId": "get_access_model_v1_access_model_get",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -12206,6 +12296,24 @@
         "description": "\"Would this grant do what I think?\" \u2014 a Check evaluated as if ``hypothetical`` existed.\n\nNothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the\nsimulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up\ncascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get\nwrong. The only way to find out today is to write the tuple and look \u2014 which on an authorization\nstore is a change you then have to remember to undo.\n\nReturns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant\nthat unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the\ncaller can distinguish \"this is what changes the answer\" from \"this grant is a no-op\" \u2014 and the\nsecond is the more common finding.\n\nEvery hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a\nderived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,\nand \u2014 more importantly \u2014 a hypothesis this API would refuse to write must not be simulatable, or\nthe answer describes a grant that cannot exist.",
         "operationId": "simulate_access_v1_access_simulate_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -12303,6 +12411,24 @@
         "description": "Delete ONE raw tuple (idempotent \u2014 an already-absent tuple is success), echoing the tuple removed.",
         "operationId": "delete_access_tuple_v1_access_tuples_delete",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -12489,6 +12615,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -12573,6 +12717,24 @@
         "description": "Write ONE raw tuple (idempotent \u2014 a duplicate write is success), echoing the tuple as stored.\n\nOnly a directly-assignable relation the compiled model defines on the object's type is accepted (a\nderived ``can_*`` action or an unknown type/relation is a 400) \u2014 the raw-tuple analog of the\nper-object grant surface's grantable-rung guard, without its table/namespace restriction.",
         "operationId": "write_access_tuple_v1_access_tuples_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -12684,6 +12846,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -12777,6 +12957,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -12886,6 +13084,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -12989,6 +13205,24 @@
         "description": "Describe the signed-in caller: verified claims, estate standing, and tenant memberships.\n\nAny verified token \u2192 200; anonymous \u2192 401. FGA off \u2192 ``estate_admin=true`` + ``projects=[]`` (dev\nparity). With FGA on, the lookups are display-only and DEGRADE per relation on an OpenFGA\noutage/brownout \u2014 this endpoint never 5xxes over authz-lookup health.",
         "operationId": "get_me_v1_me_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -13107,6 +13341,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -13203,6 +13455,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -13296,6 +13566,24 @@
             "schema": {
               "title": "Model",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -13437,6 +13725,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -13540,6 +13846,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -13649,6 +13973,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -13742,6 +14084,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -13841,6 +14201,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -13934,6 +14312,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -14040,6 +14436,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -14153,6 +14567,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -14289,6 +14721,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -14399,6 +14849,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -14545,6 +15013,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -14641,6 +15127,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -14734,6 +15238,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -14843,6 +15365,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -14939,6 +15479,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -15032,6 +15590,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -15141,6 +15717,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -15232,6 +15826,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -15383,6 +15995,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -15476,6 +16106,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -15579,6 +16227,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -15672,6 +16338,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -15772,6 +16456,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -15876,6 +16578,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -15985,6 +16705,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16081,6 +16819,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16174,6 +16930,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -16283,6 +17057,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16386,6 +17178,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -16495,6 +17305,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16592,6 +17420,24 @@
         "operationId": "list_projects_v1_projects_get",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16680,6 +17526,24 @@
         "description": "Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.\n\nThe gate is ``can_observe_events`` on the fixed root object \u2014 the estate-admin bar every whole-estate\nsurface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``\nforward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry\n(record written, tuple write failed) converges instead of erroring. The grant is audited and published\nlike any other ACL change, only when it was actually written.",
         "operationId": "create_project_v1_projects_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -16787,6 +17651,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16883,6 +17765,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -16976,6 +17876,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -17085,6 +18003,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -17176,6 +18112,24 @@
             "schema": {
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -17275,6 +18229,24 @@
               "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -17385,6 +18357,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -17479,6 +18469,24 @@
               "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -17579,6 +18587,24 @@
         "operationId": "list_stores_v1_stores_get",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -17663,6 +18689,24 @@
         "description": "Attach a bucket so it can be BROWSED. Registers only \u2014 reads nothing, ingests nothing.\n\nEstate-admin gated on ``can_observe_events`` against the root object: attaching names a host and a\nbucket the whole estate will then see, which is estate-wide disclosure and so takes the estate-wide\nprivilege \u2014 the same gate ``/v1/projects`` and ``/v1/events`` use.\n\nNames are unique across BOTH sources, and a declared store cannot be shadowed. The object browser\nresolves a store by NAME, so a duplicate would make which bucket you get depend on list order \u2014 the\nfailure would look like the wrong data rather than a bad registration.\n\nAttached stores are forced ``read_only``. A bucket someone attached to LOOK at is not a bucket the\ncascade may write to, and nothing here can know whether the caller's credentials should carry write\nauthority on another host.",
         "operationId": "attach_store_v1_stores_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -17761,6 +18805,24 @@
         "description": "The tier -> store view, DERIVED from the registry rather than transcribed.\n\nGated identically to ``list_stores`` \u2014 it is the same disclosure in a different shape, and gating\nonly the flat view would leave the grouped one as the way around it.\n\nEvery governed tier appears even when empty: a bronze row with nothing in it says \"no store\nbacks bronze here\", which is a fact worth showing. Roles outside the medallion (raw, derived,\nobservability) are grouped under their own names \u2014 raw is deliberately not a tier (R23).",
         "operationId": "stores_by_tier_v1_stores_tiers_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -17900,6 +18962,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -17986,6 +19066,24 @@
         "description": "Atomic multi-table commit \u2014 delegates to the native ``batch_commit_tables``.\n\nOWNERSHIP PARITY with ``/declare`` (audit 2026-07-12): a ``declare_table`` sub-op CREATES a table\n(``_authorize_batch`` gated it as create-on-parent), so the creator must be seeded owner + parent\nedge exactly like the dedicated route \u2014 without this, a batch-declared table had NO owner tuple\n(fail-closed asymmetry: the creator couldn't manage their own table at owner tier, and the\nreused-id revoke assumptions didn't hold). ``seed_ownership`` is a no-op with FGA off.\n\n#3-A: no ``{id}`` to route by \u2192 runs against the default root, so a ``declare_table`` for a\nwarehouse-bound namespace would create the table in the SHARED bucket. Reject that (use the per-table\nroutes) before touching storage.",
         "operationId": "batch_commit_tables_v1_table_batch_commit_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -18083,6 +19181,24 @@
         "description": "Atomically create version entries for multiple tables \u2014 delegates to the native\n``batch_create_table_versions`` (implemented by the 0.9 dir backend).\n\n#3-A: this batch route has no ``{id}`` to route by, so it runs against the default root \u2014 reject a body\nthat names a warehouse-bound namespace rather than writing its version metadata to the wrong bucket.",
         "operationId": "batch_create_table_versions_v1_table_version_batch_create_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -18187,6 +19303,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -18296,6 +19430,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -18402,6 +19554,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -18495,6 +19665,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -18594,6 +19782,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -18687,6 +19893,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -18793,6 +20017,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -18934,6 +20176,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -19072,6 +20332,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -19173,6 +20451,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -19319,6 +20615,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "Range",
             "required": false,
@@ -19445,6 +20759,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -19548,6 +20880,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -19691,6 +21041,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -19784,6 +21152,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -19913,7 +21299,7 @@
     "/v1/table/{id}/count_rows": {
       "get": {
         "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
-        "operationId": "count_table_rows_v1_table__id__count_rows_post",
+        "operationId": "count_table_rows_v1_table__id__count_rows_get",
         "parameters": [
           {
             "in": "path",
@@ -19922,6 +21308,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -20022,7 +21426,7 @@
       },
       "post": {
         "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
-        "operationId": "count_table_rows_v1_table__id__count_rows_post",
+        "operationId": "count_table_rows_v1_table__id__count_rows_get",
         "parameters": [
           {
             "in": "path",
@@ -20031,6 +21435,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -20223,6 +21645,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Lance-Run-Facets",
             "required": false,
@@ -20379,6 +21819,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -20514,6 +21972,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -20669,6 +22145,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -20762,6 +22256,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -20910,6 +22422,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -21055,6 +22585,24 @@
               "default": false,
               "title": "Force",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -21315,6 +22863,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -21448,6 +23014,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -21573,6 +23157,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -21714,6 +23316,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -21822,6 +23442,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -21938,6 +23576,24 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -22089,6 +23745,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -22208,6 +23882,24 @@
             "schema": {
               "title": "Index Name",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -22364,6 +24056,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -22509,6 +24219,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -22649,6 +24377,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -22755,6 +24501,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -22858,6 +24622,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -23144,6 +24926,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Lance-Run-Facets",
             "required": false,
@@ -23300,6 +25100,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -23396,6 +25214,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -23489,6 +25325,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -23598,6 +25452,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -23689,6 +25561,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -23795,6 +25685,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -23920,6 +25828,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -24021,6 +25947,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -24172,6 +26116,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -24310,6 +26272,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -24445,6 +26425,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -24602,6 +26600,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -24715,6 +26731,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -24821,6 +26855,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -24915,7 +26967,7 @@
     "/v1/table/{id}/tags/list": {
       "get": {
         "description": "List every tag on the table \u2014 wraps lance_namespace ListTableTags.",
-        "operationId": "list_table_tags_v1_table__id__tags_list_post",
+        "operationId": "list_table_tags_v1_table__id__tags_list_get",
         "parameters": [
           {
             "in": "path",
@@ -24924,6 +26976,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -25009,7 +27079,7 @@
       },
       "post": {
         "description": "List every tag on the table \u2014 wraps lance_namespace ListTableTags.",
-        "operationId": "list_table_tags_v1_table__id__tags_list_post",
+        "operationId": "list_table_tags_v1_table__id__tags_list_get",
         "parameters": [
           {
             "in": "path",
@@ -25018,6 +27088,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -25114,6 +27202,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -25223,6 +27329,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -25329,6 +27453,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -25429,6 +27571,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -25522,6 +27682,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -25663,6 +27841,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -25800,6 +27996,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -25902,6 +28116,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -26024,6 +28256,24 @@
                 }
               ],
               "title": "Version"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -26206,6 +28456,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -26299,6 +28567,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -26408,6 +28694,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -26512,6 +28816,24 @@
         "operationId": "delete_dock_layout_v1_user_state_dock_layout_delete",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -26589,6 +28911,24 @@
         "description": "The caller's dock workbench layouts, or ``exists: false`` if they have never saved one.",
         "operationId": "get_dock_layout_v1_user_state_dock_layout_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -26674,6 +29014,24 @@
         "description": "Replace the caller's dock layouts wholesale \u2014 the client owns which workbenches it keeps.",
         "operationId": "put_dock_layout_v1_user_state_dock_layout_put",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -26772,6 +29130,24 @@
         "operationId": "delete_dock_layout_library_v1_user_state_dock_layout_library_delete",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -26849,6 +29225,24 @@
         "description": "The caller's saved views, or ``exists: false`` if they have never saved one.",
         "operationId": "get_dock_layout_library_v1_user_state_dock_layout_library_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -26934,6 +29328,24 @@
         "description": "Replace the caller's saved views wholesale \u2014 the client owns which views it keeps.",
         "operationId": "put_dock_layout_library_v1_user_state_dock_layout_library_put",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -27032,6 +29444,24 @@
         "operationId": "delete_saved_views_v1_user_state_saved_views_delete",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -27109,6 +29539,24 @@
         "description": "The caller's named read-plane selections, in the order the client stored them.",
         "operationId": "get_saved_views_v1_user_state_saved_views_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -27194,6 +29642,24 @@
         "description": "Replace the caller's saved-view list wholesale \u2014 the client owns the ordering and the dedupe.",
         "operationId": "put_saved_views_v1_user_state_saved_views_put",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -27296,6 +29762,24 @@
         "operationId": "delete_workflow_graph_v1_user_state_workflow_graph_delete",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -27373,6 +29857,24 @@
         "description": "The caller's saved workflow canvas, or ``exists: false`` if they have never saved one.",
         "operationId": "get_workflow_graph_v1_user_state_workflow_graph_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -27458,6 +29960,24 @@
         "description": "Save the caller's workflow canvas, replacing whatever they had.",
         "operationId": "put_workflow_graph_v1_user_state_workflow_graph_put",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -27565,6 +30085,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -27661,6 +30199,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -27754,6 +30310,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -27854,6 +30428,24 @@
         "operationId": "list_warehouses_v1_warehouses_get",
         "parameters": [
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -27942,6 +30534,24 @@
         "description": "Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.\n\nOrder (fail-closed): the project must EXIST (``require_project_exists`` \u2014 404 naming\n``POST /v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so\nit runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the\nbucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``\nwith its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).\n\nThe estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at\n``POST /v1/projects``, which seeds the project's admin \u2014 so by the time this runs the project has\nadmins of its own and one door is enough.",
         "operationId": "create_warehouse_v1_warehouses_post",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -28039,6 +30649,24 @@
         "description": "Every binding the caller may see, from ONE ``list_bindings`` pass (#86).\n\n``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/\u2026`` and\n``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's\nwarehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires \u22653 chars with alphanumeric ends),\nwhich makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route\nin the estate and it is our own convention, borrowed from GitLab \u2014 the Lance spec's own root\nplaceholder is the delimiter, which is not available here.\n\nGoverned exactly like the warehouse listing it complements: with FGA on, filtered to the\nwarehouses the caller can ``can_get_metadata`` \u2014 a binding names a namespace AND the tenant\nbucket it lives in, so leaking one leaks another tenant's shape.",
         "operationId": "list_estate_bindings_v1_warehouses___bindings_get",
         "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -28166,6 +30794,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -28257,6 +30903,24 @@
             "schema": {
               "title": "Warehouse Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -28356,6 +31020,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -28449,6 +31131,24 @@
             "schema": {
               "title": "Warehouse Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {
@@ -28548,6 +31248,24 @@
             }
           },
           {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -28639,6 +31357,24 @@
             "schema": {
               "title": "Warehouse Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
             }
           },
           {

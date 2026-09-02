@@ -151,7 +151,14 @@ still worth filing: its bundled client and reference server disagree with its ow
 own bundled client and reference server use GET** (`lance` repo `rust/lance-namespace-impls/src/rest.rs`,
 `rest_adapter.rs`, at v10.0.0 and main). **Closes it.** Dual-mount both routes; file the upstream issue.
 
-### A4 · `delimiter` ignored on every route
+### A4 · `delimiter` ignored on every route — **HALF DONE 2026-09-02**
+**Status.** The silent half is closed: a `delimiter` this server does not use is now refused 400
+(coded 13, naming the server's own) by a ROUTER-level guard, so a client configured with `.` gets a
+message it can act on instead of a real table reported 404. Refusing rather than honouring is
+deliberate: honouring means threading the client's delimiter through `parse_identifier` AND
+`fga.canonical_object_id`, and deciding authorization against a differently-spelled object is a worse
+failure than the one being fixed. **Remaining:** the full form — honour it, with the FGA
+canonicalisation designed.
 **Where.** `core/identifiers.py:59-63`; 0 of 153 served ops declare it; the FGA gate splits with the
 server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding `parse_identifier` and
 `canonical_object_id`.

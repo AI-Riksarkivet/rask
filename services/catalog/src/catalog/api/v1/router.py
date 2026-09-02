@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from catalog.api.delimiter import DelimiterGuard
 from catalog.api.fga_deps import authorize
 from catalog.api.v1.endpoints import (
     access,
@@ -37,7 +38,12 @@ from catalog.api.v1.endpoints import (
 
 # Router-level authn + authz (via authorize, which composes the OIDC token):
 # a no-op when both are disabled, enforced per route when enabled.
-api_router = APIRouter(dependencies=[Depends(authorize)])
+#
+# `DelimiterGuard` rides here for the same reason `authorize` does: it must hold for every route,
+# including the next one added. The spec's `delimiter` was declared on 0 of 153 served operations, so
+# a client configured with a different one had every multi-segment identifier silently re-split with
+# the server's — see `catalog.api.delimiter` for why this refuses rather than honours.
+api_router = APIRouter(dependencies=[Depends(authorize), DelimiterGuard])
 for _module in (
     namespaces,
     tables,

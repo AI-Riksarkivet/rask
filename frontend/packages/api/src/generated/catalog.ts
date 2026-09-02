@@ -1861,7 +1861,7 @@ export interface paths {
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
          *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
-        get: operations["count_table_rows_v1_table__id__count_rows_post"];
+        get: operations["count_table_rows_v1_table__id__count_rows_get"];
         put?: never;
         /**
          * Count Table Rows
@@ -1871,7 +1871,7 @@ export interface paths {
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
          *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
-        post: operations["count_table_rows_v1_table__id__count_rows_post"];
+        post: operations["count_table_rows_v1_table__id__count_rows_get"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2741,13 +2741,13 @@ export interface paths {
          * List Table Tags
          * @description List every tag on the table — wraps lance_namespace ListTableTags.
          */
-        get: operations["list_table_tags_v1_table__id__tags_list_post"];
+        get: operations["list_table_tags_v1_table__id__tags_list_get"];
         put?: never;
         /**
          * List Table Tags
          * @description List every tag on the table — wraps lance_namespace ListTableTags.
          */
-        post: operations["list_table_tags_v1_table__id__tags_list_post"];
+        post: operations["list_table_tags_v1_table__id__tags_list_get"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8669,7 +8669,10 @@ export interface operations {
     };
     check_access_v1_access_check_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8706,7 +8709,10 @@ export interface operations {
     };
     expand_access_v1_access_expand_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8743,7 +8749,10 @@ export interface operations {
     };
     list_access_objects_v1_access_list_objects_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8780,7 +8789,10 @@ export interface operations {
     };
     list_access_users_v1_access_list_users_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8817,7 +8829,10 @@ export interface operations {
     };
     get_access_model_v1_access_model_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8850,7 +8865,10 @@ export interface operations {
     };
     simulate_access_v1_access_simulate_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8897,6 +8915,8 @@ export interface operations {
                 page_size?: number | null;
                 /** @description the previous page's continuation token */
                 continuation?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -8930,7 +8950,10 @@ export interface operations {
     };
     write_access_tuple_v1_access_tuples_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -8967,7 +8990,10 @@ export interface operations {
     };
     delete_access_tuple_v1_access_tuples_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9007,6 +9033,8 @@ export interface operations {
             query?: {
                 /** @description the last cursor the client saw (0 = baseline) */
                 since?: number;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -9040,7 +9068,10 @@ export interface operations {
     };
     create_materialized_view_v1_materialized_view__id__create_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9079,7 +9110,10 @@ export interface operations {
     };
     refresh_materialized_view_v1_materialized_view__id__refresh_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9118,7 +9152,10 @@ export interface operations {
     };
     get_me_v1_me_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9155,6 +9192,8 @@ export interface operations {
                 limit?: number;
                 /** @description Continue after this model name (the previous page's `page_token`). */
                 page_token?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -9188,7 +9227,10 @@ export interface operations {
     };
     describe_model_v1_model__model__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9223,7 +9265,10 @@ export interface operations {
     };
     promote_model_v1_model__model__promote_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -9264,7 +9309,10 @@ export interface operations {
     };
     check_namespace_access_v1_namespace__id__access_check_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9303,7 +9351,10 @@ export interface operations {
     };
     grant_namespace_access_v1_namespace__id__access_grant_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9342,7 +9393,10 @@ export interface operations {
     };
     graph_namespace_access_v1_namespace__id__access_graph_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9377,7 +9431,10 @@ export interface operations {
     };
     list_namespace_access_v1_namespace__id__access_list_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9412,7 +9469,10 @@ export interface operations {
     };
     my_namespace_permissions_v1_namespace__id__access_my_permissions_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9447,7 +9507,10 @@ export interface operations {
     };
     revoke_namespace_access_v1_namespace__id__access_revoke_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9486,7 +9549,10 @@ export interface operations {
     };
     create_namespace_v1_namespace__id__create_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9525,7 +9591,10 @@ export interface operations {
     };
     describe_namespace_v1_namespace__id__describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9567,6 +9636,8 @@ export interface operations {
             query?: {
                 force?: boolean;
                 purge?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -9606,7 +9677,10 @@ export interface operations {
     };
     namespace_exists_v1_namespace__id__exists_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9648,6 +9722,8 @@ export interface operations {
             query?: {
                 page_token?: string | null;
                 limit?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -9683,7 +9759,10 @@ export interface operations {
     };
     get_namespace_managed_access_v1_namespace__id__managed_access_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9718,7 +9797,10 @@ export interface operations {
     };
     set_namespace_managed_access_v1_namespace__id__managed_access_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9757,7 +9839,10 @@ export interface operations {
     };
     delete_namespace_policy_v1_namespace__id__policy_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9792,7 +9877,10 @@ export interface operations {
     };
     describe_namespace_policy_v1_namespace__id__policy_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9827,7 +9915,10 @@ export interface operations {
     };
     set_namespace_policy_v1_namespace__id__policy_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9866,7 +9957,10 @@ export interface operations {
     };
     get_namespace_protection_v1_namespace__id__protection_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9901,7 +9995,10 @@ export interface operations {
     };
     set_namespace_protection_v1_namespace__id__protection_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -9944,6 +10041,8 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
                 include_declared?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -9979,7 +10078,10 @@ export interface operations {
     };
     namespace_tasks_v1_namespace__id__tasks_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10014,7 +10116,10 @@ export interface operations {
     };
     undrop_namespace_v1_namespace__id__undrop_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10049,7 +10154,10 @@ export interface operations {
     };
     delete_gate_v1_project__id__gate_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10086,7 +10194,10 @@ export interface operations {
     };
     describe_gate_v1_project__id__gate_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10121,7 +10232,10 @@ export interface operations {
     };
     set_gate_v1_project__id__gate_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10160,7 +10274,10 @@ export interface operations {
     };
     delete_project_policy_v1_project__id__policy_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10195,7 +10312,10 @@ export interface operations {
     };
     describe_project_policy_v1_project__id__policy_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10230,7 +10350,10 @@ export interface operations {
     };
     set_project_policy_v1_project__id__policy_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10269,7 +10392,10 @@ export interface operations {
     };
     delete_transform_v1_project__id__transform_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10308,7 +10434,10 @@ export interface operations {
     };
     describe_transform_v1_project__id__transform_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10347,7 +10476,10 @@ export interface operations {
     };
     set_transform_v1_project__id__transform_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10386,7 +10518,10 @@ export interface operations {
     };
     list_projects_v1_projects_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10419,7 +10554,10 @@ export interface operations {
     };
     create_project_v1_projects_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10456,7 +10594,10 @@ export interface operations {
     };
     my_project_permissions_v1_projects__id__access_my_permissions_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10491,7 +10632,10 @@ export interface operations {
     };
     list_project_policies_v1_projects__id__policies_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10526,7 +10670,10 @@ export interface operations {
     };
     list_transforms_v1_projects__id__transforms_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10561,7 +10708,10 @@ export interface operations {
     };
     get_project_v1_projects__project_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10598,6 +10748,8 @@ export interface operations {
         parameters: {
             query?: {
                 force?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -10633,7 +10785,10 @@ export interface operations {
     };
     list_members_v1_projects__project_id__members_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10668,7 +10823,10 @@ export interface operations {
     };
     grant_member_v1_projects__project_id__members_put: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10707,7 +10865,10 @@ export interface operations {
     };
     revoke_member_v1_projects__project_id__members_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10746,7 +10907,10 @@ export interface operations {
     };
     list_stores_v1_stores_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10779,7 +10943,10 @@ export interface operations {
     };
     attach_store_v1_stores_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10816,7 +10983,10 @@ export interface operations {
     };
     stores_by_tier_v1_stores_tiers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10855,6 +11025,8 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
                 include_declared?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -10888,7 +11060,10 @@ export interface operations {
     };
     batch_commit_tables_v1_table_batch_commit_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10925,7 +11100,10 @@ export interface operations {
     };
     batch_create_table_versions_v1_table_version_batch_create_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -10962,7 +11140,10 @@ export interface operations {
     };
     check_table_access_v1_table__id__access_check_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11001,7 +11182,10 @@ export interface operations {
     };
     grant_table_access_v1_table__id__access_grant_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11040,7 +11224,10 @@ export interface operations {
     };
     graph_table_access_v1_table__id__access_graph_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11075,7 +11262,10 @@ export interface operations {
     };
     list_table_access_v1_table__id__access_list_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11110,7 +11300,10 @@ export interface operations {
     };
     my_table_permissions_v1_table__id__access_my_permissions_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11145,7 +11338,10 @@ export interface operations {
     };
     revoke_table_access_v1_table__id__access_revoke_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11184,7 +11380,10 @@ export interface operations {
     };
     add_columns_v1_table__id__add_columns_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11225,7 +11424,10 @@ export interface operations {
     };
     alter_columns_v1_table__id__alter_columns_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11266,7 +11468,10 @@ export interface operations {
     };
     analyze_table_query_plan_v1_table__id__analyze_plan_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11305,7 +11510,10 @@ export interface operations {
     };
     backfill_column_v1_table__id__backfill_column_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11348,6 +11556,8 @@ export interface operations {
                 column: string;
                 row: number;
                 version?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 Range?: string | null;
@@ -11385,7 +11595,10 @@ export interface operations {
     };
     create_table_branch_v1_table__id__branches_create_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11424,7 +11637,10 @@ export interface operations {
     };
     delete_table_branch_v1_table__id__branches_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11466,6 +11682,8 @@ export interface operations {
             query?: {
                 page_token?: string | null;
                 limit?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -11501,7 +11719,10 @@ export interface operations {
     };
     commit_fragments_v1_table__id__commit_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11540,9 +11761,12 @@ export interface operations {
             };
         };
     };
-    count_table_rows_v1_table__id__count_rows_post: {
+    count_table_rows_v1_table__id__count_rows_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11579,9 +11803,12 @@ export interface operations {
             };
         };
     };
-    count_table_rows_v1_table__id__count_rows_post: {
+    count_table_rows_v1_table__id__count_rows_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -11626,6 +11853,8 @@ export interface operations {
                 data_base?: string[];
                 source?: string | null;
                 source_version?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "X-Lance-Run-Facets"?: string | null;
@@ -11668,7 +11897,10 @@ export interface operations {
     };
     create_index_v1_table__id__create_index_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11709,7 +11941,10 @@ export interface operations {
     };
     create_scalar_index_v1_table__id__create_scalar_index_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11752,6 +11987,8 @@ export interface operations {
         parameters: {
             query?: {
                 tier?: "read" | "write";
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -11787,7 +12024,10 @@ export interface operations {
     };
     declare_table_v1_table__id__declare_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11828,7 +12068,10 @@ export interface operations {
     };
     delete_from_table_v1_table__id__delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -11871,6 +12114,8 @@ export interface operations {
         parameters: {
             query?: {
                 force?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -11920,6 +12165,8 @@ export interface operations {
                 tag?: string | null;
                 branch?: string | null;
                 vend_credentials?: boolean | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -11962,6 +12209,8 @@ export interface operations {
             query?: {
                 force?: boolean;
                 purge?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -11999,7 +12248,10 @@ export interface operations {
     };
     drop_columns_v1_table__id__drop_columns_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -12040,7 +12292,10 @@ export interface operations {
     };
     table_exists_v1_table__id__exists_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12079,7 +12334,10 @@ export interface operations {
     };
     explain_table_query_plan_v1_table__id__explain_plan_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12120,6 +12378,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -12161,6 +12421,8 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
                 branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -12200,7 +12462,10 @@ export interface operations {
     };
     drop_table_index_v1_table__id__index__index_name__drop_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -12240,6 +12505,8 @@ export interface operations {
         parameters: {
             query?: {
                 branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -12283,6 +12550,8 @@ export interface operations {
             query?: {
                 mode?: string | null;
                 branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -12324,7 +12593,10 @@ export interface operations {
     };
     compact_maintenance_v1_table__id__maintenance_compact_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12363,7 +12635,10 @@ export interface operations {
     };
     preview_maintenance_v1_table__id__maintenance_preview_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12402,7 +12677,10 @@ export interface operations {
     };
     run_maintenance_v1_table__id__maintenance_run_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12453,6 +12731,8 @@ export interface operations {
                 branch?: string | null;
                 source?: string | null;
                 source_version?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "X-Lance-Run-Facets"?: string | null;
@@ -12495,7 +12775,10 @@ export interface operations {
     };
     delete_table_policy_v1_table__id__policy_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12530,7 +12813,10 @@ export interface operations {
     };
     describe_table_policy_v1_table__id__policy_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12565,7 +12851,10 @@ export interface operations {
     };
     set_table_policy_v1_table__id__policy_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12604,7 +12893,10 @@ export interface operations {
     };
     get_table_protection_v1_table__id__protection_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12639,7 +12931,10 @@ export interface operations {
     };
     set_table_protection_v1_table__id__protection_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12678,7 +12973,10 @@ export interface operations {
     };
     publish_table_v1_table__id__publish_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12718,7 +13016,10 @@ export interface operations {
     };
     query_table_v1_table__id__query_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -12757,7 +13058,10 @@ export interface operations {
     };
     register_table_v1_table__id__register_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -12800,6 +13104,8 @@ export interface operations {
         parameters: {
             query?: {
                 force?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -12841,7 +13147,10 @@ export interface operations {
     };
     restore_table_v1_table__id__restore_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -12882,7 +13191,10 @@ export interface operations {
     };
     update_table_schema_metadata_v1_table__id__schema_metadata_update_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -12927,6 +13239,8 @@ export interface operations {
         parameters: {
             query?: {
                 branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -12966,7 +13280,10 @@ export interface operations {
     };
     create_table_tag_v1_table__id__tags_create_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13005,7 +13322,10 @@ export interface operations {
     };
     delete_table_tag_v1_table__id__tags_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13042,9 +13362,12 @@ export interface operations {
             };
         };
     };
-    list_table_tags_v1_table__id__tags_list_post: {
+    list_table_tags_v1_table__id__tags_list_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13077,9 +13400,12 @@ export interface operations {
             };
         };
     };
-    list_table_tags_v1_table__id__tags_list_post: {
+    list_table_tags_v1_table__id__tags_list_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13114,7 +13440,10 @@ export interface operations {
     };
     update_table_tag_v1_table__id__tags_update_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13153,7 +13482,10 @@ export interface operations {
     };
     get_table_tag_version_v1_table__id__tags_version_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13192,7 +13524,10 @@ export interface operations {
     };
     table_tasks_v1_table__id__tasks_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13227,7 +13562,10 @@ export interface operations {
     };
     undrop_table_v1_table__id__undrop_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13262,7 +13600,10 @@ export interface operations {
     };
     update_table_v1_table__id__update_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -13303,7 +13644,10 @@ export interface operations {
     };
     update_field_metadata_v1_table__id__update_field_metadata_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 authorization?: string | null;
                 "dapr-api-token"?: string | null;
@@ -13344,7 +13688,10 @@ export interface operations {
     };
     create_table_version_v1_table__id__version_create_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13383,7 +13730,10 @@ export interface operations {
     };
     batch_delete_table_versions_v1_table__id__version_delete_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13424,6 +13774,8 @@ export interface operations {
         parameters: {
             query?: {
                 version?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -13468,6 +13820,8 @@ export interface operations {
                 limit?: number | null;
                 descending?: boolean | null;
                 branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -13503,7 +13857,10 @@ export interface operations {
     };
     alter_transaction_v1_transaction__id__alter_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13542,7 +13899,10 @@ export interface operations {
     };
     describe_transaction_v1_transaction__id__describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13581,7 +13941,10 @@ export interface operations {
     };
     get_dock_layout_v1_user_state_dock_layout_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13614,7 +13977,10 @@ export interface operations {
     };
     put_dock_layout_v1_user_state_dock_layout_put: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13651,7 +14017,10 @@ export interface operations {
     };
     delete_dock_layout_v1_user_state_dock_layout_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13682,7 +14051,10 @@ export interface operations {
     };
     get_dock_layout_library_v1_user_state_dock_layout_library_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13715,7 +14087,10 @@ export interface operations {
     };
     put_dock_layout_library_v1_user_state_dock_layout_library_put: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13752,7 +14127,10 @@ export interface operations {
     };
     delete_dock_layout_library_v1_user_state_dock_layout_library_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13783,7 +14161,10 @@ export interface operations {
     };
     get_saved_views_v1_user_state_saved_views_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13816,7 +14197,10 @@ export interface operations {
     };
     put_saved_views_v1_user_state_saved_views_put: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13853,7 +14237,10 @@ export interface operations {
     };
     delete_saved_views_v1_user_state_saved_views_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13884,7 +14271,10 @@ export interface operations {
     };
     get_workflow_graph_v1_user_state_workflow_graph_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13917,7 +14307,10 @@ export interface operations {
     };
     put_workflow_graph_v1_user_state_workflow_graph_put: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13954,7 +14347,10 @@ export interface operations {
     };
     delete_workflow_graph_v1_user_state_workflow_graph_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -13985,7 +14381,10 @@ export interface operations {
     };
     my_warehouse_permissions_v1_warehouse__id__access_my_permissions_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14020,7 +14419,10 @@ export interface operations {
     };
     get_warehouse_managed_access_v1_warehouse__id__managed_access_describe_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14055,7 +14457,10 @@ export interface operations {
     };
     set_warehouse_managed_access_v1_warehouse__id__managed_access_set_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14094,7 +14499,10 @@ export interface operations {
     };
     list_warehouses_v1_warehouses_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14127,7 +14535,10 @@ export interface operations {
     };
     create_warehouse_v1_warehouses_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14164,7 +14575,10 @@ export interface operations {
     };
     list_estate_bindings_v1_warehouses___bindings_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14197,7 +14611,10 @@ export interface operations {
     };
     get_warehouse_v1_warehouses__warehouse_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14236,6 +14653,8 @@ export interface operations {
                 cascade?: boolean;
                 purge_bucket?: boolean;
                 force?: boolean;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
             };
             header?: {
                 "dapr-api-token"?: string | null;
@@ -14271,7 +14690,10 @@ export interface operations {
     };
     activate_warehouse_v1_warehouses__warehouse_id__activate_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14306,7 +14728,10 @@ export interface operations {
     };
     deactivate_warehouse_v1_warehouses__warehouse_id__deactivate_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14341,7 +14766,10 @@ export interface operations {
     };
     list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -14376,7 +14804,10 @@ export interface operations {
     };
     create_warehouse_namespace_v1_warehouses__warehouse_id__namespaces_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
