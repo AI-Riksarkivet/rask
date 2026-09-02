@@ -1,3 +1,5 @@
+> **Scope correction (2026-09-02, after the sweep):** `packages/ratch` was dissolved on 2026-08-28 and is not on `main`; the auditor read untracked residue on the sandbox. §3 and finding 1 below are therefore withdrawn; everything else stands.
+
 ## Audit: shared Python packages (`/home/user/rask/packages/*`)
 
 Base paths: `SK=/home/user/rask/packages/service-kit/src/service_kit`, `LK=/home/user/rask/packages/lineage-kit/src/lineage_kit`, `ST=/home/user/rask/packages/storage/src/storage`, `RK=/home/user/rask/packages/ray-kit/src/ray_kit`, `RA=/home/user/rask/packages/ratch/src/ratch`.

@@ -89,10 +89,10 @@ explicit.
 | Q1 | Where the five analysis documents live. | Committed under `docs/audits/lakehouse-2026-09/` on `claude/flyte-2-dapr-audit-19cyc2` (the default was taken; move them if you prefer elsewhere). | done |
 | Q2 | Delete remote branch `claude/flyte-2-dapr-audit-19cyc2`? The proxy refuses the delete from the sandbox. | Owner deletes; or it becomes the branch for Q1. | Reuse it for Q1. |
 | Q3 | UNSUPPORTED error status: keep 501 or follow the spec's 406? | Either parses (the client dispatches on `code`). | Keep 501, document. |
-| Q4 | `ratch` console script: dev-only extra, or keep in the head image? | Dev-only vs status quo. | Dev-only (CLAUDE.md says no production-state-changing CLIs). |
+| Q4 | ~~`ratch` console script~~ | withdrawn: `packages/ratch` was dissolved 2026-08-28 and is not on `main`; the packages sweep read untracked residue on the sandbox. | — |
 | Q5 | Feature flag 32 (`DISABLE_TRANSACTION_FILE`): refuse (today), or support and move the replay marker off `.txn`? | Refuse / support. | Refuse until pylance writes it by default. |
-| Q6 | Which service door authenticates producers on the lineage bus: per-publisher tokens, producer signature, or mTLS identity? | See §F F2 item 3. | Dapr mTLS SPIFFE `dapr-caller-app-id` enforced by an `accessControl` policy; producer signature as the transport-independent fallback. |
-| Q7 | The `x-api-key` principal: back it with a management-API key store, or bearer-only? | Both spec-legal. | Support both; keys minted by the management API. |
+| Q6 | Which service door authenticates producers on the lineage bus? | **Decided (owner delegated, 2026-09-02):** Dapr mTLS SPIFFE `dapr-caller-app-id` enforced by an `accessControl` policy while Dapr is the transport; a producer signature over the CloudEvent as the transport-independent form that survives the Dapr retreat (§K). The bus door applies `enforce_output_authz` as the stamped subject either way. | — |
+| Q7 | The `x-api-key` principal? | **Decided (owner delegated, 2026-09-02):** support both spec identity headers; keys are minted, scoped and revoked by the management API (a key = a `user`/service principal in FGA with an expiry), never by the spec surface. Both Q6 and Q7 stay in this backlog: the bus door is the integrity of the lakehouse's write record, and `x-api-key` is the spec's own identity contract. | — |
 
 ---
 
@@ -462,13 +462,8 @@ the location is a Lance root before `delete_dir`; a maintenance identity scoped 
 
 ## I. Shared packages (from the packages sweep)
 
-### I1 · `ratch` is an ungoverned direct write path in the production head image — **HIGH**
-**Where.** `ratch/core/driver.py:99-103,280,317,355`, `core/dataset.py:73-81`, `lineage.py:1-5`,
-`.docker/ray-cluster.dockerfile:62-69`, `pyproject.toml:70`; also `runtime_env.pip` (the rejected
-pattern), `allow_external_blob_outside_bases=True`, modality literals (`FTS_LANGUAGE="Swedish"`,
-institution column names). **Closes it.** Q4; commits through `CatalogTableWriter`; strip modality
-literals into a runner.
-
+### I1 · ~~`ratch` ungoverned write path~~ — withdrawn
+**What.** `packages/ratch` was dissolved 2026-08-28 (`open_ray-kernel.md`) and is absent from `main`; `.docker/ray-cluster.dockerfile` builds from the root lock. The packages sweep audited untracked residue. The one transferable point survives as I5/L: no service may open a governed table with bare pylance outside the catalog's doors.
 ### I2 · Vended credentials cannot pass through any seam — **HIGH** (see C1)
 
 ### I3 · Both emit kernels swallow; only the medallion has an outbox — **HIGH** (R10)
@@ -550,4 +545,4 @@ derived from the endpoint scheme; HTTP client timeouts.
 
 ## N. What was asked of the owner and is still open
 
-Q2–Q7 above (Q1 taken: the documents live under `docs/audits/lakehouse-2026-09/`). Nothing else blocks §A–§C.
+Q2, Q3 and Q5 above. Q1 taken (documents under `docs/audits/lakehouse-2026-09/`), Q4 withdrawn, Q6 and Q7 decided by delegation. Nothing else blocks §A–§C.
