@@ -461,7 +461,13 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 # Python user of the "rest" alias with FastAPI's default 405, which carries no `code` and so
 # surfaces as `InternalError 18`. Serving both is the local fix; the upstream fix is one line in
 # lance and is worth filing.
-@router.api_route("/{id}/count_rows", methods=["GET", "POST"])
+# TWO DECORATORS, NOT `api_route(methods=[...])`, and the difference is not style. One `api_route`
+# with both methods emits ONE operationId for both, and FastAPI derives its suffix from whichever
+# method it happened to register last — so the generated OpenAPI flipped between `_get` and
+# `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
+# flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
+@router.post("/{id}/count_rows", operation_id="count_table_rows")
+@router.get("/{id}/count_rows", operation_id="count_table_rows_compat_get")
 def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, body: CountTableRowsRequest | None = None) -> Response:
     """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
 

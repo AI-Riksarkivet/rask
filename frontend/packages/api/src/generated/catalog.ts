@@ -1861,7 +1861,7 @@ export interface paths {
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
          *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
-        get: operations["count_table_rows_v1_table__id__count_rows_get"];
+        get: operations["count_table_rows_compat_get"];
         put?: never;
         /**
          * Count Table Rows
@@ -1871,7 +1871,7 @@ export interface paths {
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
          *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
-        post: operations["count_table_rows_v1_table__id__count_rows_get"];
+        post: operations["count_table_rows"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2741,13 +2741,13 @@ export interface paths {
          * List Table Tags
          * @description List every tag on the table — wraps lance_namespace ListTableTags.
          */
-        get: operations["list_table_tags_v1_table__id__tags_list_get"];
+        get: operations["list_table_tags_compat_get"];
         put?: never;
         /**
          * List Table Tags
          * @description List every tag on the table — wraps lance_namespace ListTableTags.
          */
-        post: operations["list_table_tags_v1_table__id__tags_list_get"];
+        post: operations["list_table_tags"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11761,7 +11761,7 @@ export interface operations {
             };
         };
     };
-    count_table_rows_v1_table__id__count_rows_get: {
+    count_table_rows_compat_get: {
         parameters: {
             query?: {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -11803,7 +11803,7 @@ export interface operations {
             };
         };
     };
-    count_table_rows_v1_table__id__count_rows_get: {
+    count_table_rows: {
         parameters: {
             query?: {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -13362,7 +13362,7 @@ export interface operations {
             };
         };
     };
-    list_table_tags_v1_table__id__tags_list_get: {
+    list_table_tags_compat_get: {
         parameters: {
             query?: {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -13400,7 +13400,7 @@ export interface operations {
             };
         };
     };
-    list_table_tags_v1_table__id__tags_list_get: {
+    list_table_tags: {
         parameters: {
             query?: {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */

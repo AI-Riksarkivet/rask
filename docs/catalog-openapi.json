@@ -21299,7 +21299,7 @@
     "/v1/table/{id}/count_rows": {
       "get": {
         "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
-        "operationId": "count_table_rows_v1_table__id__count_rows_get",
+        "operationId": "count_table_rows_compat_get",
         "parameters": [
           {
             "in": "path",
@@ -21426,7 +21426,7 @@
       },
       "post": {
         "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
-        "operationId": "count_table_rows_v1_table__id__count_rows_get",
+        "operationId": "count_table_rows",
         "parameters": [
           {
             "in": "path",
@@ -26967,7 +26967,7 @@
     "/v1/table/{id}/tags/list": {
       "get": {
         "description": "List every tag on the table \u2014 wraps lance_namespace ListTableTags.",
-        "operationId": "list_table_tags_v1_table__id__tags_list_get",
+        "operationId": "list_table_tags_compat_get",
         "parameters": [
           {
             "in": "path",
@@ -27079,7 +27079,7 @@
       },
       "post": {
         "description": "List every tag on the table \u2014 wraps lance_namespace ListTableTags.",
-        "operationId": "list_table_tags_v1_table__id__tags_list_get",
+        "operationId": "list_table_tags",
         "parameters": [
           {
             "in": "path",

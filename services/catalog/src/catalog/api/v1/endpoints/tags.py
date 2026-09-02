@@ -32,7 +32,13 @@ router = APIRouter(prefix="/v1/table", tags=["tag"])
 # Python user of the "rest" alias with FastAPI's default 405, which carries no `code` and so
 # surfaces as `InternalError 18`. Serving both is the local fix; the upstream fix is one line in
 # lance and is worth filing.
-@router.api_route("/{id}/tags/list", methods=["GET", "POST"], response_model_exclude_none=True)
+# TWO DECORATORS, NOT `api_route(methods=[...])`, and the difference is not style. One `api_route`
+# with both methods emits ONE operationId for both, and FastAPI derives its suffix from whichever
+# method it happened to register last — so the generated OpenAPI flipped between `_get` and
+# `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
+# flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
+@router.post("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags")
+@router.get("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags_compat_get")
 def list_table_tags(id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> ListTableTagsResponse:
     """List every tag on the table — wraps lance_namespace ListTableTags."""
     req = ListTableTagsRequest(id=parse_identifier(id, settings.delimiter))
