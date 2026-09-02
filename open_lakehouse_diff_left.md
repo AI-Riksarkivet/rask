@@ -1,0 +1,553 @@
+# open_lakehouse_diff_left — the governed Lance lakehouse: verdict, decisions, backlog, zero-trust diff, open questions
+
+Working backlog, **2026-09-02**, against the working tree at `feec956`. Unsettled work; **delete this
+file when the backlog is drained**. `docs/` is for settled architecture only.
+
+**No code was changed by this analysis.** It is a read-only pass whose deliverable is this backlog.
+
+## Why this exists
+
+The owner asked, in sequence: Flyte 2 vs Dapr Workflow (keep Dapr Workflow for now, retreat later);
+what a Dapr-free lakehouse looks like; how hard-bound the estate is to Dapr; whether the core uses
+state and needs actors; what Lakekeeper has that rask lacks; what the robotics reference teaches;
+whether to buy Lakekeeper / Gravitino / Unity / DuckLake instead of the DIY catalog; whether the catalog
+is Lance Namespace spec-verbatim; what the Lance docs and the five 2026 posts (multi-base, branching,
+blob v2, Spark late materialization, blob streaming) change; and finally a governance sweep of every
+backend service that touches the lakehouse plus a zero-trust diff against Lakekeeper. The answers are
+spread over five documents and six sweep reports. This file is the one register of what is left.
+
+Source documents, committed under `docs/audits/lakehouse-2026-09/`:
+`dapr-coupling-analysis.md`, `lakehouse-analysis.md`, `catalog-build-vs-buy.md`,
+`lance-conformance-and-build-rules.md`, `verdict.md`, and the sweep reports `sweeps/{notifications,
+lineage, maintenance, gateway-compute-controlplane, packages}.md`. Zero-trust diff: `sweeps/zero-trust.md`, folded into §F.
+
+Scope the owner set: catalog, compute, ingest, medallion, maintenance, lineage, notifications, gateway,
+controlplane, and the shared packages. **Not swept, on the owner's instruction:** annotator, viewer,
+search, flows, models, and every frontend zone.
+
+## How this was produced
+
+Three multi-agent workflows (state + Lakekeeper diff, robotics lessons, Lance docs + 54-op conformance)
+with adversarial verifiers: 24 claims, 23 confirmed, 1 refuted, several tightened. Then seven
+single-service sweeps against one nine-point rubric (how it touches the lakehouse, authorization,
+lineage/events, state, Dapr coupling, format awareness, governance gaps, tests, top findings), each
+citing file:line. Live probes where a claim rested on runtime behaviour (the catalog app under the dir
+backend, pylance 10.0.0 `RestNamespace` against a logging stub, `DirectoryNamespace` version ops).
+Every number below is from those reports; nothing is from memory.
+
+---
+
+## 0. The verdict, and the condition attached to it
+
+**Continue, DIY catalog, Lance-only.** Every candidate (Lakekeeper 0.13.1, Gravitino 1.3.0, Unity OSS
+0.6.0, DuckLake 1.0, and all eleven `lance-namespace-impls` backends) gives Lance a registry floor and
+`managed_versioning=false`. None knows about the external-manifest-store commit path, multi-base,
+branches tracked by root, blob v2 lifecycle, or shallow clones. Those are the things that make a Lance
+lakehouse *governed*, and they only exist if the catalog understands the format.
+
+**The condition:** a DIY catalog that only implements the registry floor is worse than Lakekeeper.
+rask earns its existence by the format-aware governance in §C. Today it does roughly a third of it,
+and the sweeps in §D–§H show the surrounding services are not yet holding the line either. If the team
+cannot commit to §A–§D, the coherent alternative is Lakekeeper for the registry plus a thin rask
+"governed commit + blob" service, and two catalogs of record. Not recommended; recorded so the choice is
+explicit.
+
+---
+
+## 1. Design decisions
+
+### Decided by the owner during this analysis (recorded, not re-litigated)
+
+| # | Decision |
+| --- | --- |
+| D1 | Audience: **platform teams bringing their own engine** (Temporal, Flyte 2, …). rask exposes events and idempotent doors; it does not own workflow execution long-term. |
+| D2 | The annotator is a **client application** of the lakehouse, not platform core. |
+| D3 | **Spec-verbatim Lance Namespace REST is a hard goal.** A stock Lance client must work with no rask SDK. |
+| D4 | **Lance is the only format, ever.** OpenFGA and OpenLineage are locked as the governance vocabulary. |
+| D5 | Keep Dapr Workflow for now; the retreat is OpenBao for secrets, JetStream for events, no Dapr Workflow, BYO engines. |
+
+### Recommended by the analysis; need an owner acknowledgement
+
+| # | Decision | Why |
+| --- | --- | --- |
+| R1 | The governed commit path IS the spec's managed-versioning path (`CreateTableVersion` / `BatchCommitTables`, `managed_versioning=true`). The non-spec `/commit` door is retired or aliased. | It is the only mechanism by which a stock client's commit passes FGA, gate, lineage and the replay marker. |
+| R2 | Everything rask-only leaves `/v1/{namespace,table,materialized_view,transaction}` for a versioned **management API** (Lakekeeper's `/management` vs `/catalog` split). | Governance side effects inside spec handlers change what a spec client observes (7 of the 8 conformance blockers). |
+| R3 | **Bases are the storage-profile primitive.** A warehouse in another bucket/account/region or a hot tier is a `DatasetBasePath` plus `base_<id>.<key>` options; writes are steered with `target_bases`; failover is an edit of `base_paths`. | Replaces the hand-rolled "storage profile per warehouse" with the format's own vocabulary. |
+| R4 | **Credential vending is per base**, never per table prefix. | The multi-base post calls per-prefix vending the model that does not scale; rask currently refuses to vend a multi-base table. |
+| R5 | **Branches are governed at the branch prefix** (`tree/<branch>/`): FGA `branch` type, vending scoped to the prefix, protection/trash/lineage per branch. Write-audit-publish is branch → gate → tag or copy; **there is no merge primitive in pylance 10.0.0**. | The format's branch-by-root design only pays off if the catalog scopes to it. |
+| R6 | **Cross-dataset pins are a catalog feature.** A clone or branch records its (source, version) edge; the source version is tag-pinned while referenced; sweep, purge and the on-demand doors consult it. | Lance GC has no knowledge of clones; nothing in any candidate catalog has this either. |
+| R7 | **External blob bases carry a lifecycle policy** (`managed` vs `reference-only`) and cleanup runs without delete rights on reference-only bases. | The blob post claims reachability GC reaches in-base external blobs; the archival case must never be reclaimable. |
+| R8 | **The descriptor is the read contract.** Query responses return the blob v2 descriptor struct by default; bytes on `blob_handling="all_binary"` opt-in. | Same contract as the Spark connector; what a BYO engine expects. |
+| R9 | **The medallion tiers stop copying managed blob bytes.** Silver/gold as shallow clones of bronze at a pinned version plus derived columns (`add_columns`, already used in place). Requires R6 first. Measure before committing. | The cascade re-materialises managed blobs per tier today; external descriptors are already forwarded. |
+| R10 | **One lineage emit kernel, outbox-backed.** lineage-kit stays; `service_kit.lancekit.openlineage` and `lancekit.lineage_emit` go; every producer stages before transport. | Two kernels, three producer strings, and both swallow failures; a swallowed bronze-write emit cancels a cascade silently. |
+| R11 | **Zero-trust posture is an explicit target**, measured against the control list in §F, not a claim. | Lakekeeper does not actually use the term; it implements a control set that rask matches or beats on 9 of 19 rows and misses on 1, with 8 partial. |
+
+### Decisions the owner still has to make
+
+| # | Question | Options | Default if unanswered |
+| --- | --- | --- | --- |
+| Q1 | Where the five analysis documents live. | Committed under `docs/audits/lakehouse-2026-09/` on `claude/flyte-2-dapr-audit-19cyc2` (the default was taken; move them if you prefer elsewhere). | done |
+| Q2 | Delete remote branch `claude/flyte-2-dapr-audit-19cyc2`? The proxy refuses the delete from the sandbox. | Owner deletes; or it becomes the branch for Q1. | Reuse it for Q1. |
+| Q3 | UNSUPPORTED error status: keep 501 or follow the spec's 406? | Either parses (the client dispatches on `code`). | Keep 501, document. |
+| Q4 | `ratch` console script: dev-only extra, or keep in the head image? | Dev-only vs status quo. | Dev-only (CLAUDE.md says no production-state-changing CLIs). |
+| Q5 | Feature flag 32 (`DISABLE_TRANSACTION_FILE`): refuse (today), or support and move the replay marker off `.txn`? | Refuse / support. | Refuse until pylance writes it by default. |
+| Q6 | Which service door authenticates producers on the lineage bus: per-publisher tokens, producer signature, or mTLS identity? | See §F F2 item 3. | Dapr mTLS SPIFFE `dapr-caller-app-id` enforced by an `accessControl` policy; producer signature as the transport-independent fallback. |
+| Q7 | The `x-api-key` principal: back it with a management-API key store, or bearer-only? | Both spec-legal. | Support both; keys minted by the management API. |
+
+---
+
+## A. Spec-verbatim (D3) — the ten blockers
+
+Measured: 12 of 54 ops verbatim, 34 partial, 3 model-differs, 5 stub. With pylance 10.0.0's bundled
+`RestNamespace`, 5 ops are unusable and 4 answer silently wrong. Vendored spec is v0.9.0; current is
+v0.12.0. Details and evidence: `lance-conformance-and-build-rules.md` §2–§3, §9.
+
+### A1 · Bodyless handlers ignore the required JSON body
+**What.** `DescribeTable`, `ListTableIndices`, `GetTableStats`, `DescribeTableIndexStats`, the exists/
+deregister/transaction ops read version/tag/branch/vend_credentials/pagination from the query string or
+not at all. The reference client sends `vend_credentials` only in the body, so **credential vending is
+unreachable by any spec client**. **Where.** `services/catalog/src/catalog/api/v1/endpoints/tables.py:270-283,903-907`, `indices.py:97-114`.
+**Closes it.** Declare the request model as the body on every op, `reconcile_body_id` uniformly, body
+wins over rask's query aliases; a wire-level test posting each spec body.
+
+### A2 · Three response shapes the client cannot parse
+**What.** `schema_metadata/update` answers the wrapped envelope (spec: direct `{str:str}`); explain/
+analyze answer `text/plain` (spec: JSON string); `count_rows` answers `text/plain` (parses by accident).
+**Where.** `columns.py:229-234`, `data.py:698-720`. **Closes it.** Direct map, `JSONResponse` strings,
+JSON integer; the envelope dialect moves to the management API.
+
+### A3 · GET vs POST on `count_rows` and `tags/list`
+**What.** The spec and lance-namespace's generated client say POST at every tag since 0.9.0. **pylance's
+own bundled client and reference server use GET** (`lance` repo `rust/lance-namespace-impls/src/rest.rs`,
+`rest_adapter.rs`, at v10.0.0 and main). **Closes it.** Dual-mount both routes; file the upstream issue.
+
+### A4 · `delimiter` ignored on every route
+**Where.** `core/identifiers.py:59-63`; 0 of 153 served ops declare it; the FGA gate splits with the
+server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding `parse_identifier` and
+`canonical_object_id`.
+
+### A5 · Error bodies without `code`
+**What.** 422, generic 500, FastAPI 404/405, maintenance 503, 413, 429 and draining 503 all collapse to
+`InternalError 18` in the client; tag/branch failures are unmapped 500s (codes 8/9/11/22/23 unreachable);
+column/data ops never mint 14/20. **Where.** `service_kit/lakehouse/ns_errors.py:135-161`,
+`api/maintenance_mode.py:31-43`, `dataplane.py:1345-1418`. **Closes it.** One coded problem+json builder
+for every status (the four hand-built ones in `body_limit.py`, `load_shed.py`, `draining.py` fold in).
+
+### A6 · Identity: `x-api-key` never read; bearer verified only with OIDC on
+**Where.** `api/security.py:36-49,168-181`, `core/config.py:181` (`LANCE_OIDC_ENABLED=False`).
+**Closes it.** See §F; anonymous-by-default ends.
+
+### A7 · Governance inside spec handlers
+**What.** Warehouse-scoped namespace refusal, no root tables, trash soft-delete, protection 409/code 3,
+lineage keys injected into schema metadata, implicit BTREE on merge_insert, insert pre-coercion,
+maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R2; each refusal
+re-expressed with the spec's own code; `branch` honoured (plumbing at `dataplane.py:1085`).
+
+### A8 · Stub status codes
+**Where.** `views.py:24,58`, `columns.py:146` lack 201/202. One-line fix each.
+
+### A9 · 0.12.0: merge_insert `on` is an array
+**Where.** `data.py` merge handler declares `on: str | None`; the wire form is a repeated query
+parameter. **Closes it.** `on: list[str]`; pass through to pylance.
+
+### A10 · 0.12.0: bump `lance-namespace` and re-vendor `lance_docs`
+**What.** 0.11.1's vector index build params are dropped by the 0.11.0 pydantic model before the backend
+sees them; 0.12.0's `computed` columns + backfill are a spec-level data-evolution contract rask answers
+501 to; `header.*` context mapping is now specified both directions. **Closes it.** Pin 0.12.0, re-vendor
+the spec and the current blob/object-store/versioning guides, re-run conformance.
+
+### A11 · The conformance test that defines "verbatim"
+**What.** `tests/integration/test_spec_conformance.py` pins (method, path) only; no test constructs
+`lance.namespace.RestNamespace`, lancedb `namespace_client_impl="rest"` or lance-ray namespace mode
+against a running catalog (the urllib3 client is exercised through rask's own transport wrapper only).
+**Closes it.** One suite that drives every op with the three stock clients. A1–A10 land behind it.
+
+---
+
+## B. The governed commit path and the management API (R1, R2)
+
+### B1 · Advertise and govern managed versioning
+**What.** Version routes are mounted and FGA-gated (`_BATCH_PATHS`, `_action_relation` → `can_write_data`)
+but carry no lineage, gate, protection or replay marker, and `managed_versioning` is never advertised;
+the real governed door is the non-spec `/commit` doing a direct pylance commit under root creds.
+`DirectoryNamespace` implements `create_table_version` and enforces the staged-manifest protocol (probed);
+`batch_commit_tables` is `UnsupportedOperationError`. **Where.** `endpoints/versions.py`, `data.py:326-364`,
+`dataplane.py:556-637`. **Closes it.** Lineage/gate/marker/protection on `CreateTableVersion`;
+`managed_versioning=true` in `DescribeTable`; `/commit` aliased then removed; `batch_commit_tables`
+backed by rask's own staged-manifest KV (the dir backend will not provide it).
+
+### B2 · Carve the management API
+**What.** 25 route groups to move: `/commit`, `/credentials`, `/publish`, `/protection`, `/undrop`,
+`/maintenance/*`, `/policy/*`, `/access/*`, `/history`, `/blobs`, `/v1/warehouses`, `/v1/projects`,
+`/v1/model`, `/v1/access`, `/v1/events`, `/v1/me`, `/v1/user-state`, `/v1/stores`, plus non-spec query
+params, headers (`X-Lance-Run-Facets`, `x-lance-originator`) and dialects. Full list:
+`lance-conformance-and-build-rules.md` §4.
+
+### B3 · Conflict classification on every mutating door
+**What.** `_classify_commit_error` (400 incompatible / 409 retryable / 503) wraps only
+`commit_appended_fragments`; update/delete/column ops let a Lance conflict escape as 5xx.
+**Where.** `dataplane.py:578-596, 945-972, 992-1029`. **Closes it.** One classifier exported from
+`service_kit.lancekit.writer` (the catalog keeps a duplicate today) applied on every door.
+
+---
+
+## C. Format-aware governance — what makes DIY worth it (R3–R9)
+
+### C1 · Per-base credential vending
+**What.** The vendor refuses any table whose fragments carry a `base_id` (feature-flagged) instead of
+vending per base; no package seam can carry a `session_token`, so vended STS creds cannot even travel
+through `lance_storage_options`, `s3_filesystem`, `records._s3_client` or `storage.s3_client`.
+**Where.** `endpoints/credentials.py:76-130`, `core/vending.py:213,278`, `service_kit/lakehouse/objectfs.py:21-57`,
+`storage/client.py:76-90`. **Closes it.** `session_token` in every storage-options builder; vend the union
+of `base_paths` with per-base rights (read on inherited bases, write on `target_bases`, never on
+reference-only bases); expiry in the vended options.
+
+### C2 · Branch-scoped operations, FGA, vending, protection, lineage
+**What.** The model has `can_create_branch: owner` on `table` and nothing else; branch writes fall through
+to the table's `can_write_data`; update/delete write main; vending, protection, trash and lineage are
+branch-blind; the catalog's branch and tag doors **emit no lineage at all**, so no notification ever
+fires for a branch or tag. **Where.** `model.fga:357,349`, `fga_deps.py:108`, `endpoints/branches.py`,
+`tags.py`. **Closes it.** `type branch { parent:[table]; reader/writer; can_write_data }` + `.fga.yaml`
+cases; branch prefix in vending; lineage facets `parent_branch`/`parent_version`; per-branch protection
+and trash records.
+
+### C3 · Cross-dataset pins for clones and branches
+**What.** Maintenance's base-refs pre-pass protects a clone's source only when the clone sits in a
+maintained bucket (deactivated warehouses and unlisted buckets are invisible); **the catalog's on-demand
+`/maintenance/run` and `/compact` have no such guard and destroy a live shallow clone**; there is no
+lineage edge for a clone. **Where.** `catalog/services/maintenance.py:91-124`,
+`maintenance/.../base_refs.py:38-42,90`, `sweep.py:145-155`. **Closes it.** Record the clone/branch →
+(source, version) edge at creation; tag-pin the source version; every GC door (sweep, purge, on-demand)
+consults the registry; enumerate referrers over all registered buckets including deactivated.
+
+### C4 · External-base lifecycle policy and cleanup identity
+**What.** Ingest registers the source **bucket** as a base, so flag 16 makes the orphan scan refuse the
+dataset, `report_is_clean` blocks every purge, and `protected_roots` protects the whole bucket; whether
+`cleanup_old_versions` reclaims external in-base blobs is unverified against pylance 10.0.0 (the post says
+yes, the docstring says nothing). **Where.** `ingest/adapters.py:296-306`, `lander.py:311-325`,
+`maintenance/.../orphans.py:294-295`, `purge.py:223-224`, `features.py:113-114`.
+**Closes it.** Parse `BasePath.is_dataset_root`; per-base `managed`/`reference-only` policy on the
+warehouse record; cleanup credentials without delete on reference-only bases; a RED test pinning
+pylance's behaviour on external blobs under a registered base.
+
+### C5 · Storage profiles as bases
+**What.** The estate runs "one endpoint, one key" (`config.py:60-62,101-102`); a warehouse-rooted
+connection swaps only `root`. **Closes it.** `initial_bases` + `base_<id>.<key>` options on the warehouse
+record; `target_bases` on the write doors; `aws_provider_scheme` once pylance ships it.
+
+### C6 · Tiers as shallow clones plus columns (R9)
+**What.** `compute.py` re-materialises managed blob bytes per tier; external descriptors are forwarded.
+**Closes it.** After C3: silver = shallow clone of bronze@N + `add_columns`; measure bytes and latency
+against the copying path on one corpus before adopting.
+
+### C7 · Descriptor-first reads (R8) and `read_blob_ranges`
+**What.** rask's `/blobs` door streams `take_blobs` chunks with Range/ETag; query responses do not expose
+the descriptor struct by default. **Closes it.** Descriptor struct on Arrow responses, `all_binary` on
+opt-in; document `read_blob_ranges` as the batched client path once creds are vended.
+
+### C8 · Repack and branch maintenance in the sweep
+**What.** `compact_files` never passes a `compaction_mode`; nothing repacks packed sidecars; datasets
+under `tree/<branch>/` are never compacted, optimized or cleaned (`optimize.py:123-127`).
+**Closes it.** Discover branch datasets; add repack; pin that compaction does not rewrite dedicated blobs.
+
+### C9 · Feature flags 32 / 64 / 128
+**What.** `features.py` whitelists 1|2|4|8 (+16 for GC), names 64, does not know 32 or 128; comments say
+the spec stops at 16. Refusal is fail-closed and correct; the decision is Q5. **Closes it.** Name the
+bits, decide 32, add 128 once an index declares covering columns.
+
+---
+
+## D. Edge and service doors (from the gateway/compute/controlplane sweep)
+
+### D1 · Two services fully open through the gateway — **HIGH**
+**What.** The gateway enforces no authn/authz on any row; `controlplane` (`GET /api/projects`: tenant
+names, teams, namespaces, hosts) and `compute` (`/api/ray/*`, `/api/serve`: topology, job entrypoints,
+node log files) have no door of their own; the Ingress routes `/api` to the gateway and the front-door
+policy admits from anywhere. **Where.** `gateway/__init__.py:317-360`, `controlplane/.../routes.py:36-44`,
+`compute/.../routes.py:24-67`, `proxy.py:58-59`, `chart/templates/ingress.yaml:66-72`,
+`network-policy.yaml:251-275`. **Closes it.** `make_auth_deps` (OIDC + FGA reader on the root object) on
+both routers and the Serve proxy.
+
+### D2 · Sidecar-only blocklist is a partial hand-list
+**What.** Only `lineage-events` and `lineage-reconcile-cron` are blocked; the root rewrites expose
+`/api/lineage/lineage-dlq`, `/api/catalog/control-events`, both `/dapr/subscribe`, `/ui/*`, `/demo/*`;
+with `APP_API_TOKEN` unset the route guards no-op. **Closes it.** Invert to an allowlist per
+root-rewritten row (catalog `/v1/*`; lineage `/runs`, `/events`, `/v1/*`).
+
+### D3 · No body cap, rate limit, request-id, forwarded-for, access log, or coded errors at the edge
+**Where.** `gateway/__init__.py:280,332,341,347`. **Closes it.** Streaming body-size middleware,
+token bucket per subject/IP, `RequestIDMiddleware`, strip inbound `X-Forwarded-*` and inject at the edge,
+one structured access line per request, problem+json with `code` for 404/413/429/502.
+
+### D4 · Compute's prune route does not fail closed; Serve proxy path unbounded
+**Where.** `compute/.../pruner.py:43-67`, `proxy.py:53`, `ray_kit/dashboard.py:674`. **Closes it.**
+`assert_app_token_configured` in compute's lifespan; reject dot-segments in `_canonical`.
+
+### D5 · Compute is an introspection shell: none of the three BYO seams exists on it
+**What.** No submit door with vended creds, no idempotent outcome door, no plan document on a control
+lane; `submit_or_reattach` exists only as library code used in-process by the medallion.
+**Closes it.** The two BYO artefacts from `lakehouse-analysis.md` §11 D, exposed on the management API.
+
+---
+
+## E. Lineage (from the lineage sweep)
+
+### E1 · Lost origination events are unrecoverable and invisible — **HIGH**
+**What.** The reconcile sweep enumerates the graph, not storage, and skips nodes without `source_uri`;
+every HTTP producer swallows failures. A lost `create/declare/register` means the table never exists in
+lineage; a lost write on a known table is back-filled version-only. **Where.** `lineage/core/reconcile.py:169-172`,
+`catalog/core/lineage_emit.py:598-604`, `lineage_kit/emitter.py:193-197`. **Closes it.** Enumerate the
+catalog registry / warehouse roots; create the Dataset vertex from on-disk `lineage.dataset_id`; R10.
+
+### E2 · Bus door trusts a producer-stamped author behind one shared token — **HIGH**
+**Where.** `lineage/api/dapr.py:302-310`, `services/consumer.py:33-35`, `core/config.py:70-79`.
+**Closes it.** Q6; `enforce_output_authz` as the stamped subject on the bus door too.
+
+### E3 · Run state regresses on out-of-order ingest
+**Where.** `repository.py:98-110` (last-delivery-wins), fed by outbox drain and DLQ replay.
+**Closes it.** Sticky terminal state; a START-after-COMPLETE test.
+
+### E4 · `GET /events` is a lossy subset of the graph, and notifications replays from it
+**Where.** `ingest.py:261-264`, `consumer.py:445-454`, `repository.py:1295-1296` (20 000-row prune per
+insert). **Closes it.** Feed row inside the ingest transaction; time-based retention.
+
+### E5 · Unbounded growth, O(history) hot paths, no default pruning
+**Where.** `values.yaml:404` (`runRetentionDays: 0`), `repository.py:352-354,660,711`, no index on
+`Run.event_time`, unbounded `*1..` traversals. **Closes it.** `latest_version` on the Dataset node;
+index on `event_time`; bounded paths; paginated `/runs`, `/producers`.
+
+### E6 · Model gaps
+**What.** Versions are `WROTE` edge properties (one per run+dataset); no branch/tag/clone/base
+representation; `parent` facets parsed and discarded; column lineage latest-only; rename strands history
+on the old vertex. **Closes it.** Version and branch nodes; persist `parent`; clone edge (C3); rename
+carries history.
+
+---
+
+## F. Zero trust — the diff against Lakekeeper (R11)
+
+**Premise check first.** Lakekeeper never uses the words "zero trust" anywhere in its repository (docs, README, crates). What it claims is "secure", "every request is checked against your policy before any data is read, and recorded", vended credentials or remote signing, and "does not issue API-Keys". So this section diffs what Lakekeeper *implements* against what rask implements, control by control, at Lakekeeper v0.13.1 (b328e58) and rask `feec956`. Full report with every citation: `docs/audits/lakehouse-2026-09/sweeps/zero-trust.md`.
+
+**Score.** 19 controls: rask HAVE 6, STRONGER 3, PARTIAL 8, MISSING 1 (per-workload storage identities: catalog, maintenance and every mover run as the RustFS root user). Both sides lack image signing and SBOM. Lakekeeper is stronger on service identity (one Kubernetes SA per service, no shared secret), location containment and audit request-ids; rask is stronger on token validation, vending posture, mTLS on the Dapr plane, pod hardening, network policy and fail-closed behaviour.
+
+**The twelve items in F2 are the zero-trust backlog.** Items 1–4 (per-workload storage identity, fail-closed in code, kill the shared service bearer, stop laundering anonymous browser reads into a service identity) are the ones that decide whether the claim is honest.
+
+**Framing fact first:** Lakekeeper never uses the words "zero trust" anywhere — not in docs, README, or crates (`grep -rniE "zero[- ]?trust"` over the whole tree returns nothing). Its actual claims are "secure" (README.md:18), "Every request is checked against your policy before any data is read, and recorded" (README.md:18), vended-credentials/remote-signing (README.md:48), and "does not issue API-Keys" (docs/docs/authentication.md:11). Everything below is therefore *what Lakekeeper implements*, not what it calls zero trust.
+
+### F1 · The control list — Control list — Lakekeeper vs rask
+
+| # | Control | Lakekeeper (claim/impl, cite) | rask (cite) | rask status |
+|---|---|---|---|---|
+| 1 | Every request authenticated; no anonymous default | **Impl, but anonymous by default in OSS.** Authn is on only if `OPENID_PROVIDER_URI` / `OPENID_PROVIDERS` / `ENABLE_KUBERNETES_AUTHENTICATION` set (docs/configuration.md:201-207); otherwise `Actor::Anonymous` and only a `tracing::warn!("Authentication is disabled…")` (crates/lakekeeper/src/service/authn.rs:403; serve.rs:67-72 passes `None`). Only *Lakekeeper Plus* refuses to start without an authenticator (configuration.md:209). | Code default is anonymous: `oidc_enabled` default False (services/catalog/src/catalog/core/config.py:181); `authenticate()` returns `None` and every route opens (api/security.py:66-67, docstring :3). Chart default flips it ON: `auth.enabled: true` (chart/values.yaml:695-696) → `LANCE_OIDC_ENABLED=true` via `lance.governedOidcEnv` (_helpers.tpl:1059-1061), pinned by tests/unit/test_invariants.py:1475-1490. FGA requires OIDC (config.py:350). | **PARTIAL** — same shape as LK OSS (code default open, deployment default closed). Gap: no in-code refuse-to-boot like LK Plus. |
+| 2 | Token validation: issuer, audience, alg, transport | **Impl (external crate).** Audience *optional* — "If unset, audience validation is skipped" (configuration.md:243, :271); issuer from discovery + `ADDITIONAL_ISSUERS`; required-claim rules, scope (configuration.md:245-246, 297-346). JWT crypto lives in the external `limes` crate (Cargo.toml:132), not in-repo. K8s `TokenReview` audience also optional ("all tokens proceed to validation!" configuration.md:221-223). | Audience and issuer **required** when enabled (config.py:348); asymmetric-only alg allowlist (packages/service-kit/src/service_kit/governed/oidc.py:51); HTTPS required for issuer + JWKS unless `allow_insecure` (oidc.py:19-20, :108); leeway configurable (config.py:189). Chart derives `LANCE_OIDC_ALLOW_INSECURE` from a plain-http `dex.issuer` default (`http://rask-dex:5556/dex`, values.yaml:2125; _helpers.tpl:1069). | **STRONGER** on validation policy; **PARTIAL** on transport (default IdP is plaintext in-cluster). |
+| 3 | Service-to-service auth | **Impl.** Kubernetes SA tokens via `TokenReview`, one identity per SA `kubernetes~<uid>` (authentication.md:526-565). No shared service secret exists; "Lakekeeper does not issue API-Keys" (authentication.md:11). | Service door = shared Dapr `APP_API_TOKEN` + caller-supplied `x-lance-service-identity` checked against an allowlist (governed/dapr_auth.py:237-293; catalog api/security.py:78-160). ONE Secret per release for all sidecars (chart/templates/dapr-app-token.yaml; _helpers.tpl:210). Docstring admits: "with one shared token across an allowlist, any holder can pick the highest-privileged name on it" (dapr_auth.py:255-258); only `privileged_subjects` get a dedicated credential (dapr_auth.py:282-289). Web pods hold the shared token (chart/templates/frontends.yaml:251-256) and the BFF spends it for **anonymous GETs** as `frontend.serviceIdentity` (frontend/packages/api/src/bff.ts:191-195; runs-feed.ts:213-217), which is on `LINEAGE_SERVICE_SUBJECTS` (chart/templates/services.yaml:425-445). `x-api-key` is read nowhere (grep over services/packages/chart: 0 hits). | **PARTIAL** — LK is stronger (per-SA identity, no shared secret). |
+| 4 | No implicit trust of identity headers; edge strips | LK has no identity headers to forge. It does trust `x-forwarded-*` by default for URL building (configuration.md:13, :29 `USE_X_FORWARDED_HEADERS` default true) and records `user_agent` unverified (logging.md:83). | Gateway strips `dapr-caller-app-id`, `dapr-api-token`, `dapr-app-id`, `x-lance-service-identity` on every route (services/gateway/src/gateway/__init__.py:66-76, applied :340); catalog refuses the door for a public caller (security.py:102-106); absent header ≠ public (dapr_auth.py:51-67). **Can an external caller forge them through the gateway? No** — verified by services/gateway/tests/test_spoofable_headers.py:52-105 (incl. casing, duplicate-header binding). Residual: anything reaching a pod *not* via the gateway (web BFF, any in-namespace pod) is unstripped, and NetworkPolicy is off by default (values.yaml:559). | **HAVE at the edge / PARTIAL in-cluster.** |
+| 5 | AuthZ on every object, policy engine, deny-by-default, managed access | **Impl.** OpenFGA; additive grants; owners get all incl. grant; Managed Access strips `grant` from owners and inherits down (authorization-openfga.md:20-36, 129-139); server `admin` cannot read project data (:40); sign endpoint authorizes per request (crates/lakekeeper/src/server/s3_signer/sign.rs:127-144). | Router-level `authorize` maps every guarded route to a `can_*` relation (services/catalog/src/catalog/api/fga_deps.py:554-600); fails closed 503 on unwired client or OpenFGA outage (fga_deps.py:561-562; :63-64, :86-87); model has `managed_access`/`managed_access_inheritance`/`pass_grants` (governed/auth/model.fga:116-163, 218-226). Gaps: id-less routes need only authn (fga_deps.py:577-578); top-level create is open unless `fga_lock_root_create` (values.yaml `lockRootCreate: false`, :698); FGA default False in code (config.py:196). | **HAVE** (parity, arguably stronger on fail-closed). |
+| 6 | No static storage creds to clients; scoped short-lived vending | **Impl.** STS AssumeRole with per-table inline session policy (`{key}*` + `s3:ListBucket` prefix condition, crates/lakekeeper/src/service/storage/s3.rs:1258-1312); TTL `sts-token-validity-seconds` default 3600 (s3.rs:104,842; storage.md:303); remote signing authorized per request (sign.rs:139-144); per-warehouse credential; live validation check `vended-credentials-scope-enforced` (storage/validation.rs:84-88; storage.md:86-88); `client-managed` opt-out (storage.md:107). | Modes (core/vending.py): `mode_b` vends nothing — **chart default** (values.yaml:744; config.py:278); `sts`/`web_identity` build a per-table, per-tier session policy (vending.py:94-124) with TTL 900 (config.py:279) and refuse to boot without an STS endpoint so the caller's token never goes to public AWS STS (config.py:357-369); `web_identity` exchanges the **caller's own** JWT (vending.py:263-283). **Nothing hands out the estate's root key** — `static` would hand out long-lived keys (vending.py:134-155) but `make_vendor` never passes `static_keys` (main.py:128-134) so it always returns `None`: a dead mode. Reachability: `POST /v1/table/{id}/credentials` (api/v1/endpoints/credentials.py:44) is a rask extension; a pure Lance-Namespace-spec client never sees a credential and uses server-mediated Arrow IPC. Write tier re-checks `can_write_data` (credentials.py:62-72); every issuance audited (:102-110). | **STRONGER by default posture; PARTIAL as a feature** (RustFS has no real AssumeRole per vending.py:170-172; `static` is dead; scope follows a caller-supplied `location`, see row 12). |
+| 7 | Catalog's own storage identity least-privilege; per-warehouse identities | **Impl.** One credential per warehouse (storage.md:7; production.md:21 "distinct credentials that only grant access to the prefix"); system identity must use `assume-role-arn` + `external-id` by default (configuration.md:50-51); location-exclusivity check (validation.rs:60-62). | **One root key for the whole fleet**: catalog gets `rustfs.accessKey` = `rustfsadmin` (chart/templates/services.yaml:92-94; values.yaml:1517-1518 — the RustFS root user); maintenance identical (maintenance.yaml:123-125; services/maintenance/src/maintenance/core/config.py:88 default `"rustfsadmin"`); medallion producer and every mover identical (medallion.yaml:234-236, 389-391). OpenBao only changes *where the secret value comes from* (services.yaml:93-99), not *which identity* it is. | **MISSING** — largest single gap. |
+| 8 | Secrets backend | **Impl.** Postgres `pgp_sym_encrypt(... 'cipher-algo=aes256')` (crates/lakekeeper-storage-postgres/src/secrets.rs:68,130); default key literally "This is unsafe" (configuration.md:65); Vault KV2 option; secrets cached 10 min (configuration.md:500-506). | OpenBao behind a Dapr `secretstores` component scoped per app-id (chart/templates/dapr-component.yaml:277-340); catalog fails closed at boot on a store miss (config.py:170-174; main.py:99). Defaults: `openbao.devMode: true` = in-memory, root token `root` (values.yaml:2148-2152), `tls_disable = 1` (templates/openbao.yaml:34); prod overlay requires `devMode: false` (values-prod.yaml:123-124) and then refuses dev creds (infra-credentials guard, values-prod.yaml:120-122). | **HAVE** (architecture) / **PARTIAL** (defaults). |
+| 9 | TLS everywhere / mTLS between components | **Claim, not impl.** "Lakekeeper does not terminate connections natively. Please use a reverse proxy" (production.md:22); PG `sslmode` configurable (configuration.md:75-76); OpenFGA endpoint example is `http://` (configuration.md:382); outbound TLS validated via webpki + native certs (configuration.md:594-600). No mTLS anywhere. | Dapr Sentry mTLS pinned ON (values.yaml:1947-1952) → sidecar↔sidecar hops (service invocation, pub/sub, actors) encrypted with SPIFFE ids. Everything **not** via a sidecar is plaintext: catalog→OpenFGA `http://` (_helpers.tpl:1076); catalog→RustFS `http://` + `LANCE_S3_ALLOW_HTTP=true` (services.yaml:101-102; `lance.s3Endpoint` _helpers.tpl:653-655); NATS `nats://` (_helpers.tpl:703-705); OpenFGA + Dapr-state Postgres `sslmode=disable` (templates/infra-credentials.yaml:43; external-secrets.yaml:53; openbao.yaml:171); lineage DSN carries no sslmode (services.yaml:302, with the password in env when OpenBao is off); OpenBao `http://` with `skipVerify: true` derived from the scheme (dapr-component.yaml:283,303; openbao.yaml:34); Dex issuer `http://` (values.yaml:2125); ingress `tls: []` (values.yaml:1701). | **PARTIAL** — mTLS exists (stronger than LK) but only on the Dapr plane; every store hop is plaintext by default. |
+| 10 | Audit logging (who/what/resource/decision, request id) | **Impl.** Structured audit events `event_source="audit"` with actor, action, entity, decision, `request_id` (uuid7 via `set_x_request_id`, crates/lakekeeper/src/api/router.rs:255), `idempotency_key`, `user_agent` (logging.md:49-89). Docs contradict on default: "enabled by default" (logging.md:35) vs `LAKEKEEPER__AUDIT__TRACING__ENABLED` default `false` (configuration.md:676). Grant writes audited separately (logging.md:139). No tamper evidence. | Dedicated `lance.audit` logger (governed/audit.py:22-50); authn success/failure (security.py:103-175), every authz decision incl. batch (fga_deps.py:63-93), and credential issuance (credentials.py:70,104-110) are audited; default ON (config.py:222). No request/trace id on audit records (audit.py:42-50); no tamper evidence. | **HAVE** (parity; rask lacks request-id correlation). |
+| 11 | Secrets never logged / not exported | **Impl.** `SetSensitiveHeadersLayer([AUTHORIZATION])` (router.rs:256-258); header/body logging opt-in via `debug.log_authorization_header` / `log_request_bodies` (config.rs:1074; router.rs:320-395 logs `request_body`/`response_body` at `debug!`); `#[redact]` on secret fields (crates/authz-openfga/src/config.rs:90-95; storage/az/credentials.rs:16-22). Audit logs carry PII and live idempotency keys — documented (logging.md:345, :404). | S3 secret is a `SecretStr` (config.py:165); 5xx messages redacted (service_kit/lakehouse/ns_errors.py:87-98); no OTel header capture configured (no `CAPTURE_HEADERS` env in chart); the medallion `"token"` in logs is an idempotency key, not a secret (medallion/services/produce.py:62-75); viewer logs the secret *name* only (viewer/api/v1/endpoints/objects.py:91). Vended creds appear only in the response body. Gaps: `LINEAGE_DATABASE_URL` with password in pod env when OpenBao is off (services.yaml:302); `age.password: lance` default (values.yaml:2091). | **HAVE** (no evidence of token/URL egress; presigned URLs are not used anywhere — vending returns keys, not URLs). |
+| 12 | Anti-SSRF / user-supplied storage URLs | **Partial impl.** Endpoint scheme must be http/https (s3.rs:1368-1371, 1411-1416); no private-IP/link-local block (grep `is_private|loopback|169.254` → 0 hits); location-exclusive across warehouses (validation.rs:60-62); tables must sit under warehouse location (storage.md:24). | Storage endpoint is operator-only; client `storage_options` explicitly refused (api/v1/endpoints/data.py:119-121); `data_base` allowlist (data.py:123-125); reserved buckets refused on warehouse create (api/v1/endpoints/warehouses.py:164, 641). But `register_table` forwards `body.location` with **no** location/bucket check in the Python door (api/v1/endpoints/tables.py:514-536; Rust dir-impl behaviour not verified) — the catalog then opens it with root creds (credentials.py:84) and vends session creds scoped to *that* prefix. | **PARTIAL** — LK is stronger on location containment. |
+| 13 | Bootstrap protection | **Impl.** Bootstrap runs once; concurrent/second bootstrap refused (crates/lakekeeper/src/api/management/v1/server.rs:260-275); first token becomes admin; with auth off "no admin is set" (bootstrap.md:18-22). | `chart/templates/bootstrap-admin.yaml` + `auth.bootstrapAdmin` (values.yaml:702); root object has no auto-seed (config.py:225-231); top-level create open unless `lockRootCreate` (fga_deps.py:591-594 "None => open top-level create"). Bootstrap Job internals not read. | **PARTIAL** (not fully verified). |
+| 14 | Destructive-op protection, soft delete, idempotency, maintenance mode | **Impl.** Soft-delete per warehouse + protection + `force` override (concepts.md:144-241); `Idempotency-Key` per spec (configuration.md:656-668); read-only maintenance mode (:643-653). | Trash + undrop (service_kit/lakehouse/trash.py:1-12), protection records (lakehouse/protection.py; tests/unit/test_drop_protection.py:134-268), all owner-gated (fga_deps.py:104-162); `LANCE_MAINTENANCE_READ_ONLY` (config.py:283); commit idempotency by `run_id` (services/catalog/tests/test_commit_idempotency.py:49-97) but no `Idempotency-Key` header (grep → 0). | **HAVE** (parity). |
+| 15 | Request limits / rate limiting | Body 32 MB, 30 s timeout (configuration.md:610-617; router.rs:270-273). No rate limiter. | Body limit 256 MiB, pure-ASGI 413 (api/body_limit.py:1-28; config.py:285); concurrent-write load-shed 429 + Retry-After (api/load_shed.py:7-96; config.py:287; values-prod.yaml:84-92); Dapr `Resiliency` CRs (dapr-resiliency.yaml:26,116). | **HAVE** (slightly more than LK). |
+| 16 | Network segmentation | Nothing in this repo (Helm chart is a separate repo `lakekeeper-charts`, not cloned — **not verified**). Docs only recommend OpenFGA co-location (production.md:17). | Default-deny Ingress+Egress + DNS + targeted store allows (chart/templates/network-policy.yaml:1-50); `networkPolicy.enabled: false` by default (values.yaml:559), ON in values-prod.yaml:82-83; needs an enforcing CNI. | **HAVE (prod) / PARTIAL (default)** — stronger than anything in LK's repo. |
+| 17 | Internal doors all require the app token? Dapr access control | N/A | `require_dapr_token` on sidecar-delivered routes and actor callbacks (dapr_auth.py:70-102, 301-341); catalog/lineage service door checks the token (dapr_auth.py:274-293); components scoped per app-id (dapr-component.yaml:19,44,113,152,233,265,336). **Not** every internal door: ordinary `/v1/*` routes are OIDC-guarded, so with OIDC off they are open (security.py:66-67); no Dapr `accessControl` policy exists (grep `accessControl` over chart → 0; the only `Configuration` is tracing/retention, observability.yaml:50-56) so any sidecar may invoke any app-id. Token no-op when `APP_API_TOKEN` unset in dev (dapr_auth.py:98-102) but boot refuses that when Dapr ingest is on (:105-114). | **PARTIAL**. |
+| 18 | Supply chain: non-root, read-only FS, signing, SBOM | Distroless `nonroot` images (docker/bin.Dockerfile:3,32-35; full.Dockerfile:47,78). Release builds with `--provenance=false` and no cosign/SBOM/attestation (.github/workflows/release.yml:200,209; grep → nothing else). No pod securityContext in repo (chart elsewhere). | Every image `useradd … --uid 10001` + `USER` (.docker/gateway.dockerfile:62,79; rest-catalog.dockerfile:68,93; ray-cluster.dockerfile:114,167; frontend.dockerfile:87,116; only cnpg-age-ext.dockerfile:16 is `USER root`, a CNPG base image). Restricted securityContext + `readOnlyRootFilesystem: true` default (_helpers.tpl:952-970; values.yaml:520-521); sidecar seccomp (_helpers.tpl:748). Scanners: osv-scanner, trivy config+image, trufflehog (Makefile:255-297; ci.yml:124,156-189). No cosign signing, no SBOM. | **STRONGER on hardening; both MISSING signing/SBOM.** |
+| 19 | Compute-plane auth (rask-specific) | N/A | Ray dashboard token auth required in prod, fails render otherwise (values-prod.yaml:128-135; tests/unit/test_ray_auth.py:176-191). | HAVE |
+
+### F2 · What rask must add to honestly claim zero trust (ordered)
+
+1. **Per-workload storage identities.** chart/templates/services.yaml:92-94, maintenance.yaml:123-125, medallion.yaml:234-236 & 389-391, services/maintenance/src/maintenance/core/config.py:88 — stop running catalog, maintenance and every mover as the RustFS root user; provision one least-privilege RustFS user/policy (or STS role) per service, scoped to its buckets/prefixes.
+2. **Fail closed in code, not only in the chart.** services/catalog/src/catalog/core/config.py:181 (`oidc_enabled=False`) and api/security.py:66-67 — default to enabled and add an explicit `LANCE_INSECURE_ALLOW_UNAUTHENTICATED` escape (LK Plus's shape, configuration.md:209), so a service run outside the chart is not anonymous.
+3. **Kill the one shared service bearer.** governed/dapr_auth.py:291-293 + chart/templates/dapr-app-token.yaml (one Secret for the release) — make every allowlisted subject "privileged" (dedicated credential, dapr_auth.py:283-289) or, better, derive identity from Dapr's mTLS SPIFFE `dapr-caller-app-id` enforced by an `accessControl` policy rather than a copyable token.
+4. **Stop laundering anonymous browser reads into a service identity.** frontend/packages/api/src/bff.ts:193-195 and runs-feed.ts:214-217 send the shared token + `frontend.serviceIdentity` when there is no session; that subject is allowlisted at lineage (services.yaml:425-445) — anonymous must be 401 or an explicit `anonymous` FGA principal with visible grants.
+5. **Add a Dapr access-control policy and turn NetworkPolicy on by default.** chart/templates/observability.yaml:50-56 (add `accessControl: {defaultAction: deny, trustDomain, policies[]}`), chart/values.yaml:559 (`networkPolicy.enabled: true`).
+6. **TLS to every store.** _helpers.tpl:1076 (OpenFGA https + preshared key/OIDC — none configured today, fga.py:295-350 builds `ClientConfiguration(api_url=…)` with no credentials), infra-credentials.yaml:43 / external-secrets.yaml:53 / openbao.yaml:171 (`sslmode=disable` → `verify-full`), services.yaml:302 (lineage DSN sslmode), services.yaml:102 + _helpers.tpl:654 (RustFS https, `ALLOW_HTTP=false`), _helpers.tpl:704 (`tls://` NATS), openbao.yaml:34 + dapr-component.yaml:303 (real certs, `skipVerify: false`), values.yaml:2125 (https Dex), values.yaml:1701 (ingress TLS).
+7. **Validate `register_table` locations.** services/catalog/src/catalog/api/v1/endpoints/tables.py:514-536 — require the location to sit under the namespace's warehouse root and outside `reserved_bucket_set`, as warehouses.py:164/641 already does; otherwise a writer attaches any prefix the root key reaches and credentials.py:73-89 vends scoped creds to it.
+8. **Delete or wire the dead `static` vending mode.** services/catalog/src/catalog/main.py:128-134 never passes `static_keys`, so core/vending.py:134-155 silently returns `None` — a configured mode that does nothing is a false control.
+9. **Refuse well-known defaults in the base chart, not only on `devMode=false`.** values.yaml:1517-1518 (`rustfsadmin`), :2091 (`age.password: lance`), :1915 (dev app token), :2148-2152 (`openbao.devMode: true`) — generate at install or fail render.
+10. **Correlate audit records.** governed/audit.py:42-50 — add request id + trace id (LK has uuid7 request ids on every audit event, router.rs:255; logging.md:70-76) and ship the `lance.audit` stream through the Collector to an append-only sink.
+11. **Lock root create by default.** values.yaml:698 (`lockRootCreate: false`) + fga_deps.py:591-594 — top-level namespace creation is open self-serve for any authenticated subject.
+12. **Sign and attest images.** .github/workflows/ci.yml:124-189 has scanners only — add cosign keyless signing + SBOM attestation (LK lacks this too, and even disables provenance, release.yml:200).
+
+### F3 · Where rask is already stronger than Lakekeeper
+
+1. **Token validation policy.** Audience *and* issuer are mandatory when auth is on (config.py:348), signing algorithms are an asymmetric-only allowlist (oidc.py:51), and issuer/JWKS must be HTTPS unless explicitly overridden (oidc.py:108). Lakekeeper skips audience validation when unset (configuration.md:243, :271) and does its JWT work in an out-of-tree crate (Cargo.toml:132).
+2. **Vending posture.** Default `mode_b` vends nothing (values.yaml:744) so no storage credential ever leaves the catalog unless an operator opts in; STS TTL 900 s vs LK's 3600 (config.py:279 vs s3.rs:104); boot refuses an STS mode without an explicit endpoint so the caller's JWT can never be POSTed to public AWS STS (config.py:357-369); every issuance is audited with subject/resource/tier (credentials.py:102-110); `web_identity` exchanges the caller's own token instead of the catalog's (vending.py:263-283).
+3. **In-repo runtime hardening and edge discipline.** Dapr Sentry mTLS pinned on (values.yaml:1947-1952), restricted PodSecurity + `readOnlyRootFilesystem` for every app container (_helpers.tpl:952-970), default-deny NetworkPolicy with exclusive store ingress (network-policy.yaml:1-50, prod-enabled values-prod.yaml:82-83), a gateway that strips every trust header with tests proving duplicate/casing variants cannot smuggle (gateway/__init__.py:66-76; test_spoofable_headers.py:52-105), and fail-closed OpenFGA/secret-store outages (fga_deps.py:561-562; config.py:170-174). Lakekeeper's repo carries none of this (its chart is elsewhere) and its release pipeline explicitly disables provenance.
+
+### F4 · Tests that exist for these controls
+
+**Lakekeeper (in-repo):**
+- Audience config parsing: crates/lakekeeper/src/config.rs:1777-1787; debug header/body logging defaults off: config.rs:1972-2014. JWT signature/issuer/audience tests are in the external `limes` crate — none in this tree.
+- Vended-credential scope: live validation check (storage/validation.rs:79-88, exposed as `vended-credentials-scope-enforced`, storage.md:86-88) — an operator-run probe, not a unit test; STS/multipart vending tests s3.rs:2626, 2925, 3162; storage/mod.rs:2065-2259.
+- AuthZ: `test_managed_access_warehouse_inheritance_{user,role}`, `test_load_table_hidden_table_denied`, `test_load_generic_table_credentials_hidden_*_denied`, `test_batch_authorization_all_denied`, `test_move_namespace_denied_*`, `test_openfga_client_credentials_with_scope` (crates/lakekeeper-integration-tests, crates/authz-openfga).
+- Remote signing: sign.rs:1303-1681 are parser/URL tests only — no in-crate test that an unauthorized sign is refused.
+- Cache/identity headers: router.rs:730-757 (`responses_are_private_and_vary_on_the_request_identity`).
+- Bootstrap once: server.rs:260-275 (logic; no dedicated test found).
+
+**rask:**
+- Header spoofing at the edge: services/gateway/tests/test_spoofable_headers.py:52,69,83,105.
+- Public-caller laundering and proxied humans: tests/unit/test_catalog_gateway_proxied_human.py:89-212 (incl. `test_public_caller_cannot_launder_even_while_holding_a_valid_bearer`, `test_anonymous_through_the_gateway_is_unauthenticated_not_permitted`).
+- Service door: services/catalog/tests/test_service_door.py:96-175 (unconfigured door 401, empty allowlist, shared token cannot claim privileged subject, unreadable store 503); tests/unit/test_dapr_auth.py:28-107; packages/service-kit/tests/test_actor_route_guard.py.
+- OIDC verifier: tests/unit/test_oidc_verify.py:192-401 (expired, wrong aud, wrong iss, bad sig, HS256, alg=none, split-horizon).
+- Vending scope: tests/unit/test_vending.py:33-224 (`test_a_tenants_policy_denies_another_tenants_bucket`, `…SIBLING_table…`, `test_a_read_tier_policy_cannot_write_its_own_table`, real AssumeRole at :159).
+- AuthZ fail-closed + audit: tests/unit/test_invariants.py:620, 642, 652, 873; auth-on-by-default and session-secret refusal :1475, :1493; every app-token-consuming pod gets one :1407; Dapr secrets through the store :982.
+- Protection/trash: tests/unit/test_drop_protection.py:111-291; namespace/trash guards `test_namespace_trash_guard.py`, `test_trash_purge.py`, `test_maintenance_trash_exclusion.py`.
+- Secrets fail-closed: tests/unit/test_medallion_secrets.py:25-57; `test_secrets.py`, `test_media_s3_secret.py`.
+- Body limit / idempotency: `test_body_limit.py`; services/catalog/tests/test_commit_idempotency.py:49-97.
+- Ray auth in prod: tests/unit/test_ray_auth.py:78-191.
+- **No rask test** covers: per-service storage identity (there is none), TLS on store hops, Dapr access-control policy, `register_table` location containment, or the BFF anonymous-read service-door path.
+
+**Scope notes (things I did not verify):** Lakekeeper's Helm chart (separate repo) for pod security/NetworkPolicy; the Rust `DirectoryNamespace.register_table` location check behind pylance; rask's `bootstrap-admin.yaml` Job internals; where `LINEAGE_API` in the zones resolves (direct service vs gateway) for the BFF service-door reads.
+
+---
+
+## G. Notifications (from the notifications sweep)
+
+### G1 · Feed-lane coverage depends on the service principal's own grants — **HIGH**
+**Where.** `lineage/.../runs.py:116-148`, `notifications/.../reconciler.py:19-21`. **Closes it.** A
+service-only ungoverned projection of the feed gated by `can_observe_events`; `can_be_notified` stays the
+sole disclosure gate.
+
+### G2 · Unbounded producer strings become permanent retry loops — **HIGH**
+**Where.** `models.py:122-135`, `fanout.py:164-176`. **Closes it.** `max_length` on delivery fields; a
+permanent outcome for validation faults.
+
+### G3 · Producer `eventTime` is the sort and retention key — **HIGH**
+**Where.** `feed.py:61-80`, `inbox_actor.py:299-343`. **Closes it.** Service-side `received_at`; cap
+inside `deliver`.
+
+### G4 · Control lane trusted end-to-end with no catch-up path
+**Where.** `control_events.py:125-139`, `dlq.py:9-16`. **Closes it.** Reconcile from the catalog's
+durable audit trail; verify `object_id` against `object_type` and the actor app-id.
+
+### G5 · Bare 500s and a blocking sidecar wait per call
+**Where.** `proxies.py:98-119`. **Closes it.** Map transport errors to 503 problem bodies; one proxy
+factory in the lifespan.
+
+### G6 · No erasure, no retention for watches/prefs/cursor, no reverse index for a subject
+**Where.** `watch_actor.py:1-7`, `models.py:322-335`, `inbox_actor.py:444-446`. **Closes it.** A
+delete-subject door that sweeps inbox, prefs, watches and the sent ledger; TTLs.
+
+Also: `.claude/skills/rask-notifications/SKILL.md` contradicts the code in eight places (reason count,
+line refs, `lease_expired`, the feed grant, render on control rows, delivery membership check,
+`named_subjects`, the missing `WatchIndexActor`). Fix the skill in the same commit as G1.
+
+---
+
+## H. Maintenance (from the maintenance sweep)
+
+### H1 · On-demand doors destroy live shallow clones — **HIGH** (see C3)
+### H2 · Bucket-granular external bases freeze purge and protect whole buckets — **HIGH** (see C4)
+### H3 · Clone protection bounded to maintained buckets — **MEDIUM-HIGH** (see C3)
+
+### H4 · No lease, no deployment strategy, unpersisted retry state
+**Where.** `routes.py:61`, `maintenance.yaml:41-66`, `trash.py:80-91`, `purge.py:442-445`, `sweep.py:204-206`.
+**Closes it.** Conditional-put lease per tick and per dataset (`records.create_json` exists); `attempts`
+and `last_refusal` on the trash record; `strategy: Recreate`.
+
+### H5 · No per-object GC audit
+**Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`. **Closes it.**
+Per-dataset structured log plus a `table_maintained` control event from sweep and doors.
+
+### H6 · Purge deletes any sub-prefix a trash record names; root key everywhere
+**Where.** `purge.py:326-340,380-385`, `maintenance.yaml:123`, `values.yaml:1517`. **Closes it.** Verify
+the location is a Lance root before `delete_dir`; a maintenance identity scoped per warehouse (C4/§F).
+
+---
+
+## I. Shared packages (from the packages sweep)
+
+### I1 · `ratch` is an ungoverned direct write path in the production head image — **HIGH**
+**Where.** `ratch/core/driver.py:99-103,280,317,355`, `core/dataset.py:73-81`, `lineage.py:1-5`,
+`.docker/ray-cluster.dockerfile:62-69`, `pyproject.toml:70`; also `runtime_env.pip` (the rejected
+pattern), `allow_external_blob_outside_bases=True`, modality literals (`FTS_LANGUAGE="Swedish"`,
+institution column names). **Closes it.** Q4; commits through `CatalogTableWriter`; strip modality
+literals into a runner.
+
+### I2 · Vended credentials cannot pass through any seam — **HIGH** (see C1)
+
+### I3 · Both emit kernels swallow; only the medallion has an outbox — **HIGH** (R10)
+
+### I4 · The FGA model cannot express the verdict's rungs — **MEDIUM-HIGH**
+**What.** No `branch`, `column`, `base`, `estate` type; bootstrap is a configured root warehouse plus
+out-of-band tuples (`provision()` writes none). **Closes it.** C2's `branch`; a column-policy relation
+(§J3); an `estate` root with `can_create_project`; `.fga.yaml` cases; `_CHILD_EDGE_PARENT_TYPES`.
+
+### I5 · Duplicated seams
+**What.** Two conflict classifiers; two emit kernels with three producer strings; ingest hand-maps 409;
+`storage/client.py:102` is a verified no-op; three boto3 constructors; two S3FileSystem constructors with
+different scheme logic. **Closes it.** B3, R10, one `s3_client`, delete the dead line.
+
+### I6 · Untested seams
+`objectfs.py`, `lakehouse/blobs.py`, `lancekit/store.py`, `lancekit/reader.py` REST path, `audit.py`,
+`middleware.py`; ratch's ingest/materialize/indexing/search/jobs; `submit_or_reattach`'s delete branch.
+
+---
+
+## J. Governance features a lakehouse buyer expects (none exist)
+
+| # | Feature | Today | What closes it |
+| --- | --- | --- | --- |
+| J1 | Read audit log (subject, table, version, columns, when) | none; `lineage_reads` covers lineage's own endpoints only | `audit()` on every data-read door via a service-kit middleware; retention; an index on dataset |
+| J2 | Right to erasure end to end | Lance row delete only | propagate to blob sidecars (reachability GC), clones/branches (C3), and tags pinning old versions; a delete-subject door in notifications (G6) |
+| J3 | Column-level policy (mask/deny) | column *lineage* only; `columns.py` has no FGA check | `column` relation in `model.fga`; masking on query and descriptor-first reads |
+| J4 | Change feed for BYO consumers | Lance has row versions | `changes since version N` door and event on the control lane |
+| J5 | Encryption at rest options per warehouse | none in code or chart | `aws_server_side_encryption` / `aws_sse_kms_key_id` on the warehouse record and in vended options |
+| J6 | Schema evolution governance | raw pylance errors | compatibility check; breaking change requires owner; schema history door |
+| J7 | Distributed index build as a governed job | synchronous in request handlers | `create_index_uncommitted` / commit-segments protocol behind an index-job record |
+| J8 | Quotas and storage accounting | none | per-project/warehouse accounting; branch-by-root gives per-directory cost for free |
+| J9 | PII / sensitivity classification | a `pii` key in seed data | classification on the dataset node; policy keyed on it |
+| J10 | Backup and tested restore of the control root | chart snapshot for RustFS and Postgres | a documented, exercised restore of projects, warehouses, bindings, trash |
+| J11 | In-flight blob-byte admission budget | none (catalog counts requests) | 503 + `Retry-After` on every blob door (from the lance-context spec) |
+
+---
+
+## K. The Dapr retreat (D5) — sequenced after A–D
+
+From `dapr-coupling-analysis.md`: 7 of 12 blocks used; 40/480 source files import the SDK, 171 name it;
+actors 2 481 LOC (annotator, notifications only); workflows 3 407 LOC; 240/769 tests; 36/53 chart
+templates. Replacement map per block is in that document and in each sweep's §5. Order: secrets (OpenBao
+direct) → pub/sub (JetStream durable consumers, `Publisher` protocol behind `dapr_publish`) → state
+(JetStream KV with CAS; notifications' actors become KV rows with revision CAS) → bindings (in-process
+scheduler + KV lease) → invocation (plain HTTP + mTLS) → workflow last (BYO engine on the event plane;
+`promotion_review` becomes a record + door + scheduled message).
+
+---
+
+## L. Runtime hygiene from the Lance guide (unchanged from the digest)
+
+Shared `lance.Session` in every Lance-plane process (catalog opens ~24 bare datasets per request path);
+`LANCE_CPU_THREADS` / `LANCE_IO_THREADS` / `LANCE_LOG` in the Ray `runtime_env`; `instrument_lance_metrics`
+once per process (ingest, viewer, search, annotator never call it); unenforced primary key on the ingest
+`id`; branch/tag name validation at the door; blob thresholds pinned on every create path; `allow_http`
+derived from the endpoint scheme; HTTP client timeouts.
+
+---
+
+## M. What needs more investigation before a decision
+
+| # | Question | How to answer it |
+| --- | --- | --- |
+| M1 | Does `cleanup_old_versions` on pylance 10.0.0 delete external blobs under a registered base? | RED test: external blob under `initial_bases`, cleanup, assert the object survives. Decides C4's default. |
+| M2 | Does Lance honour a tag that pins a *branch* version during main cleanup? | Test on `tree/<branch>/` with a root tag; matters once C8 maintains branches. |
+| M3 | Bytes and latency of tiers-as-clones vs copying on one corpus (R9). | `scripts/` measurement against the medallion's blob path. |
+| M4 | Blob v2 default thresholds: post says 64 KB / 4 MB, guide says 16 KiB / 2 MiB, rask measured 64 KiB / 4 MiB. | Keep pinning; re-measure on each pylance bump. |
+| M5 | Per-base `base_<id>.<key>` storage options and `aws_provider_scheme` in pylance 10.0.0. | `base_store_params` exists; the keyed form and provider scheme are unconfirmed in the installed build. |
+| M6 | Put-if-not-exists on every store rask might run on (RustFS verified; COS/GooseFS need commit locks per the guide). | A per-store CAS probe in the warehouse validation endpoint. |
+| M7 | Shared-base cleanup safety: no test proves cleanup on a dataset sharing a non-root base spares its sibling. | Add the test before C5 ships. |
+| M8 | Whether MemWAL server-id sharding is a fit for append-only bronze landing (coordinator-free ingest). | Prototype after K; blob v2 columns read `None` through the MemWAL scanner today. |
+| M9 | Ray Serve / dashboard exposure once D1 lands: which dashboard reads are still needed by the compute zone. | Enumerate the zone's calls; keep only those behind FGA. |
+| M10 | The `x-api-key` key store (Q7) and its rotation model. | Design note in the management API RFC. |
+| M11 | Upstream: pylance's GET routes (A3) and the 0.12.0 `header.` vs `headers.` prefix in the bundled client. | File the two issues; track the fix version. |
+| M12 | Whether branch tags need CAS (`_set_tag` is unconditional at every layer, incl. pylance's `Tags::update`). | Object-store conditional put on `_refs/tags/<name>.json`; verify RustFS honours `If-Match` there. |
+
+---
+
+## N. What was asked of the owner and is still open
+
+Q2–Q7 above (Q1 taken: the documents live under `docs/audits/lakehouse-2026-09/`). Nothing else blocks §A–§C.
