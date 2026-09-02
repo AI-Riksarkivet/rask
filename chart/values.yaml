@@ -274,6 +274,16 @@ services:
     # reports authorization as configured. That is the `explorer.yaml` failure verbatim (the viewer
     # streamed page images wide open because the auth env was emitted for the annotator alone).
     governedAuth: true
+    # FAIL CLOSED ON THE APP TOKEN. This service hosts a sidecar-delivered route —
+    # `POST /compute-prune-jobs-cron`, which deletes terminal Ray jobs — and its boot refuses to start
+    # with Dapr on and no token. `daprIngest` is the chart's name for exactly that contract (fleet.yaml
+    # renders APP_API_TOKEN for it), and `tests/unit/test_invariants.py::
+    # test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one` fails the render if the
+    # code and this flag ever disagree. Measured on the live estate 2026-09-02 before it was set: the
+    # SIDECAR held the token and stamped every delivery, the app container held none, and the route's
+    # guard compared each delivery against an empty string — open to any pod in the namespace while
+    # reading as sidecar-only.
+    daprIngest: true
   # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
   # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
   # no store, no cluster — so it is part of the default install: the builder's client-side lane works

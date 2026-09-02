@@ -16,7 +16,7 @@ import logging
 import re
 import time
 from http import HTTPStatus
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import anyio
 import httpx
@@ -739,6 +739,22 @@ async def logs(
         return RayLogsPayload(ok=False, node_id=node_id, error=_error_text(exc))
 
 
+def _escapes_prefix(path: str) -> bool:
+    """True when any segment of ``path`` is empty, ``.``, ``..``, or percent-decodes to one of those.
+
+    A trailing slash is not an empty segment — the Serve API is trailing-slash-strict and the
+    compute proxy restores it on purpose — so the split runs on the path with its outer slashes
+    stripped. Decoding twice catches a double-encoded segment (``%252e%252e``) that one decode
+    would leave as ``%2e%2e`` and the upstream might decode again.
+    """
+    for segment in path.strip("/").split("/"):
+        if segment in ("", ".", ".."):
+            return True
+        if unquote(unquote(segment)) in (".", ".."):
+            return True
+    return False
+
+
 async def proxy(
     http: httpx.AsyncClient,
     dashboard_url: str,
@@ -760,6 +776,22 @@ async def proxy(
     transfer) are stripped here, so a caller relays the headers verbatim and lets
     its framework recompute the length.
     """
+    # THE PREFIX IS THE CONTRACT, AND A DOT-SEGMENT LEAVES IT. This seam forwards `path` under
+    # `dashboard_url`, and the HTTP client resolves `..` against the dashboard ORIGIN — so
+    # `api/serve/../v0/logs/file/` is a request for `/api/v0/logs/file/`, i.e. any GET the dashboard
+    # serves. The public gateway collapses dot-segments before routing, but a caller on the service
+    # port is not behind it, and a PERCENT-ENCODED `%2e%2e` arrives at a `{path:path}` handler
+    # already decoded (measured 2026-09-02 through the compute app: it was forwarded as written
+    # above). Refused here, where the URL is built, so every consumer inherits it; an empty segment
+    # is refused for the same reason, since `a//..` is the same escape once a normaliser runs, and
+    # a segment that DECODES to a dot is refused rather than sent on for the upstream to decide.
+    if _escapes_prefix(path):
+        log.warning("ray_proxy_path_refused", extra={"dashboard_url": dashboard_url, "path": path})
+        return ProxyResponse(
+            content=b"refusing a path with a dot or empty segment",
+            status_code=HTTPStatus.BAD_REQUEST,
+            headers={"content-type": "text/plain"},
+        )
     url = f"{dashboard_url}/{path.lstrip('/')}"
     fwd = {k: v for k, v in headers.items() if k.lower() not in _REQUEST_STRIP}
     qs = query.decode() if isinstance(query, bytes) else query

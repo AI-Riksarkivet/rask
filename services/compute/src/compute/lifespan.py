@@ -16,6 +16,7 @@ from ray_kit import build_client
 from ray_kit.auth import auth_headers
 from service_kit.config import Settings
 from service_kit.governed.auth_lifespan import attach_auth
+from service_kit.governed.dapr_auth import assert_app_token_configured
 
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,15 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # the first request waits out the cooldown rather than immediately restorming the dashboard.
         app.state.ray_client_last_attempt = time.monotonic()
         app.state.ray_client = await to_thread.run_sync(build_client, settings.ray_dashboard_url)
+        # FAIL CLOSED ON THE APP TOKEN, like every sibling that hosts a sidecar-delivered route. The
+        # prune binding (`pruner.py`) is guarded by `require_dapr_token`, which is a documented no-op
+        # while `APP_API_TOKEN` is unset — safe only because this call turns that into a boot refusal
+        # once Dapr is on. Measured on the deployed estate 2026-09-02 without it: the sidecar held the
+        # token and stamped every delivery, the app container held none, and the guard compared each
+        # delivery against an empty string — so a route that deletes terminal Ray jobs was open to
+        # any pod in the namespace while reading as sidecar-only. A pod that refuses to start names
+        # the missing variable; a pod that starts open names nothing.
+        assert_app_token_configured(dapr_enabled=get_compute_settings().dapr_enabled)
         # THE DOOR'S OWN DEPENDENCIES. `compute.security` reads `app.state.oidc` / `app.state.fga`;
         # without this the settings are bound, the routes declare the dependency, and every request
         # answers 503 "Authentication is enabled but unavailable" — which is fail-CLOSED and correct,

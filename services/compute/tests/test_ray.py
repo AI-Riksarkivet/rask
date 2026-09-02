@@ -215,3 +215,22 @@ def test_get_ray_client_negative_caches_while_ray_down(monkeypatch: pytest.Monke
     for _ in range(3):
         assert dependencies.get_ray_client(request) is None
     assert calls == 1  # only the first rapid request rebuilt; the cooldown suppressed the rest
+
+
+def test_serve_proxy_refuses_an_encoded_dot_segment_end_to_end(client: TestClient) -> None:
+    """The gateway is not the defence; the seam is. Driven through the REAL `dashboard.proxy` with the
+    app's HTTP client swapped for a recorder: the request must be refused 400 and the dashboard must
+    never see it. Reproduced before the fix: `%2e%2e` decoded at the handler and was forwarded as
+    `api/serve/../v0/logs/file/`."""
+    import httpx
+
+    seen: list[str] = []
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    client.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(_record))
+    resp = client.get("/api/serve/%2e%2e/v0/logs/file")
+    assert resp.status_code == 400, f"{resp.status_code}: {resp.text[:100]}"
+    assert seen == [], f"the dashboard was reached at {seen}"
