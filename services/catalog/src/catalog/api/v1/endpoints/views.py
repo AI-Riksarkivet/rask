@@ -21,7 +21,10 @@ from catalog.services import native
 router = APIRouter(prefix="/v1/materialized_view", tags=["materialized_view"])
 
 
-@router.post("/{id}/create", response_model_exclude_none=True)
+# The spec's success status, declared on the decorator. All three answer a spec-correct 501 today
+# (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
+# missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
+@router.post("/{id}/create", response_model_exclude_none=True, status_code=201)
 async def create_materialized_view(
     id: str,
     body: CreateMaterializedViewRequest,
@@ -55,7 +58,10 @@ async def create_materialized_view(
     return response
 
 
-@router.post("/{id}/refresh", response_model_exclude_none=True)
+# The spec's success status, declared on the decorator. All three answer a spec-correct 501 today
+# (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
+# missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
+@router.post("/{id}/refresh", response_model_exclude_none=True, status_code=202)
 def refresh_materialized_view(
     id: str, ns: NamespaceDep, settings: SettingsDep, body: RefreshMaterializedViewRequest | None = None
 ) -> RefreshMaterializedViewResponse:

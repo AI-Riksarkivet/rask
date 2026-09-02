@@ -205,6 +205,11 @@ async def merge_insert_into_table(
     emitter: LineageEmitterDep,
     client: FgaClientDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
+    # `on` STAYS A SINGLE KEY until the lance-namespace bump (A9 is blocked on A10). 0.12.0 makes it an
+    # array of field paths — a composite merge key, sent as a repeated query parameter — but the
+    # INSTALLED 0.11.0 model types it `str` with MinLen(1), so accepting a list here fails validation
+    # inside `MergeInsertIntoTableRequest` rather than at the door. Widening the door without the
+    # model would 422 a 0.12.0 client one layer deeper and read as a rask bug.
     on: str | None = None,
     when_matched_update_all: bool | None = None,
     when_matched_update_all_filt: str | None = None,
@@ -448,7 +453,15 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
     return Response(content=data, media_type=ARROW_FILE)
 
 
-@router.post("/{id}/count_rows")
+# DUAL-MOUNTED, and the reason is upstream disagreeing with itself. The spec says POST at every
+# tag from v0.9.0 to v0.12.0, and lance-namespace's own generated reqwest client sends POST — but
+# the REST client pylance BUNDLES from the lance repo (`rust/lance-namespace-impls/src/rest.rs`)
+# calls `get_json` for this op, and the reference server it bundles mounts it as GET. Since
+# `lance_namespace.connect("rest", …)` resolves to that class, a POST-only route answered every
+# Python user of the "rest" alias with FastAPI's default 405, which carries no `code` and so
+# surfaces as `InternalError 18`. Serving both is the local fix; the upstream fix is one line in
+# lance and is worth filing.
+@router.api_route("/{id}/count_rows", methods=["GET", "POST"])
 def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, body: CountTableRowsRequest | None = None) -> Response:
     """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
 

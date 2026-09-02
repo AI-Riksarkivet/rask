@@ -144,7 +144,10 @@ async def drop_columns(
     return response
 
 
-@router.post("/{id}/backfill_column", response_model_exclude_none=True)
+# The spec's success status, declared on the decorator. All three answer a spec-correct 501 today
+# (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
+# missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
+@router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
 def backfill_column(id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, settings: SettingsDep) -> AlterTableBackfillColumnsResponse:
     """Backfill values into columns via the native driver — wraps ``alter_table_backfill_columns``.
 

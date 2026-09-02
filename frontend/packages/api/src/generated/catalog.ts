@@ -1853,7 +1853,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Count Table Rows
+         * @description Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
+         *
+         *     Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
+         *     was not: the parameter reached the upstream implementation, which answered from main regardless,
+         *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
+         */
+        get: operations["count_table_rows_v1_table__id__count_rows_post"];
         put?: never;
         /**
          * Count Table Rows
@@ -2729,7 +2737,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Table Tags
+         * @description List every tag on the table — wraps lance_namespace ListTableTags.
+         */
+        get: operations["list_table_tags_v1_table__id__tags_list_post"];
         put?: never;
         /**
          * List Table Tags
@@ -9046,7 +9058,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9085,7 +9097,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11311,7 +11323,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11515,6 +11527,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommitFragmentsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    count_table_rows_v1_table__id__count_rows_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CountTableRowsRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -12978,6 +13029,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteTableTagResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_table_tags_v1_table__id__tags_list_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListTableTagsResponse"];
                 };
             };
             /** @description Validation Error */

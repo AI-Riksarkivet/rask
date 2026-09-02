@@ -124,11 +124,10 @@ Measured: 12 of 54 ops verbatim, 34 partial, 3 model-differs, 5 stub. With pylan
 v0.12.0. Details and evidence: `lance-conformance-and-build-rules.md` §2–§3, §9.
 
 ### A1 · Bodyless handlers ignore the required JSON body
-**Status 2026-09-02.** `DescribeTable` is done — `4c64046c` (2026-08-29) gave it `body: DescribeTableRequest | None`,
-reconciles the id and lets a present body field win. The other EIGHT stand, checked against HEAD and the
-vendored spec (every one of the nine declares a required JSON body and no query parameters):
-`ListTableIndices`, `GetTableStats`, `DescribeTableIndexStats`, `DescribeNamespace`, `NamespaceExists`,
-`TableExists`, `DeregisterTable`, `DescribeTransaction` take no body parameter at all.
+**DONE 2026-09-02** (`a6d2032e`). All nine now declare the spec body; a present body field wins and the
+query aliases stay as a fallback. It also closed a hole it had opened elsewhere: `stats`, `index/list`
+and `index/{n}/stats` had been given a `branch` QUERY parameter to REFUSE a branch-scoped read, and a
+spec client sends `branch` in the body, so all three answered 200 from main until this landed.
 **What.** `DescribeTable`, `ListTableIndices`, `GetTableStats`, `DescribeTableIndexStats`, the exists/
 deregister/transaction ops read version/tag/branch/vend_credentials/pagination from the query string or
 not at all. The reference client sends `vend_credentials` only in the body, so **credential vending is
@@ -136,14 +135,18 @@ unreachable by any spec client**. **Where.** `services/catalog/src/catalog/api/v
 **Closes it.** Declare the request model as the body on every op, `reconcile_body_id` uniformly, body
 wins over rask's query aliases; a wire-level test posting each spec body.
 
-### A2 · Three response shapes the client cannot parse
+### A2 · Three response shapes the client cannot parse — **DONE 2026-09-02** (`aa57350c`)
+`count_rows` answers a JSON integer, both plan doors a JSON string (encoded AS a string, so a plan that
+looks like JSON is not mistaken for structure), `schema_metadata/update` the direct map. Three tests
+that pinned the deviation were rewritten.
 **What.** `schema_metadata/update` answers the wrapped envelope (spec: direct `{str:str}`); explain/
 analyze answer `text/plain` (spec: JSON string); `count_rows` answers `text/plain` (parses by accident).
 **Where.** `columns.py:229-234`, `data.py:698-720`. **Closes it.** Direct map, `JSONResponse` strings,
 JSON integer; the envelope dialect moves to the management API.
 
 ### A3 · GET vs POST on `count_rows` and `tags/list`
-**Status 2026-09-02.** Stands — both routes are `@router.post` only at HEAD.
+**DONE 2026-09-02** (`e2f0…`). Both dual-mounted `GET` + `POST`. The upstream one-liner in lance is
+still worth filing: its bundled client and reference server disagree with its own spec.
 **What.** The spec and lance-namespace's generated client say POST at every tag since 0.9.0. **pylance's
 own bundled client and reference server use GET** (`lance` repo `rust/lance-namespace-impls/src/rest.rs`,
 `rest_adapter.rs`, at v10.0.0 and main). **Closes it.** Dual-mount both routes; file the upstream issue.
@@ -180,11 +183,15 @@ maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R
 re-expressed with the spec's own code; `branch` honoured (plumbing at `dataplane.py:1085`).
 
 ### A8 · Stub status codes
-**Status 2026-09-02.** Stands — `views.py:24,58` and `columns.py:146` carry no `status_code`.
+**DONE 2026-09-02.** 201 / 202 / 202 declared on the three decorators, asserted through the OpenAPI
+(all three answer 501 today, so no live call can exercise the success status).
 **Where.** `views.py:24,58`, `columns.py:146` lack 201/202. One-line fix each.
 
 ### A9 · 0.12.0: merge_insert `on` is an array
-**Status 2026-09-02.** Stands — `data.py:208` declares `on: str | None`.
+**BLOCKED ON A10, measured 2026-09-02.** Widening only the door was tried and reversed: the installed
+0.11.0 model types `on` as `str` with `MinLen(1)`, so a list fails validation INSIDE the request model
+and a 0.12.0 client gets a pydantic error one layer deeper — which reads as a rask bug rather than a
+version skew. The current single-key contract is now pinned so the change lands WITH the bump.
 **Where.** `data.py` merge handler declares `on: str | None`; the wire form is a repeated query
 parameter. **Closes it.** `on: list[str]`; pass through to pylance.
 
