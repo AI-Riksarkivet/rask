@@ -132,7 +132,41 @@ The token is omitted rather than set empty when absent: object_store treats a pr
 as a token and the request is refused. Both the unset and the empty case are covered, because a config
 read yields `""` far more often than `None`.
 
-| N3 | **The plan document + `maintenance_requested`/`maintenance_completed` control actions**, emitted by the sweep and by the catalog doors, so both produce a byte-identical plan. | D5, H5 |
+| N3 | **The plan document** ✅ **LANDED 2026-09-03** — `DatasetWorkItem` (uri + `DatasetPlan` + the reduced protection verdict), produced by `plan_sweep` and executed by `maintain_one_item`. The control actions are **NOT** done and remain open. | D5, H5 |
+
+### N3 as landed — the plan document (control actions still open)
+
+The sweep now splits where it always wanted to: `plan_sweep` does every metadata read (registries,
+bucket listing, discovery, the whole-estate base-reference pre-pass, per-dataset policy resolution) and
+mints nothing; `maintain_one_item` does one dataset's work and **takes nothing computed across the
+estate**. `run_sweep` is the two composed, so today's behaviour is unchanged.
+
+Self-containment is the property, and one thing genuinely stood in its way. `_protected_roots` HAS to
+be whole-estate — a shallow clone in bucket B is the only thing that knows bucket A's dataset must not
+be touched — so it cannot be recomputed per dataset. But `compact_one` consumes it through exactly one
+call, `is_protected(uri)`, and that answer is one string. The pre-pass stays whole-estate at planning
+time and what crosses to the worker is its verdict for that dataset.
+
+Two things running found:
+
+- **The reduced root must be NORMALISED on rehydration.** `is_protected` normalises the location it is
+  asked about but compares against its set verbatim, so a root arriving in any other spelling matches
+  nothing — and base_refs' own docstring names that outcome: "the failure mode that looks exactly like
+  having no guard at all". `plan_sweep` happens to emit a normalised value because it forwards
+  `is_protected`'s own return, but a work item crosses a queue and will eventually be built by
+  something else.
+- **Nothing in the suite noticed if the verdict stopped being carried.** Deleting `protected_by` from
+  the planner left all 70 tests green while making a shallow clone's source compactable. That gap is
+  now closed by a test that drives `plan_sweep` with the IO phases stubbed.
+
+Still open in N3: the `maintenance_requested` / `maintenance_completed` control actions, so a person
+hears about maintenance rather than only the lineage graph. That is `rask-notifications` work and has
+not been started.
+
+**Not claimed:** nothing enqueues these items yet. `run_sweep` still executes them in one loop inside
+the cron handler, so the tick is still unbounded, still single-flight on an `asyncio.Lock`, and still
+correct only while `replicas: 1` is hardcoded. N4 is what changes that; the units it needs now exist.
+
 | N4 | **The JetStream work queue and the executor**, mirroring `ingest/queue.py`'s shape. The catalog doors and the sweep become planners; `compact_one` runs on the worker. | H4, K |
 | N5 | **Retire the process-local locks and the `replicas: 1` pin** once the ack is the lease; parameterise the template. | H4 |
 | N6 | Index builds and `rename` move onto the same lane (`rename` becomes a server-side copy or a base-path rewrite, never bytes through the pod). | J7 |

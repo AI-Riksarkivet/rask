@@ -341,6 +341,52 @@ class DatasetPlan(BaseModel):
     optimize_indices_enabled: bool = True
 
 
+class DatasetWorkItem(BaseModel):
+    """ONE dataset's maintenance, self-contained — everything a worker needs and nothing more.
+
+    Self-containment is the whole point, and it is what lets this ride a queue: a unit that needed a
+    value computed across the estate could only ever be executed by the process that computed it, which
+    is the shape the sweep has today. The three costs of that shape — an overrunning tick is DROPPED
+    rather than queued, a poison dataset stops everything discovered after it, and the single-flight
+    guard is an ``asyncio.Lock`` correct only while ``replicas: 1`` stays hardcoded — all dissolve once
+    a dataset's maintenance is a unit.
+
+    ``protected_by`` is the reduction that makes that possible. ``_protected_roots`` HAS to be
+    whole-estate (a shallow clone in bucket B is the only thing that knows bucket A's dataset must not
+    be touched), but ``compact_one`` consumes it through exactly one call — ``is_protected(uri)`` — and
+    that answer is one string. So the pre-pass stays whole-estate where it belongs, at planning time,
+    and what crosses to the worker is its verdict for this dataset: the referencing root, or ``None``.
+    """
+
+    uri: str
+    plan: DatasetPlan
+    #: The root that some OTHER dataset's manifest resolves through, when this dataset is one or lies
+    #: under one. ``None`` means the pre-pass found no referrer — the dataset may be compacted.
+    protected_by: str | None = None
+
+
+def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, options: dict[str, str]) -> DatasetResult:
+    """Execute ONE work item. The worker entry point — takes nothing computed across the estate.
+
+    The absence of a whole-estate parameter here is load-bearing rather than incidental, and
+    ``test_a_work_item_is_self_contained.py`` pins the signature: reintroducing one would put the
+    queue in front of work that cannot actually be distributed.
+
+    ``protected_by`` is rehydrated into the single-root ``BaseRefs`` ``compact_one`` expects.
+    ``is_protected`` matches by containment, so reconstructing from the MATCHED root returns that same
+    root for this uri — the verdict is preserved exactly, not approximated.
+
+    It is NORMALISED on the way in, and that is not defensive tidying. ``is_protected`` normalises the
+    location it is asked about but compares against ``protected`` verbatim, so a root that reaches this
+    unnormalised — a hand-built item, or a producer that stores the URI it read rather than the verdict
+    it was given — matches nothing, and base_refs names that outcome precisely: "the failure mode that
+    looks exactly like having no guard at all". A work item crosses a queue, so it will eventually be
+    built by something other than :func:`plan_sweep`.
+    """
+    protected = base_refs.BaseRefs(protected={base_refs.normalise(item.protected_by)} if item.protected_by else set())
+    return _maintain_one(item.uri, item.plan, settings=settings, options=options, protected=protected)
+
+
 def _resolve_plan(
     uri: str,
     *,
@@ -505,6 +551,58 @@ def _record_sweep_metrics(results: list[DatasetResult]) -> None:
     record_failed(failures)
 
 
+def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], list[DatasetResult]]:
+    """Decide what this tick should do, WITHOUT doing any of it. Returns ``(work, already-decided)``.
+
+    Every phase here is a metadata read — registries, a bucket listing, one manifest open per dataset —
+    and none of them rewrites a byte or mints a version. That is what makes this half safe to keep in a
+    request handler while the other half moves to a worker, and it is the same split the catalog's
+    ``/compaction_plan`` door draws.
+
+    The phases, each its own function above and each ordered for a reason that function states: read the
+    protective registries (:func:`_load_policies`, :func:`_trash_exclusions` — either one unreadable
+    ABORTS the tick), enumerate the buckets (:func:`_buckets_to_sweep`), discover (:func:`_discover_all`),
+    take the whole-estate base-reference pre-pass (:func:`_protected_roots`), then remove what the trash
+    freezes (:func:`_exclude_trashed`).
+
+    The pre-pass is the one thing that cannot be per-dataset, and it is REDUCED here rather than carried:
+    ``compact_one`` asks it exactly one question per dataset, so each work item leaves with that
+    question's answer and the whole-estate value stays behind.
+
+    The second return is the datasets already decided without work — the trash exclusions — which are
+    results, not units, and must not be enqueued.
+
+    ``record_run_started`` fires here, BEFORE discovery, for the reason it always did: a pass killed at
+    dataset 400 of 900 was observationally identical to a tick that never arrived, and started-minus-
+    completed is the lost-pass count.
+    """
+    record_run_started()
+    options = settings.storage_options()
+    older_than = timedelta(days=settings.older_than_days)
+    policy_records = _load_policies(settings, options)
+    trashed_by_path = _trash_exclusions(settings, options)
+    uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options))
+    protected = _protected_roots(uris, options)
+    uris, decided = _exclude_trashed(uris, trashed_by_path)
+    now = datetime.now(UTC)
+    # The discovery listing order is deterministic across ticks, so a pass that consistently dies at
+    # dataset N never maintained anything after N — silently, forever. Shuffling rotates which datasets
+    # sit behind a recurring failure point. It is a mitigation for the absence of a per-dataset failure
+    # boundary, and it stops being needed once these units are executed independently rather than in
+    # one serial pass; until then it still holds, and per-dataset pacing lives in the policy stamps,
+    # which do not care about order.
+    random.shuffle(uris)
+    items = [
+        DatasetWorkItem(
+            uri=uri,
+            plan=_resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than),
+            protected_by=protected.is_protected(uri),
+        )
+        for uri in uris
+    ]
+    return items, decided
+
+
 def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     """Discover every dataset in EVERY swept bucket and compact + GC each; record what was reclaimed.
 
@@ -527,26 +625,18 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # BEFORE discovery, not after the loop like `record_run()`: a pass killed at dataset 400 of 900
     # was observationally identical to a tick that never arrived. started minus
     # completed is the lost-pass count.
-    record_run_started()
+    items, results = plan_sweep(settings)
     options = settings.storage_options()
-    older_than = timedelta(days=settings.older_than_days)
-    policy_records = _load_policies(settings, options)
-    trashed_by_path = _trash_exclusions(settings, options)
-    uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options))
-    protected = _protected_roots(uris, options)
-    uris, results = _exclude_trashed(uris, trashed_by_path)
     now = datetime.now(UTC)
     # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
     # discovery listing order is deterministic across ticks, so a pass that consistently dies at
     # dataset N never maintained anything after N — silently, forever. Shuffling
     # rotates which datasets sit behind a recurring failure point; per-dataset pacing stays with the
     # policy stamps, which don't care about order.
-    random.shuffle(uris)
-    for uri in uris:
+    for item in items:
         record_dataset_swept()
-        plan = _resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than)
-        result = _maintain_one(uri, plan, settings=settings, options=options, protected=protected)
-        _stamp_cadence(uri, plan, result, settings=settings, options=options, now=now)
+        result = maintain_one_item(item, settings=settings, options=options)
+        _stamp_cadence(item.uri, item.plan, result, settings=settings, options=options, now=now)
         results.append(result)
     _record_sweep_metrics(results)
     return results
