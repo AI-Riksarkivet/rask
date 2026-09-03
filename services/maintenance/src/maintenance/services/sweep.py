@@ -525,30 +525,37 @@ def _maintain_one(
         return result
 
 
-def _record_sweep_metrics(results: list[DatasetResult]) -> None:
-    """The tick's counters. Every one is recorded including 0 — the ``record_reclaimed`` rule.
+def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, options: dict[str, str], now: datetime) -> DatasetResult:
+    """Do ONE unit and record what it cost — the whole of a worker's job, and of a serial iteration's.
+
+    Both lanes call this so they cannot drift: a queued unit and a serially-executed one must maintain
+    the dataset, stamp its cadence and move the same counters, or "execution moved onto a queue" would
+    quietly also mean "and changed what maintenance does".
+
+    The counters here are the PER-DATASET ones, and they are all monotonic `.add()`, so N unit
+    recordings total exactly what one aggregate recording of N results did. ``record_run`` is
+    deliberately NOT among them: it is the tick's completion half of the ``record_run_started`` pair, and
+    firing it per unit would report N completed passes for one tick and destroy the lost-pass count that
+    pair exists to give. The zero baseline those series need is emitted per tick by :func:`plan_sweep`,
+    for the same reason.
 
     On ``record_refused`` the zero carries the most weight of any counter in this service: ``SUPPORTED``
     is a whitelist, so a rising refusal count after a pylance upgrade is the ONLY signal that maintenance
-    quietly stopped covering the estate.
-
-    The FAILURE series (T5) is keyed by the STABLE error class, never the message, which carries URIs and
-    would make the series unbounded. Without it a dataset failing on every tick forever was
-    indistinguishable from a healthy estate on every surface that can raise an alarm — the error reached
-    OTel as a span status and one aggregate log line, and vmalert evaluates PromQL, so neither can page.
+    quietly stopped covering the estate. The FAILURE series is keyed by the STABLE error class, never the
+    message, which carries URIs and would make the series unbounded.
     """
-    record_run()
+    record_dataset_swept()
+    result = maintain_one_item(item, settings=settings, options=options)
+    _stamp_cadence(item.uri, item.plan, result, settings=settings, options=options, now=now)
     record_reclaimed(
-        fragments_removed=sum(r.fragments_removed for r in results),
-        versions_removed=sum(r.old_versions_removed for r in results),
-        indices_optimized=sum(r.indices_optimized for r in results),
+        fragments_removed=result.fragments_removed,
+        versions_removed=result.old_versions_removed,
+        indices_optimized=result.indices_optimized,
     )
-    record_refused(sum(1 for r in results if r.refused))
-    failures: dict[str, int] = {}
-    for result in results:
-        if result.error is not None:
-            failures[result.error_type or "Unknown"] = failures.get(result.error_type or "Unknown", 0) + 1
-    record_failed(failures)
+    record_refused(1 if result.refused else 0)
+    if result.error is not None:
+        record_failed({result.error_type or "Unknown": 1})
+    return result
 
 
 def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], list[DatasetResult]]:
@@ -577,6 +584,15 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     completed is the lost-pass count.
     """
     record_run_started()
+    # THE ZERO BASELINE, emitted per TICK because per-unit recording alone cannot: an estate with no
+    # datasets runs no unit, and a counter nothing ever adds to is a series that does not exist — a
+    # dashboard or alert on `rate(compaction_*_total[5m])` reads "no data" rather than "nothing to
+    # reclaim". Adding zero is a no-op for the totals and creates the series from the first tick, which
+    # is the rule `record_reclaimed` states and the sharper one `record_refused` states: a whitelist
+    # that silently starts refusing the whole estate must be visible from the first tick after the
+    # upgrade that caused it. Each unit then adds its own.
+    record_reclaimed(fragments_removed=0, versions_removed=0, indices_optimized=0)
+    record_refused(0)
     options = settings.storage_options()
     older_than = timedelta(days=settings.older_than_days)
     policy_records = _load_policies(settings, options)
@@ -604,41 +620,30 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
 
 
 def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
-    """Discover every dataset in EVERY swept bucket and compact + GC each; record what was reclaimed.
+    """Plan the tick, then execute every unit it produced, in one process. Returns what was reclaimed.
 
-    The tick's PHASES, each its own function above and each ordered for a reason the extracted helper
-    states: read the protective registries (:func:`_load_policies`, :func:`_trash_exclusions` — either
-    one unreadable ABORTS the tick), enumerate the buckets (:func:`_buckets_to_sweep`), discover
-    (:func:`_discover_all`), take the whole-estate base-reference pre-pass (:func:`_protected_roots`),
-    remove what the trash freezes (:func:`_exclude_trashed`), then maintain what is left.
+    :func:`plan_sweep` decides (registries, discovery, the base-reference pre-pass, per-dataset policy)
+    and :func:`maintain_one_item` does one dataset's work; this is the two composed. It is the SERIAL
+    execution of a set of units that are individually independent — which is what makes moving the
+    execution half onto a queue a wiring change rather than a redesign.
 
     #50/#84 policies: a per-table/namespace/project record from the catalog's ``_policies/`` registry can
     disable a dataset's maintenance, re-pace it (cadence stamp per dataset), or override its old-version
     retention (a table record beats a namespace record beats a project record); everything else keeps the
-    global defaults.
+    global defaults. The resolution happens in the planner; each unit arrives carrying its verdict.
 
     MULTI-BUCKET (audit 2026-07-14). This used to sweep exactly ONE bucket, so every #3-A per-warehouse
     bucket and #3-B multi-base data bucket was invisible to GC — their tables accumulated superseded
     manifest versions and small fragments FOREVER. A storage leak created by the very features that
     introduce new buckets.
     """
-    # BEFORE discovery, not after the loop like `record_run()`: a pass killed at dataset 400 of 900
-    # was observationally identical to a tick that never arrived. started minus
-    # completed is the lost-pass count.
     items, results = plan_sweep(settings)
     options = settings.storage_options()
     now = datetime.now(UTC)
-    # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
-    # discovery listing order is deterministic across ticks, so a pass that consistently dies at
-    # dataset N never maintained anything after N — silently, forever. Shuffling
-    # rotates which datasets sit behind a recurring failure point; per-dataset pacing stays with the
-    # policy stamps, which don't care about order.
-    for item in items:
-        record_dataset_swept()
-        result = maintain_one_item(item, settings=settings, options=options)
-        _stamp_cadence(item.uri, item.plan, result, settings=settings, options=options, now=now)
-        results.append(result)
-    _record_sweep_metrics(results)
+    results.extend(execute_unit(item, settings=settings, options=options, now=now) for item in items)
+    # The completion half of the `record_run_started` pair the planner opened. Started minus completed
+    # is the lost-pass count, so this fires once per tick and only after every unit has been executed.
+    record_run()
     return results
 
 

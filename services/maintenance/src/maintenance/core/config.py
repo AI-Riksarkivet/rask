@@ -84,6 +84,26 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # otherwise be an open forged-sweep path). Symmetric with the lineage service. Off in dev (no sidecar).
     dapr_enabled: bool = Field(default=False, alias="MAINTENANCE_DAPR_ENABLED")
 
+    # --- The WORK QUEUE. When set, the cron tick PLANS and enqueues instead of maintaining the estate
+    # inside its own request; a subscription executes one dataset per delivery. That is the whole of what
+    # this buys, and each part is a thing the serial tick cannot do: an overrunning tick is queued rather
+    # than DROPPED by the single-flight guard, a poison dataset fails its own message instead of stopping
+    # everything discovered after it, and work outlives a pod restart because JetStream holds it.
+    #
+    # Empty topic => the serial path, which is what local runs and the test suite take. There is no
+    # separate on/off flag: the queue is used when there IS one, so production has exactly one path
+    # rather than two that can drift.
+    #
+    # Delivery is AT-LEAST-ONCE and that is safe here rather than merely tolerated: compaction and GC are
+    # both convergent — a redelivered unit finds the fragments already merged and the versions already
+    # reclaimed, and does nothing. A unit is not a transaction and must never be treated as one.
+    work_pubsub: str = Field(default="maintenance-work-pubsub", alias="MAINTENANCE_WORK_PUBSUB")
+    work_topic: str = Field(default="", alias="MAINTENANCE_WORK_TOPIC")
+    #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
+    #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
+    #: per-dataset boundary was supposed to fix.
+    work_dlq_topic: str = Field(default="", alias="MAINTENANCE_WORK_DLQ_TOPIC")
+
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each materially-compacted
     # dataset to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the
     # catalog publishes to and the lineage service subscribes to, so a compaction shows up in producers()

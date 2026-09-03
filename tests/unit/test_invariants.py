@@ -99,6 +99,13 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # fixed to bronze, which is what let a silver publication fire a bronze trigger.
     ("services/medallion/src/medallion/services/publication_trigger.py", "topic"): "trigger",
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
+    # A maintenance work UNIT: "compact and GC this one dataset". An instruction, so correctly bare —
+    # and its durability question is answered by the plan rather than by the outbox. A unit that is lost
+    # is re-planned by the next cron tick from the CURRENT manifest, which is strictly better than
+    # replaying a stale one: a re-delivered old unit names fragments a later compaction may already have
+    # rewritten, and carries a protection verdict computed against an estate that no longer exists.
+    # Staging these would make maintenance durable in exactly the way it must not be.
+    ("services/maintenance/src/maintenance/services/work_queue.py", "topic"): "trigger",
     # `transform.py` (settings.pub_topic) IS DELIBERATELY ABSENT. The mover fired the next stage's
     # topic itself — a SECOND enforcement point beside the catalog's tag move, and the DEFAULT one
     # because MEDALLION_CASCADE_VIA_PUBLISH shipped False. Deleted with `GateOutcome.TRIGGER`; the

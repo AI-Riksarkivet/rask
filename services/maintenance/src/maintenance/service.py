@@ -31,6 +31,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.routes import build_router
+from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
 from service_kit.control_emit import make_control_emitter
@@ -122,7 +123,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # sidecar, so it's cheap to construct and needs no broker reachability at boot; a no-op emitter when off.
     # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either
     # is on; the sidecar is local, so construction is cheap and needs no broker reachability at boot.
-    dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
+    # The work queue publishes through this same client, so a configured work topic keeps it alive
+    # even with both emitters off — otherwise the tick would plan units it has no way to send.
+    dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled or settings.work_topic) else None
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         dapr=dapr_client,
@@ -145,6 +148,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The reconciler's two read-only clients. Both are OPTIONAL by design: a missing one degrades its
     # categories to UNAVAILABLE-with-a-reason, and the other five still report. Boot must NOT fail on
     # them — the sweep is this service's primary job and does not need either.
+    app.state.dapr_client = dapr_client
     app.state.fga_client = await _make_fga_client(settings)
     app.state.s3_client = _make_s3_client(settings)
     app.state.startup_complete = True
@@ -173,3 +177,8 @@ app = build_lance_service_app(
 # The Dapr cron route (POST /<binding-name>) + its OPTIONS discovery ack, with the require_dapr_token gate.
 # BUILT from the settings this app was assembled with, not stamped into the routes module at import.
 app.include_router(build_router(get_settings()))
+
+# The work subscription (POST /maintenance-work), registered only when a work topic is configured — the
+# same condition the cron route uses to choose its lane, so a deployment cannot advertise a subscription
+# for a queue it never publishes to.
+register_work_route(app, get_settings())

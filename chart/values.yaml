@@ -1298,6 +1298,18 @@ maintenance:
   # files, which is why it gets its own schedule instead of inheriting that one.
   reconcileBindingName: maintenance-reconcile-cron
   reconcileSchedule: "@every 300s"
+  # THE WORK QUEUE. Empty => the cron tick maintains the estate inside its own request (the serial
+  # lane). Set => it PLANS and publishes one message per dataset, and the `/maintenance-work`
+  # subscription executes them — so an overrunning tick is queued rather than dropped by the
+  # single-flight guard, a poison dataset fails its own message instead of stopping everything
+  # discovered after it, and work outlives a pod restart because JetStream holds it.
+  #
+  # OFF by default. Turning it on changes where maintenance runs, and the deployment is still pinned to
+  # one replica (`replicas: 1` is hardcoded in maintenance.yaml), so the queue's scaling payoff is not
+  # available until that pin and the in-process sweep lock are retired together.
+  workTopic: ""
+  workDlqTopic: dlq.maintenance.work
+  workPubsub: maintenance-work-pubsub
   # The catalog's control root (project/warehouse/trash registries). Empty => the primary bucket, which
   # is what the catalog itself defaults to; set both together if the catalog's root is moved.
   controlRoot: ""

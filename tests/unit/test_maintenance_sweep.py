@@ -161,17 +161,21 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
 
     monkeypatch.setattr(routes, "emit_sweep_lineage", _noop_emit)
     monkeypatch.setattr(routes, "summarize", lambda _results: {"status": "ok", "datasets": 0})
-    settings = cast(Any, types.SimpleNamespace(delimiter="$"))
+    # `work_topic=""` selects the SERIAL lane, which is what this test is about — the single-flight
+    # guard is what stands in for a lease there. It holds on the queue lane too (two concurrent planners
+    # would enqueue every dataset twice), but there the tick is bounded and duplicate units are merely
+    # wasted rather than racing.
+    settings = cast(Any, types.SimpleNamespace(delimiter="$", work_topic=""))
 
     async def while_a_sweep_is_running() -> dict:
         async with routes._sweep_lock:  # simulate the previous tick's sweep still holding the lock
-            return await routes.on_cron(settings, cast(Any, object()))
+            return await routes.on_cron(settings, cast(Any, object()), None)
 
     skipped = asyncio.run(while_a_sweep_is_running())
     assert skipped["status"] == "skipped" and ran == [], "an overlapping tick must NOT start a 2nd sweep"
 
     # once the lock is free again, a tick runs the sweep exactly once
-    ok = asyncio.run(routes.on_cron(settings, cast(Any, object())))
+    ok = asyncio.run(routes.on_cron(settings, cast(Any, object()), None))
     assert ok["status"] == "ok" and ran == [1]
 
 

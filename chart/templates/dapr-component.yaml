@@ -339,3 +339,51 @@ scopes:
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if and .Values.dapr.enabled .Values.maintenance.enabled .Values.maintenance.workTopic }}
+---
+# THE MAINTENANCE WORK QUEUE. Its OWN component rather than a scope on a shared one, for the reason
+# `queueGroupName` forces: that key lives on the COMPONENT, so adding maintenance as a scope to a
+# broadcast component would split the broadcast into a competing-consumer group instead of joining one.
+#
+# `deliverPolicy: new` — a restarted pod must NOT replay a backlog of units planned against a manifest
+# that has since moved. A stale unit is not merely wasted work: it names fragments that a later
+# compaction may already have rewritten, and its protection verdict was computed against an estate that
+# no longer exists. The next cron tick re-plans everything against the current manifest anyway, which is
+# what makes dropping the backlog the safe direction.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.maintenance.workPubsub }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-maintenance-work" }
+    - { name: queueGroupName, value: {{ .Values.maintenance.daprAppId | quote }} }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: "{{ .Values.maintenance.daprAppId }}-work-durable" }
+    # ackWait is sized by the WORK, not by convention, and it is the one number here that a growing
+    # estate can invalidate. It must exceed the longest single dataset's compact + index-optimize + GC,
+    # because an ack that expires mid-compaction redelivers the unit to a second worker and two
+    # concurrent passes then race `compact_files`/`cleanup_old_versions` on one dataset — one committing
+    # a rewrite while the other GCs the versions it is reading. That race is precisely what the
+    # in-process single-flight lock exists to prevent, so letting the broker reintroduce it would undo
+    # the guarantee rather than move it.
+    #
+    # The same first-backOff-step rule the sibling components carry applies: the broker's first step
+    # must exceed the sidecar's total resiliency retry window (7.5 min, asserted by .dagger/charts.go),
+    # or the broker redelivers while the sidecar is still mid-retry and one unit runs twice at once.
+    {{- if .Values.dapr.resiliency.enabled }}
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+    {{- else }}
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "5" }
+    - { name: backOff, value: "720s,720s,720s,720s" }
+    {{- end }}
+scopes:
+  - {{ .Values.maintenance.daprAppId }}
+{{- end }}

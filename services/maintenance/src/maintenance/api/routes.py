@@ -26,11 +26,12 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
-from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
+from maintenance.api.dependencies import ControlEmitterDep, DaprClientDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import reconcile
-from maintenance.services.sweep import emit_sweep_lineage, run_sweep, summarize
+from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
+from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -59,20 +60,42 @@ log = logging.getLogger(__name__)
 _sweep_lock = asyncio.Lock()
 
 
-async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep) -> dict[str, Any]:
-    """One maintenance sweep, triggered by a Dapr cron tick (POST /<binding-name>).
+async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprClientDep) -> dict[str, Any]:
+    """One maintenance tick, triggered by a Dapr cron tick (POST /<binding-name>).
 
-    Single-flight: if a prior tick's sweep is still running, SKIP this one (it would only re-cover the same
-    datasets and race the running sweep). The blocking discover + compact/GC runs in the threadpool; then
-    each materially-compacted dataset records a maintenance run on the lineage graph (#7b). The emit phase
-    is awaited as one bounded, concurrent batch — per-dataset serial awaits were the MAINT-04 defect — so
-    every publish reaches the durable Dapr/JetStream transport before we return, and it is best-effort
-    throughout, so a publish failure never fails the sweep.
+    TWO LANES, and which one runs is decided by whether there IS a queue rather than by a flag — so a
+    production deployment has exactly one path instead of two that can drift:
+
+    * **A work topic is configured** → this tick PLANS and enqueues, and maintains nothing itself. It
+      returns as soon as the units are published, so the handler's cost is the estate's dataset COUNT
+      rather than its size. A unit that fails to publish is reported in the response, not swallowed:
+      it is simply not maintained this tick and the next one re-plans it.
+    * **No work topic** (local runs, the test suite) → the serial sweep, unchanged.
+
+    Single-flight either way: an overlapping tick SKIPS. It matters less on the queue lane — planning is
+    bounded — but two concurrent planners would enqueue every dataset twice, and duplicate units are
+    wasted work even though they are safe (compaction and GC are convergent).
+
+    The serial lane's emit phase is awaited as one bounded, concurrent batch — per-dataset serial awaits
+    were the MAINT-04 defect — so every publish reaches the durable Dapr/JetStream transport before we
+    return, and it is best-effort throughout, so a publish failure never fails the tick. On the queue
+    lane each unit emits its own lineage from the subscription that executed it.
     """
     if _sweep_lock.locked():
         log.warning("maintenance_sweep_skipped", extra={"reason": "previous sweep still running"})
         return {"status": "skipped", "reason": "overlapping sweep still running"}
     async with _sweep_lock:
+        if settings.work_topic and dapr is not None:
+            items, decided = await run_in_threadpool(plan_sweep, settings)
+            published, not_queued = await enqueue_units(
+                dapr, items, pubsub=settings.work_pubsub, topic=settings.work_topic, timeout_seconds=settings.publish_timeout_seconds
+            )
+            # The trash exclusions are decided WITHOUT work and are results, not units — they must not be
+            # enqueued, and their lineage is emitted here because no subscription will ever see them.
+            await emit_sweep_lineage(emitter, decided, delimiter=settings.delimiter)
+            summary = {"status": "enqueued", "planned": len(items), "published": published, "not_queued": len(not_queued), "skipped": len(decided)}
+            log.info("maintenance_tick_enqueued", extra=summary)
+            return summary
         results = await run_in_threadpool(run_sweep, settings)
         await emit_sweep_lineage(emitter, results, delimiter=settings.delimiter)
         summary = summarize(results)

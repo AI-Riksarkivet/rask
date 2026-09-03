@@ -175,6 +175,19 @@ spec:
               # load-bearing (a booting replica skips the backlog rather than replaying it into memory).
               add_if_missing CATALOG_CONTROL "catalog.control.>"
               {{- end }}
+              {{- if .Values.maintenance.workTopic }}
+              # The maintenance work queue: one message per dataset, planned by the cron tick and
+              # executed by the `/maintenance-work` subscription. It NEEDS a stream — Dapr does not
+              # create one, and a publish with no stream fails, which would leave every tick reporting
+              # units it planned and could not send.
+              #
+              # WORK retention, for the reason the INGEST stream carries it: a unit is REMOVED once
+              # acked, so the stream itself is the outstanding-work ledger and `messages` answers "how
+              # much maintenance is still owed" without a side ledger to keep in step. A retained log
+              # would answer that question wrongly by 168 hours.
+              add_workqueue_if_missing MAINTENANCE_WORK "maintenance.work.>"
+              assert_retention MAINTENANCE_WORK workqueue
+              {{- end }}
               # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
               # can only BIND an existing durable whose config matches its request — after a values
               # change that alters consumer config (e.g. the resiliency flip's maxDeliver/backOff),

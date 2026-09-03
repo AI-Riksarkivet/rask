@@ -22,6 +22,19 @@ def get_lineage_emitter(request: Request) -> MaintenanceEmitter:
 LineageEmitterDep = Annotated[MaintenanceEmitter, Depends(get_lineage_emitter)]
 
 
+def get_dapr_client(request: Request) -> Any:  # noqa: ANN401 — DaprClient | None; the SDK ships no protocol
+    """The sidecar client built in the lifespan, or ``None`` when nothing this service does needs one.
+
+    ``None`` is legitimate and must stay distinguishable from a broken one: with no emitters and no work
+    topic there is nothing to publish, and constructing a client for that case would make an unwired
+    deployment look configured.
+    """
+    return getattr(request.app.state, "dapr_client", None)
+
+
+DaprClientDep = Annotated[Any, Depends(get_dapr_client)]
+
+
 def get_fga_client(request: Request) -> Any:  # noqa: ANN401 — OpenFgaClient | None; the SDK ships no protocol
     """The OpenFGA client built in the lifespan, or ``None`` when FGA is off/unwired.
 

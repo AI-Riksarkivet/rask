@@ -98,6 +98,11 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
             {{- end }}
+            {{- if .Values.maintenance.workTopic }}
+            - { name: MAINTENANCE_WORK_PUBSUB, value: {{ .Values.maintenance.workPubsub | quote }} }
+            - { name: MAINTENANCE_WORK_TOPIC, value: {{ .Values.maintenance.workTopic | quote }} }
+            - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
+            {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
