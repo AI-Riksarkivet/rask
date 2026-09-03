@@ -239,12 +239,31 @@ refusal instead of drifting. Its warehouse-root bound is deliberate and stated a
 computed per call, so a clone made a minute ago protects its source on the next event — which is why
 an hourly backstop cannot stand in for that particular check.
 
-**Still open on this lane:** the cadence has NOT moved (`@every 120s` in values, `0 */30 * * * *` in
-prod) — moving it is only safe once the event lane is observed working in-cluster, and neither it nor
-N4's executor has ever run there. The `compact_min_versions` debounce (Lakekeeper's
-`min-snapshots-to-expire`) is not built: without it the lane plans a manifest read per commit, which is
-the event-storm failure. And the catalog's `/maintenance/compact` button still rewrites data files
-inside its own request handler — it should publish a unit and return 202 on this same lane.
+**VERIFIED IN-CLUSTER 2026-09-03**, which is what the rest of this section was waiting on. Deploying
+found two defects no test could: a workqueue stream REFUSES a `deliverPolicy: new` consumer (JetStream:
+"consumer must be deliver all on workqueue stream"), and the arrival subscription bound to the
+broadcast `lineage-pubsub` instead of the per-subscriber component, so every replica would have planned
+the same dataset. Both fixed in `71d7b04f`, along with the staleness the first fix implied — the
+executor now re-reads `sibling_base_refs` before acting, because deliver-all means a unit can sit
+unacked up to the stream's max-age carrying a plan-time protection verdict.
+
+Observed working: both subscriptions bound with zero errors; the cron planned and published 335 units
+which the executor drained to zero doing real compaction; a real authenticated insert (Dex password
+grant, Arrow-IPC through `/v1/table/{id}/insert`) reached `/maintenance-arrival` → 200.
+
+**The debounce landed** (`328ae209`). It short-circuits BEFORE `plan_one`, which matters more than first
+estimated: `plan_one` does not open the target's manifest, but `sibling_base_refs` opens EVERY sibling
+manifest in the warehouse, so an undebounced burst was a whole-warehouse sweep per write. Stamp is
+keyed by URI alone — `_state_key` derives from a policy record and unpoliced is the default, so the
+datasets most needing a debounce had nowhere to stamp.
+
+**The cadence moved** (`977b84bb`): prod 30min → hourly, with the role written into both values files
+and the coupling to `workTopic` stated (with the lane off, the cron IS the trigger and must stay fast).
+
+**Still open on this lane:** the catalog's `/maintenance/compact` button still rewrites data files
+inside its own request handler — it should publish a unit and return 202 on this same lane. Doing that
+needs `DatasetWorkItem`/`DatasetPlan` moved into `service_kit` (the catalog cannot import a sibling
+deployable), which is the same relocation `base_refs` and the policy registry already had.
 
 ## Not in this plan
 
