@@ -135,6 +135,10 @@ async def compact_maintenance(
                 optimize_indices_enabled=False,
             ),
             protected_by=protected.is_protected(location),
+            # The door's own request path IS the identity, so it never needs deriving. This is the
+            # producer that most needs to supply it: a catalog-created table's location may be a
+            # medallion path no parser can read back.
+            table_id=id,
         )
         await dapr_publish.publish_event(
             publisher,

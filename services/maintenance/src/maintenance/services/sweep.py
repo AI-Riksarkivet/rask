@@ -578,6 +578,9 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
             uri=uri,
             plan=_resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than),
             protected_by=protected.is_protected(uri),
+            # Same derivation and same limit as `plan_one`: the flat layout yields an identity, every
+            # other layout yields None rather than a guess.
+            table_id=table_id_from_uri(uri),
         )
         for uri in uris
     ]
@@ -625,7 +628,16 @@ def plan_one(uri: str, settings: MaintenanceSettings) -> DatasetWorkItem | None:
     )
     if plan.skipped:
         return None
-    return DatasetWorkItem(uri=uri, plan=plan, protected_by=base_refs.sibling_base_refs(uri, options).is_protected(uri))
+    return DatasetWorkItem(
+        uri=uri,
+        plan=plan,
+        protected_by=base_refs.sibling_base_refs(uri, options).is_protected(uri),
+        # Derived where the flat layout allows it, left unset where it does not. This lane starts from
+        # a bare URI, so it is the one producer that cannot always know — and an id guessed from a path
+        # the parser cannot read would vend a credential for a DIFFERENT table, which is worse than
+        # vending none.
+        table_id=table_id_from_uri(uri),
+    )
 
 
 def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:

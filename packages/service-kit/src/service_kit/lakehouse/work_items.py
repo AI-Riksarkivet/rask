@@ -64,3 +64,17 @@ class DatasetWorkItem(BaseModel):
     #: The root that some OTHER dataset's manifest resolves through, when this dataset is one or lies
     #: under one. ``None`` means the pre-pass found no referrer — the dataset may be compacted.
     protected_by: str | None = None
+    #: The catalog identifier (``namespace$table``) this dataset IS, when the producer knows it.
+    #:
+    #: Carried rather than derived, because the catalog is addressed by IDENTIFIER and never by
+    #: location: an executor holding only a URI can do the work but cannot ask for a credential scoped
+    #: to it. Recovering the id from the path covers a minority — measured on the live warehouse,
+    #: ``table_id_from_uri`` reads six of eleven top-level roots, and the five it cannot read include
+    #: ``medallion/``, the cascade. Those five are not unknown to the catalog: ``bronze$events`` at
+    #: ``medallion/bronze`` and ``bronze$pages`` at ``bronze/pages`` both answer a write-tier vend 200.
+    #: The identity exists; only the parser cannot see it in the path, and the producer always can.
+    #:
+    #: ``None`` stays expressible on purpose. The bucket sweep starts from a bare URI and may genuinely
+    #: not know, and a producer forced to supply something would invent one — which vends a credential
+    #: for the WRONG table rather than for none.
+    table_id: str | None = None
