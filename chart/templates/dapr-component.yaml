@@ -357,11 +357,15 @@ scopes:
 # `queueGroupName` forces: that key lives on the COMPONENT, so adding maintenance as a scope to a
 # broadcast component would split the broadcast into a competing-consumer group instead of joining one.
 #
-# `deliverPolicy: new` — a restarted pod must NOT replay a backlog of units planned against a manifest
-# that has since moved. A stale unit is not merely wasted work: it names fragments that a later
-# compaction may already have rewritten, and its protection verdict was computed against an estate that
-# no longer exists. The next cron tick re-plans everything against the current manifest anyway, which is
-# what makes dropping the backlog the safe direction.
+# NO `deliverPolicy` — a WORKQUEUE stream refuses anything but deliver-all, and JetStream says so:
+# `nats: consumer must be deliver all on workqueue stream` (measured 2026-09-03, the subscription
+# retried forever and bound to nothing). The rule follows from the retention: an acked unit is REMOVED,
+# so whatever remains is by definition still outstanding and replaying it is the point, not a hazard.
+#
+# What that does expose is unit STALENESS — a unit can sit here up to the stream's max-age, and its
+# protection verdict was computed at plan time. That is answered at the EXECUTOR (`work.py` re-checks
+# `sibling_base_refs` before acting), not by skipping the backlog, because a skipped unit is work
+# silently dropped while a stale verdict is work done against the wrong facts.
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -374,7 +378,6 @@ spec:
     - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
     - { name: name, value: "lance-dapr-maintenance-work" }
     - { name: queueGroupName, value: {{ .Values.maintenance.daprAppId | quote }} }
-    - { name: deliverPolicy, value: "new" }
     - { name: durableName, value: "{{ .Values.maintenance.daprAppId }}-work-durable" }
     # ackWait is sized by the WORK, not by convention, and it is the one number here that a growing
     # estate can invalidate. It must exceed the longest single dataset's compact + index-optimize + GC,

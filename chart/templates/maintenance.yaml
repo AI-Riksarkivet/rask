@@ -105,7 +105,17 @@ spec:
             {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
+            {{- if .Values.maintenance.workTopic }}
+            # The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
+            # COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
+            # a competing-consumer group — measured 2026-09-03, the arrival route bound to
+            # `pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
+            # publishing too, exactly as the movers do (`lance.subPubsub`): the queue group affects
+            # subscription only.
+            - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprAppId) | quote }} }
+            {{- else }}
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
+            {{- end }}
             - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             # Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when the

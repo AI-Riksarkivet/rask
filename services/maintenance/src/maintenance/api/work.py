@@ -26,6 +26,7 @@ from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, exec
 from maintenance.services.work_queue import SUCCESS, ack_for
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse import base_refs
 
 
 async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emitter: MaintenanceEmitter) -> dict[str, str]:
@@ -43,7 +44,20 @@ async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emit
         item = DatasetWorkItem.model_validate(event.get("data", event))
     except ValidationError:
         return {"status": SUCCESS}
-    result = await run_in_threadpool(execute_unit, item, settings=settings, options=settings.storage_options(), now=datetime.now(UTC))
+    # RE-VERIFY PROTECTION, because the verdict in the unit is as old as the unit. The work stream is
+    # `workqueue` retention, which JetStream requires deliver-all consumers on — so an unacked unit is
+    # replayed by design and can be up to the stream's max-age old. In that window a shallow clone may
+    # have been created whose source is this dataset, and compacting it destroys the bytes the clone
+    # resolves through. Skipping the backlog is not the alternative: it drops real work silently, and
+    # the broker refuses that consumer shape anyway. One non-recursive listing is the whole cost, and
+    # `sibling_base_refs` is computed per call for exactly this reason.
+    #
+    # The two verdicts UNION rather than replace: the planner may have seen a referrer this narrower
+    # read cannot (the sweep runs a whole-estate pre-pass), so a plan-time refusal still refuses.
+    options = settings.storage_options()
+    fresh = await run_in_threadpool(base_refs.sibling_base_refs, item.uri, options)
+    item = item.model_copy(update={"protected_by": item.protected_by or fresh.is_protected(item.uri)})
+    result = await run_in_threadpool(execute_unit, item, settings=settings, options=options, now=datetime.now(UTC))
     await emit_sweep_lineage(emitter, [result], delimiter=settings.delimiter)
     return {"status": ack_for(result)}
 

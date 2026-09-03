@@ -129,6 +129,9 @@ async def test_the_handler_relays_the_units_own_verdict(monkeypatch: pytest.Monk
 
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     monkeypatch.setattr(work_mod, "emit_sweep_lineage", lambda *a, **k: _noop())
+    # The handler re-reads protection before acting; stub the listing so this test stays about the ACK
+    # decision rather than about object storage.
+    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts: work_mod.base_refs.BaseRefs())
 
     for error, expected in (("maintain: connection reset", RETRY), ("open: no such dataset", SUCCESS), (None, SUCCESS)):
         monkeypatch.setattr(work_mod, "execute_unit", lambda *a, error=error, **k: DatasetResult(uri="u", error=error, error_type="OSError" if error else None))
@@ -202,3 +205,43 @@ async def test_a_tick_with_no_sidecar_client_falls_back_to_the_serial_lane(monke
 
     assert await routes.on_cron(settings, cast(Any, object()), None) == {"status": "ok"}
     assert ran == [1], "the serial lane never ran, so the estate went unmaintained"
+
+
+@pytest.mark.asyncio
+async def test_a_QUEUED_unit_reverifies_protection_before_acting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A unit's protection verdict was computed when it was PLANNED, and it can sit in the queue.
+
+    The work stream is `workqueue` retention, which JetStream requires deliver-all consumers on — an
+    unacked unit is replayed, by design, and can be up to the stream's max-age old. In that window a
+    shallow clone may have been created whose source is this dataset, and compacting it would destroy
+    the bytes the clone resolves through.
+
+    Skipping the backlog is NOT the fix (it silently drops real work, and the broker refuses it here
+    anyway). Re-reading the verdict is: `sibling_base_refs` is one non-recursive listing, computed per
+    call for exactly this reason — "a clone created a minute ago must protect its source on the next
+    click".
+    """
+    from maintenance.api import work as work_mod
+    from maintenance.core.config import MaintenanceSettings
+    from maintenance.core.lineage_emit import NoopEmitter
+    from service_kit.lakehouse import base_refs
+
+    executed: list[str | None] = []
+
+    def capture(item: object, **kwargs: object) -> DatasetResult:
+        executed.append(getattr(item, "protected_by", None))
+        return DatasetResult(uri="u")
+
+    async def noop(*args: object, **kwargs: object) -> None:
+        return None
+
+    # Planned clean; a clone appeared since, so the FRESH read says protected.
+    monkeypatch.setattr(work_mod, "execute_unit", capture)
+    monkeypatch.setattr(work_mod, "emit_sweep_lineage", noop)
+    monkeypatch.setattr(base_refs, "sibling_base_refs", lambda uri, opts: base_refs.BaseRefs(protected={base_refs.normalise("s3://b/t.lance")}))
+
+    settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
+    item = DatasetWorkItem(uri="s3://b/t.lance", plan=DatasetPlan(), protected_by=None)
+    await work_mod.handle_unit({"data": item.model_dump(mode="json")}, settings, NoopEmitter())
+
+    assert executed == [base_refs.normalise("s3://b/t.lance")], "the stale clean verdict was used instead of the fresh one"
