@@ -16,13 +16,14 @@ import asyncio
 import contextlib
 import logging
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
 from lance import blob_field
 
-from ingest.catalog import CatalogSeam, CommittingCatalog, PublishingCatalog, VersioningCatalog
+from ingest.catalog import CatalogSeam, CommittingCatalog, PublishingCatalog, VendingCatalog, VersioningCatalog
 from ingest.config import settings
 
 
@@ -421,7 +422,17 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
         from ingest.sources import SourceSpec, external_base_for
 
         chunk_spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
-        worker = Worker(queue, fetcher_for(chunk.kind) or UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
+        # THE SCOPED CREDENTIAL these fragments are signed with. Built from the same seam the create
+        # went through, and keyed on the namespace the chunk CARRIES rather than one derived from the
+        # URI — see `ChunkSpec.namespace` for why the URI cannot be reduced back to an identity.
+        worker = Worker(
+            queue,
+            fetcher_for(chunk.kind) or UriFetcher(),
+            PayloadValidator(),
+            name=chunk.chunk_id,
+            sizing=chunk.sizing,
+            write_options=write_options_for(_catalog(), namespace=chunk.namespace, dataset=chunk.dataset),
+        )
         # THE PLACEMENT, resolved from the same chunk and through the same operator gate as the
         # create did (`ensure_dataset_at`). Resolved here rather than read back off the dataset
         # because pylance exposes no accessor for a manifest's registered bases — `add_bases` writes
@@ -790,6 +801,35 @@ def _publish(catalog: CatalogSeam, spec: PublishSpec, version: int) -> dict[str,
         "to_version": body.get("to_version"),
         "publish_reason": body.get("reason"),
     }
+
+
+def write_options_for(catalog: CatalogSeam, *, namespace: str, dataset: str) -> Callable[[], dict[str, str] | None] | None:
+    """A provider of the SCOPED credential this chunk's writes are signed with, or ``None`` for the
+    ambient one.
+
+    The client-direct write puts bytes on object storage without them passing through the catalog
+    (#2), so the credential signing them should be scoped to one table prefix and expire in 900s
+    rather than being a long-lived key that reaches the whole bucket. Proven enforced on RustFS: a
+    credential vended for one table is refused on another with 403 AccessDenied.
+
+    ``None`` — meaning "write as we always did" — in the two cases where no credential is available,
+    and neither is a failure:
+
+    * **The seam cannot vend.** `LocalCatalog` is the no-catalog dev shape and has no vending door at
+      all, so asking it would raise rather than degrade. Checked by capability, never assumed.
+    * **The chunk names no namespace.** A pre-upgrade chunk replayed by this build carries an empty
+      one (the field defaults for exactly that reason), and composing `$dataset` from it would ask for
+      an object that does not exist — 403-ing every write of a run that was mid-flight at deploy.
+
+    A CALLABLE rather than a value: the credential expires and a run can outlive it, so the batch has
+    to be able to re-ask. The cache behind this re-vends while the old credential is still valid.
+    """
+    if not isinstance(catalog, VendingCatalog) or not namespace:
+        return None
+    from ingest.credentials import VendedCredentialCache
+
+    cache = VendedCredentialCache(catalog.vend_storage_options)
+    return lambda: cache.storage_options(namespace, dataset)
 
 
 def _catalog() -> CatalogSeam:

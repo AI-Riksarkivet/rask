@@ -406,11 +406,16 @@ class Worker:
         validator: Validator | None = None,
         name: str = "w0",
         sizing: ResolvedSizing | None = None,
+        write_options: Callable[[], dict[str, str] | None] | None = None,
     ) -> None:
         self._q = queue
         self._fetch = fetcher
         self._validate = validator or AcceptAll()
         self._name = name
+        #: Resolves the SCOPED credential this worker's fragments are written with (see
+        #: `runtime.write_options_for`). ``None`` = the ambient credential, which is what every
+        #: existing caller and every test that builds a bare Worker gets.
+        self._write_options = write_options
         # The RUN's numbers, resolved at accept and carried down through the chunk spec. Falling back
         # to `resolve()` here (deployment defaults) rather than requiring them keeps every existing
         # caller — and every test that builds a bare Worker — working unchanged.
@@ -491,7 +496,13 @@ class Worker:
         outcome = ChunkOutcome(chunk_id=chunk_id)
         sizing = self._sizing
         sem = asyncio.Semaphore(sizing.fetch_concurrency)
-        batch = _OpenBatch(dataset_uri=dataset_uri, run_id=run_id, external_base=external_base, outcome=outcome)
+        batch = _OpenBatch(
+            dataset_uri=dataset_uri,
+            run_id=run_id,
+            external_base=external_base,
+            outcome=outcome,
+            write_options=self._write_options,
+        )
 
         beat = asyncio.create_task(_renew_held(batch.held))
         try:

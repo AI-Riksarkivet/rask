@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
     import pyarrow as pa
 
+    from ingest.catalog_service import VendedCredential
+
 
 def _is_object_store(uri: str) -> bool:
     """True for a URI whose scheme is an object store rather than a filesystem path.
@@ -54,6 +56,21 @@ class CommittingCatalog(Protocol):
     """
 
     def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]: ...
+
+
+@runtime_checkable
+class VendingCatalog(Protocol):
+    """A catalog that can hand out a SCOPED, short-lived credential for one table.
+
+    The distinguishing capability of the deployed plane, like `CommittingCatalog` beside it: the local
+    catalog has no vending door at all, so this is asked by capability rather than assumed. A client
+    that writes fragments straight to object storage should sign them with a credential scoped to that
+    table's prefix and expiring in 900s, not with a long-lived key that reaches the whole bucket —
+    proven enforced on RustFS, where a credential vended for one table is refused on another with 403
+    AccessDenied.
+    """
+
+    def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = ...) -> VendedCredential | None: ...
 
 
 @runtime_checkable
@@ -88,11 +105,17 @@ class LocalCatalogSeam(Protocol):
 
 
 @runtime_checkable
-class ServiceCatalogSeam(CommittingCatalog, PublishingCatalog, VersioningCatalog, Protocol):
-    """The in-cluster half: creation, the commit, the publication and the version all belong to the catalog.
+class ServiceCatalogSeam(CommittingCatalog, PublishingCatalog, VersioningCatalog, VendingCatalog, Protocol):
+    """The in-cluster half: creation, the commit, the publication, the version and the CREDENTIAL all
+    belong to the catalog.
 
     It has no `register_version`, because the run id rides the commit itself — so it can never be
     handed to the lander, whose job is to register what it wrote.
+
+    `VendingCatalog` joins the union rather than being asked for by class, because the runtime reads
+    `catalog.vend_storage_options` off the seam and this file's whole reason for existing is that such
+    a read must be typed: an implementation losing a method the runtime calls has to be a type error,
+    not an in-cluster TypeError after the run is accepted.
     """
 
     def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str: ...
