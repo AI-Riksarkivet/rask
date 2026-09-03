@@ -269,7 +269,7 @@ async def create_governed_table(
     # table that was never created — read the true schema back PINNED at that version instead. Best-effort
     # either way (failure → []).
     if create_mode is CreateMode.EXIST_OK:
-        _, schema_fields = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version)
+        _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version)
     else:
         schema_fields = await run_in_threadpool(dataplane.payload_schema_fields, data, segments)
     # S4: the pin resolves to a version-pinned INPUT exactly as `emit_write_event` resolves a merge's

@@ -57,7 +57,7 @@ async def emit_measured_write(
     ``source@N``); ``extra_run_facets`` rides caller-supplied run facets (e.g. training ``params``) —
     both threaded verbatim to :func:`emit_write_event`, so the catalog stays un-opinionated about them.
     """
-    version, schema_fields = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, pin_version, branch)
+    version, schema_fields, location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, pin_version, branch)
     await emit_write_event(
         emitter,
         segments,
@@ -67,6 +67,10 @@ async def emit_measured_write(
         operation=operation,
         authorization=authorization,
         schema_fields=schema_fields,
+        # The standard `dataSource` facet. Every write door reaches lineage through this trailer, so
+        # omitting it here withheld the URI from ALL of them — the facet was plumbed end to end and
+        # reachable from nothing, the same shape `test_originator_reaches_the_event.py` pins.
+        source_uri=location,
         inputs=inputs,
         extra_run_facets=extra_run_facets,
     )

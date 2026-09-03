@@ -396,7 +396,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
         seen["pin"] = pin_version
         seen["branch"] = branch
-        return pin_version, [{"name": "x", "type": "int64"}]
+        return pin_version, [{"name": "x", "type": "int64"}], "s3://bucket/abc12345_db$t"
 
     monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
     captured = _capture_measured_emit(monkeypatch)
@@ -419,7 +419,7 @@ def test_merge_insert_emits_version_pinned_source_and_run_facets(client: TestCli
     fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
     monkeypatch.setattr(
         "catalog.services.dataplane.read_version_and_schema",
-        lambda *a, **k: (2, [{"name": "id", "type": "int64"}]),
+        lambda *a, **k: (2, [{"name": "id", "type": "int64"}], "s3://bucket/abc12345_db$t"),
     )
     # The implicit BTREE build opens the real dataset — orthogonal to lineage; stub it out.
     monkeypatch.setattr("catalog.services.dataplane.ensure_merge_key_index", lambda *a, **k: None)
@@ -456,7 +456,7 @@ def test_merge_insert_authz_checks_the_source_before_recording_it(client: TestCl
         seen["segments"] = segments
 
     monkeypatch.setattr(fga_deps, "require_can_get_metadata", _cap)
-    monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", lambda *a, **k: (2, []))
+    monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", lambda *a, **k: (2, [], "s3://bucket/abc12345_db$t"))
     monkeypatch.setattr("catalog.services.dataplane.ensure_merge_key_index", lambda *a, **k: None)
     fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
 
@@ -582,7 +582,7 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
 
     def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None) -> object:
         seen["pin"] = pin_version
-        return pin_version, [{"name": "true_col", "type": "int64"}]
+        return pin_version, [{"name": "true_col", "type": "int64"}], "s3://bucket/abc12345_db$t"
 
     def _payload_bomb(*_a: object, **_k: object) -> object:
         raise AssertionError("ExistOk create must not trust the request payload's schema")

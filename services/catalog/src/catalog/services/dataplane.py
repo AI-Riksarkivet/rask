@@ -106,7 +106,7 @@ def read_version_and_schema(
     table_id: list[str],
     pin_version: int | None = None,
     branch: str | None = None,
-) -> tuple[int | None, SchemaFields]:
+) -> tuple[int | None, SchemaFields, str | None]:
     """The ``(version, schema-facet fields)`` pair for stamping lineage after a committed write.
 
     ONE dataset open serves both reads, so the version and the schema can never come from two different
@@ -125,14 +125,19 @@ def read_version_and_schema(
     try:
         dataset = open_dataset(ns, so, table_id, version=pin_version, branch=branch)
         version = pin_version if pin_version is not None else int(dataset.version)
+        # The physical URI rides the SAME handle, so the standard `dataSource` facet costs nothing
+        # beyond this open. Without it #23 reconcile has no URI to read and reports every live table
+        # `missing_on_storage`, and an event-driven consumer receives a table id it cannot resolve —
+        # `services/maintenance` holds no catalog client by design.
+        location = str(getattr(dataset, "uri", "") or "") or None
     except Exception as exc:
         log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)})
-        return pin_version, []
+        return pin_version, [], None
     try:
-        return version, facet_fields(dataset.schema)
+        return version, facet_fields(dataset.schema), location
     except Exception as exc:
         log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)})
-        return version, []
+        return version, [], location
 
 
 def payload_schema_fields(data: bytes, table_id: list[str]) -> SchemaFields:
