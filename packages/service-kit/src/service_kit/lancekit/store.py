@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pyarrow.fs as pafs
 
+from service_kit.lakehouse.objectfs import credential_of
+
 
 def is_uri(root: str | Path) -> bool:
     return "://" in str(root)
@@ -40,12 +42,13 @@ def _s3fs(storage_options: dict[str, str]) -> tuple[pafs.S3FileSystem, str]:
 @lru_cache(maxsize=8)
 def _s3fs_for(options: frozenset[tuple[str, str]]) -> tuple[pafs.S3FileSystem, str]:
     storage_options = dict(options)
+    _access_key, _secret_key, _ = credential_of(storage_options)
     endpoint = storage_options.get("endpoint", "")
     scheme = "http" if endpoint.startswith("http://") else "https"
     host = endpoint.split("://", 1)[-1]
     fs = pafs.S3FileSystem(
-        access_key=storage_options.get("access_key_id") or None,
-        secret_key=storage_options.get("secret_access_key") or None,
+        access_key=_access_key,
+        secret_key=_secret_key,
         endpoint_override=host or None,
         scheme=scheme,
         region=storage_options.get("region", "us-east-1"),

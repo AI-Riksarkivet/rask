@@ -199,7 +199,7 @@ def source_filesystem(connection: SourceConnection) -> Any:  # noqa: ANN401 — 
     """
     import pyarrow.fs as pafs
 
-    from service_kit.lakehouse.objectfs import lance_storage_options, s3_filesystem
+    from service_kit.lakehouse.objectfs import lance_storage_options, s3_filesystem, without_credentials
 
     if connection.is_estate_default:
         endpoint = configured_endpoint()
@@ -211,9 +211,10 @@ def source_filesystem(connection: SourceConnection) -> Any:  # noqa: ANN401 — 
     if not (connection.access_key and connection.secret_key):
         # A registered store that declares no secret shares the deployment's credentials, so pyarrow's
         # own AWS_* chain supplies them. The keys are REMOVED rather than left empty: `s3_filesystem`
-        # reads them with `.get`, and an empty string is a credential pyarrow will sign with.
-        options.pop("access_key_id", None)
-        options.pop("secret_access_key", None)
+        # reads them with `.get`, and an empty string is a credential pyarrow will sign with. Removing
+        # them is `without_credentials`' job because each field has TWO spellings — popping one and
+        # leaving the other is the same silent half-credential this is trying to avoid.
+        options = without_credentials(options)
     return s3_filesystem(options)
 
 

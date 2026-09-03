@@ -46,23 +46,74 @@ def lance_storage_options(
     entirely when absent rather than set empty: object_store treats a present-but-empty token as a
     token and the request is refused.
 
+    THE CREDENTIAL KEYS ARE ``aws_``-PREFIXED BECAUSE THE BARE ONES DO NOT DISPLACE THE ENVIRONMENT.
+    Every fleet pod exports ``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY`` (the root key), and with the
+    bare spellings object_store BLENDS the two sources — one half from the environment, one from here —
+    and signs with a pair belonging to neither identity. Measured in-cluster 2026-09-03: the ingest
+    worker's vended credential failed every write with ``403 SignatureDoesNotMatch`` while the identical
+    options read the identical table successfully from a process with no AWS_* environment; exporting
+    those two variables locally reproduced it exactly, and the ``aws_``-prefixed form read it
+    successfully with them still set. The failure is doubly hidden: it reads as an expired or broken
+    credential rather than a precedence bug, and no test process has an ambient AWS_* environment, so
+    the spelling that fails in every pod passes every unit test.
+
     Unknown keys are the hazard this builder stands between callers and: object_store silently IGNORES
     a storage option it does not recognise (verified 2026-09-03 — an invented key produced no error and
     no change to the signed request), so a mis-spelled credential field is dropped with nothing to
-    notice. ``session_token`` is object_store's own spelling, pinned on the wire by
-    ``test_a_vended_credential_survives_the_storage_seam.py``.
+    notice. Pinned on the wire by ``test_a_vended_credential_survives_the_storage_seam.py`` and by
+    ``test_explicit_credentials_beat_the_ambient_environment.py``.
     """
     options: StorageOptions = {
         "endpoint": endpoint,
-        "access_key_id": access_key_id,
-        "secret_access_key": secret_access_key,
+        "aws_access_key_id": access_key_id,
+        "aws_secret_access_key": secret_access_key,
         "region": region,
         "allow_http": str(allow_http).lower(),
+        # No ``aws_`` alias exists for this one, and none is needed: it is not read from the
+        # environment, so there is nothing for it to lose a precedence contest to.
         "virtual_hosted_style_request": str(virtual_hosted).lower(),
     }
     if session_token:
-        options["session_token"] = session_token
+        options["aws_session_token"] = session_token
     return options
+
+
+#: The two spellings of each credential field. `lance_storage_options` emits the `aws_`-prefixed form
+#: (see there for why the bare one loses to the ambient environment), but dicts also arrive from the
+#: wire — a vending response, a stored store descriptor, a hand-built test fixture — so every READER
+#: must accept both. One tuple rather than an `or` chain at each call site: a site that read only one
+#: spelling would not error, it would fall back to the default credential chain, which is the pod's own
+#: broader role rather than the scoped credential it was handed. Failing OPEN, silently.
+_CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
+    ("aws_access_key_id", "access_key_id"),
+    ("aws_secret_access_key", "secret_access_key"),
+    ("aws_session_token", "session_token"),
+)
+
+
+def credential_of(storage_options: StorageOptions) -> tuple[str | None, str | None, str | None]:
+    """The (access key, secret, session token) a storage-options dict carries, under either spelling.
+
+    ``None`` for a field the dict does not carry — meaning "use the ambient chain for this one", which
+    is what a store sharing the deployment's credentials deliberately wants.
+    """
+    access_key, secret_key, session_token = (_first_present(storage_options, aliases) for aliases in _CREDENTIAL_ALIASES)
+    return access_key, secret_key, session_token
+
+
+def _first_present(storage_options: StorageOptions, aliases: tuple[str, str]) -> str | None:
+    return next((storage_options[key] for key in aliases if storage_options.get(key)), None)
+
+
+def without_credentials(storage_options: StorageOptions) -> StorageOptions:
+    """The same options with every credential field removed, under BOTH spellings.
+
+    For a registered store that declares no secret: it shares the deployment's credentials, so the
+    fields are REMOVED rather than left empty — an empty string is a credential pyarrow will sign with.
+    Popping one spelling and leaving the other is the same silent half-credential.
+    """
+    dropped = {key for aliases in _CREDENTIAL_ALIASES for key in aliases}
+    return {key: value for key, value in storage_options.items() if key not in dropped}
 
 
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
@@ -75,10 +126,11 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
     the catalog scoped, not narrower. Dropping it fails open.
     """
     scheme, _, host = storage_options["endpoint"].partition("://")
+    access_key, secret_key, session_token = credential_of(storage_options)
     return pafs.S3FileSystem(
-        access_key=storage_options.get("access_key_id"),
-        secret_key=storage_options.get("secret_access_key"),
-        session_token=storage_options.get("session_token"),
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
         endpoint_override=host or storage_options["endpoint"],
         scheme=scheme or "http",
         region=storage_options.get("region", ""),

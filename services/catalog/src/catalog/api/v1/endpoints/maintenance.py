@@ -81,7 +81,19 @@ async def run_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: 
     return GcRunResult(**result)
 
 
-@router.post("/{id}/maintenance/compact", response_model=None)
+@router.post(
+    "/{id}/maintenance/compact",
+    # BOTH outcomes are declared, because this OpenAPI is a wire contract: it is generated into
+    # `frontend/packages/api/src/generated/catalog.ts`, and a 202 the schema does not describe is a
+    # response the typed client cannot name. The union return annotation carries the 200; `responses`
+    # carries the 202, which FastAPI cannot infer from a status code set at runtime.
+    responses={
+        status.HTTP_202_ACCEPTED: {
+            "model": CompactAccepted,
+            "description": "Enqueued onto the maintenance work queue; no fragment counts exist yet.",
+        }
+    },
+)
 async def compact_maintenance(
     id: str,
     body: CompactRequest,

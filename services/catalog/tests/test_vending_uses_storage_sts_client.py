@@ -83,7 +83,7 @@ def test_sts_vendor_builds_a_signed_client_through_the_storage_seam(seam: tuple[
     creds = vendor.vend(table_location="s3://b/db$t", tier="read")
 
     assert built == [{"region": "eu-north-1", "endpoint": "http://rustfs:9000", "access_key": "ROOTKEY", "secret_key": "ROOTSECRET"}]
-    assert creds is not None and creds.storage_options["session_token"] == "tok"
+    assert creds is not None and creds.storage_options["aws_session_token"] == "tok"
 
 
 def test_web_identity_vendor_builds_an_unsigned_client_through_the_storage_seam(seam: tuple[_FakeSts, list[dict[str, Any]]]) -> None:
@@ -95,7 +95,7 @@ def test_web_identity_vendor_builds_an_unsigned_client_through_the_storage_seam(
     creds = vendor.vend(table_location="s3://b/db$t", tier="read", web_identity_token="a.jwt.here")
 
     assert built == [{"region": "eu-north-1", "endpoint": "http://rustfs:9000", "unsigned": True}]
-    assert creds is not None and creds.storage_options["session_token"] == "tok"
+    assert creds is not None and creds.storage_options["aws_session_token"] == "tok"
 
 
 def test_the_sts_client_is_built_once_per_vendor(seam: tuple[_FakeSts, list[dict[str, Any]]]) -> None:

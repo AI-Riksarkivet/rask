@@ -49,8 +49,8 @@ def test_secret_comes_from_the_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(media_config, "_store_secret", lambda *_a: "from-the-store")
     opts = _settings().storage_options()
     assert opts is not None
-    assert opts["secret_access_key"] == "from-the-store"
-    assert opts["access_key_id"] == "rustfsadmin"
+    assert opts["aws_secret_access_key"] == "from-the-store"
+    assert opts["aws_access_key_id"] == "rustfsadmin"
 
 
 def test_missing_store_secret_FAILS_CLOSED(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,7 +70,7 @@ def test_missing_access_key_id_is_a_config_error(monkeypatch: pytest.MonkeyPatch
 def test_explicit_test_creds_bypass_the_store() -> None:
     """Sidecar-less dev/tests: BOTH static fields set -> no store call (it would raise here)."""
     opts = _settings(MEDIA_S3_SECRET_ACCESS_KEY="local-secret").storage_options()
-    assert opts is not None and opts["secret_access_key"] == "local-secret"
+    assert opts is not None and opts["aws_secret_access_key"] == "local-secret"
 
 
 def test_local_root_needs_no_store_at_all() -> None:

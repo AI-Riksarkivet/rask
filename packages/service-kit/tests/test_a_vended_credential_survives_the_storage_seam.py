@@ -33,8 +33,11 @@ from service_kit.lakehouse.objectfs import lance_storage_options, s3_filesystem
 
 
 def test_the_lance_builder_carries_a_session_token() -> None:
+    """Under the ``aws_``-prefixed spelling — the bare one loses a precedence contest with the pod's
+    ambient AWS_* environment, which `test_explicit_credentials_beat_the_ambient_environment.py`
+    records in full."""
     options = lance_storage_options("http://s3:9000", "AKIA", "secret", "us-east-1", session_token="TOKEN")
-    assert options["session_token"] == "TOKEN"
+    assert options["aws_session_token"] == "TOKEN"
 
 
 @pytest.mark.parametrize("absent", [None, ""])
@@ -46,7 +49,9 @@ def test_the_builder_emits_no_token_key_when_the_credential_is_static(absent: st
     empty case are covered because a config read is far likelier to yield ``""`` than ``None``: an
     env var that exists and is blank is exactly what a half-configured vending mode produces.
     """
-    assert "session_token" not in lance_storage_options("http://s3:9000", "AKIA", "secret", "us-east-1", session_token=absent)
+    built = lance_storage_options("http://s3:9000", "AKIA", "secret", "us-east-1", session_token=absent)
+    assert "aws_session_token" not in built
+    assert "session_token" not in built
 
 
 @pytest.mark.parametrize("token", ["TOKEN-ABC", "a/token+with/base64=chars"])

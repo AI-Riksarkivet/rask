@@ -311,15 +311,21 @@ class WebIdentityVendor:
             DurationSeconds=self._ttl,
         )
         creds = cast(dict[str, object], resp["Credentials"])
-        opts: dict[str, str] = {
-            "access_key_id": str(creds["AccessKeyId"]),
-            "secret_access_key": str(creds["SecretAccessKey"]),
-            "session_token": str(creds["SessionToken"]),
-            "region": self._region,
-        }
-        if self._endpoint:
-            opts["endpoint"] = self._endpoint
-        return VendedCredentials(storage_options=opts, expires_at_millis=_expiry_millis(creds.get("Expiration"), self._ttl))
+        # Through the ONE builder, like `StsVendor` beside it. Hand-rolling this dict is how it came to
+        # carry the bare credential spellings, which do not displace a pod's ambient AWS_* environment —
+        # object_store blends the two and signs as neither identity (`403 SignatureDoesNotMatch`,
+        # measured in-cluster 2026-09-03). It also silently omitted `allow_http` and
+        # `virtual_hosted_style_request`, which RustFS needs.
+        opts = lance_storage_options(
+            self._endpoint or "",
+            str(creds["AccessKeyId"]),
+            str(creds["SecretAccessKey"]),
+            self._region,
+            session_token=str(creds["SessionToken"]),
+        )
+        if not self._endpoint:
+            opts.pop("endpoint", None)
+        return VendedCredentials(storage_options=dict(opts), expires_at_millis=_expiry_millis(creds.get("Expiration"), self._ttl))
 
 
 def make_vendor(

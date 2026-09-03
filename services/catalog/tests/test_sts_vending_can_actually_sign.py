@@ -73,5 +73,5 @@ def test_an_sts_vendor_signs_with_the_credentials_it_was_built_with() -> None:
     )
     vended = vendor.vend(table_location="s3://bucket/tbl", tier="write")
     assert vended is not None
-    assert vended.storage_options["session_token"] == "T"
+    assert vended.storage_options["aws_session_token"] == "T"
     assert seen.get("aws_access_key_id") == "ROOTKEY"

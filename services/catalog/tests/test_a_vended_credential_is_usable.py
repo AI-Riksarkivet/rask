@@ -51,7 +51,7 @@ def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> Non
 
 def test_the_credential_itself_still_rides() -> None:
     opts = _vend(endpoint="http://rustfs:9000")
-    assert (opts["access_key_id"], opts["secret_access_key"], opts["session_token"]) == ("AK", "SK", "TOK")
+    assert (opts["aws_access_key_id"], opts["aws_secret_access_key"], opts["aws_session_token"]) == ("AK", "SK", "TOK")
     assert opts["region"] == "us-east-1"
 
 

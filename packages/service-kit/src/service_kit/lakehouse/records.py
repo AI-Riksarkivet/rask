@@ -73,13 +73,15 @@ def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto
     patching the wrapper would let a regression back to a raw client pass unnoticed — and so the
     local-root branch below needs no S3 stack at all.
     """
+    from service_kit.lakehouse.objectfs import credential_of
     from storage import s3_client
 
+    _access_key, _secret_key, _session_token = credential_of(storage_options)
     return s3_client(
         storage_options.get("endpoint"),
-        access_key=storage_options.get("access_key_id"),
-        secret_key=storage_options.get("secret_access_key"),
-        session_token=storage_options.get("session_token"),
+        access_key=_access_key,
+        secret_key=_secret_key,
+        session_token=_session_token,
         region=storage_options.get("region") or "us-east-1",
     )
 

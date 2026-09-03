@@ -283,6 +283,13 @@ class MediaSettings(BaseSettings):
 
         Path-style addressing is forced (``virtual_hosted_style_request=false``)
         because RustFS/MinIO reject virtual-hosted signing — verified live.
+
+        The credential keys are ``aws_``-prefixed for the reason ``lance_storage_options`` records:
+        every fleet pod exports ``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY``, and the bare spellings
+        do not displace them — object_store blends the two sources and signs with a pair belonging to
+        neither identity (``403 SignatureDoesNotMatch``, measured in-cluster 2026-09-03). This builder
+        goes to the trouble of fetching a secret from the store, fail-closed; being overridden by the
+        environment afterwards would defeat the whole path.
         """
         if not self.s3_endpoint:
             return None
@@ -300,16 +307,16 @@ class MediaSettings(BaseSettings):
         #      env-borne secret is the shape the rule forbids, and a silent chain fallback would
         #      re-admit it while looking configured.
         if self.s3_access_key_id and self.s3_secret_access_key:
-            opts["access_key_id"] = self.s3_access_key_id
-            opts["secret_access_key"] = self.s3_secret_access_key
+            opts["aws_access_key_id"] = self.s3_access_key_id
+            opts["aws_secret_access_key"] = self.s3_secret_access_key
             return opts
         if not self.s3_access_key_id:
             raise RuntimeError("MEDIA_S3_ENDPOINT is set but MEDIA_S3_ACCESS_KEY_ID is not — the id is config, set it")
         secret = _store_secret(self.s3_secret_store, self.s3_secret_key, self.s3_secret_field)
         if not secret:
             raise RuntimeError(f"S3 secret {self.s3_secret_field!r} unavailable from Dapr store {self.s3_secret_store!r} — failing closed")
-        opts["access_key_id"] = self.s3_access_key_id
-        opts["secret_access_key"] = secret
+        opts["aws_access_key_id"] = self.s3_access_key_id
+        opts["aws_secret_access_key"] = secret
         return opts
 
     @property
