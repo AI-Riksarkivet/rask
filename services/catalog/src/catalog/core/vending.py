@@ -34,6 +34,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
+from service_kit.lakehouse.objectfs import lance_storage_options
+
 
 Tier = Literal["read", "write"]
 VendingMode = Literal["mode_b", "static", "sts", "web_identity"]
@@ -237,14 +239,25 @@ class StsVendor:
             DurationSeconds=self._ttl,
         )
         creds = cast(dict[str, object], resp["Credentials"])
-        opts: dict[str, str] = {
-            "access_key_id": str(creds["AccessKeyId"]),
-            "secret_access_key": str(creds["SecretAccessKey"]),
-            "session_token": str(creds["SessionToken"]),
-            "region": self._region,
-        }
-        if self._endpoint:
-            opts["endpoint"] = self._endpoint
+        # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. The hand-rolled dict carried the key pair,
+        # the token, the region and the endpoint — and Lance refused to construct a client from it,
+        # failing in 13µs with `HTTP error: builder error` (measured 2026-09-03). object_store will not
+        # build an S3 client for an `http://` endpoint without `allow_http`, and RustFS/MinIO reject
+        # virtual-hosted signing with 403 `SignatureDoesNotMatch`. A credential that is correct and
+        # unusable is the worst shape: the vend returns 200 with a full triple and every use of it fails
+        # somewhere else. `lance_storage_options`' own docstring names this — "one omitted key in a
+        # hand-rolled copy is exactly the drift this builder exists to prevent".
+        opts = lance_storage_options(
+            self._endpoint or "",
+            str(creds["AccessKeyId"]),
+            str(creds["SecretAccessKey"]),
+            self._region,
+            session_token=str(creds["SessionToken"]),
+        )
+        if not self._endpoint:
+            # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the
+            # client to nothing. The builder always emits the key, so it is removed rather than skipped.
+            opts.pop("endpoint", None)
         return VendedCredentials(
             storage_options=opts,
             expires_at_millis=_expiry_millis(creds.get("Expiration"), self._ttl),
