@@ -31,7 +31,10 @@ _METHODS = frozenset({"get", "put", "post", "delete", "patch", "head", "options"
 
 def _operations(spec: dict[str, object]) -> list[tuple[str, str, dict[str, object]]]:
     out = []
-    for path, item in (spec.get("paths") or {}).items():
+    paths = spec.get("paths")
+    if not isinstance(paths, dict):
+        return out
+    for path, item in paths.items():
         if not isinstance(item, dict):
             continue
         for method, op in item.items():

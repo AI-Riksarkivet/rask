@@ -41,9 +41,16 @@ from catalog.api.dependencies import (
 from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
+from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.serialization import dump
-from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
+from catalog.schemas import (
+    CommitFragmentsRequest,
+    CommitFragmentsResponse,
+    CompactionCommitRequest,
+    CompactionCommitResponse,
+    CompactionPlanRequest,
+    CompactionPlanResponse,
+)
 from catalog.services import blob_serving, dataplane, native, table_create
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
@@ -156,6 +163,93 @@ async def commit_fragments(
         authorization=authorization,
     )
     return CommitFragmentsResponse(version=version, row_count=row_count)
+
+
+@router.post("/{id}/compaction_plan", response_model_exclude_none=True)
+async def plan_table_compaction(
+    id: str,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    body: CompactionPlanRequest | None = None,
+    branch: str | None = None,
+) -> CompactionPlanResponse:
+    """Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
+
+    Rewriting a table's data files is unbounded work whose cost is set by the table rather than by the
+    request. Doing it here would make this pod's memory ceiling a function of the largest table anyone
+    owns and turn a maintenance pass into an availability incident for every other door on it. So the
+    protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
+    no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
+    and ``/compaction_commit`` folds the results back in. `open_cloudnative.md` N1.
+
+    Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
+    table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
+    ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
+
+    An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
+    to queue.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    # A branch has its own version sequence and its own fragments; planning against main and reporting
+    # it as the branch's work would compact the wrong dataset with a 200. Refuse until the plan/commit
+    # pair opens the branch ref (`open_cloudnative.md` N6).
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="plan_table_compaction")
+    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+    if not described.location:
+        raise InvalidInputError("table has no object-store location to compact")
+    policy = (body or CompactionPlanRequest()).model_dump(exclude_none=True)
+    plan = await run_in_threadpool(lambda: dataplane.plan_compaction(described.location or "", so, **policy))
+    return CompactionPlanResponse(read_version=plan.read_version, tasks=plan.tasks)
+
+
+@router.post("/{id}/compaction_commit", response_model_exclude_none=True)
+async def commit_table_compaction(
+    id: str,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    token: CurrentToken,
+    emitter: LineageEmitterDep,
+    body: CompactionCommitRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    branch: str | None = None,
+) -> CompactionCommitResponse:
+    """Commit the workers' rewrite results as ONE metadata-only version.
+
+    Every data file this publishes was written by the worker that executed the task and already exists
+    when this is called, so no data byte transits the catalog — the same property that makes the sibling
+    ``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite
+    is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
+    malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
+
+    The lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and
+    recording it as one would put phantom writes on the graph at every maintenance pass.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="commit_table_compaction")
+    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+    if not described.location:
+        raise InvalidInputError("table has no object-store location to compact")
+    outcome = await run_in_threadpool(dataplane.commit_compaction, described.location, so, body.results)
+    await lineage_deps.emit_measured_write(
+        emitter,
+        segments,
+        ns=ns,
+        so=so,
+        settings=settings,
+        token=token,
+        operation=COMPACT_TABLE,
+        pin_version=outcome.version,
+        authorization=authorization,
+    )
+    return CompactionCommitResponse(
+        version=outcome.version,
+        fragments_added=outcome.fragments_added,
+        fragments_removed=outcome.fragments_removed,
+        files_added=outcome.files_added,
+        files_removed=outcome.files_removed,
+    )
 
 
 @router.post("/{id}/insert", response_model_exclude_none=True)

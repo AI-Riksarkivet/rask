@@ -712,6 +712,53 @@ class CommitFragmentsResponse(BaseModel):
     row_count: int
 
 
+class CompactionPlanRequest(BaseModel):
+    """Ask the catalog what compaction this table needs — a metadata read that mints nothing.
+
+    The knobs are POLICY (what shape the table should end up in), never mechanics (how many threads a
+    machine should use): the executor owns the machine, so its own knobs never cross this door. An
+    unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Merge fragments until each holds about this many rows. ``None`` leaves Lance's own default.
+    target_rows_per_fragment: int | None = Field(default=None, gt=0)
+    max_rows_per_group: int | None = Field(default=None, gt=0)
+    max_bytes_per_file: int | None = Field(default=None, gt=0)
+    #: Rewrite fragments to drop soft-deleted rows, not just to merge small files.
+    materialize_deletions: bool | None = None
+    #: The deleted-row fraction above which a fragment is rewritten for deletions alone. Lance spells
+    #: the field ``threadhold``; the name is carried verbatim because renaming it here would mean
+    #: forwarding nothing.
+    materialize_deletions_threadhold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class CompactionPlanResponse(BaseModel):
+    """The planned work. ``tasks`` are opaque strings for a queue — one worker, one task."""
+
+    read_version: int
+    tasks: list[str]
+
+
+class CompactionCommitRequest(BaseModel):
+    """The workers' rewrite results, come back to be committed as one metadata-only version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Lance's serialized ``RewriteResult`` strings, one per executed task. Opaque to the catalog and
+    #: client-controlled: a malformed one is a 400, never a 500.
+    results: list[str] = Field(min_length=1)
+
+
+class CompactionCommitResponse(BaseModel):
+    version: int
+    fragments_added: int
+    fragments_removed: int
+    files_added: int
+    files_removed: int
+
+
 class PublishRequest(BaseModel):
     """Ask the catalog to gate a committed version and, if it passes, publish it.
 

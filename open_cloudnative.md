@@ -77,7 +77,39 @@ orphan scan's per-version walk, and `rename`'s byte copy.
 
 | # | Step | Closes |
 | --- | --- | --- |
-| N1 | **Widen the commit door**: `Rewrite` and `CreateIndex` beside `Append` in `dataplane.commit_appended_fragments` + `/commit`, same verification and taxonomy. Nothing else can start until a worker's result can land. | B1, B3 |
+| N1 | ~~**Widen the commit door**~~ → **LANDED 2026-09-03, and by a better route than this row named.** Running the protocol found that hand-rolling `LanceOperation.Rewrite` from `write_fragments` output is not merely awkward but *impossible* on the tables this estate produces: Lance refuses it with `All fragments must have row ids`, and every medallion table is written with stable row ids. Lance already ships the distributed protocol — `Compaction.plan` → `CompactionTask.execute` → `Compaction.commit`, all `.json()`-serializable — so the catalog exposes THAT instead: `POST /v1/table/{id}/compaction_plan` and `/compaction_commit`, with `dataplane.plan_compaction` / `commit_compaction` beneath. `CreateIndex` moves to N6, where pylance's own `create_index_uncommitted` / `commit_existing_index_segments` pair is the same shape. | B1, B3 |
+
+### N1 as landed — what running the protocol changed
+
+The row above was written from reading. Three things only showed up under execution, and all three
+improved the design:
+
+1. **A hand-rolled `Rewrite` cannot work here at all.** `lance.fragment.write_fragments` produces
+   fragments without row ids; committing them as a `Rewrite` against a stable-row-id table raises
+   `Invalid user input: All fragments must have row ids`. The medallion writes every governed tier at
+   2.2 *with* stable row ids, so the hand-rolled route was unavailable on exactly the tables it was for.
+2. **Lance ships the protocol.** `Compaction.plan(dataset, options)` → `CompactionTask.execute(dataset)`
+   → `Compaction.commit(dataset, results)`, with `.json()` / `.from_json()` on both the task and the
+   result. The split is by CREDENTIAL as much as by machine: plan and commit are metadata-only under
+   root creds, execute is every byte under vended table-scoped creds. Verified end-to-end on a real
+   300-row / 3-fragment dataset: one version minted, rows intact, stable row ids preserved.
+3. **The conflict remedy is per-door.** A compaction result that lost a race to an `Overwrite` gets
+   Lance's `Incompatible transaction`, which the shared classifier already routes to a non-retryable
+   400 — but its advice ("re-WRITE the data") names work a compaction worker never did. The classifier
+   now takes the remedy from its caller; a compaction is told to re-plan.
+
+Two properties are pinned rather than assumed, because both are what make the door safe to keep:
+`/compaction_plan` mints no version (a version minted there would mean the door did the work itself),
+and every data file `/compaction_commit` publishes already exists when it is called.
+
+Both doors **refuse a named branch** rather than answering it from main. A branch has its own fragments;
+planning main and reporting it as the branch's work is the dropped-parameter defect from §A, and here it
+would compact the wrong dataset with a 200. Honouring it is N6.
+
+Not yet done, and not claimed: **nothing calls these doors.** The `maintenance` sweep still runs
+`compact_one` in-process on its own pod — N3 and N4 are what move it. The doors are the seam that had
+to exist first, verified against real pylance and over real HTTP, not the migration.
+
 | N2 | **`session_token` through every storage-options builder** (`objectfs.lance_storage_options`, `s3_filesystem`, `records._s3_client`, `storage.s3_client`). Without it a vended STS credential cannot reach a worker and the executor is forced back onto the root key. | C1, F2·1 |
 | N3 | **The plan document + `maintenance_requested`/`maintenance_completed` control actions**, emitted by the sweep and by the catalog doors, so both produce a byte-identical plan. | D5, H5 |
 | N4 | **The JetStream work queue and the executor**, mirroring `ingest/queue.py`'s shape. The catalog doors and the sweep become planners; `compact_one` runs on the worker. | H4, K |

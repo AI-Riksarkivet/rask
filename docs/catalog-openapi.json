@@ -2966,6 +2966,148 @@
         "title": "CompactResult",
         "type": "object"
       },
+      "CompactionCommitRequest": {
+        "additionalProperties": false,
+        "description": "The workers' rewrite results, come back to be committed as one metadata-only version.",
+        "properties": {
+          "results": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "CompactionCommitRequest",
+        "type": "object"
+      },
+      "CompactionCommitResponse": {
+        "properties": {
+          "files_added": {
+            "title": "Files Added",
+            "type": "integer"
+          },
+          "files_removed": {
+            "title": "Files Removed",
+            "type": "integer"
+          },
+          "fragments_added": {
+            "title": "Fragments Added",
+            "type": "integer"
+          },
+          "fragments_removed": {
+            "title": "Fragments Removed",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "fragments_added",
+          "fragments_removed",
+          "files_added",
+          "files_removed"
+        ],
+        "title": "CompactionCommitResponse",
+        "type": "object"
+      },
+      "CompactionPlanRequest": {
+        "additionalProperties": false,
+        "description": "Ask the catalog what compaction this table needs \u2014 a metadata read that mints nothing.\n\nThe knobs are POLICY (what shape the table should end up in), never mechanics (how many threads a\nmachine should use): the executor owns the machine, so its own knobs never cross this door. An\nunrecognized field is refused rather than dropped \u2014 see ``dataplane.plan_compaction``.",
+        "properties": {
+          "materialize_deletions": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialize Deletions"
+          },
+          "materialize_deletions_threadhold": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialize Deletions Threadhold"
+          },
+          "max_bytes_per_file": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Bytes Per File"
+          },
+          "max_rows_per_group": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Rows Per Group"
+          },
+          "target_rows_per_fragment": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Rows Per Fragment"
+          }
+        },
+        "title": "CompactionPlanRequest",
+        "type": "object"
+      },
+      "CompactionPlanResponse": {
+        "description": "The planned work. ``tasks`` are opaque strings for a queue \u2014 one worker, one task.",
+        "properties": {
+          "read_version": {
+            "title": "Read Version",
+            "type": "integer"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "read_version",
+          "tasks"
+        ],
+        "title": "CompactionPlanResponse",
+        "type": "object"
+      },
       "CountTableRowsRequest": {
         "description": "CountTableRowsRequest",
         "properties": {
@@ -21291,6 +21433,325 @@
           }
         ],
         "summary": "Commit Fragments",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v1/table/{id}/compaction_commit": {
+      "post": {
+        "description": "Commit the workers' rewrite results as ONE metadata-only version.\n\nEvery data file this publishes was written by the worker that executed the task and already exists\nwhen this is called, so no data byte transits the catalog \u2014 the same property that makes the sibling\n``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite\nis a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a\nmalformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).\n\nThe lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and\nrecording it as one would put phantom writes on the graph at every maintenance pass.",
+        "operationId": "commit_table_compaction_v1_table__id__compaction_commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompactionCommitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactionCommitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Commit Table Compaction",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v1/table/{id}/compaction_plan": {
+      "post": {
+        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. `open_cloudnative.md` N1.\n\nWriter tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the\ntable default, which is the correct rung \u2014 a compaction preserves every row (Lance commits it as a\n``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
+        "operationId": "plan_table_compaction_v1_table__id__compaction_plan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CompactionPlanRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactionPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Plan Table Compaction",
         "tags": [
           "data"
         ]

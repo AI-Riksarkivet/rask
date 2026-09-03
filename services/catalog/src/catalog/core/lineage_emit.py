@@ -93,6 +93,13 @@ UPDATE_SCHEMA_METADATA = "update_schema_metadata"
 #: or schema; recorded so provenance shows when a scalar/vector index was (re)built or removed.
 CREATE_INDEX = "create_index"
 DROP_INDEX = "drop_index"
+#: A compaction landed: fragments were merged and the table got a new version. Recorded for the same
+#: reason the index ops are — the version moved and an operator asking "what touched this table at
+#: 03:00?" must get an answer — but kept DISTINCT from the data ops on purpose. A compaction changes
+#: no row, so folding it into ``insert``/``update`` would put a content change in the graph where none
+#: happened, and a downstream consumer replaying WROTE edges would see phantom writes on every
+#: maintenance pass.
+COMPACT_TABLE = "compact_table"
 #: Restore moves the table's current version to a prior one — a real version-state change, recorded as a
 #: versioned WROTE at the new (restored) version.
 RESTORE_TABLE = "restore_table"

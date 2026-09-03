@@ -25,6 +25,7 @@ from contextlib import contextmanager, suppress
 from typing import Any, cast
 
 import lance
+import lance.optimize as lance_optimize
 import pyarrow as pa
 import pyarrow.fs as pafs
 from lance_namespace import (
@@ -78,6 +79,7 @@ from lance_namespace import (
     UpdateTableTagRequest,
     UpdateTableTagResponse,
 )
+from pydantic import BaseModel
 
 from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
@@ -544,10 +546,18 @@ _COMMIT_CONFLICT_MARKERS = ("commit conflict", "concurrent")
 #: compacted away) — a CLIENT error (400), NOT a store outage (audit 2026-07-14): otherwise a client that
 #: appends to a freshly-declared table (read_version=0) gets a 503 and retries the same version forever.
 _COMMIT_NO_BASE_MARKERS = ("must already exist unless", "manifest was not found", "no such file")
+#: The default non-retryable remedy — the client-direct append's. Its fragments describe data the table
+#: no longer accepts, so the data must be written again, not the metadata re-sent.
+_APPEND_REMEDY = "Discard them, re-read the current version, and re-WRITE the data"
 
 
-def _classify_commit_error(exc: OSError) -> Exception:
-    """Map a raised ``LanceDataset.commit`` ``OSError`` to the right catalog error (audit 2026-07-14)."""
+def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exception:
+    """Map a raised ``LanceDataset.commit`` ``OSError`` to the right catalog error (audit 2026-07-14).
+
+    ``remedy`` is the sentence the non-retryable branch gives the caller — the work it must redo. It is
+    per-door because the doors hold different things: an append holds fragments it must re-write, a
+    compaction holds a result whose plan is void.
+    """
     msg = str(exc).lower()
     if any(m in msg for m in _COMMIT_NO_BASE_MARKERS):
         return InvalidInputError(f"append target has no committed base version — create or overwrite the table first: {exc}")
@@ -555,12 +565,12 @@ def _classify_commit_error(exc: OSError) -> Exception:
         return InvalidInputError(f"fragments are incompatible with the table: {exc}")
     if any(m in msg for m in _COMMIT_INCOMPATIBLE_MARKERS):
         # NON-RETRYABLE (spec). Do NOT tell the caller to re-commit: the table changed underneath them
-        # (e.g. a concurrent Overwrite), so these fragments describe data that no longer belongs. They must
-        # re-WRITE against the current version. Advising a re-commit here is how you corrupt a table.
+        # (e.g. a concurrent Overwrite), so what they hold describes data that no longer belongs. Advising
+        # a re-commit here is how you corrupt a table. The REMEDY differs by door — an append re-writes its
+        # fragments, a compaction re-plans and re-executes — so the caller names the work it must redo.
         return InvalidInputError(
             "commit is incompatible with the table's current transaction — this is NOT retryable: the "
-            "table changed underneath these fragments (e.g. a concurrent overwrite). Discard them, re-read "
-            f"the current version, and re-WRITE the data; do not re-commit: {exc}"
+            f"table changed underneath it (e.g. a concurrent overwrite). {remedy}; do not re-commit: {exc}"
         )
     if any(m in msg for m in _COMMIT_CONFLICT_MARKERS):
         return ConcurrentModificationError(f"commit conflict — re-read the table version and re-commit the fragments: {exc}")
@@ -753,6 +763,107 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
         raise InvalidInputError(
             f"commit references {len(missing)} data file(s) not present under the table location (did the direct write target the wrong prefix?): {missing[:5]}"
         )
+
+
+#: pylance's stub declares neither ``CompactionTask.json()`` nor ``RewriteResult.from_json()``, though
+#: both exist on the Rust classes and round-trip (verified 2026-09-03 against pylance's shipped
+#: ``lance/lance/optimize.pyi``, which stops at ``execute``/``plan``/``commit``). One named alias is where
+#: that gap is absorbed — narrow enough that everything else in the two functions below stays checked.
+_RewriteResult: Any = lance_optimize.RewriteResult
+
+#: The maintenance knobs a POLICY sets, and the whole of what the plan door accepts. Lance's
+#: ``CompactionOptions`` carries a dozen more (thread counts, buffer sizes, encoding modes) that describe
+#: how a machine should do the work rather than what the table needs — those belong to the executor that
+#: owns the machine, so the catalog neither takes them nor forwards them. Names are Lance's, verbatim,
+#: including ``materialize_deletions_threadhold``: it is spelled that way in ``lance.optimize`` and
+#: renaming it here would mean silently dropping whatever a caller sent.
+_COMPACTION_POLICY_KNOBS = ("target_rows_per_fragment", "max_rows_per_group", "max_bytes_per_file", "materialize_deletions", "materialize_deletions_threadhold")
+
+#: The compaction result's non-retryable remedy. A lost race voids the PLAN, not just the commit — the
+#: fragments the result names were chosen against a version that no longer exists.
+_COMPACTION_REMEDY = "Discard this result and re-plan against the current version"
+
+
+class PlannedCompaction(BaseModel):
+    """What the catalog hands a queue: the version the work was planned against, and the tasks.
+
+    Each task is Lance's own serialized ``CompactionTask`` — an opaque JSON string the catalog does not
+    interpret. Opaque is deliberate: the task names fragments and encoding decisions that are the
+    format's business, and a catalog that parsed them would have to be re-taught on every format change.
+
+    Named for the plan rather than after Lance's own ``CompactionPlan``, which this is built FROM and
+    which is a different type living one import away in the same module.
+    """
+
+    read_version: int
+    tasks: list[str]
+
+
+class CompactionOutcome(BaseModel):
+    """The metadata-only commit's result: the version it minted and what the rewrite moved."""
+
+    version: int
+    fragments_added: int
+    fragments_removed: int
+    files_added: int
+    files_removed: int
+
+
+def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> PlannedCompaction:
+    """Plan a compaction WITHOUT executing it — the catalog's first half of the maintenance protocol.
+
+    This is a metadata read: it opens the manifest, decides which fragments should merge, and returns
+    serialized tasks for a queue. It moves no data byte and mints no version, which is what makes it
+    safe to run inside a request handler at all. The second half is :func:`commit_compaction`; between
+    them sits a WORKER holding vended, table-scoped creds that runs ``CompactionTask.execute`` and does
+    every byte of the rewrite — the split that keeps the catalog's memory ceiling a function of its
+    request rate rather than of the largest table anyone owns.
+
+    ``policy`` accepts only ``_COMPACTION_POLICY_KNOBS``; anything else is refused rather than dropped,
+    so a caller tuning a knob this door does not honour learns it instead of watching the plan ignore it.
+    An empty ``tasks`` list is the ANSWER for a table already at target, not an error — a scheduled sweep
+    over a healthy estate must be able to conclude "nothing to do" without paging anyone.
+    """
+    unknown = sorted(set(policy) - set(_COMPACTION_POLICY_KNOBS))
+    if unknown:
+        raise InvalidInputError(f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS)}")
+    options = {k: v for k, v in policy.items() if v is not None}
+    dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    plan = lance_optimize.Compaction.plan(dataset, cast(Any, options))
+    return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
+
+
+def commit_compaction(location: str, so: StorageOptions, results: Sequence[str]) -> CompactionOutcome:
+    """Commit the workers' rewrite results — the catalog's second half, under ROOT creds.
+
+    Metadata-only by construction: every data file this publishes was written by the worker that
+    executed the task, and already exists when this is called. The catalog reads none of them.
+
+    ``results`` are Lance's serialized ``RewriteResult`` strings, arriving off a queue and therefore
+    CLIENT-CONTROLLED: ``from_json`` raises ``ValueError`` on a malformed one, which becomes a 400 here
+    rather than a 500. An EMPTY list is refused for the same reason the sibling append door refuses
+    empty fragments — Lance answers it with a zero-metric success and no new version, which relayed
+    verbatim is indistinguishable from a healthy table and would mask an executor that lost every result
+    it was handed.
+    """
+    if not results:
+        raise InvalidInputError("no compaction results to commit")
+    try:
+        rewrites = [_RewriteResult.from_json(result) for result in results]
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise InvalidInputError(f"malformed compaction result: {exc}") from exc
+    dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    try:
+        metrics = lance_optimize.Compaction.commit(dataset, rewrites)
+    except OSError as exc:
+        raise _classify_commit_error(exc, remedy=_COMPACTION_REMEDY) from exc
+    return CompactionOutcome(
+        version=int(lance.dataset(location, storage_options=dict(so) if so else None).version),
+        fragments_added=int(metrics.fragments_added),
+        fragments_removed=int(metrics.fragments_removed),
+        files_added=int(metrics.files_added),
+        files_removed=int(metrics.files_removed),
+    )
 
 
 # Scalar Arrow type names → pyarrow factory, for the alter_columns re-type path. A ``JsonArrowDataType``
