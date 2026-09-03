@@ -332,13 +332,13 @@ def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
     import lance
     import pyarrow as pa
 
-    from catalog.services import maintenance as svc
+    from service_kit.lakehouse import base_refs
 
     source = str(tmp_path / "aa11_ns$src.lance")
     src = lance.write_dataset(pa.table({"id": pa.array(range(9), pa.int64())}), source)
     src.shallow_clone(str(tmp_path / "bb22_ns$clone.lance"), reference=src.version)
 
-    refs = svc.sibling_base_refs(source, {})
+    refs = base_refs.sibling_base_refs(source, {})
 
     assert refs.is_protected(source) is not None, f"the clone's reference to its source was not found: {refs}"
     assert refs.is_protected(str(tmp_path / "cc33_ns$unrelated.lance")) is None

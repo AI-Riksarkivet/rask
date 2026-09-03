@@ -189,6 +189,18 @@ scopes:
      maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
      (nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick. */}}
 {{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
+{{- /* MAINTENANCE's write-event subscription — the primary maintenance trigger, replacing the sweep's
+     120s whole-estate walk. Gated on `workTopic` because the route is: the subscription plans a unit
+     and publishes it to the work queue, so without a queue there is nowhere to put the result.
+
+     `new`, for the notifications reason sharpened: replaying the retained stream on a pod restart
+     would re-plan maintenance for every write in the window — hundreds of manifest opens to reach the
+     same converged answer, since anything genuinely outstanding is still outstanding and the hourly
+     backstop re-plans it anyway. A missed window costs at most one backstop tick; a replayed one costs
+     the walk this lane exists to avoid. */}}
+{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId "deliverPolicy" "new") }}
+{{- end }}
 {{- range $subscribers }}
 ---
 apiVersion: dapr.io/v1alpha1

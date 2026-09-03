@@ -18,10 +18,9 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
-import pyarrow.fs as pafs
 from lance_namespace import UnsupportedOperationError
 
-from service_kit.lakehouse.base_refs import BaseRefs, protected_roots
+from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
     FragmentCarrier,
@@ -31,7 +30,7 @@ from service_kit.lakehouse.features import (
     gather_compaction_bases,
     manifest_feature_flags,
 )
-from service_kit.lakehouse.objectfs import dataset_root_probe, fs_and_base
+from service_kit.lakehouse.objectfs import dataset_root_probe
 
 
 if TYPE_CHECKING:
@@ -196,32 +195,6 @@ def _refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) 
             f"maintenance refused: another dataset resolves its files through {root} (shallow clone / multi-base) — "
             "compacting or reclaiming here would break it (the sweep's base-reference guard refuses it for the same reason)."
         )
-
-
-def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRefs:
-    """Every root referenced by a dataset laid out ALONGSIDE ``location`` — the map
-    :func:`require_compactable` and :func:`require_reclaimable` check against.
-
-    THE BOUND IS THE WAREHOUSE ROOT, and it is stated rather than implied. A referrer in some other
-    warehouse is invisible here, exactly as a referrer outside its configured buckets is invisible to
-    the sweep; what this rules out is the case that can actually happen, since ``shallow_clone``
-    resolves through a path and the catalog's own tables share one root. The alternative — walking
-    every warehouse on every button press — buys coverage of a shape nothing in this estate creates
-    at a cost paid on every click.
-
-    The listing is ONE non-recursive call because the layout is flat: the ``dir`` backend does not
-    nest a table under its namespace, it encodes both into one directory name
-    (``<uuid8>_<namespace>$<table>``) directly under the root. Anything that is not a Lance dataset
-    simply fails to open and lands in ``unreadable``, which the caller can see.
-    """
-    root = location.rstrip("/").rsplit("/", 1)[0]
-    fs, base = fs_and_base(root, storage_options)
-    siblings = [
-        f"{root.rstrip('/')}/{info.path.rstrip('/').rsplit('/', 1)[-1]}"
-        for info in fs.get_file_info(pafs.FileSelector(base, recursive=False, allow_not_found=True))
-        if info.type == pafs.FileType.Directory
-    ]
-    return protected_roots(siblings, storage_options)
 
 
 def _as_utc(ts: object) -> datetime:

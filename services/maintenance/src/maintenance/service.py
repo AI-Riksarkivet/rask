@@ -30,6 +30,7 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
+from maintenance.api.arrival import register_arrival_route
 from maintenance.api.routes import build_router
 from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings, get_settings
@@ -181,4 +182,9 @@ app.include_router(build_router(get_settings()))
 # The work subscription (POST /maintenance-work), registered only when a work topic is configured — the
 # same condition the cron route uses to choose its lane, so a deployment cannot advertise a subscription
 # for a queue it never publishes to.
-register_work_route(app, get_settings())
+_work_app = register_work_route(app, get_settings())
+
+# The write-event subscription (POST /maintenance-arrival) — the PRIMARY trigger. Shares the DaprApp
+# the work route built: a second DaprApp(app) re-registers /dapr/subscribe and the sidecar reads only
+# one of them, so one subscription would silently never be delivered to.
+register_arrival_route(app, get_settings(), _work_app)

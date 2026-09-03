@@ -619,6 +619,50 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     return items, decided
 
 
+def plan_one(uri: str, settings: MaintenanceSettings) -> DatasetWorkItem | None:
+    """Plan ONE dataset, named by a write event — the event lane's half of :func:`plan_sweep`.
+
+    Returns the unit to enqueue, or ``None`` when this dataset must not be maintained right now. It
+    applies the same three refusals the sweep applies, because an event lane that skipped any of them
+    would be a second, weaker door onto the same bytes:
+
+    * **the trash record** — a recoverably-dropped dataset is frozen until undrop or purge, and
+      rewriting it destroys time-travel someone can still restore. This is the refusal the estate has
+      already paid for by hand-overriding it once;
+    * **the policy** — `compact_enabled` and the cadence stamp, resolved winner-takes-all;
+    * **the base references** — whether another manifest resolves through these bytes.
+
+    The protection check is :func:`sibling_base_refs`, not the sweep's whole-estate pre-pass, and that
+    is a deliberate narrowing with the bound stated at that function: a referrer in another warehouse
+    is invisible here exactly as a referrer outside the configured buckets is invisible to the sweep.
+    It is computed PER CALL, so a clone created a minute ago protects its source on the next event.
+
+    An unreadable trash index refuses rather than proceeds. The sweep aborts the whole tick on one;
+    here the blast radius is one dataset, so the same fail-toward-not-deleting choice costs a single
+    skipped event that the hourly backstop will re-plan.
+    """
+    options = settings.storage_options()
+    try:
+        trashed_by_path = _trash_exclusions(settings, options)
+    except Exception as exc:  # noqa: BLE001 — an unreadable trash index must refuse, never proceed
+        log.warning("arrival_trash_index_unreadable", extra={"uri": uri, "error": str(exc)})
+        return None
+    if base_refs.normalise(uri) in trashed_by_path:
+        return None
+
+    plan = _resolve_plan(
+        uri,
+        policy_records=_load_policies(settings, options),
+        settings=settings,
+        options=options,
+        now=datetime.now(UTC),
+        older_than=timedelta(days=settings.older_than_days),
+    )
+    if plan.skipped:
+        return None
+    return DatasetWorkItem(uri=uri, plan=plan, protected_by=base_refs.sibling_base_refs(uri, options).is_protected(uri))
+
+
 def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     """Plan the tick, then execute every unit it produced, in one process. Returns what was reclaimed.
 

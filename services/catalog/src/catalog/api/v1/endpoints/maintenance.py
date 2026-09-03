@@ -18,6 +18,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import open_dataset
 from catalog.schemas import CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult
 from catalog.services import maintenance
+from service_kit.lakehouse import base_refs
 
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ async def _base_refs(ds: object, so: dict[str, str]) -> maintenance.BaseRefs:
     maintenance unusable. The refusals it can make are the point.
     """
     location = str(getattr(ds, "uri", "") or "")
-    refs = await run_in_threadpool(maintenance.sibling_base_refs, location, so)
+    refs = await run_in_threadpool(base_refs.sibling_base_refs, location, so)
     if refs.unreadable:
         log.warning("maintenance_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
     return refs

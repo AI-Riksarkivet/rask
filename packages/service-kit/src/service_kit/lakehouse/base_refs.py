@@ -55,10 +55,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
 from service_kit.lakehouse.features import manifest_base_paths
 from service_kit.lakehouse.lance_session import lance_session
+from service_kit.lakehouse.objectfs import fs_and_base
 
 
 if TYPE_CHECKING:
@@ -195,3 +197,37 @@ def protected_roots(
             refs.protected.add(root)
             log.info("maintenance_base_ref", extra={"referrer": uri, "protects": root})
     return refs
+
+
+def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRefs:
+    """Every root referenced by a dataset laid out ALONGSIDE ``location``.
+
+    Lives here rather than in either consumer because BOTH need the identical refusal: the catalog's
+    on-demand maintenance doors (`require_compactable` / `require_reclaimable`) and the maintenance
+    service's event lane, which resolves one dataset per write event and cannot run the sweep's
+    whole-estate pre-pass. A per-service copy of this would drift, which is the same reasoning that
+    put `protected_roots` and the policy registry in service-kit.
+
+    THE BOUND IS THE WAREHOUSE ROOT, and it is stated rather than implied. A referrer in some other
+    warehouse is invisible here, exactly as a referrer outside its configured buckets is invisible to
+    the sweep; what this rules out is the case that can actually happen, since ``shallow_clone``
+    resolves through a path and the catalog's own tables share one root. The alternative — walking
+    every warehouse on every event — buys coverage of a shape nothing in this estate creates at a cost
+    paid on every write.
+
+    Computed PER CALL, never cached: a clone created a minute ago must protect its source on the next
+    event, which is also why an hourly backstop cannot stand in for this check.
+
+    The listing is ONE non-recursive call because the layout is flat: the ``dir`` backend does not nest
+    a table under its namespace, it encodes both into one directory name
+    (``<uuid8>_<namespace>$<table>``) directly under the root. Anything that is not a Lance dataset
+    simply fails to open and lands in ``unreadable``, which the caller can see.
+    """
+    root = location.rstrip("/").rsplit("/", 1)[0]
+    fs, base = fs_and_base(root, storage_options)
+    siblings = [
+        f"{root.rstrip('/')}/{info.path.rstrip('/').rsplit('/', 1)[-1]}"
+        for info in fs.get_file_info(pafs.FileSelector(base, recursive=False, allow_not_found=True))
+        if info.type == pafs.FileType.Directory
+    ]
+    return protected_roots(siblings, storage_options)
