@@ -35,6 +35,10 @@ class _NoBuckets:
 def _run(tmp_path: Path) -> mod.ReconcileReport:
     settings = MaintenanceSettings(
         s3_bucket="lance-catalog",
+        # BOTH halves. The key used to default to the RustFS tenant root, so this fixture got a working
+        # credential for free; it no longer does, and an empty key fails inside object_store before the
+        # injected fault this module is actually about ever fires.
+        s3_access_key_id="unit",
         s3_secret_access_key=SecretStr("unit"),
         orphan_scan_enabled=True,
     )

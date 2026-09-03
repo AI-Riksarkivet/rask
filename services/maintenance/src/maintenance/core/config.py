@@ -131,7 +131,13 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")
-    s3_access_key_id: str = Field(default="rustfsadmin", alias="MAINTENANCE_S3_ACCESS_KEY_ID")
+    # NO DEFAULT, and specifically not the tenant root it used to carry. The chart always sets this, so
+    # nothing shipped relied on the default — which is what made it dangerous: a deployment that
+    # configured a scoped SECRET and forgot the key would pair it with the root key id, and one that
+    # configured neither ran the whole sweep as RustFS tenant root, reaching every tenant's bytes and
+    # the records that govern maintenance itself. Empty so the boot check can refuse it, exactly as the
+    # secret half is already refused; a credential is a PAIR and half of one is not a lesser risk.
+    s3_access_key_id: str = Field(default="", alias="MAINTENANCE_S3_ACCESS_KEY_ID")
     # Default "" so the chart can omit the plaintext env when the store is the source; apply_dapr_secrets
     # fails closed if neither the store nor env provides it (the audit's secret-consumption fix — the
     # compaction pod is a real S3 consumer (compacts/GCs the lakehouse), so it must NOT ship the key plain).

@@ -29,7 +29,8 @@ Source documents, committed under `docs/audits/lakehouse-2026-09/`:
 lineage, maintenance, gateway-compute-controlplane, packages}.md`. Zero-trust diff: `sweeps/zero-trust.md`, folded into §F.
 
 The control plane and the future `rask-operator` are a separate plan, `open_controller.md` (2026-09-02), and
-moving maintenance execution out of the lakehouse process is `open_cloudnative.md`; this register stays on
+moving maintenance execution out of the lakehouse process LANDED — see `docs/DECISIONS.md`, "The
+lakehouse cloud-native cutover"; this register stays on
 the lakehouse itself.
 
 Scope the owner set: catalog, compute, ingest, medallion, maintenance, lineage, notifications, gateway,

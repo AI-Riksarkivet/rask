@@ -1341,7 +1341,8 @@ maintenance:
   # COVERAGE IS PER WAREHOUSE, not estate-wide: the bootstrap hook grants `writer` on the default
   # warehouse, so a tenant warehouse (and any warehouse minted after install) still compacts on the
   # root key until its own grant exists. The fallback is correct and is logged per dataset, so this is
-  # a bounded improvement rather than a switch that either works or fails — see `open_cloudnative.md`.
+  # a bounded improvement rather than a switch that either works or fails. See `docs/DECISIONS.md`,
+  # "The lakehouse cloud-native cutover".
   vendWriteCredentials: false
   # The subject this service claims at the catalog's identity door. It is what the bootstrap-admin hook
   # grants `writer` on each warehouse, and what the catalog audits on every vend.

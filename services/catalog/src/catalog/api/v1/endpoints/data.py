@@ -181,7 +181,7 @@ async def plan_table_compaction(
     owns and turn a maintenance pass into an availability incident for every other door on it. So the
     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
-    and ``/compaction_commit`` folds the results back in. `open_cloudnative.md` N1.
+    and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
 
     Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
@@ -193,7 +193,7 @@ async def plan_table_compaction(
     segments = parse_identifier(id, settings.delimiter)
     # A branch has its own version sequence and its own fragments; planning against main and reporting
     # it as the branch's work would compact the wrong dataset with a 200. Refuse until the plan/commit
-    # pair opens the branch ref (`open_cloudnative.md` N6).
+    # pair opens the branch ref (`open_lakehouse_lanes.md`).
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="plan_table_compaction")
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:

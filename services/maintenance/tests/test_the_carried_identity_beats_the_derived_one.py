@@ -4,7 +4,7 @@
 and the shortfall is the part that matters rather than an edge case. Measured against the live
 warehouse, of eleven top-level roots in `s3://lance-catalog/`, `table_id_from_location` answers for
 six; the five it cannot read are `bronze`, `ingest`, `medallion`, `media-src` and `models` — and
-`medallion/` is the whole cascade, which `open_cloudnative.md` names as the highest-churn writer in
+`medallion/` is the whole cascade, which `docs/DECISIONS.md` names as the highest-churn writer in
 the estate.
 
 Those five are NOT unknown to the catalog, which is the finding that makes this worth fixing rather

@@ -4,7 +4,8 @@ Compaction must not run inside the catalog's request handler. Rewriting a table'
 unbounded, CPU- and memory-heavy work whose cost is set by the table, not by the request — running it
 in-process is what pins the catalog to `replicas: 1`, makes its memory ceiling a function of the
 largest table anyone owns, and turns a maintenance pass into an availability incident for every other
-door on the pod. `open_cloudnative.md` names this as the estate's central non-cloud-native defect.
+door on the pod. `docs/DECISIONS.md` ("The lakehouse cloud-native cutover") records this as the estate's central
+non-cloud-native defect, and its resolution.
 
 Lance ships the protocol for doing it properly, and it is a three-way split by CREDENTIAL as much as by
 machine:

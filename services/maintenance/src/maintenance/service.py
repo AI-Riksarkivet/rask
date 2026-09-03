@@ -119,6 +119,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the source; this covers the plaintext-env path (secrets_from_dapr off) the comment used to over-claim.
     if not settings.s3_secret_access_key.get_secret_value():
         raise RuntimeError("MAINTENANCE_S3_SECRET_ACCESS_KEY is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR)")
+    # THE KEY HALF, refused here for the same reason and in the same place. It used to default to the
+    # RustFS tenant root, so an unconfigured deployment did not fail — it ran the entire sweep with a
+    # credential reaching every tenant's bytes and the `_projects/`/`_protection/` records that govern
+    # maintenance itself. A credential is a pair; refusing only the secret half left the dangerous half
+    # unguarded.
+    if not settings.s3_access_key_id:
+        raise RuntimeError("MAINTENANCE_S3_ACCESS_KEY_ID is required — it no longer defaults to the RustFS tenant root")
     # Lineage emission (opt-in, best-effort): build the Dapr pub/sub emitter so each materially-compacted
     # dataset records a maintenance run on the lineage graph (#7b). The Dapr client targets the local
     # sidecar, so it's cheap to construct and needs no broker reachability at boot; a no-op emitter when off.

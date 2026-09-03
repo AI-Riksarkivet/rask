@@ -1096,3 +1096,56 @@ own precision is the specific failure this section elsewhere calls the estate's 
 Over the 100 commits before this ruling the gate would have flagged **15** added lines, every one of
 them genuine — so the habit it addresses is live, not hypothetical, and the gate will have work to do
 from its first commit.
+
+## The lakehouse cloud-native cutover (2026-09-03/04)
+
+The cloud-native cutover plan asked one question: can the lakehouse stop doing unbounded work in request
+handlers and stop signing writes with a root object-store key. It is closed, and the durable findings
+are here because the plan doc is deleted — a finished plan left in the tree reads as outstanding work.
+
+**The catalog exposes Lance's own distributed compaction protocol, not a hand-rolled Rewrite.** The
+plan called for widening the commit door to accept `LanceOperation.Rewrite` built from
+`write_fragments` output. Running it found that is not awkward but IMPOSSIBLE on this estate's tables:
+Lance refuses with `All fragments must have row ids`, and every medallion table is written with stable
+row ids. `Compaction.plan` → `CompactionTask.execute` → `Compaction.commit` are all `.json()`
+serializable, so the split by credential is the protocol's own: plan and commit are metadata-only under
+the catalog's key, execute moves every byte under a vended one.
+
+**Maintenance discovers work by LISTING BUCKETS, and must.** Lakekeeper's catalog-directed task queue
+is sound because every Iceberg commit goes through the catalog — the commit pointer lives in it. rask
+deliberately does not have that (Lance puts the CAS in the object store, which is why this estate needs
+no relational DB), and the medallion movers call `lance.write_dataset` directly, so a catalog-directed
+decider would be blind to the highest-churn writer in the estate. Two supporting facts: the selection
+function is whole-estate (`_protected_roots` must open every manifest in every bucket, because a shallow
+clone in bucket B is the only thing that knows bucket A's dataset must not be rewritten), and datasets
+carrying no policy have no record to poll. Note also that Lakekeeper performs zero compaction — its
+queue drives work whose "is it due" is a pure function of a timestamp it already holds.
+
+**A vended credential must use the `aws_`-prefixed storage-option spellings.** Every fleet pod exports
+AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and with the bare spellings object_store BLENDS the two
+sources and signs with a pair belonging to neither identity. Measured: identical options, identical
+read — ALLOWED with no AWS_* env, `403 SignatureDoesNotMatch` with it, ALLOWED again under the prefixed
+spellings with it still set. No test process has an ambient AWS_* environment, so the spelling that
+fails in every pod passes every unit test. `test_vending.py` once forbade the prefix, for a real reason
+(an e2e had read boto3's parameter names back out of the payload); the concern was right and the
+conclusion was wrong — what matters is ONE vocabulary, and measurement chose it.
+
+**Vending coverage is per warehouse, not estate-wide.** `warehouse:lance_catalog` is described as the
+root whose grant cascades estate-wide; measured against the live store it parents 8 namespaces, among
+~130 warehouses and 2810 tuples. A `can_write_data` check for the maintenance subject on a table under
+another warehouse returns `allowed:false` with that grant in place. So vending hardens the granted
+warehouses and falls back — correctly, and audibly per dataset — everywhere else. Closing that gap is
+an authorization-model decision (a platform-subject rung, or a grant seeded at warehouse creation), not
+a longer tuple list.
+
+**N5's premise was falsified: the sweep lock cannot simply be retired.** The row read "retire the
+process-local locks and the `replicas: 1` pin once the ack is the lease". The ack IS the lease for the
+EXECUTOR — `api/work.py::handle_unit` takes no lock, and redelivery is safe because compaction and GC
+are convergent. It is not the lease for the PLANNER: `bindings.cron` fires on every replica with no
+coordination anywhere in the path (Diagrid, verbatim: "No coordination – each replica runs the schedule
+independently"), so two replicas would both plan and both enqueue the whole estate. Scaling the
+executor therefore needs a SPLIT — a second Deployment with its own app-id, subscribed to the work
+topic and not scoped to the cron binding — not a larger replica count. That is a pure chart change,
+because Dapr component scoping decides which lanes a replica set receives. It is not urgent: the
+estate is tens to hundreds of datasets, and a whole-estate tick planned and published 20 units in
+1.76s.
