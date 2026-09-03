@@ -182,8 +182,16 @@ async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespa
     object_id = request.path_params.get("id")
     if not object_id:  # collection routes (list/health) have no id to route by
         return default_ns
-    top_ns = parse_identifier(object_id, settings.delimiter)[0]
-    root = await _resolve_warehouse_root(request, settings, top_ns)
+    segments = parse_identifier(object_id, settings.delimiter)
+    if not segments:
+        # THE ROOT NAMESPACE. Its id IS the delimiter (spec), so it parses to no segments — and there is
+        # no warehouse above the root to route to, which makes the default namespace the right answer
+        # rather than an error. Indexing `[0]` here raised `IndexError` into the handler and answered
+        # `GET /v1/namespace/$/list` with a 500 (measured on the deployed estate 2026-09-03). Only
+        # reachable with `warehouses_enabled`, since the branch above returns first when it is off —
+        # which is why every id with a segment routed fine and the one naming the root did not.
+        return default_ns
+    root = await _resolve_warehouse_root(request, settings, segments[0])
     if not root or root == settings.root:
         return default_ns
     return namespace_for_root(request, settings, root)
