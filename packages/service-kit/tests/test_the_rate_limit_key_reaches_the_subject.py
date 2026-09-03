@@ -57,7 +57,7 @@ def test_the_subject_dependency_publishes_what_the_limiter_reads() -> None:
     from service_kit.governed import deps
 
     source = (deps.__file__ or "").replace(".pyc", ".py")
-    body = open(source).read()  # noqa: SIM115, PTH123 — reading our own module's source, not user input
+    body = open(source).read()  # noqa: SIM115 — reading our own module's source, not user input
     marker = body.split("def current_subject(", 1)[1].split("def ", 1)[0]
 
     assert "state.subject" in marker, (
