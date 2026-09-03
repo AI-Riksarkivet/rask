@@ -537,7 +537,15 @@ def _prior_commit_for_run(catalog: CatalogSeam, spec: RunSpec) -> tuple[int, int
         # read_version=0 so the marker scan walks EVERY version. It scans versions AFTER the floor,
         # so a floor that is too high would hide the run's own commit — and this caller does not know
         # which version the run based its commit on, only that it may have made one.
-        version, rows = catalog.commit(spec.project, spec.dataset, [], 0, spec.run_id)
+        # `spec.namespace`, NOT `spec.project`. They are different levels — a project selects the
+        # storage root, the namespace is the medallion tier — and this was the last consumer still
+        # handed the project, which `RunSpec.namespace` calls "THE ONE PLACE a project becomes a
+        # namespace" precisely to end. It asked about `acme$vendproof` where the table is
+        # `acme-bronze$vendproof`, and the deployed catalog answered 403 (nobody holds a relation on a
+        # table that does not exist). The `except` below then swallowed it, so the probe answered None
+        # for every run in every project — turning "this retry already committed" into "it committed
+        # nothing", which is the exact false report this function was added to prevent.
+        version, rows = catalog.commit(spec.namespace, spec.dataset, [], 0, spec.run_id)
     except Exception:
         return None
     return (int(version), int(rows))
