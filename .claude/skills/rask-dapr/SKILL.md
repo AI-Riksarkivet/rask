@@ -67,19 +67,42 @@ actor placement/turn semantics.
 - **Configuration API** (2026-08-28): the fleet's config is ONE ConfigMap via `envFrom`, validated by
   pydantic-settings at boot, and the render-driven invariant tests depend on seeing it; change
   cadence is deliberately rollout-shaped. It solves a problem this estate chose not to have.
-- **Jobs API** (2026-08-28, sharpened same day when per-project policies raised it again): the six
-  crons stay `bindings.cron`, and the reason is a PATTERN distinction, not conservatism —
-  **level-triggered vs edge-triggered.** Maintenance is CONVERGENCE work (idempotent, self-healing,
-  late-is-free), and the textbook pattern for convergence is the reconcile loop: one heartbeat, scan,
-  act where due — which is how per-project `compact_interval_hours` is already honoured, from the
-  policy RECORD at every tick, at 60x finer resolution (120s heartbeat vs 1h minimum interval). This
-  is what Kubernetes controllers do with a scheduler available. Per-policy Jobs would be strictly
-  worse by three structural counts: the loop must exist anyway (unpoliced datasets + the medallion
-  tiers, which CANNOT carry a policy, still need sweeping — so Jobs adds a second mechanism beside
-  the first rather than replacing it); it creates a second stateful store (the Scheduler's etcd)
-  that every policy create/update/delete/drop/undrop path must mirror, invisible to the render
-  gates and the drift report; and the sweep is single-flight, so per-target wakeups queue on the
-  same lock. **AUDITED ESTATE-WIDE 2026-08-28** (10 time-shaped clusters,
+- **Jobs API** (2026-08-28; reasons rewritten 2026-09-03 after four adversarial re-tests — the
+  CONCLUSION held every time, most of the original reasoning did not). The six crons stay
+  `bindings.cron`. **This entry is deliberately shorter than it was: three of the four counts it used
+  to give are falsified, and a refusal defended by dead reasons invites the re-litigation it exists to
+  prevent.**
+
+  **The count that carries it, and it was never stated before:** the selection function is
+  WHOLE-ESTATE and a per-table wakeup cannot compute it. `sweep.py::_protected_roots` must open every
+  discovered dataset in every bucket before one is compacted — a shallow clone in bucket B is the only
+  thing that knows bucket A's dataset must not be rewritten, and `base_refs.py` states why no
+  per-dataset check can find it ("the evidence lives only on the referring side"). That pre-pass IS
+  the scan's dominant cost, so a per-target Job avoids a datetime comparison and avoids nothing that
+  is expensive — while either re-running the pre-pass per job (catastrophically worse) or skipping it
+  (re-opening the measured #114/#128d data-loss defect). `work_queue.py` already carries the
+  consequence: a worker "cannot recompute the whole-estate protection verdict", which is why
+  `DatasetWorkItem` ships the reduced `protected_by`.
+
+  Secondary, and still true: **the loop must exist anyway** for datasets carrying no policy — they
+  have no `_policies/state/` record at all and are maintained on every tick — so Jobs would add a
+  second mechanism beside the first rather than replacing it.
+
+  **What was falsified, so nobody re-derives it from this file:** the medallion tiers CAN carry a
+  policy (a project record matches at bucket level, `maintenance_policies.py:18,156`); the "60x finer
+  resolution" was demo-only arithmetic (prod is `0 */30 * * * *`, i.e. 2x); "per-target wakeups queue
+  on the same lock" stopped describing the queue lane when N4 landed (`41f29fa8` — `routes.on_cron`
+  holds `_sweep_lock` for PLANNING only and `api/work.py::handle_unit` takes no lock); and "creates a
+  second stateful store" names the wrong thing — the Scheduler etcd is already deployed and
+  load-bearing for Dapr Workflow and actor reminders, so what per-policy Jobs would create is a second
+  authoritative HOME for policy cadence that every create/update/delete/drop/undrop path must mirror,
+  invisible to the render gates and to the drift report's three store categories.
+
+  **The event-driven redesign (2026-09-03) shrinks the question rather than reopening it.** With the
+  primary trigger becoming a `lineage.events.v1` subscription and the cron demoted to an hourly
+  backstop, the scheduling mechanism stops driving maintenance at all; the components that need
+  throughput (the event subscriber, the N4 executor) scale on `queueGroupName` competing consumers,
+  which needs no Jobs. **AUDITED ESTATE-WIDE 2026-08-28** (10 time-shaped clusters,
   adversarial, fable agents): **zero SHOULD_USE_JOBS.** Every hypothesised consumer dissolved on
   inspection — the candidates below are REFUTED and must not be re-proposed without new facts:
   * *auto-purge at trash deadline* → already shipped as a sweep flag (`MAINTENANCE_TRASH_PURGE_ENABLED`,
@@ -140,6 +163,17 @@ sidecar. The Jobs-API echo of `runtime_env` is exactly why "inject at submit" is
   check reads the client's own claim.
 - A cron/input binding is delivered to `POST /<component-name>` at the pod ROOT — never under
   `RASK_API_PREFIX`. Component name, env var and served path are one string, pinned by invariants.
+- **`bindings.cron` FIRES ON EVERY REPLICA.** The component is stateless and uncoordinated — Diagrid,
+  verbatim: *"No coordination – each replica runs the schedule independently, causing duplicate
+  triggers"* and *"when the target app is scaled to multiple replicas, the schedule will fire on every
+  instance"*. There is no lease anywhere in the path, so every multi-replica service must buy the
+  guarantee itself, and the estate answers it FOUR different ways: lineage takes a Postgres advisory
+  lock (`RECONCILE_LOCK_KEY`); notifications and maintenance are pinned to `replicas: 1`; catalog's
+  control relay accepts duplicates because a duplicate publish dedupes on `event_id`; and compute's
+  prune accepts them because the operation is convergent (`9489d5e1` — until then a job another
+  replica had already reclaimed was miscounted as a retention FAILURE, one false alarm per job
+  reclaimed). A new cron on a service that can scale needs its answer chosen and written down, or its
+  absence reads as an oversight rather than a decision.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
 - Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`
   crash-loops the pod. Missing row in `dapr-resiliency.yaml` ⇒ no sidecar retry AND no dead-letter.
