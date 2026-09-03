@@ -23,7 +23,7 @@ version and the schema in ONE open, and the location is an attribute of that sam
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -102,11 +102,11 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
         )
         asyncio.run(
             lineage_deps.emit_measured_write(
-                recorder,
+                cast(Any, recorder),
                 ["db", "t"],
-                ns=None,
+                ns=cast(Any, None),
                 so={},
-                settings=types.SimpleNamespace(delimiter="$"),
+                settings=cast(Any, types.SimpleNamespace(delimiter="$")),
                 token=None,
                 operation="insert",
                 authorization=None,
@@ -136,11 +136,11 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
         monkey.setattr(lineage_deps.dataplane, "read_version_and_schema", lambda *a, **k: (None, [], None))
         asyncio.run(
             lineage_deps.emit_measured_write(
-                recorder,
+                cast(Any, recorder),
                 ["db", "t"],
-                ns=None,
+                ns=cast(Any, None),
                 so={},
-                settings=types.SimpleNamespace(delimiter="$"),
+                settings=cast(Any, types.SimpleNamespace(delimiter="$")),
                 token=None,
                 operation="insert",
                 authorization=None,
