@@ -110,7 +110,28 @@ Not yet done, and not claimed: **nothing calls these doors.** The `maintenance` 
 `compact_one` in-process on its own pod — N3 and N4 are what move it. The doors are the seam that had
 to exist first, verified against real pylance and over real HTTP, not the migration.
 
-| N2 | **`session_token` through every storage-options builder** (`objectfs.lance_storage_options`, `s3_filesystem`, `records._s3_client`, `storage.s3_client`). Without it a vended STS credential cannot reach a worker and the executor is forced back onto the root key. | C1, F2·1 |
+| N2 | ~~**`session_token` through every storage-options builder**~~ → **LANDED 2026-09-03.** Two of the four named sites already forwarded it (`records._s3_client`, whose own comment names the failure — "a dropped token makes a scoped credential sign as an unknown identity" — and `storage.s3_client`). The two that did not were the shared builders: `lance_storage_options` could not *express* a temporary credential at all, and `s3_filesystem` dropped it. The catalog's STS vendor was already minting the token and `VendedCredentials.storage_options` carries it verbatim, so the chain is now complete from vend to open. | C1, F2·1 |
+
+### N2 as landed
+
+The gap was narrower than the row implied and its edges are worth recording, because both are
+invisible failure modes:
+
+- **object_store silently ignores storage-option keys it does not recognise.** Verified 2026-09-03: an
+  invented key produced no error and no change to the signed request. A mis-spelled credential field is
+  therefore dropped with nothing to notice — which is why the builder's spelling is now pinned on the
+  WIRE (a capturing HTTP listener asserting `x-amz-security-token`) rather than against a doc. Three
+  aliases are honoured — `session_token`, `aws_session_token`, `token` — and the estate's existing
+  spelling was already the right one.
+- **`s3_filesystem` failed OPEN.** pyarrow falls back to the default credential chain for anything it
+  was not given, so a half-forwarded vended credential could sign with the pod's own role — broader
+  rights than the catalog scoped, not narrower. That is the one direction a zero-trust seam must never
+  fail in.
+
+The token is omitted rather than set empty when absent: object_store treats a present-but-empty token
+as a token and the request is refused. Both the unset and the empty case are covered, because a config
+read yields `""` far more often than `None`.
+
 | N3 | **The plan document + `maintenance_requested`/`maintenance_completed` control actions**, emitted by the sweep and by the catalog doors, so both produce a byte-identical plan. | D5, H5 |
 | N4 | **The JetStream work queue and the executor**, mirroring `ingest/queue.py`'s shape. The catalog doors and the sweep become planners; `compact_one` runs on the worker. | H4, K |
 | N5 | **Retire the process-local locks and the `replicas: 1` pin** once the ack is the lease; parameterise the template. | H4 |

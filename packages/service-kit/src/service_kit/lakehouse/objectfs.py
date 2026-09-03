@@ -32,14 +32,27 @@ def lance_storage_options(
     *,
     allow_http: bool = True,
     virtual_hosted: bool = False,
+    session_token: str | None = None,
 ) -> StorageOptions:
     """The lance-style ``storage_options`` dict every service opens datasets with.
 
     Path-style addressing is the default (``virtual_hosted=False``): RustFS/MinIO reject virtual-hosted
     signing with 403 ``SignatureDoesNotMatch``, and one omitted key in a hand-rolled copy is exactly the
     drift this builder exists to prevent.
+
+    ``session_token`` completes a VENDED credential. An STS credential is a triple and the token is the
+    half that carries the scoping, so a builder that cannot express one forces every vended-credential
+    caller to hand-roll the dict — the drift above — or to sign as a different identity. It is omitted
+    entirely when absent rather than set empty: object_store treats a present-but-empty token as a
+    token and the request is refused.
+
+    Unknown keys are the hazard this builder stands between callers and: object_store silently IGNORES
+    a storage option it does not recognise (verified 2026-09-03 — an invented key produced no error and
+    no change to the signed request), so a mis-spelled credential field is dropped with nothing to
+    notice. ``session_token`` is object_store's own spelling, pinned on the wire by
+    ``test_a_vended_credential_survives_the_storage_seam.py``.
     """
-    return {
+    options: StorageOptions = {
         "endpoint": endpoint,
         "access_key_id": access_key_id,
         "secret_access_key": secret_access_key,
@@ -47,15 +60,25 @@ def lance_storage_options(
         "allow_http": str(allow_http).lower(),
         "virtual_hosted_style_request": str(virtual_hosted).lower(),
     }
+    if session_token:
+        options["session_token"] = session_token
+    return options
 
 
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
     """An ``S3FileSystem`` from lance-style storage options — scheme derived from the endpoint (an
-    ``https://`` endpoint keeps TLS; hardcoding ``http`` once silently downgraded a secured connection)."""
+    ``https://`` endpoint keeps TLS; hardcoding ``http`` once silently downgraded a secured connection).
+
+    The ``session_token`` is forwarded for the same reason ``records._s3_client`` forwards it, and the
+    stakes are higher here: pyarrow falls back to the default credential chain for anything it was not
+    given, so a half-forwarded vended credential can sign with the POD's own role — broader rights than
+    the catalog scoped, not narrower. Dropping it fails open.
+    """
     scheme, _, host = storage_options["endpoint"].partition("://")
     return pafs.S3FileSystem(
         access_key=storage_options.get("access_key_id"),
         secret_key=storage_options.get("secret_access_key"),
+        session_token=storage_options.get("session_token"),
         endpoint_override=host or storage_options["endpoint"],
         scheme=scheme or "http",
         region=storage_options.get("region", ""),
