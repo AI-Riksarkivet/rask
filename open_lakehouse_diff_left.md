@@ -123,7 +123,7 @@ Measured: 12 of 54 ops verbatim, 34 partial, 3 model-differs, 5 stub. With pylan
 `RestNamespace`, 5 ops are unusable and 4 answer silently wrong. Vendored spec is v0.9.0; current is
 v0.12.0. Details and evidence: `lance-conformance-and-build-rules.md` §2–§3, §9.
 
-### A1 · Bodyless handlers ignore the required JSON body
+### A1 · Bodyless handlers ignore the required JSON body — **DONE 2026-09-02** (`a6d2032e`)
 **DONE 2026-09-02** (`a6d2032e`). All nine now declare the spec body; a present body field wins and the
 query aliases stay as a fallback. It also closed a hole it had opened elsewhere: `stats`, `index/list`
 and `index/{n}/stats` had been given a `branch` QUERY parameter to REFUSE a branch-scoped read, and a
@@ -144,7 +144,7 @@ analyze answer `text/plain` (spec: JSON string); `count_rows` answers `text/plai
 **Where.** `columns.py:229-234`, `data.py:698-720`. **Closes it.** Direct map, `JSONResponse` strings,
 JSON integer; the envelope dialect moves to the management API.
 
-### A3 · GET vs POST on `count_rows` and `tags/list`
+### A3 · GET vs POST on `count_rows` and `tags/list` — **DONE 2026-09-02** (`9e3844b5`; the dual-mount made the OpenAPI non-deterministic and was fixed in `fa4ee8f8`, now gated by `test_the_openapi_contract_is_deterministic.py`)
 **DONE 2026-09-02** (`e2f0…`). Both dual-mounted `GET` + `POST`. The upstream one-liner in lance is
 still worth filing: its bundled client and reference server disagree with its own spec.
 **What.** The spec and lance-namespace's generated client say POST at every tag since 0.9.0. **pylance's
@@ -163,7 +163,7 @@ canonicalisation designed.
 server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding `parse_identifier` and
 `canonical_object_id`.
 
-### A5 · Error bodies without `code`
+### A5 · Error bodies without `code` — **HALF DONE 2026-09-02** (`f1ee42d3` framework 404/405 carry the spec code; `0699bac3` `Unsupported` answers 406). REMAINING: tag/branch dataplane failures still surface as unmapped 500s, so codes 8/9/11/22/23 stay unreachable, and the column/data ops never mint 14/20.
 **MOSTLY DONE 2026-09-02.** Two halves landed. `f1ee42d3`: FastAPI's own 404/405 went out as
 `{"detail": ...}` with no `code`, so the reference client reported `InternalError 18` — a
 `StarletteHTTPException` handler now stamps `Unsupported` (the honest code for "this backend does
@@ -197,7 +197,7 @@ lineage keys injected into schema metadata, implicit BTREE on merge_insert, inse
 maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R2; each refusal
 re-expressed with the spec's own code; `branch` honoured (plumbing at `dataplane.py:1085`).
 
-### A8 · Stub status codes
+### A8 · Stub status codes — **DONE 2026-09-02** (`9e3844b5`)
 **DONE 2026-09-02.** 201 / 202 / 202 declared on the three decorators, asserted through the OpenAPI
 (all three answer 501 today, so no live call can exercise the success status).
 **Where.** `views.py:24,58`, `columns.py:146` lack 201/202. One-line fix each.
