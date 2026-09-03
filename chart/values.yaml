@@ -1292,7 +1292,20 @@ maintenance:
   daprAppId: maintenance
   port: 8000
   bindingName: maintenance-cron
-  schedule: "@every 120s" # demo cadence (prod: e.g. "0 */30 * * * *")
+  # THE SWEEP'S CADENCE, AND ITS ROLE DEPENDS ON `workTopic` ABOVE.
+  #
+  # With the event lane OFF (this default), the cron IS the trigger: it plans and executes the whole
+  # estate every tick, so a short interval is what makes maintenance responsive. 120s is the demo
+  # cadence; prod historically ran "0 */30 * * * *".
+  #
+  # With the event lane ON, the cron becomes a BACKSTOP and should be relaxed to hourly or slower. It
+  # still has to exist — the bus is provably incomplete (ingest, Ray TRAIN and external OpenLineage
+  # producers emit over HTTP only and never reach the topic; the catalog's lineage lane has no outbox,
+  # so a lost trigger is silent) and clock-due work like old-version GC has no write to react to. What
+  # it stops being is the thing that finds work first. Measured before the lane landed: every tick paid
+  # a whole-estate walk plus one manifest open per dataset (87 of them) and reported
+  # `fragments_removed: 0, versions_removed: 0` on every pass since 2026-08-16.
+  schedule: "@every 120s"
   # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
   # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
   # files, which is why it gets its own schedule instead of inheriting that one.
