@@ -167,7 +167,34 @@ not been started.
 the cron handler, so the tick is still unbounded, still single-flight on an `asyncio.Lock`, and still
 correct only while `replicas: 1` is hardcoded. N4 is what changes that; the units it needs now exist.
 
-| N4 | **The JetStream work queue and the executor**, mirroring `ingest/queue.py`'s shape. The catalog doors and the sweep become planners; `compact_one` runs on the worker. | H4, K |
+| N4 | **The JetStream work queue and the executor** ✅ **CODE LANDED 2026-09-03**, but through Dapr pub/sub rather than mirroring `ingest/queue.py` — I3 reserves the direct NATS client, and its documented reasons (`max_ack_pending` against a rate-limited endpoint, batch fetch across millions of units, explicit nak delays) are all ingest's, none maintenance's. The cron tick plans and publishes one message per dataset; `/maintenance-work` executes one. **Defaults OFF** (`maintenance.workTopic: ""`) and is NOT verified in-cluster — see below. | H4, K |
+
+### N4 as landed — and what is NOT claimed
+
+The ack decision is the part a queue makes easy to get wrong. `compact_one` never raises — it captures
+the per-dataset error so a serial sweep can continue — so nothing in the handler's control flow signals
+failure and the verdict has to be read off the result. Four outcomes, and they are not one answer:
+`maintain:` retries then dead-letters (safe, because the FAIL event's run id is deterministic per
+dataset, so redeliveries merge onto one node rather than flooding the graph); `open:` acks (an
+unreadable directory will not become readable by being redelivered); a refusal acks (a deliberate
+decline is not a failure); a malformed unit acks (the one failure redelivery cannot fix).
+
+Two things the chart forced, both load-bearing:
+
+- **The work subject needs its own stream.** Dapr does not create one and a publish with no stream
+  FAILS — every tick would report units it planned and could not send. `workqueue` retention, so the
+  stream itself is the outstanding-work ledger.
+- **`ackWait` is sized by the WORK, not by convention.** An ack that expires mid-compaction redelivers
+  to a second worker, and two concurrent passes then race `compact_files`/`cleanup_old_versions` on one
+  dataset. That is exactly the race the in-process single-flight lock prevents today, so letting the
+  broker reintroduce it would undo the guarantee rather than move it.
+
+**NOT VERIFIED IN-CLUSTER.** The image built and pushed and the chart renders correctly, but patching
+the live deployment was not permitted in that session. The Dapr component and the NATS stream were
+created by hand to test the wiring and then REMOVED, so the cluster is as it was. Shipping this is
+`make k3s-up` with `maintenance.workTopic` set — which is why it defaults to empty. Until that runs,
+the estate is still on the serial lane and nothing about its behaviour has changed.
+
 | N5 | **Retire the process-local locks and the `replicas: 1` pin** once the ack is the lease; parameterise the template. | H4 |
 | N6 | Index builds and `rename` move onto the same lane (`rename` becomes a server-side copy or a base-path rewrite, never bytes through the pod). | J7 |
 
