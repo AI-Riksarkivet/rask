@@ -1745,6 +1745,31 @@ rustfs:
   # `mc` image the mkbucket Job already uses, then set these.
   rayComputeAccessKey: ""
   rayComputeSecretKey: ""
+  # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
+  #
+  # `MAINTENANCE_S3_ACCESS_KEY_ID` renders from `accessKey` — the RustFS TENANT ROOT — and maintenance
+  # COMPACTS with it, which is a write. So the service that rewrites every dataset in every bucket also
+  # reaches `_projects/`, `_protection/` and `_policies/`: the records that decide what maintenance
+  # itself is permitted to do. A compromise there can turn off the shallow-clone guard that stops a
+  # compaction destroying another dataset's source, or re-pace its own cadence.
+  #
+  # VENDING DOES NOT CLOSE THIS ALONE, measured rather than assumed. `warehouse.writer` (model.fga:97)
+  # has no `writer from parent`, unlike `namespace.writer` (:258) and `table.writer` (:330) — so a
+  # grant covers ONE warehouse, and `can_write_data` for the maintenance subject on a table under
+  # `warehouse:acme-bucket` (one of ~130) returns `allowed:false` with the grant in place. Every vend
+  # outside the default warehouse degrades, and what it degrades TO is this key. The fallback itself
+  # has to stop being root.
+  #
+  # BOTH HALVES OR NEITHER, the same rule the Ray pair carries and for the same measured reason:
+  # setting one gives `SignatureDoesNotMatch` on every operation.
+  #
+  # EMPTY = the root credential, i.e. exactly today's behaviour. A chart that silently repointed a live
+  # service at a credential nobody created would take maintenance down on upgrade. Unlike the Ray pair,
+  # these ARE provisioned by the chart: `rustfs-scoped-users` creates the policy and the user with the
+  # same `mc` image the bucket-init Job uses, so the hardening is one values edit rather than a
+  # hand-run session.
+  maintenanceAccessKey: ""
+  maintenanceSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog

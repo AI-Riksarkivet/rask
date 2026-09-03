@@ -99,6 +99,13 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # fixed to bronze, which is what let a silver publication fire a bronze trigger.
     ("services/medallion/src/medallion/services/publication_trigger.py", "topic"): "trigger",
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
+    # The on-demand compaction door. A TRIGGER, not lineage: it publishes an instruction to maintain one
+    # dataset, and the lineage for that maintenance is emitted by the EXECUTOR once the work is actually
+    # done (`work.py::handle_unit` -> `emit_sweep_lineage`). Staging it through the lineage outbox would
+    # re-ingest an instruction as though it described a committed write. Its durability question is the
+    # trigger one and has the trigger answer: the caller holds the 202 and can re-click, and the hourly
+    # cron backstop re-plans the dataset regardless.
+    ("services/catalog/src/catalog/api/v1/endpoints/maintenance.py", "settings.maintenance_work_topic"): "trigger",
     # A maintenance work UNIT: "compact and GC this one dataset". An instruction, so correctly bare —
     # and its durability question is answered by the plan rather than by the outbox. A unit that is lost
     # is re-planned by the next cron tick from the CURRENT manifest, which is strictly better than

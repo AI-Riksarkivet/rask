@@ -172,9 +172,19 @@ spec:
             - { name: MAINTENANCE_SCAN_BATCH_SIZE, value: {{ .Values.maintenance.scanBatchSize | quote }} }
             - { name: MAINTENANCE_COMPACT_THREADS, value: {{ .Values.maintenance.compactThreads | quote }} }
             - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            {{- /*
+              THE SCOPED PAIR WINS, BOTH HALVES OR NEITHER. `rustfs.accessKey` is the TENANT ROOT, and
+              maintenance compacts with it — a write — so it also reaches `_projects/`, `_protection/`
+              and `_policies/`, the records that govern maintenance itself. A provisioned scoped user
+              (rustfs-scoped-users) replaces it; empty leaves today's behaviour exactly, because
+              repointing a live service at a credential nobody created would take the sweep down on
+              upgrade. Requiring BOTH halves is the Ray pair's measured lesson: setting one gives
+              `SignatureDoesNotMatch` on every operation.
+            */ -}}
+            {{- $scoped := and .Values.rustfs.maintenanceAccessKey .Values.rustfs.maintenanceSecretKey }}
+            - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.maintenanceAccessKey .Values.rustfs.accessKey (not (not $scoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary .Values.rustfs.maintenanceSecretKey .Values.rustfs.secretKey (not (not $scoped)) | quote }} }
             {{- else }}
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
             # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.

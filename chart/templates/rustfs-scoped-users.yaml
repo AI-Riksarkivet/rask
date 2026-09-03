@@ -1,0 +1,203 @@
+{{- $ray := and .Values.rustfs.rayComputeAccessKey .Values.rustfs.rayComputeSecretKey }}
+{{- $maint := and .Values.rustfs.maintenanceAccessKey .Values.rustfs.maintenanceSecretKey }}
+{{- if and .Values.rustfs.enabled (or $ray $maint) }}
+# RustFS SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
+#
+# `rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
+# and user with the mc image the mkbucket Job already uses, then set these." So the estate's one proven
+# scoped-user precedent was a values knob that only a hand-run `mc` session could turn, and a fresh
+# install came up on the tenant root. This is that step, written once for both consumers.
+#
+# WHY A POLICY AND NOT JUST A USER: a RustFS user created with no policy gets whatever the server
+# defaults to, which is not a documented deny. The point of this Job is the DENY — the compaction
+# credential must not reach `_projects/`, `_protection/` or `_policies/`, the records that decide what
+# maintenance is permitted to do. A credential that can rewrite its own governing policy can turn off
+# the shallow-clone guard that stops a compaction destroying another dataset's source.
+#
+# TWO POLICY LESSONS, each of which cost a broken cascade when the Ray plane's policy was written
+# (estate-verification row 32) and neither of which is recoverable by reading the docs:
+#
+#   * `s3:ListBucket` is BUCKET-scoped, not object-scoped. An object-scoped rule constrains a LIST not
+#     at all — the first attempt allowed the whole control plane to be listed and looked like RustFS
+#     ignoring Deny.
+#   * the prefix condition must be `medallion*`, NOT `medallion/*`: Lance lists with `prefix=medallion/`
+#     and `StringLike` does not match a trailing-slash pattern against it.
+#
+# IDEMPOTENT. `mc admin policy create` and `mc admin user add` are re-run on every upgrade with the
+# same content; a `|| true` on the create keeps an existing policy from failing the hook, while the
+# attach is unconditional so a policy edit actually takes effect.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" . }}-rustfs-scoped-users-{{ include "rask.bootstrapRev" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # AFTER bucket-init: a policy naming a bucket that does not exist yet is accepted by RustFS and
+    # then silently governs nothing, so the buckets must be provisioned first.
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rustfs-scoped-users
+    spec:
+      restartPolicy: OnFailure
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+      {{- end }}
+      containers:
+        - name: mc
+          image: {{ .Values.rustfs.mcImage }}
+          # Every secret arrives as an env var read by `mc`, never interpolated into the rendered
+          # command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
+          # discloses a key.
+          env:
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
+            {{- if $maint }}
+            - name: MAINTENANCE_SECRET_KEY
+              value: {{ .Values.rustfs.maintenanceSecretKey | quote }}
+            {{- end }}
+            {{- if $ray }}
+            - name: RAY_COMPUTE_SECRET_KEY
+              value: {{ .Values.rustfs.rayComputeSecretKey | quote }}
+            {{- end }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"; do echo wait-rustfs; sleep 3; done
+
+              {{- /*
+                THE POLICY'S BUCKET SET MUST EQUAL THE SWEPT SET. `maintenance.yaml` builds
+                MAINTENANCE_S3_EXTRA_BUCKETS from exactly this union — the medallion storage zones plus
+                the approved multi-base data bases — so it is recomputed here rather than approximated.
+                A policy NARROWER than the swept set is the worse failure of the two: the sweep is
+                configured to maintain a bucket and gets AccessDenied on it, which surfaces as a
+                per-dataset `open:` error and reads like a broken dataset rather than a missing grant.
+                Pinned by `test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep`.
+
+                PER-WAREHOUSE BUCKETS ARE MINTED AT RUNTIME and are appended to the sweep by the
+                operator as tenants are onboarded, so they are outside any static render — this policy
+                and that env var are wrong together, which is the point of deriving them from one place.
+              */}}
+              {{- $dataBuckets := list .Values.rustfs.bucket }}
+              {{- range $ns, $bkt := .Values.medallion.buckets }}
+              {{- $dataBuckets = append $dataBuckets $bkt }}
+              {{- end }}
+              {{- range .Values.catalog.multibase.dataBases }}
+              {{- $dataBuckets = append $dataBuckets (. | replace "s3://" "" | trimSuffix "/") }}
+              {{- end }}
+              {{- $dataBuckets = uniq (compact $dataBuckets) }}
+
+              {{- if $maint }}
+              # --- MAINTENANCE: rewrite data, never the records that govern the rewrite. -------------
+              cat >/tmp/maintenance.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "ListAccountForReconcileDriftReport",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListAllMyBuckets"],
+                    "Resource": ["arn:aws:s3:::*"]
+                  },
+                  {
+                    "Sid": "SurveyAndRewriteData",
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:ListBucket",
+                      "s3:GetObject",
+                      "s3:PutObject",
+                      "s3:DeleteObject",
+                      "s3:AbortMultipartUpload"
+                    ],
+                    "Resource": [
+              {{- range $i, $b := $dataBuckets }}
+                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}", "arn:aws:s3:::{{ $b }}/*"
+              {{- end }}
+                    ]
+                  },
+                  {
+                    "Sid": "NeverTheRecordsThatGovernMaintenance",
+                    "Effect": "Deny",
+                    "Action": ["s3:PutObject", "s3:DeleteObject"],
+                    "Resource": [
+              {{- range $i, $b := $dataBuckets }}
+                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}/_projects/*",
+                      "arn:aws:s3:::{{ $b }}/_protection/*",
+                      "arn:aws:s3:::{{ $b }}/_warehouses/*"
+              {{- end }}
+                    ]
+                  },
+                  {
+                    "Sid": "NeverTheObservabilityStore",
+                    "Effect": "Deny",
+                    "Action": ["s3:*"],
+                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
+                  }
+                ]
+              }
+              POLICY
+              # `_policies/` is NOT denied, and that exception is load-bearing rather than an oversight:
+              # `_stamp_cadence` writes the per-dataset cadence stamp under `_policies/state/` on every
+              # maintained dataset, and `_policy_skip_reason` reads a missing stamp as "maintain" — so
+              # denying it would silently stop the cadence pacing anything and compact every policied
+              # dataset on every tick, with nothing going red. The POLICY RECORDS themselves live at
+              # `_policies/<kind>/` and are written only by the catalog, which holds a different
+              # credential; this user can reach them, and narrowing that needs the stamp to move first.
+              mc admin policy create rfs rask-maintenance /tmp/maintenance.json || true
+              mc admin user add rfs {{ .Values.rustfs.maintenanceAccessKey }} "$MAINTENANCE_SECRET_KEY" || true
+              mc admin policy attach rfs rask-maintenance --user {{ .Values.rustfs.maintenanceAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.rustfs.maintenanceAccessKey }} (rask-maintenance)"
+              {{- end }}
+
+              {{- if $ray }}
+              # --- RAY COMPUTE: the cascade's stage/train jobs. ---------------------------------------
+              cat >/tmp/ray-compute.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "CascadeDataOnly",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+                    "Resource": [
+              {{- range $i, $b := $dataBuckets }}
+                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}", "arn:aws:s3:::{{ $b }}/*"
+              {{- end }}
+                    ]
+                  },
+                  {
+                    "Sid": "NeverTheControlPlane",
+                    "Effect": "Deny",
+                    "Action": ["s3:*"],
+                    "Resource": [
+              {{- range $i, $b := $dataBuckets }}
+                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}/_projects/*",
+                      "arn:aws:s3:::{{ $b }}/_protection/*",
+                      "arn:aws:s3:::{{ $b }}/_policies/*"
+              {{- end }}
+                    ]
+                  },
+                  {
+                    "Sid": "NeverTheObservabilityStore",
+                    "Effect": "Deny",
+                    "Action": ["s3:*"],
+                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
+                  }
+                ]
+              }
+              POLICY
+              mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json || true
+              mc admin user add rfs {{ .Values.rustfs.rayComputeAccessKey }} "$RAY_COMPUTE_SECRET_KEY" || true
+              mc admin policy attach rfs rask-ray-compute --user {{ .Values.rustfs.rayComputeAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.rustfs.rayComputeAccessKey }} (rask-ray-compute)"
+              {{- end }}
+{{- end }}
