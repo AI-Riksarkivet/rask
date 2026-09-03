@@ -66,9 +66,31 @@ class PruneResult(BaseModel):
     kept_failed: int = 0
     deleted: int = 0
     failed: int = 0
+    #: Terminal jobs that were ALREADY GONE when this pass reached them — the convergent outcome, and
+    #: its own counter rather than folded into either neighbour. Not ``failed``: the row is absent,
+    #: which is what retention wanted. Not ``deleted``: this pass did not reclaim it, and crediting it
+    #: would double-count reclamation across the replicas that raced. A non-zero value here on a
+    #: multi-replica deployment is the expected steady state, not a fault.
+    already_absent: int = 0
     skipped_active: int = 0
     #: First few failing ids, so a systematic failure is debuggable from the report alone.
     failed_ids: list[str] = Field(default_factory=list)
+
+
+#: Substrings that prove a delete found NOTHING TO DELETE. Ray flattens three distinct causes into one
+#: ``RuntimeError`` — the job does not exist, the request to the job server failed, or the job is not
+#: terminal (its own docstring) — and only the first is convergence. Matching on the message is the only
+#: discrimination available, and it is the same shape ``dataplane._ABSENCE_MARKERS`` uses for the same
+#: reason: the layer below flattens absence into a generic error with the cause only in the text.
+#:
+#: FAILS CLOSED. Wording this does not recognise counts as a FAILURE, never as convergence — a false
+#: alarm is recoverable, a swallowed real failure is retention that looks healthy while the store fills.
+_ALREADY_GONE_MARKERS = ("does not exist", "not found")
+
+
+def _is_already_gone(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _ALREADY_GONE_MARKERS)
 
 
 def prune_jobs(client: JobsClient, *, keep_newest: int, keep_newest_failed: int = 0) -> PruneResult:
@@ -125,7 +147,15 @@ def prune_jobs(client: JobsClient, *, keep_newest: int, keep_newest_failed: int 
         try:
             client.delete_job(submission_id)
             result.deleted += 1
-        except Exception:
+        except Exception as exc:
+            # Already gone is CONVERGENCE, not failure, and this is what makes the docstring's
+            # "idempotent" claim true of the code. `compute` runs two replicas in prod and its cron
+            # binding fires on both (Dapr's cron is uncoordinated), so the losing replica meets this
+            # once per job the winner reclaimed — a pass that freed 500 jobs would otherwise report 500
+            # failures and 500 warnings, a false alarm scaling with the work actually done.
+            if _is_already_gone(exc):
+                result.already_absent += 1
+                continue
             result.failed += 1
             if len(result.failed_ids) < _FAILED_SAMPLE:
                 result.failed_ids.append(submission_id)

@@ -46,10 +46,15 @@ async def on_prune_cron(client: RayClientDep, settings: ComputeSettingsDep) -> P
         keep_newest_failed=settings.prune_keep_failed_jobs,
     )
     log.info(
-        "job retention: total=%d kept=%d deleted=%d failed=%d active=%d",
+        # `absent` is reported because this service runs two replicas and its cron binding fires on
+        # BOTH (Dapr's cron is uncoordinated), so the losing replica meets an already-reclaimed job
+        # once per job the winner deleted. A steady non-zero absent count is that race, working —
+        # reading it as failure is exactly the false alarm the counter exists to separate out.
+        "job retention: total=%d kept=%d deleted=%d absent=%d failed=%d active=%d",
         result.total,
         result.kept_newest,
         result.deleted,
+        result.already_absent,
         result.failed,
         result.skipped_active,
     )
