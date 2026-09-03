@@ -36,6 +36,8 @@ import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel
+
 from ingest.config import settings
 from ingest.naming import delimiter
 
@@ -111,6 +113,20 @@ class CatalogError(RuntimeError):
     """The catalog refused, or could not be reached."""
 
 
+class VendedCredential(BaseModel):
+    """A scoped credential and WHEN IT DIES, together.
+
+    The expiry travels with the options because only the vend knows it: a caller that had to supply it
+    would be guessing, and a cache that never learned it would either re-vend on every write or hold a
+    credential past its death. `expires_at_millis` is the vending door's own answer.
+    """
+
+    options: dict[str, str]
+    #: Epoch milliseconds. ``None`` when the vendor issues no expiry (a static key), which means
+    #: "does not expire" rather than "expired".
+    expires_at_millis: int | None = None
+
+
 class CatalogServiceClient:
     """Talks to the catalog service — the `ServiceCatalogSeam` half of the seam (`ingest.catalog`).
 
@@ -127,7 +143,7 @@ class CatalogServiceClient:
 
     # ── identity ──────────────────────────────────────────────────────────────────────
 
-    def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = "write") -> dict[str, str] | None:
+    def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = "write") -> VendedCredential | None:
         """Ask the catalog for a SCOPED credential for this table, or ``None`` to use the ambient one.
 
         This is the client-direct flow's other half (#2): the worker writes fragments straight to
@@ -171,7 +187,10 @@ class CatalogServiceClient:
         except ValueError as exc:  # a non-JSON body from something in front of the catalog
             logger.info("credential vending answered unparseable content (%s) — writing with the ambient credential", exc)
             return None
-        return options if isinstance(options, dict) and options else None
+        if not isinstance(options, dict) or not options:
+            return None
+        expires = (response.json().get("credentials") or {}).get("expires_at_millis")
+        return VendedCredential(options=options, expires_at_millis=expires if isinstance(expires, int) else None)
 
     def table_id(self, namespace: str, dataset: str) -> str:
         """`{namespace}${dataset}` — pure composition, and the argument is a NAMESPACE.

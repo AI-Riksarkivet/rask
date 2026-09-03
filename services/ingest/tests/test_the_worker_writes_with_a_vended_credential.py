@@ -28,24 +28,31 @@ from ingest.credentials import VendedCredentialCache
 
 
 class _Vendor:
-    """Counts vends so a test can prove caching, and can be told what to return."""
+    """Counts vends so a test can prove caching, and can be told what to return.
 
-    def __init__(self, *answers: dict[str, str] | None) -> None:
+    Answers are `(options, expires_at_millis)`; the expiry rides WITH the credential because only the
+    vend knows it — a caller supplying it would be guessing.
+    """
+
+    def __init__(self, *answers: tuple[dict[str, str] | None, int | None]) -> None:
         self._answers = list(answers)
         self.calls = 0
 
-    def __call__(self, *_a: Any, **_k: Any) -> dict[str, str] | None:
+    def __call__(self, *_a: Any, **_k: Any) -> Any:
+        from ingest.catalog_service import VendedCredential
+
         self.calls += 1
-        return self._answers[min(self.calls - 1, len(self._answers) - 1)]
+        options, expires = self._answers[min(self.calls - 1, len(self._answers) - 1)]
+        return None if options is None else VendedCredential(options=options, expires_at_millis=expires)
 
 
 def test_a_credential_is_vended_once_and_reused_until_it_nears_expiry() -> None:
     """A round trip per unit would put the catalog on the hot path of every write."""
-    vendor = _Vendor({"access_key_id": "AK", "session_token": "T1"})
+    vendor = _Vendor(({"access_key_id": "AK", "session_token": "T1"}, 1_900_000))
     cache = VendedCredentialCache(vendor, now=lambda: 1_000.0)
 
-    first = cache.storage_options("ns", "ds", expires_at_millis=1_900_000)
-    second = cache.storage_options("ns", "ds", expires_at_millis=1_900_000)
+    first = cache.storage_options("ns", "ds")
+    second = cache.storage_options("ns", "ds")
 
     assert first == second == {"access_key_id": "AK", "session_token": "T1"}
     assert vendor.calls == 1
@@ -54,24 +61,24 @@ def test_a_credential_is_vended_once_and_reused_until_it_nears_expiry() -> None:
 def test_it_REFRESHES_before_the_credential_expires_rather_than_after() -> None:
     """Refreshing on failure would mean a 403 mid-run that reads as a permission problem, not an
     expiry — so the refresh has to happen while the credential is still valid."""
-    vendor = _Vendor({"access_key_id": "AK", "session_token": "T1"}, {"access_key_id": "AK", "session_token": "T2"})
+    vendor = _Vendor(({"access_key_id": "AK", "session_token": "T1"}, 1_900_000), ({"access_key_id": "AK", "session_token": "T2"}, 9_900_000))
     clock = {"t": 1_000.0}
     cache = VendedCredentialCache(vendor, now=lambda: clock["t"])
 
-    assert cache.storage_options("ns", "ds", expires_at_millis=1_900_000)["session_token"] == "T1"
+    assert cache.storage_options("ns", "ds")["session_token"] == "T1"
     clock["t"] = 1_890.0  # inside the safety margin, still technically valid
-    assert cache.storage_options("ns", "ds", expires_at_millis=1_900_000)["session_token"] == "T2"
+    assert cache.storage_options("ns", "ds")["session_token"] == "T2"
     assert vendor.calls == 2
 
 
 def test_each_table_gets_its_own_credential() -> None:
     """A credential scoped to one table prefix is useless for another — sharing one across tables
     would produce exactly the 403 the scoping is FOR."""
-    vendor = _Vendor({"access_key_id": "A"}, {"access_key_id": "B"})
+    vendor = _Vendor(({"access_key_id": "A"}, 9_000_000), ({"access_key_id": "B"}, 9_000_000))
     cache = VendedCredentialCache(vendor, now=lambda: 0.0)
 
-    a = cache.storage_options("ns", "one", expires_at_millis=9_000_000)
-    b = cache.storage_options("ns", "two", expires_at_millis=9_000_000)
+    a = cache.storage_options("ns", "one")
+    b = cache.storage_options("ns", "two")
     assert a != b
     assert vendor.calls == 2
 
@@ -79,11 +86,11 @@ def test_each_table_gets_its_own_credential() -> None:
 def test_a_vendor_that_offers_nothing_yields_none_and_is_not_retried_per_write() -> None:
     """`mode_b` vends nothing by design. Asking again on every single write would put a doomed round
     trip on the hot path of a deployment that has simply chosen server-mediated access."""
-    vendor = _Vendor(None)
+    vendor = _Vendor((None, None))
     cache = VendedCredentialCache(vendor, now=lambda: 0.0)
 
-    assert cache.storage_options("ns", "ds", expires_at_millis=None) is None
-    assert cache.storage_options("ns", "ds", expires_at_millis=None) is None
+    assert cache.storage_options("ns", "ds") is None
+    assert cache.storage_options("ns", "ds") is None
     assert vendor.calls == 1
 
 
@@ -101,13 +108,13 @@ def test_the_deadline_is_compared_on_the_STORE_S_clock_not_a_monotonic_one() -> 
 
     from ingest.credentials import VendedCredentialCache
 
-    vendor = _Vendor({"access_key_id": "AK"})
+    vendor = _Vendor(({"access_key_id": "AK"}, int((_time.time() + 900) * 1000)), ({"access_key_id": "AK"}, int((_time.time() - 3600) * 1000)))
     cache = VendedCredentialCache(vendor)  # no `now` — the production clock
 
     # A credential expiring 900s from now must be considered fresh; one that expired an hour ago must
     # not. Both are epoch-based, which only works if the cache's own clock is too.
-    assert cache.storage_options("ns", "fresh", expires_at_millis=int((_time.time() + 900) * 1000)) is not None
+    assert cache.storage_options("ns", "fresh") is not None
     assert vendor.calls == 1
-    cache.storage_options("ns", "stale", expires_at_millis=int((_time.time() - 3600) * 1000))
-    cache.storage_options("ns", "stale", expires_at_millis=int((_time.time() - 3600) * 1000))
+    cache.storage_options("ns", "stale")
+    cache.storage_options("ns", "stale")
     assert vendor.calls == 3, "an expired credential must be re-vended, not held"

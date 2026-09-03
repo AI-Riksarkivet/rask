@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
@@ -316,11 +317,24 @@ class _OpenBatch:
     `units_done: 0`.
     """
 
-    def __init__(self, *, dataset_uri: str, run_id: str, external_base: str | None, outcome: ChunkOutcome) -> None:
+    def __init__(
+        self,
+        *,
+        dataset_uri: str,
+        run_id: str,
+        external_base: str | None,
+        outcome: ChunkOutcome,
+        write_options: Callable[[], dict[str, str] | None] | None = None,
+    ) -> None:
         self._dataset_uri = dataset_uri
         self._run_id = run_id
         self._external_base = external_base
         self.outcome = outcome
+        #: Resolves the SCOPED credential these bytes are written with, or ``None`` for the ambient
+        #: one. A callable rather than a value because a credential expires mid-run: resolving per
+        #: batch lets the cache behind it re-vend while still valid, where a value captured at
+        #: construction would go stale on any run outliving the TTL. Absent = today's behaviour.
+        self._write_options = write_options or (lambda: None)
         self.held: dict[int, Any] = {}
         self._reset()
 
@@ -364,7 +378,11 @@ class _OpenBatch:
         units, msgs_to_ack, parts, toks = self._units, self._msgs, self._parts, self._tokens
         self._reset()
 
-        written = write_unit_fragments(self._dataset_uri, units_to_table(units, parts, toks, self._external_base))
+        written = write_unit_fragments(
+            self._dataset_uri,
+            units_to_table(units, parts, toks, self._external_base),
+            storage_options=self._write_options(),
+        )
         # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
         # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
         # partially-acked batch committed its units TWICE

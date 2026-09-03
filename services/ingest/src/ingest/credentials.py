@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, Field
+
+
+if TYPE_CHECKING:
+    from ingest.catalog_service import VendedCredential
 
 
 class CredentialVendor(Protocol):
@@ -31,7 +35,7 @@ class CredentialVendor(Protocol):
     nothing here depends on how the credential is fetched.
     """
 
-    def __call__(self, namespace: str, dataset: str, *, tier: str = ...) -> dict[str, str] | None: ...
+    def __call__(self, namespace: str, dataset: str, *, tier: str = ...) -> VendedCredential | None: ...
 
 
 #: Refresh this long before expiry. Wide enough that a batch already in flight finishes on the old
@@ -65,18 +69,20 @@ class VendedCredentialCache:
         self._now = now or time.time
         self._entries: dict[tuple[str, str], _Entry] = {}
 
-    def storage_options(self, namespace: str, dataset: str, *, expires_at_millis: int | None) -> dict[str, str] | None:
+    def storage_options(self, namespace: str, dataset: str) -> dict[str, str] | None:
         """The storage options to write this table with, or ``None`` to use the ambient credential.
 
-        ``expires_at_millis`` is the vending door's own answer for the PREVIOUS vend, threaded back so
-        the cache knows when to refresh without parsing the credential itself.
+        The expiry is read off the vend itself — only the vend knows it, so a caller that had to
+        supply it would be guessing.
         """
         key = (namespace, dataset)
         entry = self._entries.get(key)
         if entry is not None and (entry.refresh_after is None or self._now() < entry.refresh_after):
             return entry.options
 
-        options = self._vendor(namespace, dataset, tier="write")
+        vended = self._vendor(namespace, dataset, tier="write")
+        options = vended.options if vended is not None else None
+        expires_at_millis = vended.expires_at_millis if vended is not None else None
         # A "nothing on offer" answer is cached WITHOUT a deadline. `mode_b` is a deliberate posture,
         # and re-asking on every write would put a doomed round trip on the hot path of a deployment
         # that simply chose server-mediated access.

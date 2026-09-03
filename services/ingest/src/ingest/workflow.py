@@ -309,6 +309,23 @@ class ChunkSpec(BaseModel):
     #: derivations of one location is the bug; carrying the resolved value is the fix.
     dataset_uri: str = ""
 
+    #: The catalog NAMESPACE this chunk writes into, RESOLVED at dispatch and carried — the same rule
+    #: as `dataset_uri` above, for a sharper reason. The worker composes a table id from it to ask the
+    #: catalog for a scoped credential, and the id cannot be recovered downstream: parsing it back out
+    #: of `dataset_uri` is refused because rask-lance-catalog documents FIVE dataset-URI layouts where
+    #: reducing the wrong one silently yields `None` or the PARENT namespace, and a credential vended
+    #: for the wrong table surfaces as a 403 at write time that reads as a permission problem.
+    #:
+    #: NAMESPACE, never `project`. `RunSpec.namespace` is "THE ONE PLACE a project becomes a
+    #: namespace", and the estate has already paid for the confusion: a parameter named `project`
+    #: composed `bind86$e2ewin`, an object nobody had granted anything on. Carrying the project here
+    #: would rebuild that one layer down.
+    #:
+    #: DEFAULTS deliberately: a chunk enqueued by the previous build is replayed by the new one (Dapr
+    #: hands back the recorded input verbatim), so a required field would fail every in-flight run at
+    #: the moment of deploy.
+    namespace: str = ""
+
     #: The run's write partitioning, RESOLVED at accept and carried — same reason as `dataset_uri`.
     #: Re-reading env inside the drain would let a rolling restart change a live run's fragment size
     #: mid-fan-out, so two chunks of one run could write to different layouts.
@@ -1200,6 +1217,7 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: EnumerateChunksInput
                 count=len(window),
                 dataset_uri=uri,
                 # Carried, not re-resolved — same reason as `dataset_uri` above.
+                namespace=spec.namespace,
                 sizing=spec.sizing,
                 kind=spec.kind,
                 project=spec.project,
