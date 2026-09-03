@@ -285,6 +285,65 @@ source was legitimately empty.
 fixed here because it is a different seam (the worker→workflow error path, not credentials or
 maintenance) and deserves its own RED test rather than being folded into a credential commit.
 
+### Can MAINTENANCE take the vended-credential path ingest took? MEASURED 2026-09-03 — only for a minority of the estate
+
+`services/maintenance` is the last holder of a root object-store key on a write path
+(`core/config.py:134`, `s3_access_key_id` defaulting to `rustfsadmin`, set by the Deployment). The
+obvious move is to copy what ingest just proved end-to-end: vend per table, cache, refresh. Two
+measurements against the live estate say that copy covers a minority of what the sweep touches, and
+both were taken before any design was written, because the alternative is designing against a guess.
+
+**1. The catalog REFUSES to vend for a table it does not have a record for.** Driven against the
+deployed catalog with a valid user bearer:
+
+```
+POST /v1/table/bronze$events/credentials        -> 200  {"mode":"direct","credentials":{...}}
+POST /v1/table/nosuchns$nosuchtbl/credentials   -> 403  can_read_data required on table:nosuchns$nosuchtbl
+```
+
+That 403 is the FGA gate running *before* existence resolution — the same ordering row 19 of
+`open_estate-verification.md` recorded for the delete doors, and it is deliberate (a door that
+distinguished "absent" from "not yours" is an enumeration oracle). The consequence here is that the
+set of datasets maintenance can vend for is exactly the set the catalog has registered, while the set
+it must maintain is whatever is in the buckets — and those are different sets *by the ruling directly
+above this section*.
+
+**2. Most top-level roots in the warehouse carry no derivable table id.** `table_id_from_uri`
+(`maintenance/core/lineage_emit.py:155`) reads the flat `<uuid8>_<table_id>` layout and returns
+`None` otherwise. Listed live against `s3://lance-catalog/`:
+
+| Top-level root | Table id derivable? |
+| --- | --- |
+| `1694b2a0_silver$pin-live-b_…`, `2c8c0552_silver$vasa-publish-…`, `329ab1f0_silver$consensus-live-…`, `40839b13_silver$loop-…`, `6ecbe11e_transcripts_v2$annotations`, `aa3bed10_silver$vasa-publish-…` | yes (6) |
+| `bronze`, `ingest`, `medallion`, `media-src`, `models` | **no (5)** |
+
+Six of eleven. And the five that fail are not the leftovers: `medallion/` is the whole cascade —
+bronze, silver and gold — which the section above names as *the highest-churn writer in the estate*.
+So per-table vending as ingest does it would harden six catalog-created tables and leave the cascade
+tier, the ingest landing zone, the media source and the model store signing with the ambient
+credential.
+
+**What this does NOT settle.** It rules out "copy ingest verbatim and call the root key gone"; it does
+not rule out vending. Three directions remain open and one of them must be chosen rather than drifted
+into:
+
+* **vend where possible, ambient where not** — honest, incremental, and must LOG the downgrade per
+  dataset the way `ingest/credentials.py` now does, or the estate cannot tell a hardened sweep from
+  one that quietly stopped;
+* **split the privileges N4 already separated** — the planner needs `ListBucket` across buckets and no
+  write at all; the executor needs write on one dataset. That split is available today and needs no
+  catalog call for the planner half;
+* **a non-root, prefix-scoped STS credential with no catalog dependency** — `catalog/core/vending.py`
+  already mints session-policy-scoped credentials, and row 32 of `open_estate-verification.md`
+  measured RustFS enforcing exactly that for the Ray plane (`medallion*` allowed, `_projects/`,
+  `_protection/` and the observability bucket AccessDenied). This is the only direction that covers
+  the five no-table-id roots.
+
+Whichever wins, `reconcile.py` (read-only drift report) and `purge.py` (DELETES bytes) must be sized
+separately from compaction: they are three different privileges reading one setting today, and a
+change that hardens compaction while leaving purge on the root key has not moved the thing that
+matters most.
+
 ### Is the maintenance plane catalog-DIRECTED? ANSWERED 2026-09-03: no, and it must not be
 
 The question was whether the sweep should stop listing buckets and instead ask the catalog which
