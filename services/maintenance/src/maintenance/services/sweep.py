@@ -348,7 +348,7 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     # unit — and the work stream is `workqueue` retention, so a unit can sit for up to the stream's
     # max-age before a worker takes it. That is the same staleness argument the protection re-check
     # above this makes, applied to the thing that expires by design.
-    write_options = credentials.write_options_for(item.uri, settings, fallback=options)
+    write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=item.table_id)
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected)
 
 

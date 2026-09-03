@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 _TIMEOUT_SECONDS = 10.0
 
 
-def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict[str, str]) -> dict[str, str]:
+def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict[str, str], declared_table_id: str | None = None) -> dict[str, str]:
     """The storage options this dataset's REWRITE should be signed with.
 
     Returns the vended, table-scoped options when every precondition holds, and ``fallback`` — the
@@ -56,15 +56,24 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     preconditions are checked in the order that makes a misconfiguration readable:
 
     1. a catalog URL is configured. Unset means this deployment has no vending door;
-    2. the location yields a table identifier. A nested layout names its namespace as a parent
-       directory rather than in the leaf, so :func:`table_id_from_location` declines rather than
-       guesses — and a guessed id vends a credential for a DIFFERENT table, surfacing as a 403 on the
-       right one;
+    2. a table identifier is available. ``declared_table_id`` — the id the WORK ITEM carries — is
+       preferred over deriving one from the path, and the difference is most of the estate rather than
+       an edge case. Measured on the live warehouse: of eleven top-level roots in
+       ``s3://lance-catalog/``, :func:`table_id_from_location` answers for six, and the five it cannot
+       read include ``medallion/``, the cascade. Those five are NOT unknown to the catalog —
+       ``bronze$events`` at ``medallion/bronze`` and ``bronze$pages`` at ``bronze/pages`` both answer a
+       write-tier vend with 200 — so deriving alone would leave the highest-churn writer in the estate
+       signing with the root key while reporting no fault at all. Derivation stays as the fallback for
+       a unit produced before the field existed, or by a planner that genuinely does not know;
     3. the door answers ``direct``. ``server_mediated`` is a supported posture (`mode_b`), not a fault.
+
+    A DECLARED id is never repaired or second-guessed here. If a producer stamps a wrong one the vend
+    fails on a table that does exist, which is a visible 403 in the log — whereas silently falling back
+    to derivation would hide the producer's bug behind a working sweep.
     """
     if not settings.catalog_url:
         return fallback
-    table_id = table_id_from_location(uri)
+    table_id = declared_table_id or table_id_from_location(uri)
     if table_id is None:
         logger.debug("maintenance_vend_skipped_unresolvable_location", extra={"uri": uri})
         return fallback

@@ -36,8 +36,6 @@ import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
-
 from ingest.config import settings
 from ingest.naming import delimiter
 
@@ -48,6 +46,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
     from ingest.catalog import CatalogSeam
+from service_kit.lakehouse.vended_credentials import VendedCredential
+
 
 logger = logging.getLogger(__name__)
 
@@ -111,20 +111,6 @@ def catalog_token() -> str | None:
 
 class CatalogError(RuntimeError):
     """The catalog refused, or could not be reached."""
-
-
-class VendedCredential(BaseModel):
-    """A scoped credential and WHEN IT DIES, together.
-
-    The expiry travels with the options because only the vend knows it: a caller that had to supply it
-    would be guessing, and a cache that never learned it would either re-vend on every write or hold a
-    credential past its death. `expires_at_millis` is the vending door's own answer.
-    """
-
-    options: dict[str, str]
-    #: Epoch milliseconds. ``None`` when the vendor issues no expiry (a static key), which means
-    #: "does not expire" rather than "expired".
-    expires_at_millis: int | None = None
 
 
 class CatalogServiceClient:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ingest.credentials import VendedCredentialCache
+from service_kit.lakehouse.vended_credentials import VendedCredentialCache
 
 
 class _Vendor:
@@ -39,7 +39,7 @@ class _Vendor:
         self.calls = 0
 
     def __call__(self, *_a: Any, **_k: Any) -> Any:
-        from ingest.catalog_service import VendedCredential
+        from service_kit.lakehouse.vended_credentials import VendedCredential
 
         self.calls += 1
         options, expires = self._answers[min(self.calls - 1, len(self._answers) - 1)]
@@ -106,7 +106,7 @@ def test_the_deadline_is_compared_on_the_STORE_S_clock_not_a_monotonic_one() -> 
     """
     import time as _time
 
-    from ingest.credentials import VendedCredentialCache
+    from service_kit.lakehouse.vended_credentials import VendedCredentialCache
 
     vendor = _Vendor(({"access_key_id": "AK"}, int((_time.time() + 900) * 1000)), ({"access_key_id": "AK"}, int((_time.time() - 3600) * 1000)))
     cache = VendedCredentialCache(vendor)  # no `now` — the production clock

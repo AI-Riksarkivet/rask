@@ -1,9 +1,15 @@
-"""Cached, per-table vended credentials for the client-direct write path.
+"""Cached, per-table vended credentials for any writer that puts bytes on object storage directly.
 
-The worker writes fragments straight to object storage, so the credential signing those bytes should
-be scoped to one table prefix and short-lived rather than a long-lived key that reaches the whole
-bucket — proven enforced on RustFS 2026-09-03, where a credential vended for one table was refused on
-another with 403 AccessDenied.
+A writer that puts fragments straight on object storage should sign them with a credential scoped to
+one table prefix and short-lived, rather than a long-lived key that reaches the whole bucket — proven
+enforced on RustFS 2026-09-03, where a credential vended for one table was refused on another with
+403 AccessDenied, and where a read-tier credential answered PUT and DELETE with AccessDenied too.
+
+IT LIVES IN SERVICE-KIT because it has two consumers in different processes: the ingest worker's
+client-direct write, and the maintenance executor's compaction. `base_refs` and `work_items` moved
+here before it, for the same reason and with the same consequence if they had not — a second copy of
+a credential cache is a second answer to "when does this expire", and the one that is wrong reports a
+403 that reads as a permission problem rather than as a stale credential.
 
 Two facts decide the shape here and they pull against each other. An ingest run is long and its units
 are many (`ingest/queue.py` speaks of "millions of units"), so vending per unit would put a catalog
@@ -20,16 +26,25 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from pydantic import BaseModel, Field
 
 
-if TYPE_CHECKING:
-    from ingest.catalog_service import VendedCredential
-
-
 logger = logging.getLogger(__name__)
+
+
+class VendedCredential(BaseModel):
+    """A scoped credential and WHEN IT DIES, together.
+
+    The expiry travels with the options because only the vend knows it: a caller that had to supply it
+    would be guessing, and a cache that never learned it would either re-vend on every write or hold a
+    credential past its death and report the 403 as a permission problem.
+    """
+
+    options: dict[str, str]
+    #: Epoch milliseconds, as the vending door reports it. Wall-clock, never a duration.
+    expires_at_millis: float | None = None
 
 
 class CredentialVendor(Protocol):

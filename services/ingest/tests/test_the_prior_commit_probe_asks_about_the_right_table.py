@@ -26,9 +26,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from ingest.catalog_service import VendedCredential
 from ingest.runtime import _prior_commit_for_run
 from ingest.workflow import RunSpec
+from service_kit.lakehouse.vended_credentials import VendedCredential
 
 
 class _RecordingCatalog:

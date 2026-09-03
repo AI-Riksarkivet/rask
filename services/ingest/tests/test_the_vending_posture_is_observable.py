@@ -21,8 +21,7 @@ import logging
 
 import pytest
 
-from ingest.catalog_service import VendedCredential
-from ingest.credentials import VendedCredentialCache
+from service_kit.lakehouse.vended_credentials import VendedCredential, VendedCredentialCache
 
 
 def test_a_vended_credential_is_reported_with_the_table_it_is_scoped_to(caplog: pytest.LogCaptureFixture) -> None:
@@ -31,10 +30,10 @@ def test_a_vended_credential_is_reported_with_the_table_it_is_scoped_to(caplog: 
         lambda namespace, dataset, *, tier="write": VendedCredential(options={"aws_access_key_id": "AK"}, expires_at_millis=(now[0] + 900) * 1000),
         now=lambda: now[0],
     )
-    with caplog.at_level(logging.INFO, logger="ingest.credentials"):
+    with caplog.at_level(logging.INFO, logger="service_kit.lakehouse.vended_credentials"):
         cache.storage_options("acme-bronze", "events")
 
-    records = [r for r in caplog.records if r.name == "ingest.credentials"]
+    records = [r for r in caplog.records if r.name == "service_kit.lakehouse.vended_credentials"]
     assert records, "a scoped credential was taken into use and nothing said so"
     assert "acme-bronze" in records[0].getMessage() and "events" in records[0].getMessage()
 
@@ -47,14 +46,14 @@ def test_the_hot_path_is_silent(caplog: pytest.LogCaptureFixture) -> None:
         now=lambda: now[0],
     )
     cache.storage_options("acme-bronze", "events")
-    with caplog.at_level(logging.INFO, logger="ingest.credentials"):
+    with caplog.at_level(logging.INFO, logger="service_kit.lakehouse.vended_credentials"):
         # The first vend above legitimately logged. `caplog` collects every propagated record whether
         # or not it was emitted inside this block, so without clearing, this asserts on the setup call
         # and passes or fails depending on the root level another test happened to leave behind.
         caplog.clear()
         for _ in range(50):
             cache.storage_options("acme-bronze", "events")
-    assert [r for r in caplog.records if r.name == "ingest.credentials"] == []
+    assert [r for r in caplog.records if r.name == "service_kit.lakehouse.vended_credentials"] == []
 
 
 def test_a_refresh_says_so(caplog: pytest.LogCaptureFixture) -> None:
@@ -65,10 +64,10 @@ def test_a_refresh_says_so(caplog: pytest.LogCaptureFixture) -> None:
     )
     cache.storage_options("acme-bronze", "events")
     now[0] += 900
-    with caplog.at_level(logging.INFO, logger="ingest.credentials"):
+    with caplog.at_level(logging.INFO, logger="service_kit.lakehouse.vended_credentials"):
         caplog.clear()
         cache.storage_options("acme-bronze", "events")
-    assert [r for r in caplog.records if r.name == "ingest.credentials"], "a re-vend after expiry was silent"
+    assert [r for r in caplog.records if r.name == "service_kit.lakehouse.vended_credentials"], "a re-vend after expiry was silent"
 
 
 def test_falling_back_to_the_ambient_credential_is_reported_as_the_downgrade_it_is(caplog: pytest.LogCaptureFixture) -> None:
@@ -76,10 +75,10 @@ def test_falling_back_to_the_ambient_credential_is_reported_as_the_downgrade_it_
     Both write with a key that reaches the whole bucket, so both must be visible — the caller cannot
     distinguish them and neither can a reader who is only shown silence."""
     cache = VendedCredentialCache(lambda namespace, dataset, *, tier="write": None, now=None)
-    with caplog.at_level(logging.INFO, logger="ingest.credentials"):
+    with caplog.at_level(logging.INFO, logger="service_kit.lakehouse.vended_credentials"):
         assert cache.storage_options("acme-bronze", "events") is None
 
-    records = [r for r in caplog.records if r.name == "ingest.credentials"]
+    records = [r for r in caplog.records if r.name == "service_kit.lakehouse.vended_credentials"]
     assert records, "the write fell back to the ambient credential and nothing said so"
     assert "acme-bronze" in records[0].getMessage()
 
@@ -94,7 +93,7 @@ def test_the_secret_is_never_logged(caplog: pytest.LogCaptureFixture) -> None:
         ),
         now=lambda: 1000.0,
     )
-    with caplog.at_level(logging.INFO, logger="ingest.credentials"):
+    with caplog.at_level(logging.INFO, logger="service_kit.lakehouse.vended_credentials"):
         cache.storage_options("acme-bronze", "events")
 
     for record in caplog.records:

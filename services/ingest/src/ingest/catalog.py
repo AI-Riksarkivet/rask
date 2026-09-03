@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
     import pyarrow as pa
 
-    from ingest.catalog_service import VendedCredential
+    from service_kit.lakehouse.vended_credentials import VendedCredential
 
 
 def _is_object_store(uri: str) -> bool:

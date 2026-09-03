@@ -834,7 +834,7 @@ def write_options_for(catalog: CatalogSeam, *, namespace: str, dataset: str) -> 
     """
     if not isinstance(catalog, VendingCatalog) or not namespace:
         return None
-    from ingest.credentials import VendedCredentialCache
+    from service_kit.lakehouse.vended_credentials import VendedCredentialCache
 
     cache = VendedCredentialCache(catalog.vend_storage_options)
     return lambda: cache.storage_options(namespace, dataset)
