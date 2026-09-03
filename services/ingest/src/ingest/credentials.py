@@ -17,6 +17,7 @@ for exactly this.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
@@ -26,6 +27,9 @@ from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from ingest.catalog_service import VendedCredential
+
+
+logger = logging.getLogger(__name__)
 
 
 class CredentialVendor(Protocol):
@@ -90,4 +94,21 @@ class VendedCredentialCache:
         # the margin is used once and re-vended on the NEXT call, rather than re-vended in a loop here.
         refresh_after = None if options is None or expires_at_millis is None else max(expires_at_millis / 1000.0 - _REFRESH_MARGIN_SECONDS, self._now())
         self._entries[key] = _Entry(options=options, refresh_after=refresh_after)
+        # LOGGED AT THE VEND, which is the only transition — a cached hit is silent, because this sits
+        # behind writes counted in millions and a line per write would be a line per unit. Without it
+        # the posture is unauditable in both directions: a scoped write and a fallback to the key that
+        # reaches the whole bucket looked identical from outside, so an estate whose vending door had
+        # silently stopped working was indistinguishable from a hardened one.
+        #
+        # NEVER the credential itself. What is useful is which table, whether it is scoped, and when it
+        # expires; the secret in a log store would undo the scoping it is reporting on.
+        if options is None:
+            logger.info("write credential AMBIENT for %s$%s — nothing vended; these writes are signed by the process credential", namespace, dataset)
+        else:
+            logger.info(
+                "write credential SCOPED for %s$%s — expires in %.0fs",
+                namespace,
+                dataset,
+                0.0 if expires_at_millis is None else max(expires_at_millis / 1000.0 - self._now(), 0.0),
+            )
         return options
