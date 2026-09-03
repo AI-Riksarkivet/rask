@@ -859,7 +859,19 @@ auth:
 #                   x-lance-service-identity, never a bearer.
 #   static        — pre-provisioned per-bucket keys.
 vending:
-  mode: mode_b # mode_b | web_identity | sts | static
+  # STS by default, because scoped short-lived credentials ARE the zero-trust posture and `mode_b`
+  # vends nothing at all — under it no worker can ever hold a per-table credential, so every direct
+  # reader falls back to a shared root key or to routing bytes through the server.
+  #
+  # It defaulted to `mode_b` for a reason that turned out to be a DEFECT rather than a choice: the STS
+  # vendor built its boto client without credentials, so every AssumeRole raised `NoCredentialsError`
+  # and the door answered 503 (fixed 01222590), and the credential it then returned omitted `allow_http`
+  # so no Lance client could be built from it (fixed 3cb13c88). `sts` was unusable, not unwanted.
+  #
+  # PROVEN on RustFS 2026-09-03, which is what makes this default honest rather than aspirational:
+  # a credential vended for one table read that table (4 rows) and was refused on another with
+  # 403 AccessDenied. The store enforces the session policy; the scoping is real.
+  mode: sts # mode_b | web_identity | sts | static
   ttlSeconds: 900
   assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # RustFS ignores it; boto3 requires the param
   # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.

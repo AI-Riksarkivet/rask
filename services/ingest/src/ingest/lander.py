@@ -268,7 +268,7 @@ def ensure_indexes_at(dataset_uri: str) -> None:
         logger.warning("could not open %s to ensure indexes — queries will scan", dataset_uri, exc_info=True)
 
 
-def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
+def write_unit_fragments(dataset_uri: str, batch: pa.Table, storage_options: dict[str, str] | None = None) -> list[str]:
     """A worker's half of the write: fragments on disk, invisible until the lander commits them.
 
     Lives here rather than in the worker because of I4 — the write verb may appear in exactly one
@@ -297,7 +297,17 @@ def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
     stable ids — and the flag is creation-time-only, so there is no later point at which it could be
     repaired. Passing the flags explicitly makes both impossible regardless of what exists yet.
     """
-    written = lance.fragment.write_fragments(batch, dataset_uri, **CREATION_FLAGS)
+    # `storage_options` is how a VENDED credential reaches the write. This is the client-direct flow
+    # the vending door was built for (#2): the worker writes fragments straight to object storage and
+    # the catalog commits only the metadata, so a per-table credential scoped to one prefix and
+    # expiring in 900s is what should sign these bytes — not a long-lived key that reaches the whole
+    # bucket. Proven enforced on RustFS 2026-09-03: a credential vended for one table read it and was
+    # refused on another with 403 AccessDenied.
+    #
+    # ABSENT means the ambient credential chain, which is exactly the previous behaviour. `mode_b`
+    # vends nothing by design, so a deployment on it must be untouched — this adds a capability
+    # without removing one.
+    written = lance.fragment.write_fragments(batch, dataset_uri, **CREATION_FLAGS, **({"storage_options": storage_options} if storage_options else {}))
     return [json.dumps(f.to_json()) for f in written]
 
 

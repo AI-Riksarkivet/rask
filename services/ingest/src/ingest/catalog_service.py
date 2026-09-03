@@ -127,6 +127,52 @@ class CatalogServiceClient:
 
     # ── identity ──────────────────────────────────────────────────────────────────────
 
+    def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = "write") -> dict[str, str] | None:
+        """Ask the catalog for a SCOPED credential for this table, or ``None`` to use the ambient one.
+
+        This is the client-direct flow's other half (#2): the worker writes fragments straight to
+        object storage, so the credential signing those bytes should be scoped to one table prefix and
+        short-lived rather than a long-lived key that reaches the whole bucket. Proven enforced on
+        RustFS 2026-09-03 — a credential vended for one table read it and was refused on another with
+        403 AccessDenied.
+
+        ``None`` on ANY non-answer, and that is deliberate in three cases rather than one:
+
+        * ``mode_b`` answers ``server_mediated`` with no credential. It is a supported posture, not a
+          failure.
+        * a vending error (the vendor down, misconfigured, unreachable) must not lose an ingest run.
+          The ambient credential is what this writer used before vending existed, so falling back is
+          strictly no worse — whereas raising would turn an optional hardening into a new single point
+          of failure.
+        * an unparseable body, for the same reason.
+
+        The caller therefore never has to distinguish "not offered" from "not available": both mean
+        write the way we always did.
+        """
+        import httpx
+
+        from ingest.http import shared_client
+
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/credentials"
+        try:
+            response = shared_client().post(url, json={"tier": tier}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+        except httpx.HTTPError as exc:
+            # NARROW on purpose. A blanket `except Exception` here swallowed a `NameError` raised by
+            # this very method and reported it as "vending unavailable" — the degradation path hid a
+            # programming error as a configuration one, which is what a bare catch actually costs.
+            # Transport failures degrade; anything else is a defect and must surface.
+            logger.info("credential vending unreachable (%s) — writing with the ambient credential", exc)
+            return None
+        if response.status_code >= 400:
+            logger.info("credential vending unavailable (%s) — writing with the ambient credential", response.status_code)
+            return None
+        try:
+            options = (response.json().get("credentials") or {}).get("storage_options")
+        except ValueError as exc:  # a non-JSON body from something in front of the catalog
+            logger.info("credential vending answered unparseable content (%s) — writing with the ambient credential", exc)
+            return None
+        return options if isinstance(options, dict) and options else None
+
     def table_id(self, namespace: str, dataset: str) -> str:
         """`{namespace}${dataset}` — pure composition, and the argument is a NAMESPACE.
 
