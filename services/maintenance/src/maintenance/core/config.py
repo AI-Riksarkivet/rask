@@ -97,6 +97,12 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # Delivery is AT-LEAST-ONCE and that is safe here rather than merely tolerated: compaction and GC are
     # both convergent — a redelivered unit finds the fragments already merged and the versions already
     # reclaimed, and does nothing. A unit is not a transaction and must never be treated as one.
+    #: How many versions must accumulate before the EVENT lane re-plans one dataset — Lakekeeper's
+    #: `min-snapshots-to-expire`, in rask's own registry. It exists because a plan is not cheap:
+    #: `sibling_base_refs` opens every sibling manifest in the warehouse, so without a threshold a write
+    #: burst drives one whole-warehouse sweep per write. The hourly backstop covers whatever this skips,
+    #: which is what makes a threshold safe rather than a way to lose maintenance.
+    event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
     work_pubsub: str = Field(default="maintenance-work-pubsub", alias="MAINTENANCE_WORK_PUBSUB")
     work_topic: str = Field(default="", alias="MAINTENANCE_WORK_TOPIC")
     #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it

@@ -26,11 +26,12 @@ from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.dependencies import DaprClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.arrival import triggering_write
+from maintenance.services.arrival import should_replan, triggering_write
 from maintenance.services.sweep import plan_one
 from maintenance.services.work_queue import RETRY, SUCCESS, enqueue_units
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse import maintenance_policies
 
 
 async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, dapr: Any) -> dict[str, str]:  # noqa: ANN401 — DaprClient | None
@@ -47,12 +48,24 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, d
     hit = triggering_write(event.get("data", event))
     if hit is None or hit.location is None:
         return {"status": SUCCESS}
+    # DEBOUNCE BEFORE PLANNING, never inside it. `plan_one` calls `sibling_base_refs`, which opens every
+    # sibling manifest in the warehouse — so a write burst would drive one whole-warehouse sweep per
+    # write. Checking a single JSON stamp first is what makes the lane affordable on a busy table.
+    options = settings.storage_options()
+    last = await run_in_threadpool(maintenance_policies.read_planned_version, settings.resolved_policy_root, options, hit.location)
+    if not should_replan(last_planned=last, event_version=hit.version, min_versions=settings.event_min_versions):
+        return {"status": SUCCESS}
     item = await run_in_threadpool(plan_one, hit.location, settings)
     if item is None:
         return {"status": SUCCESS}
     published, _not_queued = await enqueue_units(
         dapr, [item], pubsub=settings.work_pubsub, topic=settings.work_topic, timeout_seconds=settings.publish_timeout_seconds
     )
+    if published and hit.version is not None:
+        # Stamp only what actually reached the queue. Stamping a unit that failed to publish would
+        # debounce a dataset whose work never got queued — the one combination that loses maintenance
+        # silently, since the next events would be skipped against a plan that never happened.
+        await run_in_threadpool(maintenance_policies.write_planned_version, settings.resolved_policy_root, options, hit.location, hit.version)
     return {"status": SUCCESS if published else RETRY}
 
 

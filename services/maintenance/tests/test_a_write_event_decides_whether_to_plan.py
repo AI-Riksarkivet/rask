@@ -142,6 +142,7 @@ async def test_an_event_this_lane_declines_is_ACKED_not_retried(monkeypatch: pyt
     from maintenance.services.work_queue import SUCCESS
 
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
+    monkeypatch.setattr(route.maintenance_policies, "read_planned_version", lambda *a: None)
     monkeypatch.setattr(route, "plan_one", lambda uri, s: None)
 
     # no dataSource facet -> nothing this service can open (it holds no catalog client)
@@ -165,6 +166,9 @@ async def test_a_publishable_unit_is_enqueued_and_acked(monkeypatch: pytest.Monk
         published.extend(i.uri for i in items)
         return len(items), []
 
+    # The debounce reads a stamp before planning; stub it so these stay about the ACK decision.
+    monkeypatch.setattr(route.maintenance_policies, "read_planned_version", lambda *a: None)
+    monkeypatch.setattr(route.maintenance_policies, "write_planned_version", lambda *a: None)
     monkeypatch.setattr(route, "plan_one", lambda uri, s: DatasetWorkItem(uri=uri, plan=DatasetPlan()))
     monkeypatch.setattr(route, "enqueue_units", fake_enqueue)
 
@@ -190,6 +194,9 @@ async def test_a_unit_that_could_NOT_be_published_is_RETRIED(monkeypatch: pytest
     async def fake_enqueue(dapr: object, items: list[Any], **kwargs: object) -> tuple[int, list[str]]:
         return 0, [i.uri for i in items]
 
+    # The debounce reads a stamp before planning; stub it so these stay about the ACK decision.
+    monkeypatch.setattr(route.maintenance_policies, "read_planned_version", lambda *a: None)
+    monkeypatch.setattr(route.maintenance_policies, "write_planned_version", lambda *a: None)
     monkeypatch.setattr(route, "plan_one", lambda uri, s: DatasetWorkItem(uri=uri, plan=DatasetPlan()))
     monkeypatch.setattr(route, "enqueue_units", fake_enqueue)
 

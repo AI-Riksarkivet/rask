@@ -116,3 +116,30 @@ def _location_of(output: dict[str, Any]) -> str | None:
     source = facets.get("dataSource") if isinstance(facets, dict) else None
     uri = source.get("uri") if isinstance(source, dict) else None
     return uri if isinstance(uri, str) and uri else None
+
+
+def should_replan(*, last_planned: int | None, event_version: int | None, min_versions: int) -> bool:
+    """Have enough versions accumulated since this dataset was last planned to be worth planning again?
+
+    THE DEBOUNCE, and it has to run before the plan rather than inside it. `plan_one` calls
+    `sibling_base_refs`, which opens EVERY sibling dataset's manifest in the warehouse to read its
+    `base_paths` — a whole-warehouse cost paid per event. Without this, a table taking a burst of writes
+    drives one full sibling sweep per write. That is Lakekeeper's `min-snapshots-to-expire`, expressed
+    against rask's own version stamps.
+
+    Three cases MAINTAIN rather than skip, and each is the direction that fails loud instead of silent:
+
+    * **No stamp** — this lane has never planned the dataset. Skipping would mean it is never maintained
+      until something else writes a stamp.
+    * **No version on the event** — a producer outside the catalog may stamp no version facet. There is
+      nothing to compare, and dropping those would lose maintenance for every such producer; the stamp
+      written after this pass debounces the next one.
+    * **A threshold below one** — a misconfigured `0` must not read as "never plan", which would disable
+      the lane silently. One is the smallest real threshold: every write plans.
+
+    A REDELIVERY or an out-of-order event skips, and both matter: delivery is at-least-once so the same
+    event arrives twice, and the bus does not order events, so an older version says nothing new.
+    """
+    if last_planned is None or event_version is None:
+        return True
+    return event_version - last_planned >= max(min_versions, 1)

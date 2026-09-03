@@ -219,3 +219,28 @@ def read_state(control_root: str, storage_options: StorageOptions, record: dict[
 def write_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], uri: str, at: str) -> None:
     """Persist the sweep's ``last_maintained_at`` stamp for one dataset under a policy (overwrite)."""
     put_record(control_root, storage_options, _state_key(record, uri), {"last_maintained_at": at})
+
+
+#: The event lane's per-DATASET stamp, keyed by uri alone. Deliberately NOT `_state_key`, which derives
+#: from a policy record: that key exists only for datasets carrying a policy with an interval, so an
+#: unpoliced dataset has nowhere to stamp — and unpoliced is the default. Same `state/` prefix, a
+#: reserved `dataset` kind, so both live in one place an operator can list; the existing derivation is
+#: untouched, because changing it would orphan every stamp already written.
+_EVENT_STATE_KIND = "dataset"
+
+
+def read_planned_version(control_root: str, storage_options: StorageOptions, uri: str) -> int | None:
+    """The dataset version this lane last PLANNED at, or ``None`` if it never has.
+
+    ``None`` also covers an unreadable or malformed stamp, and that is the safe direction: it maintains.
+    Treating an unreadable stamp as "recently planned" would silence maintenance for that dataset until
+    someone noticed, which is the failure mode the cadence stamp's own docstring warns about.
+    """
+    record = get_record(control_root, storage_options, record_key(f"{_POLICIES_PREFIX}/state", _EVENT_STATE_KIND, uri), event="maintenance_event_state")
+    value = record.get("last_planned_version") if record else None
+    return value if isinstance(value, int) else None
+
+
+def write_planned_version(control_root: str, storage_options: StorageOptions, uri: str, version: int) -> None:
+    """Stamp the version this lane planned at (overwrite — only the latest matters)."""
+    put_record(control_root, storage_options, record_key(f"{_POLICIES_PREFIX}/state", _EVENT_STATE_KIND, uri), {"last_planned_version": version})
