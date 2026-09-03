@@ -214,6 +214,74 @@ the estate is still on the serial lane and nothing about its behaviour has chang
   work exists that no write can trigger — an old-version GC becomes due by the CLOCK on a table nobody
   has written since.
 
+### The on-demand compact door ✅ LANDED + VERIFIED IN-CLUSTER 2026-09-03 (`c8eff91c`)
+
+`POST /v1/table/{id}/maintenance/compact` rewrote every fragment inside the request handler — work
+unbounded in the dimension that decides it, since a table's fragment count is a property of the data.
+It is now a second producer for N4's lane, publishing the SAME `DatasetWorkItem` the executor already
+consumes (the model moved to `service_kit.lakehouse.work_items`, since the catalog cannot import a
+sibling service and a duplicated model that crosses a broker is a type error nowhere).
+
+**Measured against the deployed catalog:** `HTTP 202 in 0.21s`, and the maintenance pod's log shows
+`POST /maintenance-work 200` with `optimize_indices_disabled_by_policy` + `cleanup_disabled_by_policy`
+— the two flags the door sets, proving the door's non-destructive contract survived the lane change.
+
+The inline lane survives where no work topic is configured, because `register_work_route` registers no
+executor there and a 202 would accept work nothing will ever perform.
+
+### Found while verifying, NOT fixed — a run reports COMPLETE having landed nothing
+
+Driving a real ingest run in-cluster produced `status: COMPLETE`, `units_total: 2`, `units_done: 0`,
+`committed_version: null`, `errors: {}` — while every unit had in fact failed at the write with
+`403 SignatureDoesNotMatch` (the credential-precedence bug, fixed in `e0bab1b0`).
+
+The status derivation is `COMPLETE_WITH_ERRORS if errors else COMPLETE`, and `errors` was empty
+because it is populated from the queue's `num_pending` at drain time (`runtime.py:520`) rather than
+from what the write activity actually did. So an activity that exhausts its retries contributes
+nothing to `errors`, and a run that delivered zero of its units is indistinguishable from one whose
+source was legitimately empty.
+
+**This is a REPORTING defect, and it is what hid the credential bug for a whole deploy cycle.** Not
+fixed here because it is a different seam (the worker→workflow error path, not credentials or
+maintenance) and deserves its own RED test rather than being folded into a credential commit.
+
+### Is the maintenance plane catalog-DIRECTED? ANSWERED 2026-09-03: no, and it must not be
+
+The question was whether the sweep should stop listing buckets and instead ask the catalog which
+datasets need maintenance — the shape Lakekeeper uses, where `queue_task_batch(conn)` enqueues INSIDE
+the catalog's own transaction and workers poll `FOR UPDATE ... SKIP LOCKED`, "eliminating the overhead
+of cron-based polling".
+
+**It does not transfer, because rask's catalog is not the commit coordinator.** Lakekeeper's task queue
+is sound because every Iceberg commit goes through it — the commit pointer lives IN the catalog, so a
+table cannot change without the catalog knowing. rask deliberately does not have that: Lance puts the
+CAS in the object store, which is the reason this estate needs no relational DB (the LANCE ONLY ruling
+depends on it). And the medallion movers call `lance.write_dataset(...)` DIRECTLY —
+`medallion/services/compute.py:229,353` and `ingest.py:184` — so a catalog-directed maintenance
+decider would be blind to the highest-churn writer in the estate. Bucket listing sees those writes;
+the catalog does not.
+
+Two supporting facts, both already load-bearing elsewhere:
+
+* **The selection function is whole-estate.** `sweep._protected_roots` must open every discovered
+  dataset in every bucket before one is compacted, because a shallow clone in bucket B is the only
+  thing that knows bucket A's dataset must not be rewritten (`base_refs.py`: "the evidence lives only
+  on the referring side"). A catalog that answered "these tables are due" would still not answer
+  "and none of them is a clone source", so the walk happens either way.
+* **Datasets carrying no policy have no record to poll.** They have no `_policies/state/` entry at all
+  and are maintained on every tick, so a record-driven decider would need a second mechanism beside
+  itself for exactly the datasets a new deployment starts with.
+
+Note what Lakekeeper does NOT do, since it is the model being borrowed from: it performs **zero
+compaction**. Its task queue drives expiration and purge — work whose "is it due" is a pure function
+of a timestamp the catalog already holds. rask's is not.
+
+**What DID land from that comparison** is the shape, not the store: the tick plans and enqueues, and
+workers execute one dataset each (N4), which is Lakekeeper's producer/consumer split without moving
+the source of truth. The one thing still worth taking is per-dataset ADAPTIVE cadence — Lakekeeper
+reschedules from the previous run's outcome with a 1-day floor and ceiling — which the policy's fixed
+`interval` does not express. Not started; not blocking anything.
+
 ### N7 — the event lane ✅ LANDED 2026-09-03 (`3e41e595`), DARK BY DEFAULT
 
 Push-notify, pull-execute. `services/arrival.py` decides (is this event worth opening the manifest
