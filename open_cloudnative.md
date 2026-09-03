@@ -374,6 +374,62 @@ separately from compaction: they are three different privileges reading one sett
 change that hardens compaction while leaving purge on the root key has not moved the thing that
 matters most.
 
+### The maintenance root key: DECIDED 2026-09-03 — demote the ambient credential, do not rely on vending alone
+
+`bootstrap-admin.yaml` defers this here in its own words ("closing that gap is an authorization-model
+decision recorded in `open_cloudnative.md`, not a bigger tuple list"). This is that decision. It was
+taken after three independently-authored designs were scored and then attacked; **two of three
+attackers returned FATAL on the winning design**, and all three converged on the same repair.
+
+**The constraint that decides it.** `warehouse.writer` (`model.fga:97`) is
+`[user, role#assignee, …] or owner` — with **no `writer from parent`**, unlike `namespace.writer`
+(`:258`) and `table.writer` (`:330`), which both cascade. So a `writer` tuple reaches a warehouse's
+namespaces and tables and nothing above it: coverage is one tuple per warehouse, and the install-time
+hook cannot cover a warehouse minted later by an API call. Measured against the live store:
+`can_write_data` for the maintenance subject on `table:acme-bronze$events` — under
+`warehouse:acme-bucket`, one of ~130 — returns `allowed:false` **with the grant in place**.
+
+Vending therefore hardens the default warehouse and degrades everywhere else. That degradation is
+correct and is now audible per dataset, but it means **vending alone cannot satisfy "no service holds
+a root object-store key on a write path"** — because the thing it degrades *to* is the root key.
+
+**The decision: the fallback stops being root.** The ambient credential becomes a provisioned,
+prefix-conditioned RustFS user in the shape the Ray plane already uses — `values.yaml:1736-1751`,
+measured-enforced 2026-08-30: `medallion*` and `*-wh` allowed, `_projects/`, `_protection/`,
+`_policies/` and `rask-observability` all AccessDenied from the pod's own credential. Concretely it
+holds `ListAllMyBuckets` (reconcile's `list_buckets` is account-scoped and can never be vended),
+list/get on the swept buckets, put/delete on the maintained DATA prefixes, and **nothing on the
+control plane or IAM**.
+
+Three reasons that is the right order of work, not a consolation prize:
+
+1. **It is where the blast-radius reduction actually lives.** Today anything able to run code in that
+   pod can rewrite `_projects/`, `_protection/` and `_policies/` — the records that decide what
+   maintenance is allowed to do. A confined ambient credential removes the self-authorization
+   capability estate-wide and immediately, with no dependence on FGA coverage.
+2. **It does not make disk reclamation depend on the catalog.** Refusing to compact what cannot be
+   vended was the winning design's defining move and is what drew both FATAL verdicts: it welds the
+   estate's only storage reclamation to a grant that demonstrably covers one warehouse in ~130.
+   Vending stays a hardening; a hardening that can stop a sweep has become an outage path.
+3. **Vending still pays, and is already wired.** Where the grant does reach, the rewrite is signed by
+   a credential scoped to one table prefix and expiring in 900s, issued against an audited decision —
+   and since the unit now carries its `table_id`, that includes the cascade tier whose URIs no parser
+   can read back.
+
+**Sequencing, and nothing ships out of order.** (a) provision the confined user and repoint
+`MAINTENANCE_S3_ACCESS_KEY_ID`, empty meaning today's behaviour so the change is inert until an
+operator turns it on; (b) prove the confinement from the pod exactly as row 32 proved the Ray plane's
+— control-plane prefixes AccessDenied, data prefixes allowed; (c) only then consider widening FGA
+coverage, which is a model decision (a `writer from parent` on `warehouse`, or a per-warehouse seeder
+that runs at warehouse-mint rather than at install) and not a bigger tuple list.
+
+**What `scripts/` still lacks, and it is why the Ray plane's own hardening is not reproducible.**
+`values.yaml:1750` says it plainly of `rayComputeAccessKey`: *"`scripts/` has no provisioning step
+yet: create the policy and user with the `mc` image the mkbucket Job already uses, then set these."*
+So the estate's one proven scoped-user precedent exists as a values knob that only a hand-run `mc`
+session can turn, and a fresh install comes up on the tenant root. The provisioning step is shared
+work between the two and should land once, for both.
+
 ### Is the maintenance plane catalog-DIRECTED? ANSWERED 2026-09-03: no, and it must not be
 
 The question was whether the sweep should stop listing buckets and instead ask the catalog which
