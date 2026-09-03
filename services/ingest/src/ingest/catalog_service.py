@@ -171,7 +171,17 @@ class CatalogServiceClient:
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/credentials"
         try:
-            response = shared_client().post(url, json={"tier": tier}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+            # `params`, NOT `json`. The door declares `tier: Annotated[Tier, Query()] = "read"`, and
+            # FastAPI ignores an unknown body on a query parameter — so a body-borne tier was invisible
+            # and every vend came back READ, with a 200 and a perfectly valid credential. The write then
+            # failed minutes later at the object store as `403 AccessDenied` on a PUT, which reads as a
+            # missing grant on the table rather than as a request that asked for the wrong thing.
+            # Worse: the door gates `can_write_data` behind `if tier == "write"`, so the authz decision
+            # its own comment calls "high-value" was never made and the audit record said reader.
+            # Measured in-cluster 2026-09-03; pinned by
+            # `tests/unit/test_the_vending_client_and_door_agree_on_the_tier.py`, which drives THIS
+            # client against the door's real declaration because neither service's suite can see the seam.
+            response = shared_client().post(url, params={"tier": tier}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except httpx.HTTPError as exc:
             # NARROW on purpose. A blanket `except Exception` here swallowed a `NameError` raised by
             # this very method and reported it as "vending unavailable" — the degradation path hid a
