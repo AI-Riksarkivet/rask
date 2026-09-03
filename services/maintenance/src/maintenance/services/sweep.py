@@ -33,7 +33,7 @@ from maintenance.core.metrics import (
     record_run_started,
     record_trashed_skipped,
 )
-from maintenance.services import purge
+from maintenance.services import credentials, purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
@@ -338,7 +338,18 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     built by something other than :func:`plan_sweep`.
     """
     protected = base_refs.BaseRefs(protected={base_refs.normalise(item.protected_by)} if item.protected_by else set())
-    return _maintain_one(item.uri, item.plan, settings=settings, options=options, protected=protected)
+    # THE REWRITE IS SIGNED PER TABLE, not by the root key. `options` — the deployment's ambient
+    # credential — reaches every bucket in the estate, and a compaction is a WRITE. What signs these
+    # bytes becomes a credential scoped to this one table prefix and expiring in 900s, falling back to
+    # `options` wherever no credential is on offer (see `services/credentials.py`; a hardening that can
+    # fail a maintenance run would be a new way to stop reclaiming disk).
+    #
+    # HERE rather than at plan time, because a credential minted at planning would be as old as the
+    # unit — and the work stream is `workqueue` retention, so a unit can sit for up to the stream's
+    # max-age before a worker takes it. That is the same staleness argument the protection re-check
+    # above this makes, applied to the thing that expires by design.
+    write_options = credentials.write_options_for(item.uri, settings, fallback=options)
+    return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected)
 
 
 def _resolve_plan(

@@ -1333,6 +1333,14 @@ maintenance:
   # one replica (`replicas: 1` is hardcoded in maintenance.yaml), so the queue's scaling payoff is not
   # available until that pin and the in-process sweep lock are retired together.
   workTopic: ""
+  # Sign each compaction's WRITE with a credential vended per table by the catalog, instead of the
+  # deployment's ambient root key. OFF by default: it needs the catalog reachable AND the subject below
+  # holding `can_write_data` on what it maintains, and a deployment missing either degrades silently to
+  # the root key. Turning it on is the statement that both are in place.
+  vendWriteCredentials: false
+  # The subject this service claims at the catalog's identity door. It is what the bootstrap-admin hook
+  # grants `writer` on each warehouse, and what the catalog audits on every vend.
+  catalogServiceIdentity: service-maintenance
   workDlqTopic: dlq.maintenance.work
   workPubsub: maintenance-work-pubsub
   # The catalog's control root (project/warehouse/trash registries). Empty => the primary bucket, which

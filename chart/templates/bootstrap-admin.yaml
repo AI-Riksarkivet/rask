@@ -123,7 +123,30 @@ spec:
               {{- $readers = append $readers ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
               {{- end }}
               readers = {{ $readers | toJson }}
-              grants = [(user, "owner")] + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
+              # WRITERS are a separate list because the rung is different and the reason is different.
+              # A reader observes; the maintenance plane REWRITES bytes. It holds the root object-store
+              # key today and compacts every bucket with it, and the vending door replaces that with a
+              # credential scoped to one table and expiring in 900s — but the door authorizes on
+              # `can_write_data`, which resolves through `table#writer` <- `namespace#writer` <-
+              # `warehouse#writer`. Without this grant every vend is refused and the service degrades
+              # silently back to the root key, i.e. the hardening looks configured and is not.
+              #
+              # `writer`, never `owner`: maintenance rewrites and reclaims, it must not drop. The
+              # destructive rung stays with people.
+              #
+              # Gated on the flag that turns the feature on, so an estate not vending grants nothing —
+              # a standing estate-wide write grant to a service that is not using it is exactly the
+              # kind of tuple nobody remembers to revoke.
+              {{- $writers := list }}
+              {{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials }}
+              {{- $writers = append $writers .Values.maintenance.catalogServiceIdentity }}
+              {{- end }}
+              writers = {{ $writers | toJson }}
+              grants = (
+                  [(user, "owner")]
+                  + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
+                  + [(w if ":" in w else f"user:{w}", "writer") for w in writers]
+              )
 
               for subject_id, relation in grants:
                   tuple_key = {"user": subject_id, "relation": relation, "object": obj}

@@ -38,6 +38,7 @@ from typing import Any, Protocol, runtime_checkable
 from dapr.aio.clients import DaprClient
 
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.table_locations import table_id_from_location
 from service_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
@@ -153,17 +154,16 @@ def declared_table_id(dataset: Any) -> str | None:  # noqa: ANN401 — LanceData
 
 
 def table_id_from_uri(uri: str) -> str | None:
-    """Extract the catalog table id from a dataset URI laid out as ``<uuid>_<table_id>``.
+    """The catalog table id for a dataset URI — the canonical lineage ``Dataset`` name and the OpenFGA
+    object id of the maintenance event.
 
-    The catalog lays each table out as ``s3://<bucket>/<uuid>_<table_id>/`` (see
-    :func:`~maintenance.services.optimize.discover_datasets`), and ``table_id`` is the canonical lineage
-    ``Dataset`` name == the OpenFGA object id. Splits the last path segment on its **first** ``_`` so a
-    table id that itself contains ``_`` survives intact. Returns ``None`` when the segment has no ``_`` (not
-    a catalog-laid-out table) so a stray directory never produces a bogus maintenance event.
+    Delegates to the shared crossing rather than restating it. This function used to have its own
+    implementation that split the leaf on its first underscore unconditionally, so
+    ``aa3bed10_transcripts_v2$t1`` emitted as ``v2$t1`` — an id naming no table, written into the
+    lineage graph as though it did, on a namespace that exists in this estate. The credential path
+    needs the identical crossing, and two implementations of one convention is how that drift happened.
     """
-    name = uri.rstrip("/").split("/")[-1]
-    _uuid, sep, table_id = name.partition("_")
-    return table_id if sep and table_id else None
+    return table_id_from_location(uri)
 
 
 def build_maintenance_event(*, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str) -> dict[str, Any]:

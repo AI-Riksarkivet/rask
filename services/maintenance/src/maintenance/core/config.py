@@ -248,6 +248,17 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="MAINTENANCE_DAPR_SECRET_KEY")
+
+    # THE CATALOG'S CREDENTIAL DOOR. Unset (the default) = no vending, and every rewrite is signed by
+    # the ambient root key exactly as it always was — this adds a capability without removing one, and
+    # a deployment on `mode_b` vends nothing by design. Set, a compaction's WRITE is signed by a
+    # credential scoped to that one table and expiring in 900s. See `services/credentials.py` for what
+    # deliberately STAYS on the root key (the whole-estate protection pre-pass, which is a read).
+    catalog_url: str = Field(default="", alias="MAINTENANCE_CATALOG_URL")
+    #: The subject this service claims at the catalog's identity door, paired with the Dapr app token
+    #: daprd injects. Both halves or neither — the door requires both, and sending one is a refusal
+    #: whose reason is invisible from this side.
+    catalog_service_identity: str = Field(default="service-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
 
     @property

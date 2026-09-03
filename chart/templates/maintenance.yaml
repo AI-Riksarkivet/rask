@@ -98,6 +98,25 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
             {{- end }}
+            {{- if $root.Values.maintenance.vendWriteCredentials }}
+            # THE REWRITE IS SIGNED PER TABLE, not by the root key. A compaction is a WRITE, so this
+            # service was performing writes across every bucket in the estate with one long-lived
+            # credential — the posture the vending door exists to end. With this set, each rewrite is
+            # signed by a credential scoped to that one table prefix and expiring in 900s.
+            #
+            # GATED, and off by default, because it needs BOTH halves to be true: the catalog must be
+            # reachable AND the maintenance subject must hold `can_write_data` on the tables it
+            # maintains (seeded by the bootstrap-admin hook — grep `maintenanceSubject`). Where either
+            # is missing the service degrades to the ambient credential and says so per dataset, which
+            # is correct but silent about WHY, so the flag makes the intent explicit rather than
+            # leaving a permanently-degraded deployment looking configured.
+            #
+            # What deliberately STAYS on the root key: discovery and the whole-estate protection
+            # pre-pass, which must open every manifest in every bucket and cannot be expressed by any
+            # per-table credential. Those are reads.
+            - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
+            - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ $root.Values.maintenance.catalogServiceIdentity | quote }} }
+            {{- end }}
             {{- if .Values.maintenance.workTopic }}
             - { name: MAINTENANCE_WORK_PUBSUB, value: {{ .Values.maintenance.workPubsub | quote }} }
             - { name: MAINTENANCE_WORK_TOPIC, value: {{ .Values.maintenance.workTopic | quote }} }
