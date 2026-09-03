@@ -374,6 +374,54 @@ separately from compaction: they are three different privileges reading one sett
 change that hardens compaction while leaving purge on the root key has not moved the thing that
 matters most.
 
+### The maintenance root key ✅ CLOSED 2026-09-04 — proven live, both halves
+
+The decision below was implemented and driven against the deployed estate. `services/maintenance` no
+longer holds the RustFS tenant root.
+
+**The credential is confined, and the contrast is what makes that meaningful.** Six probes, signed for
+real against the deployed RustFS — three the service must be able to do, three it must not:
+
+| Probe | scoped `rask-maintenance` | tenant root `rustfsadmin` |
+| --- | --- | --- |
+| LIST the warehouse (discovery) | ALLOWED | ALLOWED |
+| GET a data object | ALLOWED | ALLOWED |
+| PUT into a data prefix (compaction) | ALLOWED | ALLOWED |
+| PUT into `_projects/` (the registry) | **AccessDenied** | ALLOWED |
+| PUT into `_protection/` (the guard) | **403** | ALLOWED |
+| LIST the observability store | **AccessDenied** | ALLOWED |
+
+The three ALLOWs matter as much as the denies: a credential that cannot do the service's job is not
+hardening, it is an outage. What changed is that maintenance can no longer rewrite the records that
+govern maintenance — the protection guard it consults before every compaction included.
+
+**Both halves moved together.** Repointing the access key alone gives `SignatureDoesNotMatch` on every
+operation (the Ray pair's measured lesson). `dapr_secret_s3_field` was already configurable and
+defaulted to `rustfs-secret-key` — the tenant root's secret — so the chart now renders
+`maintenance-s3-secret-key` and the OpenBao seed writes that field, gated on the same `$scoped` test as
+the Deployment. Its own field, never a second value on `rustfs-secret-key`, because other services read
+that one and overwriting it would repoint the whole estate at a credential scoped to maintenance.
+
+**Driven end to end after the repoint.** The pod boots on `MAINTENANCE_S3_ACCESS_KEY_ID=rask-maintenance`
+with `secret_from_dapr_store` (`GET /v1.0/secrets/lance-secrets/lance` 200), and a compaction pushed
+through `POST /v1/table/bronze$events/maintenance/compact` (202) was executed by the queued worker on
+that credential: `POST /maintenance-work 200 OK`, with `optimize_indices_disabled_by_policy` and
+`cleanup_disabled_by_policy` — the door's non-destructive contract intact across the lane and the
+credential change.
+
+**The provisioning step exists now, and that was the actual gap.** `values.yaml` carried
+`rayComputeAccessKey` with the admission that "`scripts/` has no provisioning step yet", so the
+estate's one scoped-user precedent was a knob only a hand-run `mc` session could turn and a fresh
+install came up on the tenant root. `chart/templates/rustfs-scoped-users.yaml` is that step, written
+once for BOTH consumers.
+
+**What is still true and bounded:** discovery and the `_protected_roots` pre-pass remain whole-estate
+READS on this credential, deliberately — no per-table credential can express "open every manifest in
+every bucket", and narrowing it would silently turn the shallow-clone guard off. The clause is about
+the WRITE path, and the write path is now scoped-or-confined. `_policies/` is also still writable,
+because `_stamp_cadence` writes the per-dataset cadence stamp there and `_policy_skip_reason` reads a
+missing stamp as "maintain" — denying it would stop the cadence pacing anything with nothing going red.
+
 ### The maintenance root key: DECIDED 2026-09-03 — demote the ambient credential, do not rely on vending alone
 
 `bootstrap-admin.yaml` defers this here in its own words ("closing that gap is an authorization-model
