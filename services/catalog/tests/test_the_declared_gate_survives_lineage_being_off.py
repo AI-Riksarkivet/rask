@@ -72,7 +72,6 @@ async def test_the_declared_gate_applies_with_lineage_emission_OFF(registry_root
     effective = await resolve_effective_gate(settings, {}, _NoopLineage(), [TOP_NS], _Body())
 
     assert effective.key_column == "declared_id", (
-        "the declared gate was not applied with lineage emission off — a project's quality policy "
-        "must not depend on an observability switch"
+        "the declared gate was not applied with lineage emission off — a project's quality policy must not depend on an observability switch"
     )
     assert "must_have" in effective.required_columns

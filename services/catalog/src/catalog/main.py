@@ -132,6 +132,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sts_endpoint=settings.s3_sts_endpoint,
         assume_role_arn=settings.s3_assume_role_arn,
         ttl_seconds=settings.vending_ttl_seconds,
+        # The credential the vendor DELEGATES FROM. Built AFTER `apply_dapr_secrets`, so this is the
+        # secret-store value rather than an env default — which is the whole reason it has to be passed
+        # explicitly: botocore's default chain reads the environment, and this estate deliberately never
+        # puts the S3 secret there.
+        access_key=settings.s3_access_key_id,
+        secret_key=settings.s3_secret_access_key.get_secret_value(),
     )
     # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
     # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so

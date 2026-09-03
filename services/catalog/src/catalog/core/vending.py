@@ -202,11 +202,18 @@ class StsVendor:
         endpoint: str | None = None,
         ttl_seconds: int = 900,
         assume_role: Callable[..., dict[str, object]] | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
     ) -> None:
         self._role_arn = role_arn
         self._region = region
         self._endpoint = endpoint
         self._ttl = ttl_seconds
+        #: The credential this vendor DELEGATES FROM. Required, not optional in practice: AssumeRole is
+        #: a signed call and botocore's default chain finds nothing here, because the S3 secret reaches
+        #: `Settings` from the Dapr secret store and never the process env.
+        self._access_key = access_key
+        self._secret_key = secret_key
         self._assume_role = assume_role or self._default_assume_role
         self._client: Any = None  # boto3 STS client, built once (the vendor is a lifespan singleton)
 
@@ -217,7 +224,7 @@ class StsVendor:
             # `storage` is where boto3 is declared and imported, so the timeouts and retry policy are
             # decided once; a client built here would inherit botocore's timeout-free defaults and an
             # unresponsive STS endpoint would hang the vend instead of failing it.
-            self._client = sts_client(region=self._region, endpoint=self._endpoint)
+            self._client = sts_client(region=self._region, endpoint=self._endpoint, access_key=self._access_key, secret_key=self._secret_key)
         return cast(dict[str, object], self._client.assume_role(**kwargs))
 
     def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
@@ -310,6 +317,8 @@ def make_vendor(
     assume_role_arn: str | None = None,
     ttl_seconds: int = 900,
     static_keys: dict[str, dict[str, str]] | None = None,
+    access_key: str | None = None,
+    secret_key: str | None = None,
 ) -> CredentialVendor:
     """Build the configured :class:`CredentialVendor`.
 
@@ -328,6 +337,8 @@ def make_vendor(
             region=region,
             endpoint=sts_endpoint,
             ttl_seconds=ttl_seconds,
+            access_key=access_key,
+            secret_key=secret_key,
         )
     if mode == "web_identity":
         return WebIdentityVendor(

@@ -63,13 +63,26 @@ def seam(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeSts, list[dict[str, Any]
 
 def test_sts_vendor_builds_a_signed_client_through_the_storage_seam(seam: tuple[_FakeSts, list[dict[str, Any]]]) -> None:
     """`AssumeRole` is authenticated by the catalog's own SigV4 signature — RustFS refuses an
-    unsigned STS request with `InvalidRequest`, so this client must NOT ask for unsigned."""
+    unsigned STS request with `InvalidRequest`, so this client must NOT ask for unsigned.
+
+    The KEY PAIR is asserted alongside the endpoint because "not unsigned" was never sufficient: the
+    client was built without credentials and botocore's default chain finds none in the pod (the S3
+    secret arrives from the Dapr secret store into `Settings`, never the env), so every AssumeRole
+    raised `NoCredentialsError` and the vending door answered 503 — measured on the deployed estate
+    2026-09-03. Signing needs the credential, not merely the intent to sign.
+    """
     _client, built = seam
 
-    vendor = vending.StsVendor(role_arn="arn:aws:iam::123456789012:role/vend", region="eu-north-1", endpoint="http://rustfs:9000")
+    vendor = vending.StsVendor(
+        role_arn="arn:aws:iam::123456789012:role/vend",
+        region="eu-north-1",
+        endpoint="http://rustfs:9000",
+        access_key="ROOTKEY",
+        secret_key="ROOTSECRET",
+    )
     creds = vendor.vend(table_location="s3://b/db$t", tier="read")
 
-    assert built == [{"region": "eu-north-1", "endpoint": "http://rustfs:9000"}]
+    assert built == [{"region": "eu-north-1", "endpoint": "http://rustfs:9000", "access_key": "ROOTKEY", "secret_key": "ROOTSECRET"}]
     assert creds is not None and creds.storage_options["session_token"] == "tok"
 
 
