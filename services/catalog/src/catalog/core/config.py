@@ -317,6 +317,15 @@ class Settings(GovernedAuthSettings, BaseSettings):
     # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
     control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")
 
+    # The maintenance work queue, shared with ``services/maintenance``: the on-demand compaction door
+    # publishes ONE ``DatasetWorkItem`` here instead of rewriting fragments inside the request handler.
+    # Empty topic (the default) = NO QUEUE, and that is the honest default rather than a disabled feature:
+    # the executor is registered only where the same topic is configured (``register_work_route``), so a
+    # 202 from a deployment without one would accept work nothing will ever perform. Unset, the door
+    # keeps the synchronous behaviour it has always had.
+    maintenance_work_pubsub: str = Field(default="maintenance-work-pubsub", alias="LANCE_MAINTENANCE_WORK_PUBSUB")
+    maintenance_work_topic: str = Field(default="", alias="LANCE_MAINTENANCE_WORK_TOPIC")
+
     # Per-subject user state (`GET/PUT/DELETE /v1/user-state/*`) on the Dapr state store. The default names
     # the component the chart already renders (`stateStore.name` in chart/values.yaml) and that the catalog
     # app-id is already in the `scopes` of, so this needs NO new chart value; tests/unit/test_invariants.py

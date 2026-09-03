@@ -134,6 +134,15 @@ spec:
             # `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            {{- if and $.Values.maintenance.enabled $.Values.maintenance.workTopic }}
+            # The on-demand compaction door publishes ONE work item here instead of rewriting fragments
+            # in the request handler. Rendered from the SAME values the maintenance service reads, so a
+            # 202 is only ever returned where an executor is actually subscribed: `register_work_route`
+            # is gated on this topic too, and a door that accepted work no worker consumes would be
+            # strictly worse than the synchronous rewrite it replaced.
+            - { name: LANCE_MAINTENANCE_WORK_PUBSUB, value: {{ $.Values.maintenance.workPubsub | quote }} }
+            - { name: LANCE_MAINTENANCE_WORK_TOPIC, value: {{ $.Values.maintenance.workTopic | quote }} }
+            {{- end }}
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
             # #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. `table_published` is
             # the only thing that wakes silver->gold (nothing re-reads the `published` tag), so a publish

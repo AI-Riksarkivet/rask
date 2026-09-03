@@ -411,6 +411,21 @@ class CompactResult(BaseModel):
     fragments_added: int
 
 
+class CompactAccepted(BaseModel):
+    """The 202 body: the door enqueued the rewrite rather than performing it.
+
+    It reports no fragment counts because it has none — the executor that will produce them is another
+    process, and inventing zeroes here would make an accepted request indistinguishable from a
+    completed no-op. ``protected_by`` is returned because it is the one verdict that can turn the
+    enqueued unit into a refusal at execution time, and a caller watching a table that never compacts
+    otherwise has nothing to read.
+    """
+
+    accepted: bool = True
+    uri: str
+    protected_by: str | None = None
+
+
 # --------------------------------------------------------------------------- #
 # Maintenance policy (#50 / #76)
 # --------------------------------------------------------------------------- #

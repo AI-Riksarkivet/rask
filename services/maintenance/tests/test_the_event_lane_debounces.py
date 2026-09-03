@@ -15,6 +15,8 @@ mean a table is never maintained until something else writes a stamp — the dir
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from maintenance.services.arrival import should_replan

@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import open_dataset
-from catalog.schemas import CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult
+from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult
 from catalog.services import maintenance
+from service_kit import dapr_publish
 from service_kit.lakehouse import base_refs
+from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 
 
 log = logging.getLogger(__name__)
@@ -79,13 +81,60 @@ async def run_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: 
     return GcRunResult(**result)
 
 
-@router.post("/{id}/maintenance/compact")
-async def compact_maintenance(id: str, body: CompactRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> CompactResult:
+@router.post("/{id}/maintenance/compact", response_model=None)
+async def compact_maintenance(
+    id: str,
+    body: CompactRequest,
+    request: Request,
+    response: Response,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+) -> CompactResult | CompactAccepted:
     """Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
-    the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none."""
+    the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
+
+    WHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two
+    answers are not a feature flag — they are the same choice ``services/maintenance`` already makes for
+    the scheduled lane, read off the same topic name so the two cannot disagree about whether a worker
+    exists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever
+    execute that unit, so the rewrite runs here as it always has.
+
+    What stays in the handler either way is the BOUNDED half — parsing the identifier, opening the
+    dataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half
+    whose cost is a property of the data rather than of the request: rewriting every fragment of a table
+    whose fragment count nobody bounded.
+    """
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     protected = await _base_refs(ds, so)
+
+    publisher = getattr(request.app.state, "dapr_client", None)
+    if settings.maintenance_work_topic and publisher is not None:
+        location = str(getattr(ds, "uri", "") or "")
+        item = DatasetWorkItem(
+            uri=location,
+            # The executor runs the full ordered pass (compact -> optimize_indices -> cleanup). This door
+            # is documented non-destructive, so both later steps are OFF: moving the work to another lane
+            # must not quietly turn "compact now" into "compact and reclaim history now".
+            plan=DatasetPlan(
+                target_rows_per_fragment=body.target_rows_per_fragment,
+                cleanup_enabled=False,
+                optimize_indices_enabled=False,
+            ),
+            protected_by=protected.is_protected(location),
+        )
+        await dapr_publish.publish_event(
+            publisher,
+            timeout_seconds=settings.control_emit_timeout_seconds,
+            pubsub_name=settings.maintenance_work_pubsub,
+            topic_name=settings.maintenance_work_topic,
+            data=item.model_dump_json(),
+            data_content_type="application/json",
+        )
+        response.status_code = status.HTTP_202_ACCEPTED
+        return CompactAccepted(uri=location, protected_by=item.protected_by)
+
     result = await run_in_threadpool(
         maintenance.compact_now,
         ds,

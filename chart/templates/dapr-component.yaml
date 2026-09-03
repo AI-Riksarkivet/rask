@@ -401,4 +401,13 @@ spec:
     {{- end }}
 scopes:
   - {{ .Values.maintenance.daprAppId }}
+  # THE CATALOG IS A PUBLISHER HERE, never a subscriber: its `maintenance/compact` door enqueues one
+  # unit instead of rewriting fragments inside the request handler. A scope is required to publish, not
+  # only to subscribe, and without it the door's publish fails with the component unknown to that
+  # sidecar — which reads as a broker fault rather than as a missing line of chart.
+  #
+  # `queueGroupName` does not become a hazard by adding it. The warning above is about a BROADCAST
+  # component gaining a subscriber that would be split into a consumer group; the catalog registers no
+  # subscription on this component, so the group stays exactly the maintenance replicas.
+  - {{ .Values.services.catalog.daprAppId }}
 {{- end }}
