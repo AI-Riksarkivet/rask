@@ -204,7 +204,47 @@ the estate is still on the serial lane and nothing about its behaviour has chang
   **native pylance** compaction inside a Ray job, not lance-ray's. Index builds via lance-ray do work.
 - The Ray pods hold a static S3 key and have no Dapr sidecar, so N2's vended credential needs the ESO
   path or a scoped RustFS user (already provisioned as `rask-ray-compute-s3`).
-- Whether the sweep keeps a cron at all after N4, or becomes a planner that only enqueues.
+- ~~Whether the sweep keeps a cron at all after N4, or becomes a planner that only enqueues.~~
+  **ANSWERED 2026-09-03: it keeps the cron and becomes a BACKSTOP, and that is a correctness
+  requirement rather than caution.** Three reasons, each measured rather than argued: the bus is
+  provably incomplete (ingest, Ray TRAIN and every external OpenLineage producer emit over HTTP only
+  and never reach `lineage.events.v1` — `notifications/api/reconcile_cron` established this from the
+  other direction); the catalog's lineage lane has **no outbox**, so a lost trigger is silent (the
+  control lane got a staged outbox and a relay cron; the lineage lane did not); and time-triggered
+  work exists that no write can trigger — an old-version GC becomes due by the CLOCK on a table nobody
+  has written since.
+
+### N7 — the event lane ✅ LANDED 2026-09-03 (`3e41e595`), DARK BY DEFAULT
+
+Push-notify, pull-execute. `services/arrival.py` decides (is this event worth opening the manifest
+for), `sweep.plan_one` plans one dataset under the same three refusals the sweep applies (trash record,
+policy, base references), and the unit goes onto N4's existing `maintenance-work` topic — **the
+executor did not change at all.**
+
+Taken from Lakekeeper, whose source (not its marketing) shows the catalog enqueueing inside its own
+catalog transaction and workers polling `FOR UPDATE ... SKIP LOCKED`. rask **cannot** copy the
+transactional half and must not try: that atomicity comes from Lakekeeper's queue and catalog sharing
+one Postgres, and the reason rask needs no relational app DB is precisely the reason Lakekeeper needs
+one. Anyone reaching for "just add a task table" is proposing the requirement this architecture exists
+to avoid.
+
+Two filters are scar tissue, not theory, and both are silent when wrong: a registration is not an
+arrival (`register_table` emits a COMPLETE event indistinguishable from a batch landing — one
+`POST /produce` fired TWO cascades until `ingest_trigger` denied them), and the loop guard must name
+BOTH producers (maintenance publishes `compaction`, the catalog publishes `compact_table`, onto this
+same topic — unfiltered, compaction triggers compaction forever and every turn looks like real work).
+
+`sibling_base_refs` moved to `service_kit` so the catalog's on-demand button and this lane share ONE
+refusal instead of drifting. Its warehouse-root bound is deliberate and stated at the function; it is
+computed per call, so a clone made a minute ago protects its source on the next event — which is why
+an hourly backstop cannot stand in for that particular check.
+
+**Still open on this lane:** the cadence has NOT moved (`@every 120s` in values, `0 */30 * * * *` in
+prod) — moving it is only safe once the event lane is observed working in-cluster, and neither it nor
+N4's executor has ever run there. The `compact_min_versions` debounce (Lakekeeper's
+`min-snapshots-to-expire`) is not built: without it the lane plans a manifest read per commit, which is
+the event-storm failure. And the catalog's `/maintenance/compact` button still rewrites data files
+inside its own request handler — it should publish a unit and return 202 on this same lane.
 
 ## Not in this plan
 
