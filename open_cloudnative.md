@@ -214,6 +214,46 @@ the estate is still on the serial lane and nothing about its behaviour has chang
   work exists that no write can trigger — an old-version GC becomes due by the CLOCK on a table nobody
   has written since.
 
+### N2 client-direct writes ✅ END-TO-END IN-CLUSTER 2026-09-03
+
+The ingest worker now signs its fragment writes with a credential scoped to ONE table prefix and
+expiring in 900s. Measured on the deployed fleet, run `3f4fca60`:
+
+```
+ingest.credentials  write credential SCOPED for acme-bronze$vendproof4 — expires in 900s
+ingest.worker       fragment: 2 units, 2394 bytes -> 1 fragment(s)
+httpx               POST .../v1/table/acme-bronze$vendproof4/commit  200 OK
+run                 status COMPLETE, units_done 2/2, committed_version 2, errors {}
+```
+
+Confinement, with a WRITE-tier credential, against a sibling table the SAME principal owns in the
+SAME bucket — so what is proven is scoping to the TABLE, not to the identity:
+
+| | table it was vended for | sibling table |
+| --- | --- | --- |
+| read | ALLOWED (5 entries) | REFUSED — `AccessDenied` |
+| write | ALLOWED | REFUSED — `AccessDenied` |
+
+**THREE DEFECTS STOOD BETWEEN "the code is correct" AND THIS, and no test could see any of them.**
+Each was found only by running the thing, and each hid the next:
+
+1. **The vended credential lost to the pod's ambient environment** (`e0bab1b0`). Every fleet pod
+   exports `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`; with the BARE option spellings object_store
+   blends the two sources and signs with a pair belonging to neither identity — `403
+   SignatureDoesNotMatch`. No test process has an ambient AWS_* environment, so the spelling that
+   fails in every pod passed every test. Fixed by emitting the `aws_`-prefixed spellings, and by
+   giving every READER one accessor, since a reader left on the old spelling does not error — it
+   falls back to the pod's own broader role. Failing open.
+2. **The prior-commit probe named a table that does not exist** (`8826be5a`) — `spec.project` where
+   `RunSpec.namespace` exists precisely to stop that, so it asked about `acme$vendproof` instead of
+   `acme-bronze$vendproof`, got 403, and the probe's deliberate blanket `except` swallowed it.
+3. **The write-tier request was invisible to the door** (`f01a061d`). The client sent
+   `json={"tier": …}`; the door declares `Query()`. FastAPI ignores an unknown body on a query
+   parameter, so every vend came back READ with a 200 — and `can_write_data`, gated behind
+   `if tier == "write"`, was never checked. Both sides were individually correct and individually
+   tested; the contract was asserted nowhere, so the test now lives in `tests/unit`, the one testpath
+   that imports both.
+
 ### The on-demand compact door ✅ LANDED + VERIFIED IN-CLUSTER 2026-09-03 (`c8eff91c`)
 
 `POST /v1/table/{id}/maintenance/compact` rewrote every fragment inside the request handler — work
