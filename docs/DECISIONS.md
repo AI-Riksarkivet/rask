@@ -1138,6 +1138,32 @@ warehouses and falls back — correctly, and audibly per dataset — everywhere 
 an authorization-model decision (a platform-subject rung, or a grant seeded at warehouse creation), not
 a longer tuple list.
 
+**The AMBIENT credential was demoted too, not just the vended path.** Vending covers the granted
+warehouses; everywhere else a rewrite falls back to whatever key the service holds, so hardening only
+the vended path would have left the fallback as the tenant root. `services/maintenance` now runs as a
+scoped `rask-maintenance` RustFS user provisioned by `chart/templates/rustfs-scoped-users.yaml` —
+which is the step that did not exist before: `values.yaml` carried `rayComputeAccessKey` with the
+admission that "`scripts/` has no provisioning step yet", so the estate's one scoped-user precedent was
+a knob only a hand-run `mc` session could turn, and a fresh install came up on the tenant root.
+
+Six probes signed for real against the deployed store — the three ALLOWs matter as much as the denies,
+because a credential that cannot do the service's job is an outage rather than hardening:
+
+| Probe | scoped `rask-maintenance` | tenant root `rustfsadmin` |
+| --- | --- | --- |
+| LIST the warehouse (discovery) | ALLOWED | ALLOWED |
+| GET a data object | ALLOWED | ALLOWED |
+| PUT into a data prefix (compaction) | ALLOWED | ALLOWED |
+| PUT into `_projects/` (the registry) | **AccessDenied** | ALLOWED |
+| PUT into `_protection/` (the guard) | **403** | ALLOWED |
+| LIST the observability store | **AccessDenied** | ALLOWED |
+
+Maintenance can no longer rewrite the records that govern maintenance — including the protection guard
+it consults before every compaction. Both halves had to move together: repointing the access key alone
+gives `SignatureDoesNotMatch` on every operation, so the secret field moved to its own
+`maintenance-s3-secret-key` rather than a second value on `rustfs-secret-key`, which other services
+read and which overwriting would have repointed the whole estate at a maintenance-scoped credential.
+
 **N5's premise was falsified: the sweep lock cannot simply be retired.** The row read "retire the
 process-local locks and the `replicas: 1` pin once the ack is the lease". The ack IS the lease for the
 EXECUTOR — `api/work.py::handle_unit` takes no lock, and redelivery is safe because compaction and GC
