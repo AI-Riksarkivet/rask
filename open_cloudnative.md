@@ -319,9 +319,39 @@ above this section*.
 
 Six of eleven. And the five that fail are not the leftovers: `medallion/` is the whole cascade —
 bronze, silver and gold — which the section above names as *the highest-churn writer in the estate*.
-So per-table vending as ingest does it would harden six catalog-created tables and leave the cascade
-tier, the ingest landing zone, the media source and the model store signing with the ambient
-credential.
+
+**But the five are VENDABLE, and that is the finding that decides the design.** Derivation failing is
+not the same as the table being unknown, and conflating them is what makes this look unsolvable.
+Measured against the deployed catalog:
+
+```
+bronze$events                 vend(write) 200   location s3://lance-catalog/medallion/bronze
+bronze$pages                  vend(write) 200   location s3://lance-catalog/bronze/pages
+transcripts_v2$annotations    vend(write) 200   location s3://lance-catalog/6ecbe11e_transcripts_v2$annotations
+```
+
+The first two are exactly the roots whose URIs yield no id, and both vend. So the gap is **URI → id
+derivation**, not registration and not authorization — and a work item that CARRIED its table id
+instead of asking a parser to recover it from a path would close it. Every producer but one already
+knows the id: the catalog's compact door has it in the request path, and the event lane has it in the
+OpenLineage event. Only the bucket sweep starts from a bare URI.
+
+**And the fallback does not have to be a root key.** The ambient credential is only needed where no id
+is available; it is needed for DISCOVERY, which is listing. Measured on RustFS with a read-tier vended
+credential against `6ecbe11e_transcripts_v2$annotations/`:
+
+| Operation | Result |
+| --- | --- |
+| LIST own prefix | ALLOWED |
+| GET own object | ALLOWED |
+| PUT into own prefix | **AccessDenied** |
+| DELETE own object | **AccessDenied** |
+
+RustFS enforces the read tier on writes, not merely across prefixes. So the honest shape is a
+read-only survey credential for discovery and planning, a vended write credential at the moment of
+mutation, and — for a dataset that can be discovered but not identified — a sweep that REFUSES to
+compact it rather than one that compacts it as root. That refusal is a real behaviour change and must
+be logged per dataset, not silently absorbed.
 
 **What this does NOT settle.** It rules out "copy ingest verbatim and call the root key gone"; it does
 not rule out vending. Three directions remain open and one of them must be chosen rather than drifted
