@@ -2923,6 +2923,36 @@
         "title": "CommitTableResult",
         "type": "object"
       },
+      "CompactAccepted": {
+        "description": "The 202 body: the door enqueued the rewrite rather than performing it.\n\nIt reports no fragment counts because it has none \u2014 the executor that will produce them is another\nprocess, and inventing zeroes here would make an accepted request indistinguishable from a\ncompleted no-op. ``protected_by`` is returned because it is the one verdict that can turn the\nenqueued unit into a refusal at execution time, and a caller watching a table that never compacts\notherwise has nothing to read.",
+        "properties": {
+          "accepted": {
+            "default": true,
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "protected_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected By"
+          },
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri"
+        ],
+        "title": "CompactAccepted",
+        "type": "object"
+      },
       "CompactRequest": {
         "description": "Optional #76 target-size override for a one-off compaction (None \u2192 Lance's default fragment sizing).",
         "properties": {
@@ -24825,7 +24855,7 @@
     },
     "/v1/table/{id}/maintenance/compact": {
       "post": {
-        "description": "Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) \u2014 the same bar as\nthe retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.",
+        "description": "Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) \u2014 the same bar as\nthe retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.\n\nWHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two\nanswers are not a feature flag \u2014 they are the same choice ``services/maintenance`` already makes for\nthe scheduled lane, read off the same topic name so the two cannot disagree about whether a worker\nexists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever\nexecute that unit, so the rewrite runs here as it always has.\n\nWhat stays in the handler either way is the BOUNDED half \u2014 parsing the identifier, opening the\ndataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half\nwhose cost is a property of the data rather than of the request: rewriting every fragment of a table\nwhose fragment count nobody bounded.",
         "operationId": "compact_maintenance_v1_table__id__maintenance_compact_post",
         "parameters": [
           {
@@ -24919,11 +24949,29 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CompactResult"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CompactResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CompactAccepted"
+                    }
+                  ],
+                  "title": "Response Compact Maintenance V1 Table  Id  Maintenance Compact Post"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactAccepted"
+                }
+              }
+            },
+            "description": "Enqueued onto the maintenance work queue; no fragment counts exist yet."
           },
           "422": {
             "content": {

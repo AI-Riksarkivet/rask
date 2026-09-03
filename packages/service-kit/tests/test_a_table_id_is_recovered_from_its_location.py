@@ -23,7 +23,9 @@ from service_kit.lakehouse.table_locations import table_id_from_location
         # prefix-strip must decline. Getting this wrong yields `v2$t1`, which names no table.
         ("s3://bucket/transcripts_v2$t1", "transcripts_v2$t1"),
         ("s3://bucket/aa3bed10_transcripts_v2$t1", "transcripts_v2$t1"),
-        ("s3://bucket/4750a5b9_acme-bronze$events.lance", "acme-bronze$events"),
+        # Verbatim: a `.lance` suffix belongs to datasets the catalog did not lay out, and their
+        # id is a fallback label the lineage graph already carries under that exact name.
+        ("s3://bucket/4750a5b9_acme-bronze$events.lance", "acme-bronze$events.lance"),
     ],
 )
 def test_the_flat_layout_yields_its_identifier(uri: str, expected: str) -> None:

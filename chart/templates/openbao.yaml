@@ -183,6 +183,16 @@ spec:
                 {{- range (compact $privileged | uniq | sortAlpha) }}
                 service-token-{{ . }}={{ printf "%s-%s" . $.Values.dapr.appApiToken | sha256sum | trunc 40 }} \
                 {{- end }}
+                {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
+                       rather than a second value on `rustfs-secret-key`: that field IS the tenant root's
+                       secret and other services read it, so overwriting it would repoint the whole
+                       estate at a credential scoped to maintenance's prefixes. Seeded only when both
+                       halves of the pair are set, matching the Deployment's own `$scoped` test — a
+                       field the service is told to read and nothing writes is a fail-closed boot, since
+                       `fetch_required_secrets` raises rather than degrading. */}}
+                {{- if and $.Values.rustfs.maintenanceAccessKey $.Values.rustfs.maintenanceSecretKey }}
+                maintenance-s3-secret-key={{ $.Values.rustfs.maintenanceSecretKey }} \
+                {{- end }}
 
               echo "seeded secret/lance into OpenBao"
 {{- end }}{{/* devMode seed */}}

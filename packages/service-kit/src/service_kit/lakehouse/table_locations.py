@@ -23,6 +23,8 @@ does not exist.
 
 from __future__ import annotations
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 def table_id_from_location(dataset_uri: str) -> str | None:
     """The catalog identifier for a dataset URI, or ``None`` if the location names no table.
@@ -32,13 +34,18 @@ def table_id_from_location(dataset_uri: str) -> str | None:
     only when the leading segment actually IS one — eight lowercase hex characters — so
     ``transcripts_v2$t1`` keeps its namespace instead of being reduced to ``v2$t1``.
     """
-    leaf = dataset_uri.rstrip("/").split("/")[-1].removesuffix(".lance")
+    # The leaf is taken VERBATIM — no `.lance` suffix is stripped. A catalog-laid-out table has none
+    # (`4750a5b9_acme-bronze$events`, measured live); a `.lance` suffix appears only on datasets the
+    # catalog did not lay out, which are exactly the UNDECLARED ones whose id here is a fallback label
+    # already recorded in the lineage graph under that name. Stripping it would silently rename
+    # existing Dataset nodes for no benefit to any caller.
+    leaf = dataset_uri.rstrip("/").split("/")[-1]
     prefix, separator, remainder = leaf.partition("_")
     if separator and _is_uuid8(prefix):
         return _well_formed(remainder)
     # No uuid8 prefix. A leaf that is itself an identifier (the layout written without one) is
     # answerable; a bare directory name is not, and the delimiter is what tells them apart.
-    return _well_formed(leaf) if "$" in leaf else None
+    return _well_formed(leaf) if CATALOG_DELIMITER in leaf else None
 
 
 def _well_formed(table_id: str) -> str | None:
@@ -50,16 +57,23 @@ def _well_formed(table_id: str) -> str | None:
     """
     if not table_id:
         return None
-    if "$" in table_id:
-        namespace, _, table = table_id.partition("$")
+    if CATALOG_DELIMITER in table_id:
+        namespace, _, table = table_id.partition(CATALOG_DELIMITER)
         return table_id if namespace and table else None
     return table_id
 
 
 def _is_uuid8(candidate: str) -> bool:
-    """Eight lowercase hex characters — the `dir` backend's directory prefix, checked not assumed.
+    """Is this leading segment the `dir` backend's directory prefix, rather than part of a namespace?
 
-    This one predicate is the whole fix. Without it ``transcripts_v2$t1`` reduces to ``v2$t1``, which
-    names no table: ``transcripts`` is not hex, so nothing is stripped and the namespace survives.
+    Hex-only, and a LENGTH RANGE rather than exactly 8 — the observed prefixes are all 8 characters
+    (`4750a5b9`, `aa3bed10`, `c7688659`, measured against the live estate 2026-09-03), but pinning the
+    number would make a prefix-length change silently produce a WRONG identifier rather than no
+    identifier, and a wrong id vends a credential for another table and emits lineage for a node that
+    does not exist.
+
+    Checking at all is the whole fix. The implementation this replaced stripped ANY leading segment up
+    to the first underscore, so `transcripts_v2$t1` became `v2$t1` — `transcripts` is not hex, so
+    nothing is stripped now and the namespace survives.
     """
-    return len(candidate) == 8 and all(character in "0123456789abcdef" for character in candidate)
+    return 6 <= len(candidate) <= 32 and all(character in "0123456789abcdef" for character in candidate)

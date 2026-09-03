@@ -116,10 +116,16 @@ def _vend(catalog: str, token: str, ident: str, tier: str) -> dict[str, str]:
 def _client(creds: dict[str, str]) -> Any:
     """A raw S3 client wearing the vended credentials — the catalog is NOT in this path.
 
-    BARE key names (``access_key_id``, not ``aws_access_key_id``): the vendors emit Lance-style
-    options, because `DescribeTableResponse.storage_options` is passed straight to Lance. The
-    ``aws_``-prefixed names this used are boto3's OWN kwargs — the mistake was reading the client's
-    parameter names back out of the server's payload.
+    ``aws_``-PREFIXED key names, and the coincidence with boto3's own kwargs is worth naming because
+    this file once had the opposite instruction. The vendors emit Lance-style options, which are
+    passed straight to Lance — and object_store's spelling for a credential that must DISPLACE the
+    ambient AWS_* environment is the prefixed one. With the bare spellings it blends the two sources
+    and signs with a pair belonging to neither identity: measured in-cluster 2026-09-03 as
+    `403 SignatureDoesNotMatch` on every write from a pod that carries the root key in its env.
+
+    So these are read out of the payload because the SERVER emits them under these names, not because
+    boto3 takes kwargs that happen to match. That distinction was the original lesson and it still
+    holds; only the vocabulary changed, and `tests/unit/test_vending.py` pins both sides to it.
 
     ``endpoint`` comes from the vended options when present, falling back to the env. The vendor
     includes it whenever the deployment configures one, and preferring it keeps the attack pointed at
@@ -128,9 +134,9 @@ def _client(creds: dict[str, str]) -> Any:
     return boto3.client(
         "s3",
         endpoint_url=creds.get("endpoint") or S3,
-        aws_access_key_id=creds["access_key_id"],
-        aws_secret_access_key=creds["secret_access_key"],
-        aws_session_token=creds.get("session_token"),
+        aws_access_key_id=creds["aws_access_key_id"],
+        aws_secret_access_key=creds["aws_secret_access_key"],
+        aws_session_token=creds.get("aws_session_token"),
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         region_name=creds.get("region") or "us-east-1",
     )

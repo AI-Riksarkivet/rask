@@ -34,7 +34,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import lance_storage_options, normalise_credential_keys
 
 
 Tier = Literal["read", "write"]
@@ -162,7 +162,13 @@ class StaticPrefixVendor:
         opts = self._keys.get(bucket)
         if opts is None:
             return None
-        return VendedCredentials(storage_options=dict(opts), expires_at_millis=None)
+        # NORMALISED, not passed through. These options come from configuration (typically OpenBao),
+        # so their spelling is whoever wrote the secret's choice — and the bare credential spellings do
+        # not displace a pod's ambient AWS_* environment: object_store blends the two and signs with a
+        # pair belonging to neither identity (`403 SignatureDoesNotMatch`, measured in-cluster
+        # 2026-09-03). Every vendor must emit ONE vocabulary or a client would have to sniff which
+        # vendor the deployment configured, which is what `test_vending.py` pins.
+        return VendedCredentials(storage_options=normalise_credential_keys(opts), expires_at_millis=None)
 
 
 def _expiry_millis(expiration: object, ttl_seconds: int) -> int:

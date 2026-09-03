@@ -60,7 +60,7 @@ def test_static_prefix_vendor() -> None:
     vendor = StaticPrefixVendor({"b": {"access_key_id": "AK", "secret_access_key": "SK"}})
     out = vendor.vend(table_location="s3://b/t", tier="write")
     assert out is not None
-    assert out.storage_options["access_key_id"] == "AK"
+    assert out.storage_options["aws_access_key_id"] == "AK"
     assert out.expires_at_millis is None
     # unknown bucket -> None (caller falls back to Mode B)
     assert vendor.vend(table_location="s3://other/t", tier="read") is None
@@ -90,9 +90,9 @@ def test_sts_vendor_with_fake_assume_role() -> None:
     out = vendor.vend(table_location="s3://bkt/tables/t1", tier="write")
     assert out is not None
     opts = out.storage_options
-    assert opts["access_key_id"] == "AK"
-    assert opts["secret_access_key"] == "SK"
-    assert opts["session_token"] == "TK"
+    assert opts["aws_access_key_id"] == "AK"
+    assert opts["aws_secret_access_key"] == "SK"
+    assert opts["aws_session_token"] == "TK"
     assert opts["endpoint"] == "http://minio:9000"
     assert out.expires_at_millis is not None and out.expires_at_millis > 0
     # the inline session policy was passed, scoped to the table prefix + write actions
@@ -132,7 +132,7 @@ def test_web_identity_vendor_exchanges_the_token_for_scoped_creds() -> None:
     # With the caller's token → scoped creds; the token + a write-tier session policy are forwarded.
     creds = vendor.vend(table_location="s3://lance-catalog/db$t", tier="write", web_identity_token="the.jwt.tok")
     assert creds is not None
-    assert creds.storage_options["session_token"] == "ST"
+    assert creds.storage_options["aws_session_token"] == "ST"
     assert creds.storage_options["endpoint"] == "http://rustfs:9000"
     assert creds.expires_at_millis is not None and creds.expires_at_millis > 0
     assert captured["WebIdentityToken"] == "the.jwt.tok"
@@ -167,7 +167,7 @@ def test_sts_vendor_against_a_real_assume_role_implementation() -> None:
         creds = vendor.vend(table_location="s3://lance-catalog/db$users", tier="read")
     assert creds is not None
     opts = creds.storage_options
-    assert opts["access_key_id"] and opts["secret_access_key"] and opts["session_token"]
+    assert opts["aws_access_key_id"] and opts["aws_secret_access_key"] and opts["aws_session_token"]
     assert opts["region"] == "us-east-1"
     assert creds.expires_at_millis is not None
 
@@ -245,7 +245,19 @@ def test_a_read_tier_policy_cannot_write_its_own_table() -> None:
 #: The exact keys a client hands to its object-store driver. Lance-style and BARE, because
 #: `DescribeTableResponse.storage_options` is documented as passed straight to Lance — so the
 #: catalog cannot rename them for boto3's convenience without breaking every Lance reader.
-_REQUIRED_STORAGE_OPTION_KEYS = frozenset({"access_key_id", "secret_access_key", "session_token", "region"})
+#: The ONE key vocabulary every vendor emits and every client reads. The credential fields are
+#: ``aws_``-prefixed, and that is a MEASURED requirement rather than a style choice: every fleet pod
+#: exports AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and object_store BLENDS the ambient environment
+#: with the bare spellings — one half from each — signing with a pair belonging to neither identity.
+#: Measured in-cluster 2026-09-03: the ingest worker's vended credential failed every write with
+#: `403 SignatureDoesNotMatch` while the identical options read the identical table successfully from
+#: a process with no AWS_* environment, and the prefixed form read it with that environment still set.
+_REQUIRED_STORAGE_OPTION_KEYS = frozenset({"aws_access_key_id", "aws_secret_access_key", "aws_session_token", "region"})
+
+#: The spellings that must NOT appear. Emitting both is not a safe superset: object_store resolves one
+#: value per config key, so two spellings in one dict make which credential signs a matter of the
+#: library's internal precedence rather than of what the vendor decided.
+_FORBIDDEN_STORAGE_OPTION_KEYS = frozenset({"access_key_id", "secret_access_key", "session_token"})
 
 
 def _fake_creds(**kwargs: Any) -> dict[str, Any]:
@@ -271,7 +283,7 @@ def _vended_options(vendor_name: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("vendor_name", ["sts", "web_identity"])
-def test_every_vendor_emits_the_same_bare_storage_option_keys(vendor_name: str) -> None:
+def test_every_vendor_emits_the_same_storage_option_keys(vendor_name: str) -> None:
     """All credential-issuing vendors agree on ONE key vocabulary.
 
     Parametrized over the vendors rather than asserted once: `web_identity` is the only RustFS-viable
@@ -281,10 +293,13 @@ def test_every_vendor_emits_the_same_bare_storage_option_keys(vendor_name: str) 
     options = _vended_options(vendor_name)
     missing = _REQUIRED_STORAGE_OPTION_KEYS - set(options)
     assert not missing, f"{vendor_name} stopped emitting {sorted(missing)} — every Lance client reads these by name"
-    # NO `aws_`-prefixed alias, in either direction. The e2e's bug was reading boto3's PARAMETER
-    # names back out of the server's payload; adding an alias here would make that mistake work by
-    # accident, and the next one would be just as invisible.
-    assert not [k for k in options if k.startswith("aws_")], options
+    # NO BARE ALIAS ALONGSIDE. This assertion used to point the other way — it forbade the `aws_`
+    # prefix, because the e2e had once read boto3's PARAMETER names back out of the server's payload
+    # and an alias would have made that mistake work by accident. The concern was right and the
+    # conclusion was wrong: ONE vocabulary is what matters, and measurement decided which one (see
+    # `_REQUIRED_STORAGE_OPTION_KEYS`). Carrying both would reintroduce exactly the ambiguity the
+    # original assertion existed to prevent.
+    assert not _FORBIDDEN_STORAGE_OPTION_KEYS & set(options), options
 
 
 def test_the_isolation_e2e_reads_the_keys_the_vendors_actually_emit() -> None:
@@ -305,4 +320,6 @@ def test_the_isolation_e2e_reads_the_keys_the_vendors_actually_emit() -> None:
     read = set(re.findall(r"""creds(?:\.get)?\(?\[?["']([a-z_]+)["']\]?\)?""", client))
     assert read, "could not parse the e2e's credential reads — update this pin rather than deleting it"
     unknown = read - _REQUIRED_STORAGE_OPTION_KEYS - {"endpoint"}
+    # The e2e must read the prefixed spellings too — a rename applied to the vendors and not to the
+    # one consumer that exercises them live is precisely what this pin exists to catch.
     assert not unknown, f"the isolation e2e reads {sorted(unknown)}, which no vendor emits (diff2 F5)"

@@ -127,3 +127,39 @@ def test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep() -> None:
         assert f"arn:aws:s3:::{bucket}/*" in policy, (
             f"the sweep is configured to maintain {bucket!r} and the policy does not grant it — every dataset there will 403"
         )
+
+
+def test_the_scoped_secret_has_its_own_field_in_the_store() -> None:
+    """Repointing the ACCESS KEY alone gives SignatureDoesNotMatch on every operation.
+
+    On a governed estate the secret half does not come from pod env at all — `MAINTENANCE_SECRETS_FROM_DAPR`
+    sends it to the Dapr secret store, and `dapr_secret_s3_field` names WHICH field to read, defaulting
+    to `rustfs-secret-key` (the tenant root's). So a scoped access key with that default reads the root's
+    secret and signs with a mismatched pair. The field is already configurable; the chart has to use it.
+    """
+    rendered = _helm_template(
+        "maintenance.enabled=true",
+        "rustfs.maintenanceAccessKey=rask-maintenance",
+        "rustfs.maintenanceSecretKey=maintenance-secret",
+    )
+    env = _maintenance_env(rendered)
+    assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD") == "maintenance-s3-secret-key", (
+        "the scoped key would be paired with the tenant root's secret — SignatureDoesNotMatch on every sweep"
+    )
+
+
+def test_the_scoped_secret_is_actually_seeded() -> None:
+    """A field the service is told to read and nothing writes is a fail-closed boot, not a fallback:
+    `fetch_required_secrets` raises rather than degrading."""
+    rendered = _helm_template(
+        "maintenance.enabled=true",
+        "rustfs.maintenanceAccessKey=rask-maintenance",
+        "rustfs.maintenanceSecretKey=maintenance-secret",
+    )
+    assert "maintenance-s3-secret-key=" in rendered, "nothing seeds the field the Deployment now reads"
+
+
+def test_unscoped_still_reads_the_field_it_always_did() -> None:
+    rendered = _helm_template("maintenance.enabled=true")
+    env = _maintenance_env(rendered)
+    assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD", "rustfs-secret-key") == "rustfs-secret-key"

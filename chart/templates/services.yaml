@@ -192,6 +192,16 @@ spec:
             {{- range .Values.medallion.movers }}
               {{- $catalogSubjects = append $catalogSubjects .serviceIdentity }}
             {{- end }}
+            {{- /* The maintenance plane is NOT under `.Values.services` — it has its own top-level
+                   block — so the loop below cannot see it, and its identity has to be added here or
+                   the allowlist check refuses every vend with 403 BEFORE any FGA decision is made.
+                   Measured in-cluster 2026-09-03: with the FGA grant correctly in place and
+                   `can_write_data` returning allowed, the door still answered 403 and the service
+                   fell back to the root key, saying so per dataset. Gated on the same flag as the
+                   env it pairs with, so an estate not vending admits no subject it does not use. */}}
+            {{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials }}
+              {{- $catalogSubjects = append $catalogSubjects .Values.maintenance.catalogServiceIdentity }}
+            {{- end }}
             {{- range $svcName, $svc := .Values.services }}
               {{- with (get ($svc.env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}
                 {{- $catalogSubjects = append $catalogSubjects . }}

@@ -43,16 +43,16 @@ from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_line
 
 def test_table_id_from_uri_splits_on_first_underscore() -> None:
     # The catalog lays a table out as s3://<bucket>/<uuid>_<table_id>; the id may itself contain '$'.
-    assert table_id_from_uri("s3://lance-catalog/abcd_ns$table") == "ns$table"
+    assert table_id_from_uri("s3://lance-catalog/aa3bed10_ns$table") == "ns$table"
 
 
 def test_table_id_from_uri_keeps_later_underscores_in_id() -> None:
     # Only the FIRST '_' separates the uuid from the id — an id containing '_' survives intact.
-    assert table_id_from_uri("s3://lance-catalog/uuid_my_table") == "my_table"
+    assert table_id_from_uri("s3://lance-catalog/4750a5b9_my_table") == "my_table"
 
 
 def test_table_id_from_uri_tolerates_trailing_slash() -> None:
-    assert table_id_from_uri("s3://lance-catalog/abcd_gold$catalog/") == "gold$catalog"
+    assert table_id_from_uri("s3://lance-catalog/aa3bed10_gold$catalog/") == "gold$catalog"
 
 
 def test_table_id_from_uri_none_without_underscore() -> None:
@@ -211,10 +211,10 @@ def _result(uri: str, **kw: Any) -> DatasetResult:
 def test_emit_sweep_lineage_emits_only_for_materially_compacted_datasets() -> None:
     emitter = _RecordingEmitter()
     results = [
-        _result("s3://b/u1_ns$a", fragments_removed=3),  # compacted → emit
-        _result("s3://b/u2_ns$b", old_versions_removed=2),  # GC'd → emit
-        _result("s3://b/u3_ns$c"),  # no-op tick → skip
-        _result("s3://b/u4_ns$d", fragments_removed=1, error="open: boom"),  # transient noise → skip
+        _result("s3://b/aa3bed11_ns$a", fragments_removed=3),  # compacted → emit
+        _result("s3://b/aa3bed12_ns$b", old_versions_removed=2),  # GC'd → emit
+        _result("s3://b/aa3bed13_ns$c"),  # no-op tick → skip
+        _result("s3://b/aa3bed14_ns$d", fragments_removed=1, error="open: boom"),  # transient noise → skip
         _result("s3://b/nounderscore", fragments_removed=1),  # unparseable id → skip
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
@@ -229,12 +229,12 @@ def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
     # (the documented medallion-nested blind spot).
     emitter = _RecordingEmitter()
     results = [
-        _result("s3://b/u1_ns$a", error="maintain: Commit conflict"),
-        _result("s3://b/u2_ns$b", fragments_removed=2, error="maintain: cleanup blew up"),  # partial work
-        _result("s3://b/u3_ns$c", error="open: not a dataset"),
-        _result("s3://b/u4_ns$d", error="boom"),  # UNPREFIXED error → neither event (selection contract)
+        _result("s3://b/aa3bed11_ns$a", error="maintain: Commit conflict"),
+        _result("s3://b/aa3bed12_ns$b", fragments_removed=2, error="maintain: cleanup blew up"),  # partial work
+        _result("s3://b/aa3bed13_ns$c", error="open: not a dataset"),
+        _result("s3://b/aa3bed14_ns$d", error="boom"),  # UNPREFIXED error → neither event (selection contract)
         _result("s3://b/medallion", error="maintain: nope"),  # no <uuid>_<id> layout → no id → skip
-        _result("s3://b/u5_ns$e", fragments_removed=1),  # healthy → COMPLETE as before
+        _result("s3://b/aa3bed15_ns$e", fragments_removed=1),  # healthy → COMPLETE as before
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert emitter.calls == [("ns$e", "ns")]
@@ -280,7 +280,7 @@ def test_emit_sweep_lineage_never_raises_even_for_a_broken_emitter() -> None:
         async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
             raise RuntimeError("boom from a non-best-effort emitter")
 
-    results = [_result("s3://b/u1_ns$a", error="maintain: x")]
+    results = [_result("s3://b/aa3bed11_ns$a", error="maintain: x")]
     asyncio.run(emit_sweep_lineage(cast(Any, _OldProtocolEmitter()), results, delimiter="$"))  # no raise
     asyncio.run(emit_sweep_lineage(cast(Any, _RaisingEmitter()), results, delimiter="$"))  # no raise
 
@@ -323,7 +323,7 @@ def test_emit_sweep_lineage_root_table_has_empty_namespace() -> None:
     # A single-segment table id has no parent namespace → "" (matching the catalog's create emit, so the
     # maintenance event never clobbers the dataset node's namespace).
     emitter = _RecordingEmitter()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_result("s3://b/uuid_solo", fragments_removed=1)], delimiter="$"))
+    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_result("s3://b/aa3bed10_solo", fragments_removed=1)], delimiter="$"))
     assert emitter.calls == [("solo", "")]
 
 

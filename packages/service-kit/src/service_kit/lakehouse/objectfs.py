@@ -116,6 +116,21 @@ def without_credentials(storage_options: StorageOptions) -> StorageOptions:
     return {key: value for key, value in storage_options.items() if key not in dropped}
 
 
+def normalise_credential_keys(storage_options: StorageOptions) -> StorageOptions:
+    """The same options with every credential field moved to the ``aws_``-prefixed spelling.
+
+    For options that arrive already built — a secret store's payload, a hand-written store descriptor —
+    where the spelling was whoever wrote them's choice. ``lance_storage_options`` explains why only one
+    spelling works in a pod. Non-credential keys are untouched, and an already-prefixed dict is
+    returned unchanged rather than double-prefixed.
+    """
+    normalised: StorageOptions = {}
+    bare_to_prefixed = {bare: prefixed for prefixed, bare in _CREDENTIAL_ALIASES}
+    for key, value in storage_options.items():
+        normalised[bare_to_prefixed.get(key, key)] = value
+    return normalised
+
+
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
     """An ``S3FileSystem`` from lance-style storage options — scheme derived from the endpoint (an
     ``https://`` endpoint keeps TLS; hardcoding ``http`` once silently downgraded a secured connection).

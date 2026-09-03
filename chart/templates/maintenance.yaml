@@ -189,6 +189,13 @@ spec:
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
             # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
             - { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
+            {{- if $scoped }}
+            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `rustfs-secret-key` — the
+            # TENANT ROOT's secret — so a scoped access key left on that default is signed with a
+            # mismatched pair and every operation fails `SignatureDoesNotMatch`. That is the Ray pair's
+            # measured lesson, and the field was already configurable; only the chart had to use it.
+            - { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }
+            {{- end }}
             {{- end }}
             - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
             {{- /* The #50 policy registry root defaults to this bucket, matching the catalog's

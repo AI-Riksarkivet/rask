@@ -128,8 +128,19 @@ spec:
               # key today and compacts every bucket with it, and the vending door replaces that with a
               # credential scoped to one table and expiring in 900s — but the door authorizes on
               # `can_write_data`, which resolves through `table#writer` <- `namespace#writer` <-
-              # `warehouse#writer`. Without this grant every vend is refused and the service degrades
+              # `warehouse#writer`. Without a grant the vend is refused and the service degrades
               # silently back to the root key, i.e. the hardening looks configured and is not.
+              #
+              # THIS GRANT COVERS THIS WAREHOUSE ONLY, and the file header's "cascades estate-wide" is
+              # true of the DEFAULT warehouse rather than of the estate. Measured against the live
+              # store 2026-09-03: `warehouse:lance_catalog` parents 8 namespaces, and a
+              # `can_write_data` check for this subject on `table:acme-bronze$events` — under
+              # `warehouse:acme-bucket`, one of ~130 warehouses in that store — returned
+              # `allowed:false` with the grant in place. A tenant warehouse created after install is
+              # not covered either, since this hook runs at install/upgrade and warehouses are minted
+              # by an API call. Vending therefore hardens the default warehouse today and degrades
+              # (correctly, and audibly per dataset) everywhere else; closing that gap is an
+              # authorization-model decision recorded in `open_cloudnative.md`, not a bigger tuple list.
               #
               # `writer`, never `owner`: maintenance rewrites and reclaims, it must not drop. The
               # destructive rung stays with people.

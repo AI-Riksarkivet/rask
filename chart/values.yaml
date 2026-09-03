@@ -1335,8 +1335,13 @@ maintenance:
   workTopic: ""
   # Sign each compaction's WRITE with a credential vended per table by the catalog, instead of the
   # deployment's ambient root key. OFF by default: it needs the catalog reachable AND the subject below
-  # holding `can_write_data` on what it maintains, and a deployment missing either degrades silently to
-  # the root key. Turning it on is the statement that both are in place.
+  # holding `can_write_data` on what it maintains, and a deployment missing either falls back to the
+  # root key. Turning it on is the statement that both are in place.
+  #
+  # COVERAGE IS PER WAREHOUSE, not estate-wide: the bootstrap hook grants `writer` on the default
+  # warehouse, so a tenant warehouse (and any warehouse minted after install) still compacts on the
+  # root key until its own grant exists. The fallback is correct and is logged per dataset, so this is
+  # a bounded improvement rather than a switch that either works or fails — see `open_cloudnative.md`.
   vendWriteCredentials: false
   # The subject this service claims at the catalog's identity door. It is what the bootstrap-admin hook
   # grants `writer` on each warehouse, and what the catalog audits on every vend.
