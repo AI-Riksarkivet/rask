@@ -939,9 +939,11 @@ catalog:
   # reads; a relay without staging drains an empty prefix.
   #
   # Why the control lane needs durability at all, when the events are documented as refresh hints: most
-  # of them are, and `table_published` is not. The mover does not fire the next stage's topic and the
-  # medallion plane runs no cron, so nothing ever re-reads the `published` tag — `/publication-arrival`
-  # receiving this event is the ONLY thing that wakes silver->gold. A 5s publish timeout during a NATS
+  # of them are, and `table_published` is not. The mover does not fire the next stage's topic, and
+  # `/publication-arrival` receiving this event is the ONLY thing that WAKES silver->gold. The cascade-lag
+  # cron re-reads the `published` tag since `open_cascade_repair.md` C3, but it only MEASURES: it reports
+  # how far a tier has fallen behind and advances nothing, so this lane's durability is still the whole
+  # of what carries the cascade forward. A 5s publish timeout during a NATS
   # blip ended the cascade outright with every pod green.
   #
   # THE PREFIX MUST DIFFER FROM `_lineage_outbox`. Lineage's reconcile cron parses every object in its
@@ -1055,6 +1057,27 @@ medallion:
   # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Movers are idempotent on
   # top (MERGE on run_id). medallion-producer is a subscriber too (/bronze-arrival). All stateless.
   producerReplicas: 1
+  # THE CASCADE LAG DETECTOR (`open_cascade_repair.md` C3) — the LOSS half of cascade monitoring.
+  #
+  # C4's refusal alerts see triggers that ARRIVED and were dropped. A trigger that never arrived
+  # increments no counter, runs no `_preflight`, writes no log and parks on no DLQ: the only evidence
+  # is that the source moved and the destination did not. This cron measures exactly that, per declared
+  # edge, and publishes `medallion.cascade.lag` as a GAUGE.
+  #
+  # READ-ONLY, WHICH IS THE WHOLE REPLICA ANSWER. `bindings.cron` fires on every replica with no lease,
+  # and `producerReplicas` above is values-scalable. This tick computes a level and sets a gauge, so two
+  # replicas set the same value — convergent, needing no lock, no `replicas: 1` pin and no dedupe key.
+  # Contrast lineage's reconciler, which takes a Postgres advisory lock because it WRITES.
+  #
+  # ONE STRING: this name is the Component's `metadata.name`, the producer's
+  # MEDALLION_CASCADE_LAG_BINDING_NAME, and the path it serves at its pod root. Empty disables the
+  # detector entirely — opt-in, like every other cron here.
+  cascadeLag:
+    bindingName: medallion-cascade-lag-cron
+    # Slower than a refusal alert on purpose: a lag is a LEVEL, so the question is "is it still behind
+    # in five minutes", which `for:` answers. A tighter cadence buys resolution nobody reads and costs
+    # a catalog + lineage read per edge per tick.
+    schedule: "@every 300s"
   moverReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
   # event-driven cascade produces actual versioned data on RustFS, not just provenance — the lineage graph

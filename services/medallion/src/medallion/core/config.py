@@ -291,6 +291,16 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # PUBLISHES that version through. Empty by default: the lane fails at the seam naming the env
     # var, never guessing — a gold table the catalog cannot govern must not report success.
     catalog_url: str = Field(default="", alias="MEDALLION_CATALOG_URL")
+    #: The cascade-lag cron's binding name — ONE string shared with the Dapr Component's `metadata.name`
+    #: and the path the producer serves at its pod root. Empty disables the detector: an unnamed binding
+    #: means no Component, and an always-live door for it would be a scan surface with nothing behind it.
+    cascade_lag_binding_name: str = Field(default="", alias="MEDALLION_CASCADE_LAG_BINDING_NAME")
+    #: The projects whose edges the lag tick measures. Empty = a single-tenant estate, one row per lane.
+    lag_projects: list[str] = Field(default_factory=list, alias="MEDALLION_LAG_PROJECTS")
+    #: Where each declared lane's output lands, by source namespace — read rather than derived from the
+    #: tier name, because a lane may fan out (`bronze-media` -> `silver-media`) and a naming convention
+    #: would quietly mislabel the edge.
+    lane_destinations: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_DESTINATIONS")
     #: The catalog's own CONNECTION ROOT — read by the producer, which registers rather than asks.
     #:
     #: A mover needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER

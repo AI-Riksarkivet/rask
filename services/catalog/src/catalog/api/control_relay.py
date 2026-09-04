@@ -6,9 +6,10 @@ the other half: the thing that reads that prefix and delivers what it finds.
 
 **Why it matters more than "a refresh hint".** Most control events are exactly that — a console ring
 buffer or a tag-polling reader loses a redraw. ``table_published`` is not: the mover does not fire the
-next stage's topic, and the medallion plane runs no cron and no reconcile binding, so nothing ever
-re-reads the ``published`` tag. ``/publication-arrival`` receiving this event is the ONLY thing that
-wakes silver->gold. A dropped one ends the cascade with the tag advanced, the data consumable, the
+next stage's topic, and ``/publication-arrival`` receiving this event is the ONLY thing that WAKES
+silver->gold. The medallion's cascade-lag cron re-reads the ``published`` tag since
+``open_cascade_repair.md`` C3, and that does not weaken this argument by a word: it MEASURES how far a
+tier has fallen behind and advances nothing, so a lost publish is still a cascade that stops. A dropped one ends the cascade with the tag advanced, the data consumable, the
 route 200, every pod green, and nothing red.
 
 **WHY HERE, IN THE CATALOG.** The lineage relay lives in the lineage service because its drain is an

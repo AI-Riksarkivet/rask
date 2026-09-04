@@ -1,0 +1,35 @@
+{{- /* THE CASCADE LAG DETECTOR — the LOSS half of cascade monitoring (`open_cascade_repair.md` C3).
+
+     C4's alerts fire on `medallion_stage_refused_total`: triggers that ARRIVED and were dropped by
+     `_preflight`. A DROP is an ack, so those halts leave a counter and nothing else — but a trigger
+     that NEVER ARRIVED leaves not even that. No counter, no log, no DLQ, no lineage event. The only
+     evidence is that the source's `published` tag moved and the destination never consumed it, which is
+     what this cron measures per declared edge.
+
+     It is the first thing in the estate to re-read the `published` tag, and it does NOT wake anything:
+     `/publication-arrival` remains the only thing that advances silver->gold. A detector reports; it
+     does not repair.
+
+     READ-ONLY, WHICH IS THE REPLICA ANSWER. `bindings.cron` fires on every replica with no lease, and
+     `medallion.producerReplicas` is values-scalable. This tick sets a GAUGE to a level two replicas
+     compute identically, so it is convergent — no lock, no `replicas: 1` pin, no dedupe key, unlike
+     lineage's reconciler which takes an advisory lock because it writes.
+
+     Delivered to `POST /<component name>` at the producer's pod ROOT (never under a prefix), guarded by
+     require_dapr_token so only the sidecar's cron may drive a full catalog + lineage scan. The
+     Component's name, the app's MEDALLION_CASCADE_LAG_BINDING_NAME and the served path are ONE string,
+     all three rendered from `medallion.cascadeLag.bindingName`. */}}
+{{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.medallion.cascadeLag.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "medallion") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.medallion.cascadeLag.schedule | quote }} }
+scopes:
+  - {{ .Values.medallion.producer.daprAppId }}
+{{- end }}

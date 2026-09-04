@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.bronze_arrival import register_bronze_arrival_route
+from medallion.api.cascade_lag_cron import mount_lag_cron
 from medallion.api.ingest_media import router as ingest_media_router
 from medallion.api.mover_ops import router as mover_ops_router
 from medallion.api.produce import router as produce_router
@@ -174,3 +175,7 @@ app.include_router(promotions_router)
 # human auth and forwards. See `api/mover_ops.py` for why the split is forced rather than chosen.
 app.include_router(mover_ops_router)
 register_promotion_route(app, _dapr_app)
+# The cascade-lag cron door. Opt-in on a configured binding name, like the control relay: an unnamed
+# binding means no Component, and mounting an always-live door would add a catalog+lineage scan surface
+# with nothing behind it. See `api/cascade_lag_cron.py` for the one-string rule.
+mount_lag_cron(app, get_settings().cascade_lag_binding_name)

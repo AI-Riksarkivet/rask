@@ -196,6 +196,12 @@ spec:
                    register what it writes on an unrelated feature flag is how a tier becomes
                    ungovernable without anything failing. */}}
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }} }
+            {{- if $.Values.medallion.cascadeLag.bindingName }}
+            # ONE STRING with the Component's `metadata.name` and the path the producer serves at its
+            # pod root — Dapr delivers an input binding to `POST /<component name>`, so any two of the
+            # three agreeing while the third does not is a cron firing into a 404 forever.
+            - { name: MEDALLION_CASCADE_LAG_BINDING_NAME, value: {{ $.Values.medallion.cascadeLag.bindingName | quote }} }
+            {{- end }}
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.rustfs.bucket | quote }} }
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- if .Values.medallion.qualityReview }}
