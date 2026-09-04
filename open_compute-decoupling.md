@@ -697,16 +697,36 @@ The earlier draft was imprecise and the owner was right to challenge it.
 
 ### 7.4 Revised order
 
-1. **Write the contract** (§2) — `WorkOrder`, `Executor`, the attestation. Nothing else is safe until
-   the platform can state what a conforming output is; `runners/dummy` already violates it silently.
-2. **Make the existing second executor conform** — the in-process branch behind `use_ray`. This is
-   the cheapest possible proof the contract is real, because the second engine already exists.
+1. ✅ **DONE 2026-09-04.** `WorkOrder`, `Executor`, `task_registry`, `attestation` — all in service-kit,
+   which gains no `ray` dependency. `TransformSpec.entrypoint` became `task`, and the engine noun left
+   the published contract: `grep "home/ray/jobs\|runtime_env" docs/catalog-openapi.json` went 6 -> 0.
+   Dispatch reads the record too (`engine_choice`), so a declaration naming another engine is REFUSED
+   rather than run on whatever is configured.
+2. ✅ **DONE 2026-09-04.** `InProcessExecutor` conforms — `isinstance(x, Executor)` asked at runtime,
+   and `_write_stage`'s non-Ray branch dispatches through it. What it proves is that a SYNCHRONOUS
+   engine is expressible: `submit` returns a handle already terminal, `status` answers `UNKNOWN` for a
+   handle this process never saw, `cancel` REFUSES because the capability is not advertised. A port
+   that could not express that would be a Ray-shaped interface wearing a neutral name.
 3. **`RayJobExecutor` — submit as a `RayJob` CR** rather than the Jobs REST API. First adapter, and
    the thing that makes Kueue functional.
 4. **Kueue admission** — queues, quota, gang scheduling. Unblocked by (3), impossible before it.
 5. **`Transform` CRD + reconciler** — the declaration moves to git; the catalog record becomes the
    projection.
-6. **The re-run door** — `POST /movers/{m}/stages/rerun` over the existing delta machinery. **Specified in `open_cascade_repair.md` C2**, which also records why it may precede this step: the verb re-mints a trigger behind `build_stage_trigger`, so only its fresh-token 409 touches the Jobs API — one call to port when (3) lands.
+6. ✅ **DONE 2026-09-04** — `POST /api/movers/stages/rerun`. It touches the Jobs API not at all: the
+   fresh-token 409 was DROPPED, because the listing it needed has already OOM-killed this pod (81,155
+   jobs / 164.7 MB in one response). So there is nothing here left to port when (3) lands. The
+   reasoning is in `docs/DECISIONS.md`, "Cascade repair"; `open_cascade_repair.md` is deleted.
 
-Steps 1-3 are required for a second engine. Steps 4-6 are required for the GitOps/cloud-native goal.
-Nothing here needs Argo, Airflow, Dagster, Temporal, or a second control plane.
+**"Steps 1-3 are required for a second engine" is FALSIFIED, and the correction matters for
+sequencing.** A second engine landed at step 2 with no `RayJob` CR anywhere: the in-process executor
+conforms to the port and `engine_choice` routes to it off the record. What step 3 is actually required
+for is KUEUE (step 4) and BYO maintenance compute (M3) — admission and quota, not plurality.
+
+**WHAT IS LEFT IS EXACTLY 3, 4 AND 5**, and they are one arc rather than three: submit as a `RayJob`
+CR, admit it through Kueue, and move the declaration into git behind a `Transform` CRD. The last of
+those has a precedent to respect — `docs/DECISIONS.md` (2026-08-16) rules the `Project` CRD abandoned
+as a rask-repo concern because a CRD without its controller renders unreconciled CRs as objects stuck
+mid-provision; a `Transform` CRD belongs to `rask-operator` for the same reason.
+
+Steps 1, 2 and 6 are done and their specs are deleted. Nothing here needs Argo, Airflow, Dagster,
+Temporal, or a second control plane.
