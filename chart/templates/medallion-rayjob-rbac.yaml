@@ -1,0 +1,43 @@
+{{- /* THE PRODUCER MAY CREATE A RayJob — `open_compute-decoupling.md` §7.4 step 3.
+
+     Submitting a stage as a CUSTOM RESOURCE rather than a POST to Ray's Jobs API is what makes the
+     run record DURABLE: a RayJob is an etcd object and survives a head restart, which Ray's own GCS
+     does not in this estate (no external Redis, a standing rule). That is the capability the
+     resubmit machinery reads — with `DURABLE_RECORD` advertised, `may_resubmit` refuses to resubmit
+     an UNKNOWN handle, because against a durable record unknown means "we could not ask" rather than
+     "the work was lost".
+
+     A Role, not a ClusterRole, and namespaced to the release: the producer creates jobs beside
+     itself and has no business reading another namespace's. `delete` is here because `cancel` is an
+     advertised capability and deleting the CR is what stops the job — a capability the executor
+     claims and the RBAC refuses would be a lie discovered at 3am.
+
+     Rendered only when the RayJob path is on, so an estate on the Jobs API grants nothing. */}}
+{{- if and .Values.medallion.enabled .Values.medallion.rayJobSubmission .Values.security.serviceAccounts.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lance.fullname" . }}-medallion-rayjob
+  labels: {{- include "lance.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    # `create` to submit, `get`/`list`/`watch` to poll a run's state, `delete` to cancel. No `update`
+    # and no `patch`: nothing here edits a job it already submitted, and a verb nobody uses is a verb
+    # an attacker inherits.
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lance.fullname" . }}-medallion-rayjob
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "lance.fullname" . }}-medallion-rayjob
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lance.fullname" . }}-sa-medallion-producer
+    namespace: {{ .Release.Namespace }}
+{{- end }}

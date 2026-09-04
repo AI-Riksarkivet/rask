@@ -1178,6 +1178,29 @@ medallion:
   # The template defaults it to `<release>-ray-head-svc:8265`; set it only to point at a Ray outside
   # this release.
   rayAddress: ""
+  # SUBMIT A STAGE AS A `RayJob` CUSTOM RESOURCE instead of a POST to Ray's Jobs API
+  # (`open_compute-decoupling.md` §7.4 step 3). Off by default: the Jobs API path is what this estate
+  # has run and proven, and this is the newer of the two.
+  #
+  # What it buys is a DURABLE run record. Ray's GCS is not fault-tolerant here (no external Redis, a
+  # standing rule), so a head restart takes every job record with it — which is why the stage watcher
+  # carries MAX_UNSEEN_POLLS, MAX_RESUBMITS and a poll ceiling. A RayJob is an etcd object: it
+  # survives a head restart, a controller restart and the submitting pod. The executor advertises
+  # `DURABLE_RECORD` for it, and `may_resubmit` then REFUSES to resubmit an UNKNOWN handle, because
+  # against a durable record unknown means "we could not ask", never "the work was lost".
+  #
+  # It is also the only form Kueue can admit — see `kueueQueue` below. Needs the RBAC in
+  # `medallion-rayjob-rbac.yaml`, which renders with it.
+  rayJobSubmission: false
+  # The Kueue LocalQueue a submitted RayJob is admitted through (§7.4 step 4). Empty means no
+  # admission control and the CR is created unlabelled AND unsuspended — deliberately, and the two go
+  # together: Kueue admits by UNSUSPENDING, so a workload created running has already bypassed the
+  # admission its label asked for, while a label naming a queue that does not exist parks every job
+  # forever with nothing saying why.
+  #
+  # Defaults to the LocalQueue `kueue.queues` creates, so turning `rayJobSubmission` on in an estate
+  # that already runs Kueue needs no second value.
+  kueueQueue: ""
   # WHAT THIS ESTATE'S RAY PLANE CAN RUN. The producer registers each of these into
   # `<control_root>/_tasks/` at boot, and the catalog's transform door refuses a declaration naming a
   # task nobody registered — so an unrunnable transform is a 422 at declaration instead of an
