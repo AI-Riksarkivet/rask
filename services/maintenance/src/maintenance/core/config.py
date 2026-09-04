@@ -119,6 +119,23 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
     #: per-dataset boundary was supposed to fix.
     work_dlq_topic: str = Field(default="", alias="MAINTENANCE_WORK_DLQ_TOPIC")
+    #: The INDEX-BUILD lane, on its own topic beside the maintenance work queue.
+    #:
+    #: Separate because of the ACK, not for tidiness: a compaction unit is minutes, a vector index over
+    #: a large table is not, and one `ackWait` cannot serve both — sized for the index a stuck
+    #: compaction stays invisible for as long, sized for compaction every large build redelivers
+    #: mid-flight. That is why it takes its own COMPONENT (`index_pubsub`) and not merely its own
+    #: topic: the ack window is a component-level setting.
+    #:
+    #: Empty leaves the catalog building indices in its own request handler, which is what an estate
+    #: with no broker must get. The catalog reads the SAME topic name, so neither side can believe a
+    #: worker exists when it does not.
+    index_topic: str = Field(default="", alias="MAINTENANCE_INDEX_TOPIC")
+    #: Its own COMPONENT, not just its own topic. `ackWait`, `durableName` and `queueGroupName` are
+    #: per-component in Dapr's JetStream pubsub, so a second topic on the work component would share
+    #: the work queue's 720s ack window — the very thing the separation exists to avoid.
+    index_pubsub: str = Field(default="maintenance-index-pubsub", alias="MAINTENANCE_INDEX_PUBSUB")
+    index_dlq_topic: str = Field(default="", alias="MAINTENANCE_INDEX_DLQ_TOPIC")
 
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each materially-compacted
     # dataset to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the

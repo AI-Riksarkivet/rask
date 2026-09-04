@@ -142,6 +142,13 @@ spec:
             # strictly worse than the synchronous rewrite it replaced.
             - { name: LANCE_MAINTENANCE_WORK_PUBSUB, value: {{ $.Values.maintenance.workPubsub | quote }} }
             - { name: LANCE_MAINTENANCE_WORK_TOPIC, value: {{ $.Values.maintenance.workTopic | quote }} }
+            {{- if $.Values.maintenance.indexTopic }}
+            # Set, create_index / create_scalar_index publish one unit and answer with its id rather
+            # than building inside this handler — the spec's own asynchronous model. The maintenance
+            # service reads the SAME value, so neither side can believe a worker exists when it does not.
+            - { name: LANCE_MAINTENANCE_INDEX_TOPIC, value: {{ $.Values.maintenance.indexTopic | quote }} }
+            - { name: LANCE_MAINTENANCE_INDEX_PUBSUB, value: {{ $.Values.maintenance.indexPubsub | quote }} }
+            {{- end }}
             {{- end }}
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
             # #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. `table_published` is

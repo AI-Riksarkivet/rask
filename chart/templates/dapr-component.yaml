@@ -411,3 +411,44 @@ scopes:
   # subscription on this component, so the group stays exactly the maintenance replicas.
   - {{ .Values.services.catalog.daprAppId }}
 {{- end }}
+{{- if and .Values.maintenance.enabled .Values.maintenance.indexTopic }}
+---
+# THE INDEX-BUILD LANE — its own component, not just its own topic.
+#
+# `ackWait`, `durableName` and `queueGroupName` are per-COMPONENT in Dapr's JetStream pubsub, so an
+# index build sharing the work component would inherit the work queue's 720s window. That window is
+# sized for one dataset's compact + index-optimize + GC; a vector index over a large table can exceed
+# it, and an ack that expires mid-build redelivers the unit to a second worker which then builds the
+# same index concurrently. The separation is what buys a window sized for the actual work.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.maintenance.indexPubsub }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-maintenance-index" }
+    - { name: queueGroupName, value: "{{ .Values.maintenance.daprAppId }}-index" }
+    - { name: durableName, value: "{{ .Values.maintenance.daprAppId }}-index-durable" }
+    # Sized for an INDEX, which is the whole reason this component exists. The same first-backOff-step
+    # rule the sibling components carry applies: the broker's first step must exceed the sidecar's
+    # total resiliency retry window, or the broker redelivers while the sidecar is still mid-retry and
+    # one build runs twice at once.
+    - { name: ackWait, value: {{ .Values.maintenance.indexAckWait | quote }} }
+    {{- if .Values.dapr.resiliency.enabled }}
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }}" }
+    {{- else }}
+    - { name: maxDeliver, value: "5" }
+    - { name: backOff, value: "{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }}" }
+    {{- end }}
+scopes:
+  - {{ .Values.maintenance.daprAppId }}
+  # The catalog PUBLISHES here and subscribes to nothing — its create_index doors enqueue one unit
+  # instead of building inside the request handler. A scope is required to publish, not only to
+  # subscribe, and without it the publish fails with the component unknown to that sidecar.
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}

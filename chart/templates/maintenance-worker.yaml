@@ -103,6 +103,13 @@ spec:
             - { name: MAINTENANCE_WORK_PUBSUB, value: {{ .Values.maintenance.workPubsub | quote }} }
             - { name: MAINTENANCE_WORK_TOPIC, value: {{ .Values.maintenance.workTopic | quote }} }
             - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
+            {{- if .Values.maintenance.indexTopic }}
+            # The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a
+            # minutes-long compaction and a vector index over a large table.
+            - { name: MAINTENANCE_INDEX_TOPIC, value: {{ .Values.maintenance.indexTopic | quote }} }
+            - { name: MAINTENANCE_INDEX_PUBSUB, value: {{ .Values.maintenance.indexPubsub | quote }} }
+            - { name: MAINTENANCE_INDEX_DLQ_TOPIC, value: {{ .Values.maintenance.indexDlqTopic | quote }} }
+            {{- end }}
             {{- if .Values.maintenance.dedicatedWorkers.enabled }}
             # THE PLANNER PUBLISHES AND DOES NOT CONSUME. It still needs the topic — it enqueues onto
             # it — which is exactly why `workTopic` cannot express this and a second switch exists.

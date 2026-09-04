@@ -31,6 +31,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.arrival import register_arrival_route
+from maintenance.api.index_work import register_index_route
 from maintenance.api.routes import build_router
 from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings, get_settings
@@ -194,4 +195,9 @@ _work_app = register_work_route(app, get_settings())
 # The write-event subscription (POST /maintenance-arrival) — the PRIMARY trigger. Shares the DaprApp
 # the work route built: a second DaprApp(app) re-registers /dapr/subscribe and the sidecar reads only
 # one of them, so one subscription would silently never be delivered to.
-register_arrival_route(app, get_settings(), _work_app)
+_work_app = register_arrival_route(app, get_settings(), _work_app) or _work_app
+
+# The index-build subscription (POST /maintenance-index). Its own topic beside the work queue —
+# one ackWait cannot serve both a minutes-long compaction and a vector index over a large table —
+# but the SAME DaprApp, for the reason the line above states.
+register_index_route(app, get_settings(), _work_app)

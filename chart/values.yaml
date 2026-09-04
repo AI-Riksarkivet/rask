@@ -1431,6 +1431,26 @@ maintenance:
   catalogServiceIdentity: service-maintenance
   workDlqTopic: dlq.maintenance.work
   workPubsub: maintenance-work-pubsub
+  # THE INDEX-BUILD LANE, on its own topic beside the work queue. Set, the catalog's create_index /
+  # create_scalar_index doors publish one unit and answer with its id instead of building inside the
+  # request handler — which is what the Lance Namespace spec already documents for CreateTableIndex
+  # ("index creation is handled asynchronously"; progress via ListTableIndices /
+  # DescribeTableIndexStats). Empty, the build runs in the catalog as it always has, because nothing
+  # would ever execute a unit nobody consumes.
+  #
+  # SEPARATE from workTopic because of the ACK, not for tidiness: a compaction unit is minutes and a
+  # vector index over a large table is not, and one ackWait cannot serve both — sized for the index a
+  # stuck compaction stays invisible that long, sized for compaction every large build redelivers
+  # mid-flight. Separate topics also let the two scale as independent consumer groups.
+  indexTopic: ""
+  indexDlqTopic: dlq.maintenance.index
+  indexPubsub: maintenance-index-pubsub
+  # The ack window for ONE index build, and the number this lane exists to be able to set. The work
+  # queue's 720s is sized for a dataset's compact + index-optimize + GC; a vector index over a large
+  # table can exceed it, and an ack that expires mid-build redelivers the unit to a second worker
+  # which then builds the same index concurrently. Raise it for a large estate — an over-long window
+  # only delays the redelivery of a genuinely lost unit, while an under-long one duplicates work.
+  indexAckWait: 3600s
   # The catalog's control root (project/warehouse/trash registries). Empty => the primary bucket, which
   # is what the catalog itself defaults to; set both together if the catalog's root is moved.
   controlRoot: ""

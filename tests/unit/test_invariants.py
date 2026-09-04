@@ -106,6 +106,10 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # trigger one and has the trigger answer: the caller holds the 202 and can re-click, and the hourly
     # cron backstop re-plans the dataset regardless.
     ("services/catalog/src/catalog/api/v1/endpoints/maintenance.py", "settings.maintenance_work_topic"): "trigger",
+    # The index-build lane, and a TRIGGER for the same reason its compaction sibling is: it instructs a
+    # worker to do work, and describes no committed write. The unit id is deterministic, so a
+    # caller-retried publish names the same build rather than a second one.
+    ("services/catalog/src/catalog/api/v1/endpoints/indices.py", "settings.maintenance_index_topic"): "trigger",
     # A maintenance work UNIT: "compact and GC this one dataset". An instruction, so correctly bare —
     # and its durability question is answered by the plan rather than by the outbox. A unit that is lost
     # is re-planned by the next cron tick from the CURRENT manifest, which is strictly better than

@@ -325,6 +325,18 @@ class Settings(GovernedAuthSettings, BaseSettings):
     # keeps the synchronous behaviour it has always had.
     maintenance_work_pubsub: str = Field(default="maintenance-work-pubsub", alias="LANCE_MAINTENANCE_WORK_PUBSUB")
     maintenance_work_topic: str = Field(default="", alias="LANCE_MAINTENANCE_WORK_TOPIC")
+    #: The INDEX-BUILD lane. Set, `create_index` / `create_scalar_index` publish one unit and return
+    #: the spec's `transaction_id` instead of building inside the request handler — which is what
+    #: `CreateTableIndex` already documents ("index creation is handled asynchronously", progress via
+    #: `ListTableIndices` / `DescribeTableIndexStats`). Unset, the build runs here as it always has,
+    #: because nothing would ever execute a unit nobody consumes.
+    #:
+    #: The maintenance service reads the SAME topic name from its own settings, so the two cannot
+    #: disagree about whether a worker exists.
+    maintenance_index_topic: str = Field(default="", alias="LANCE_MAINTENANCE_INDEX_TOPIC")
+    #: Its own component, for the reason `services/maintenance` records: `ackWait` is per-component,
+    #: so an index build sharing the work queue's component would share its 720s window.
+    maintenance_index_pubsub: str = Field(default="maintenance-index-pubsub", alias="LANCE_MAINTENANCE_INDEX_PUBSUB")
 
     # Per-subject user state (`GET/PUT/DELETE /v1/user-state/*`) on the Dapr state store. The default names
     # the component the chart already renders (`stateStore.name` in chart/values.yaml) and that the catalog
