@@ -2693,19 +2693,22 @@ export interface paths {
         put?: never;
         /**
          * Rename Table
-         * @description Rename the table at ``id`` IN-PROCESS (#5b), then migrate its FGA ownership and emit dest←source
-         *     lineage.
+         * @description Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.
          *
          *     Lance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and
-         *     the ``dir`` backend's ``rename_table`` is a hard 501 — 501 is also off-spec (the Namespace REST spec
-         *     makes rename a first-class Metadata op). So the rename is done in-process: the self-contained dataset
-         *     root is byte-copied to the destination location (preserving version history) and the source pointer is
-         *     deregistered (``dataplane.rename_table``). The caller must hold ``can_drop`` on the source (owner tier,
-         *     gated by the router ``authorize``) AND ``can_create_table`` on the DESTINATION parent — else a source
-         *     owner could plant their table into a namespace/tenant they lack create rights on. FGA tuples migrate
-         *     from the old id to the new; a versionless REGISTER marker records the (re)attachment at the new location
-         *     so the destination appears in the graph with its provenance (#23 reconcile back-fills its on-disk
-         *     version). Source missing → 404 ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``.
+         *     the ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec — the Namespace REST spec
+         *     makes rename a first-class Metadata op. It is served here as what the spec describes: the destination id
+         *     is registered at the SOURCE's existing location and the source id is deregistered. **No data byte is
+         *     read, written or deleted**, so the cost is O(1) rather than the dataset's size — see
+         *     ``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
+         *     shape (a V1 root-namespace table) it refuses.
+         *
+         *     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
+         *     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
+         *     namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
+         *     versionless REGISTER marker records the attachment at the new id so the destination appears in the
+         *     graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
+         *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``.
          */
         post: operations["rename_table_v1_table__id__rename_post"];
         delete?: never;

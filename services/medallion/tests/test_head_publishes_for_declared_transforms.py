@@ -48,7 +48,7 @@ def _declare(tmp_path: Path, lane: str, from_id: str) -> None:
                 "project": "acme",
                 "from_id": from_id,
                 "to_id": "acme-silver$out",
-                "entrypoint": "python /home/ray/jobs/ray_stage_job.py",
+                "task": "stage-transform",
                 "params": {},
                 "code_version": "",
             }

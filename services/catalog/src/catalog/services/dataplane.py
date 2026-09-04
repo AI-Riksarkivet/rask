@@ -67,6 +67,7 @@ from lance_namespace import (
     ListTableTagsResponse,
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
+    RegisterTableRequest,
     ServiceUnavailableError,
     TableAlreadyExistsError,
     TableColumnNotFoundError,
@@ -414,25 +415,41 @@ def rename_table(
     new_table_name: str,
     new_namespace_id: list[str] | None,
 ) -> tuple[list[str], str]:
-    """Rename a table IN-PROCESS (#5b) — the ``dir`` backend's ``rename_table`` is a hard 501, and Lance
-    has no format-level rename because table rename is a namespace-layer remap, not a data-plane commit.
+    """Rename a table by moving its POINTER. No data byte is read, written or deleted.
 
-    A Lance dataset is self-contained under one root with RELATIVE internal refs, so a rename is a byte
-    copy of the dataset root to the destination location + a repoint of the namespace: declare the
-    destination to learn its canonical location, relocate the data there, deregister the source. The copy
-    preserves the full version history a read→rewrite would collapse to v1. Returns
-    ``(new_segments, new_location)``. Raises ``TableNotFoundError`` (source missing / declared-only) or
-    ``TableAlreadyExistsError`` (destination already a written table) so the endpoint maps 404 / 409.
+    A rename is a namespace-layer remap — Lance has no format-level rename, and the spec's request
+    carries identifiers and no location. lance-ns V2 stores a table at ``<hash>_<object_id>`` with the
+    mapping in the ``__manifest`` table; the hash is there for object-store throughput and for
+    create/delete/recreate conflict prevention, and the spec says the ``object_id`` suffix "ensures
+    uniqueness and aids debugging" (`lance_docs/namespace.md`, *Manifest Table Directory*). It is a
+    label, not the resolution path. So the whole rename is: register the destination id at the
+    source's existing location, then deregister the source.
 
-    Data-safe within a single call, but NOT crash-atomic (documented limitation): a crash BETWEEN the copy
-    and the source delete leaves the data under BOTH ids — a duplicate, never data loss — and the retry
-    then 409s on the now-written destination until an operator drops one copy. The atomic fix is to copy
-    into a staging path and publish it as the final step (future). No in-call failure loses data: a copy
-    failure drops the half-copy (source intact + name free), and a source-delete failure orphans the source
-    bytes for the reconcile sweep (the data is already safe at the destination — never roll it back).
+    That makes it **O(1) in the dataset**, which is the point. The cost of a rename used to be the
+    dataset's size, paid inside a request handler that answered 200 — unbounded work no pod sizing
+    fixes, and the same class as the compact door before it became a 202. Three failure modes go with
+    it: the half-copy, the non-atomic source delete that could strand bytes, and the read-rewrite that
+    would have collapsed version history.
+
+    MEASURED on the ``dir`` backend the chart runs (``LANCE_REST_IMPL=dir``, pylance 10.0.0,
+    2026-09-04): after the two calls, ``describe_table`` on the destination resolves to the source's
+    own location, with rows and version history intact and the directory keeping its old object_id
+    suffix.
+
+    **A V1 ROOT-namespace table is REFUSED.** Compatibility mode stores those at ``<name>.lance``,
+    where the location IS the name, and the spec's own rule is that renaming one "transitions to the
+    V2 hash-based path naming" — a relocation. Serving it with a byte copy would put the unbounded
+    work straight back; rask's ``require_parent`` guard means no table reachable through these doors
+    has that shape, so the refusal costs nothing and names the reason.
+
+    Returns ``(new_segments, location)`` — the location UNCHANGED, because that is the property.
+    Raises ``TableNotFoundError`` (source missing / declared-only) or ``TableAlreadyExistsError``
+    (destination taken) so the endpoint maps 404 / 409.
+
+    The two calls are not one transaction. A crash between them leaves BOTH ids pointing at the SAME
+    dataset — one dataset, two pointers, no data at risk and no bytes duplicated — which a
+    deregister of either id resolves. The byte-copy shape's equivalent window left two full COPIES.
     """
-    # A blank/whitespace name would declare the identifier ``['']``, byte-copy the dataset to
-    # ``<root>/.lance`` and DESTROY the named source — all while returning 200 (audit 2026-07-14).
     if not new_table_name.strip():
         raise InvalidInputError("new_table_name is required")
     dest_parent = list(new_namespace_id) if new_namespace_id else segments[:-1]
@@ -441,56 +458,57 @@ def rename_table(
         raise InvalidInputError("the rename destination is identical to the source")
     source_uri, source_only_declared = _existing_location(ns, segments)
     if source_uri is None or source_only_declared:
-        # Missing OR declared-but-unwritten → no dataset to relocate (404, symmetric with every op that
+        # Missing OR declared-but-unwritten → nothing to repoint (404, symmetric with every op that
         # requires a written table).
         raise TableNotFoundError(f"table not found: {'.'.join(segments)}")
     _refuse_rename_with_branches(source_uri, so, segments)
-    # The destination must be free in EVERY form. A declared-only stub is TAKEN, never adopted: reusing it
-    # would skip ``declare_table`` — the only ATOMIC arbiter — so two concurrent renames into the same
-    # declared name would both copy into one location and both retire their sources, silently destroying a
-    # table (reproduced 9/10 under load, audit 2026-07-14). A stub from a crashed rename is cleared with an
-    # explicit drop, never implicitly reused. (This pre-check is only a fast path — ``declare_table`` below
-    # is the real guard, so a rename racing us for the same name loses there and surfaces a clean 409.)
+    if len(segments) == 1:
+        raise InvalidInputError(
+            f"cannot rename {'.'.join(segments)}: it is a root-namespace table, which the directory catalog stores "
+            "under V1 compatibility naming (<name>.lance) where the location IS the name. The spec's rule is that such "
+            "a rename transitions the table to V2 hash-based naming, which relocates its data — unbounded work this "
+            "door will not do in a request. Move the table into a namespace first."
+        )
+    # The destination must be free in EVERY form, checked BEFORE anything is touched. A declared-only
+    # stub is TAKEN, never adopted: adopting one skips `register_table`, the only arbiter here, so two
+    # concurrent renames into the same declared name would both claim it and both retire their sources.
     dest_uri, _dest_only_declared = _existing_location(ns, new_segments)
     if dest_uri is not None:
         raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
-    location = ns.declare_table(DeclareTableRequest(id=new_segments)).location
-    if not location:
-        raise InvalidInputError("namespace did not return a location for the rename destination")
-    try:
-        _copy_dataset(source_uri, location, so)
-    except Exception:
-        # The COPY failed: the destination is a partial half-copy and the SOURCE is untouched, so dropping
-        # the half-copy is safe — it leaves the source intact and the destination name free (retryable).
-        with suppress(Exception):
-            ns.drop_table(DropTableRequest(id=new_segments))
-        raise
-    # The copy SUCCEEDED — the destination now holds a COMPLETE copy and is authoritative. From here the
-    # destination must NEVER be rolled back: the source delete is NON-ATOMIC (S3 batches DeleteObjects; a
-    # local walk can fail mid-directory), so a partial delete can leave the source unreadable — and dropping
-    # the destination on that error would lose the data the copy just secured, recoverable NOWHERE (audit
-    # 2026-07-14: strictly worse than the swallowed-error bug it replaced). A source-delete failure instead
-    # ORPHANS the source bytes for the reconcile sweep; the rename still succeeds because the data is safe.
-    try:
-        _delete_dataset(source_uri, so)
-    except Exception as exc:
-        log.warning(
-            "rename_source_bytes_orphaned",
-            extra={"source": ".".join(segments), "dest": ".".join(new_segments), "error": str(exc)},
-        )
-    # Backends that keep a namespace pointer SEPARATE from the bytes retire it here; on ``dir`` the delete
-    # above already did (so this raises TableNotFound). The destination is already published and correct, so
-    # a failure here is a stale-pointer ops cleanup, not a failed rename.
+    # RELATIVE, because the dir backend refuses an absolute URI here ("Absolute URIs are not allowed
+    # for register_table") — the same conversion `undrop` already makes. `_relative_to_root` derives
+    # it from the namespace's own root rather than assuming the final path segment: under V2 naming a
+    # location is `<hash>_<object_id>` at the root, but a backend that nests would break the guess.
+    location = _relative_location(ns, source_uri)
+    ns.register_table(RegisterTableRequest(id=new_segments, location=location))
+    # The destination now resolves; retiring the source is what makes this a rename rather than a
+    # second pointer. It CANNOT roll the destination back — a failure here leaves both ids on one
+    # dataset, which is recoverable by deregistering either, while an undone destination would leave a
+    # rename that reported success and did nothing.
     try:
         ns.deregister_table(DeregisterTableRequest(id=segments))
-    except TableNotFoundError:
-        pass
     except Exception as exc:
         log.warning(
             "rename_source_pointer_retained",
-            extra={"source": ".".join(segments), "error": str(exc)},
+            extra={"source": ".".join(segments), "dest": ".".join(new_segments), "error": str(exc)},
         )
-    return new_segments, location
+    return new_segments, source_uri
+
+
+def _relative_location(ns: LanceNamespace, uri: str) -> str:
+    """``uri`` expressed relative to the namespace root, which is what ``register_table`` accepts.
+
+    The dir backend refuses an absolute URI outright, and the value `describe_table` reports IS
+    absolute — so every re-registration in this estate makes this conversion (`undrop` included).
+    Derived by subtracting the namespace's configured root rather than taking the last path segment:
+    the two agree under V2's flat `<hash>_<object_id>` layout and diverge the moment a backend nests,
+    and a wrong relative path registers a pointer to nothing.
+    """
+    root = str(getattr(ns, "root", "") or "")
+    for candidate in (root, root.removeprefix("file://")):
+        if candidate and (stripped := uri.removeprefix("file://")).startswith(candidate.rstrip("/") + "/"):
+            return stripped[len(candidate.rstrip("/")) + 1 :]
+    return uri.removeprefix("file://").rstrip("/").rsplit("/", 1)[-1]
 
 
 def _dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
@@ -504,31 +522,6 @@ def _dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
         return s3_filesystem(so), uri[len("s3://") :]
     resolved, path = pafs.FileSystem.from_uri(uri)
     return resolved, path
-
-
-def _copy_dataset(source_uri: str, dest_uri: str, so: StorageOptions) -> None:
-    """Byte-copy a self-contained Lance dataset root ``source_uri`` → ``dest_uri``, preserving ALL versions
-    (a read→rewrite would collapse the history to v1). ``copy_files`` recurses the dataset directory."""
-    src_fs, src_path = _dataset_fs(source_uri, so)
-    dst_fs, dst_path = _dataset_fs(dest_uri, so)
-    pafs.copy_files(src_path, dst_path, source_filesystem=src_fs, destination_filesystem=dst_fs)
-
-
-def _delete_dataset(uri: str, so: StorageOptions) -> None:
-    """Delete a dataset root AUTHORITATIVELY — only an ALREADY-ABSENT root is tolerated.
-
-    Deliberately NOT best-effort: on the shipped ``dir`` backend ``deregister_table`` is a no-op, so this
-    delete IS the table's retirement. Swallowing a store error here would report a *successful* rename over
-    a source that still resolves to half-deleted bytes — and ``pyarrow``'s ``ArrowIOError`` subclasses
-    ``OSError``, which is exactly how a RustFS/S3 5xx used to be eaten silently (audit 2026-07-14). A real
-    IO error must PROPAGATE so the caller can decide — ``rename_table`` orphans the source bytes for the
-    reconcile sweep rather than rolling the destination back (the destination already holds the only copy).
-    """
-    fs, path = _dataset_fs(uri, so)
-    # An ALREADY-ABSENT root is the retirement we wanted (idempotent on retry); every OTHER error — an S3
-    # 5xx, a permission failure — propagates so the caller rolls the destination back.
-    with suppress(FileNotFoundError):
-        fs.delete_dir(path)
 
 
 #: Lance commit OSError message markers (transaction.md conflict taxonomy). A schema/version mismatch can

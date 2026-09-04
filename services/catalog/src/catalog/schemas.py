@@ -935,13 +935,10 @@ class TransformSpecRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    name: str = Field(validation_alias=AliasChoices("name", "lane"))
+    name: str
     from_id: str
     to_id: str
-    #: Aliased for the same reason ``name`` is: this model is ``extra="forbid"``, so a caller still
-    #: spelling it the other way would be REFUSED rather than understood, and a refused declaration
-    #: leaves the mover running the chart's program while an operator believes the record governs it.
-    task: str = Field(validation_alias=AliasChoices("task", "entrypoint"))
+    task: str
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
     #: Row cardinality. Validated by `TransformSpec`, not here — one definition, two services — so an
@@ -1019,7 +1016,7 @@ class GateSpecResponse(BaseModel):
 
 class TransformSpecResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    name: str = Field(validation_alias=AliasChoices("name", "lane"))
+    name: str
     project: str
     from_id: str
     to_id: str

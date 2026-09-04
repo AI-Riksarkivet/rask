@@ -243,36 +243,48 @@ def test_external_blob_allowlist_accepts_in_base_rejects_out_of_base(tmp_path: P
         create_table(ns, {}, ["out_base"], _pointer(outside.as_uri()), external_blob_bases=bases)
 
 
-# --- in-process rename (#5b): the dir backend's native rename is a 501; relocate + repoint ------------ #
+# --- rename is a POINTER move (the dir backend's native rename is a 501) ----------------------------- #
+#
+# These are the BLOB half of the rename contract. A blob column's bytes live in `data/<stem>/*.blob`, a
+# sidecar `data_files()` does not name — which a byte copy had to carry deliberately and could silently
+# drop. A pointer move cannot lose it, because nothing is copied; asserting it is what proves that.
+#
+# Every table here is NAMESPACED, and that is required rather than tidy: a root-namespace table is stored
+# under V1 compatibility naming (`<name>.lance`, where the location IS the name), and renaming one is
+# refused — see `dataplane.rename_table` and the suite that pins the refusal.
 
 
-def test_rename_relocates_dataset_and_frees_source(tmp_path: Path) -> None:
+def test_rename_repoints_a_blob_table_without_touching_its_sidecars(tmp_path: Path) -> None:
     from catalog.services.dataplane import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["clips"], _blob_ipc([b"a", b"b"]), mode="create")
+    _declare_namespace(ns, "media")
+    create_table(ns, {}, ["media", "clips"], _blob_ipc([b"a", b"b"]), mode="create")
+    before = ns.describe_table(DescribeTableRequest(id=["media", "clips"])).location
 
-    new_segments, location = rename_table(ns, {}, ["clips"], "reels", None)
-    assert new_segments == ["reels"] and location
+    new_segments, location = rename_table(ns, {}, ["media", "clips"], "reels", None)
+    assert new_segments == ["media", "reels"]
+    assert location == before, "the dataset moved; a rename must repoint, not relocate"
 
-    # Discoverable under the NEW id (data intact), gone under the OLD id.
-    ds = _open(ns, ["reels"])
+    # Discoverable under the NEW id with its blob payloads still resolving, gone under the OLD id.
+    ds = _open(ns, ["media", "reels"])
     assert ds.count_rows() == 2
     assert ds.read_blobs("payload", indices=[0])[0][1] == b"a"
     with pytest.raises(TableNotFoundError):
-        ns.describe_table(DescribeTableRequest(id=["clips"]))
+        ns.describe_table(DescribeTableRequest(id=["media", "clips"]))
 
 
 def test_rename_preserves_version_history(tmp_path: Path) -> None:
-    # A byte relocation keeps ALL versions — a read→rewrite would collapse the table to v1.
+    # Nothing is rewritten, so history cannot be collapsed — the property a byte copy had to work for.
     from catalog.services.dataplane import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["t"], _blob_ipc([b"a"]), mode="create")
-    create_table(ns, {}, ["t"], _blob_ipc([b"a", b"b"]), mode="overwrite")  # commits v2
+    _declare_namespace(ns, "media")
+    create_table(ns, {}, ["media", "t"], _blob_ipc([b"a"]), mode="create")
+    create_table(ns, {}, ["media", "t"], _blob_ipc([b"a", b"b"]), mode="overwrite")  # commits v2
 
-    rename_table(ns, {}, ["t"], "t2", None)
-    assert len(_open(ns, ["t2"]).versions()) >= 2  # history survived the rename
+    rename_table(ns, {}, ["media", "t"], "t2", None)
+    assert len(_open(ns, ["media", "t2"]).versions()) >= 2  # history survived the rename
 
 
 def test_rename_into_another_namespace(tmp_path: Path) -> None:
@@ -294,12 +306,13 @@ def test_rename_onto_existing_name_conflicts(tmp_path: Path) -> None:
     from catalog.services.dataplane import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["a"], _blob_ipc([b"x"]), mode="create")
-    create_table(ns, {}, ["b"], _blob_ipc([b"y"]), mode="create")
+    _declare_namespace(ns, "media")
+    create_table(ns, {}, ["media", "a"], _blob_ipc([b"x"]), mode="create")
+    create_table(ns, {}, ["media", "b"], _blob_ipc([b"y"]), mode="create")
     with pytest.raises(TableAlreadyExistsError):
-        rename_table(ns, {}, ["a"], "b", None)
+        rename_table(ns, {}, ["media", "a"], "b", None)
     # The source is untouched by a rejected rename — still readable at its original id.
-    assert _open(ns, ["a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
+    assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
 
 
 def test_rename_missing_source_is_not_found(tmp_path: Path) -> None:
@@ -339,49 +352,57 @@ def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
 
 
 def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> None:
-    """The old code REUSED a declared-only destination, which skipped ``declare_table`` — the only ATOMIC
-    arbiter. Two concurrent renames into the same declared name then both copied into one location and both
-    retired their sources, silently destroying a table. A declared stub is now TAKEN (409), never adopted."""
+    """A declared stub is TAKEN, never adopted. Adopting one would let two concurrent renames both claim
+    the same name and both retire their sources, leaving two ids over one dataset and neither source."""
     from catalog.services.dataplane import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["src"], _blob_ipc([b"x"]), mode="create")
-    ns.declare_table(DeclareTableRequest(id=["stub"]))  # declared-but-unwritten destination
+    _declare_namespace(ns, "media")
+    create_table(ns, {}, ["media", "src"], _blob_ipc([b"x"]), mode="create")
+    ns.declare_table(DeclareTableRequest(id=["media", "stub"]))  # declared-but-unwritten destination
 
     with pytest.raises(TableAlreadyExistsError):
-        rename_table(ns, {}, ["src"], "stub", None)
-    assert _open(ns, ["src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
+        rename_table(ns, {}, ["media", "src"], "stub", None)
+    assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
 
 
-def test_rename_keeps_destination_when_source_delete_fails(tmp_path: Path, monkeypatch) -> None:
-    """Once the copy succeeds the DESTINATION holds the only complete copy and is authoritative. Deleting
-    the source is NON-ATOMIC (an S3 batch, a local mid-directory walk), so a partial-then-failed delete must
-    NOT roll the destination back — that would lose the data the copy just secured, recoverable nowhere
-    (the CRITICAL regression the naive rollback introduced). The rename SUCCEEDS; the corrupted source bytes
-    are orphaned for the reconcile sweep, and the data stays readable at the destination."""
-    import os
-    import shutil
+def test_a_failed_source_deregister_leaves_ONE_dataset_under_TWO_ids(tmp_path: Path) -> None:
+    """The pointer move is two calls, so there is a window — and what is in it is the whole safety case.
+
+    The destination is registered first, then the source retired. A failure in the second call leaves both
+    ids resolving to the SAME dataset: one copy of the data, two pointers, nothing at risk, and a
+    deregister of either id resolves it. Rolling the destination back instead would leave a rename that
+    reported success and did nothing.
+
+    A byte copy's equivalent window left two full COPIES of the dataset and, if the source delete had
+    already run partway, an unreadable source. That failure class does not exist here.
+    """
+    from lance_namespace import DeregisterTableRequest
 
     from catalog.services import dataplane
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["a"], _blob_ipc([b"x", b"y"]), mode="create")
+    _declare_namespace(ns, "media")
+    create_table(ns, {}, ["media", "a"], _blob_ipc([b"x", b"y"]), mode="create")
+    source = ns.describe_table(DescribeTableRequest(id=["media", "a"])).location
 
-    def _partial_then_fail(uri: str, _so: dict) -> None:
-        # Worst case: a NON-ATOMIC delete removes PART of the source (corrupting it), then raises like a 5xx.
-        path = uri.removeprefix("file://")
-        versions = os.path.join(path, "_versions")
-        if os.path.isdir(versions):
-            shutil.rmtree(versions)  # source is now unreadable — the copy at dest is the ONLY good copy
-        raise OSError("rustfs 503 mid-batch")
+    real = ns.deregister_table
 
-    monkeypatch.setattr(dataplane, "_delete_dataset", _partial_then_fail)
+    def _fails(request: DeregisterTableRequest):  # noqa: ANN202 - the namespace's own response type
+        raise OSError("rustfs 503")
 
-    # The rename SUCCEEDS (does not raise) — a source-delete failure never rolls the destination back.
-    new_segments, location = dataplane.rename_table(ns, {}, ["a"], "b", None)
-    assert new_segments == ["b"] and location
-    # The data is intact and readable at the DESTINATION — recoverable, not lost.
-    assert _open(ns, ["b"]).read_blobs("payload", indices=[0])[0][1] == b"x"
+    ns.deregister_table = _fails  # type: ignore[method-assign]
+    try:
+        new_segments, location = dataplane.rename_table(ns, {}, ["media", "a"], "b", None)
+    finally:
+        ns.deregister_table = real  # type: ignore[method-assign]
+
+    assert new_segments == ["media", "b"]
+    assert location == source
+    # BOTH ids resolve, to the same dataset — recoverable by retiring either, with no data duplicated.
+    assert ns.describe_table(DescribeTableRequest(id=["media", "b"])).location == source
+    assert ns.describe_table(DescribeTableRequest(id=["media", "a"])).location == source
+    assert _open(ns, ["media", "b"]).read_blobs("payload", indices=[0])[0][1] == b"x"
 
 
 def test_rejected_external_create_rolls_back_and_stays_retryable(tmp_path: Path) -> None:

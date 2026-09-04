@@ -254,27 +254,6 @@ def test_listing_is_scoped_to_the_project(client: TestClient, control_root: str)
     assert [t["name"] for t in listed["transforms"]] == ["dummy", "second"]
 
 
-def test_the_OLD_wire_spelling_is_still_accepted(client: TestClient) -> None:
-    """This door renamed `lane` to `name` and `entrypoint` to `task`. A caller still sending the old
-    spellings must work.
-
-    The frontend ships in the same release and was updated with it, but this door is public and an
-    external caller was not. `populate_by_name` plus `AliasChoices` is what makes each
-    rename a rename rather than a breaking change — and the models are `extra="forbid"`, so without
-    the alias the old body would be REFUSED rather than ignored.
-
-    Asserted through the HTTP door, not on the model, because the model is not what an external
-    caller talks to.
-    """
-    declared = client.post(
-        "/v1/project/acme/transform/set",
-        json={"lane": "legacy", "from_id": "bronze$events", "to_id": "silver$legacy", "entrypoint": "stage-transform"},
-    )
-    assert declared.status_code == 200, declared.text
-    assert declared.json()["name"] == "legacy", "the old spelling was accepted but answered under a different name"
-    assert declared.json()["task"] == "stage-transform", "the old `entrypoint` spelling must land on `task`"
-
-
 def test_the_REGISTERED_TASKS_are_discoverable_at_the_same_tier(client: TestClient) -> None:
     """A refused field whose vocabulary cannot be read is a trap, not a gate.
 

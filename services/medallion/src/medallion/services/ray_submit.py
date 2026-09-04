@@ -311,7 +311,7 @@ async def submit_stage_job(
     await rk.submit_or_reattach(client, submission_id, body)
     log.info(
         "ray_stage_job_submitted",
-        extra={"submission_id": submission_id, "stage": stage, "lane": spec.name if spec else "", "declared": spec is not None},
+        extra={"submission_id": submission_id, "stage": stage, "transform": spec.name if spec else "", "declared": spec is not None},
     )
     return submission_id
 

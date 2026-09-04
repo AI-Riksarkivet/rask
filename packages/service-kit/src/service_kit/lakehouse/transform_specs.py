@@ -37,7 +37,7 @@ import re
 from typing import Any
 
 import pyarrow.fs as pafs
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.stage_stamp import CARDINALITIES, ONE_TO_ONE
@@ -62,34 +62,18 @@ _RESERVED_PARAM_PREFIX = "RASK_PARAM_"
 class TransformSpec(BaseModel):
     """One declared TRANSFORM. Written by the catalog's admin-gated door, read by the mover."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
-    #: The declaration's own name, unique within the project.
-    #:
-    #: ACCEPTS THE OLD SPELLING ON READ (§8 change 7). The model is `extra="forbid"`, so a record
-    #: written before the rename — `{"lane": "dummy", ...}` — would be REFUSED at parse rather than
-    #: migrated, and a refused declaration means a mover runs the chart's program while an operator
-    #: believes the record governs it. That is the exact failure `UndeclaredTransformError` exists to
-    #: prevent, so the alias is not politeness, it is the rename not creating the bug it was cleaning
-    #: up after. The on-disk KEY is unaffected: `_key` hashes the VALUE, never the field name.
-    name: str = Field(validation_alias=AliasChoices("name", "lane"), description="the transform's name, unique within the project")
+    #: The declaration's own name, unique within the project. The on-disk KEY hashes the VALUE, never
+    #: the field name, so renaming a field never moves a record.
+    name: str = Field(description="the transform's name, unique within the project")
     project: str = Field(min_length=1, max_length=64)
     from_id: str = Field(min_length=1, description="upstream catalog table identifier, e.g. bronze$events")
     to_id: str = Field(min_length=1, description="downstream catalog table identifier, e.g. silver$dummy")
     #: A registered TASK KEY, resolved against `<control_root>/_tasks/` by the declaration door — opaque
     #: to this library and to the catalog, which is what keeps an engine's name out of the published
     #: OpenAPI and lets a second engine be declared without a catalog change.
-    #:
-    #: ACCEPTS `entrypoint` ON READ, and the alias is a migration mechanism rather than politeness —
-    #: the same reason recorded for `lane`->`name` below. This model is `extra="forbid"`, so an
-    #: un-aliased field name REFUSES every record that spells it the other way, and a refused
-    #: declaration means a mover runs the chart's program while an operator believes the stored
-    #: record governs it.
-    task: str = Field(
-        min_length=1,
-        validation_alias=AliasChoices("task", "entrypoint"),
-        description="a task registered in <control_root>/_tasks/",
-    )
+    task: str = Field(min_length=1, description="a task registered in <control_root>/_tasks/")
     params: dict[str, str] = Field(default_factory=dict, description="opaque workload parameters; never secrets")
     #: How many output rows this lane may emit per input row. DECLARED, never inferred: a stage
     #: driver cannot tell a deliberate fan-out from a transform that lost rows, and guessing in

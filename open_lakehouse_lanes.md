@@ -1,4 +1,4 @@
-# Index builds and rename move onto the maintenance work lane
+# Index builds move onto the maintenance work lane
 
 Carried out of the cloud-native cutover plan when it closed (`docs/DECISIONS.md`), because it is the one row that never
 belonged to the zero-trust/decoupling chain the rest of it was about. It is unstarted.
@@ -7,11 +7,11 @@ belonged to the zero-trust/decoupling chain the rest of it was about. It is unst
 
 Two operations still move BYTES THROUGH A POD that has no business carrying them:
 
-- **`rename_table`** — `catalog/api/v1/endpoints/tables.py::rename_table` copies the dataset root
-  in-process, repoints the namespace and deregisters the source. It answers 200, which is why nothing
-  flags it, but a rename's cost is the DATASET's size and it is paid inside a request handler. That is
-  the same class as the `maintenance/compact` door before it became a 202 — see `docs/DECISIONS.md`,
-  "The lakehouse cloud-native cutover".
+- ~~**`rename_table`** — copies the dataset root in-process.~~ **CLOSED 2026-09-04.** A rename is a
+  `__manifest` pointer move: register the destination id at the source's existing location, deregister
+  the source. O(1) in the dataset, no byte read or written, and the byte-copy's three failure modes go
+  with it. The answer is lance-ns's own V2 naming rule, measured on the `dir`
+  backend the chart runs — see `docs/DECISIONS.md`, "A rename moves a POINTER, not bytes".
 - **Index builds** run wherever they are invoked rather than on the work lane, so a large index is
   another unbounded in-handler cost.
 
@@ -23,11 +23,11 @@ plan-elsewhere / commit-in-the-catalog pair that `Compaction.plan` / `.execute` 
 compaction. So an index build becomes a `DatasetWorkItem` like any other unit, executed under a
 credential vended for that table.
 
-A rename is different in kind and must NOT become a byte copy on the work lane. The right answer is a
-server-side copy (the object store's own, no bytes through any pod) or a base-path rewrite that moves
-no data at all. Which of the two depends on whether the estate is willing to leave a dataset's bytes at
-a path that no longer matches its name — that is the decision this work has to make first, and it is
-not made.
+The rename decision is MADE, and it turned out to be neither of the two options this file listed. It is
+not a server-side copy and not a base-path rewrite: lance-ns V2 keeps the authoritative name→location
+mapping in `__manifest` and treats the `<hash>_<object_id>` directory name as a debugging label, so a
+rename is one manifest-row move and the dataset's path simply stops matching its name — which is the
+correct design rather than a tradeoff. Measured and closed; see `docs/DECISIONS.md`.
 
 ## What is already in place
 
@@ -41,6 +41,4 @@ not made.
 
 - any index-build unit type, or a decision about whether index work shares `DatasetPlan` or needs its
   own payload;
-- the rename decision above;
-- a measured cost for either, which is the first thing to get: `rename_table` is a 200 today and
-  nobody has recorded how long it takes on a real dataset.
+- a measured cost for the index build, which is the first thing to get.

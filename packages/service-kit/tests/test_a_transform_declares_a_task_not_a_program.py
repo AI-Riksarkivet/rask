@@ -1,7 +1,7 @@
 """A `TransformSpec` names a registered TASK, not a Ray program path.
 
 `open_compute-decoupling.md` §2.1, step 1 of §7.4, and the change that makes clause 1 true: today
-`entrypoint` is validated against `BAKED_JOBS_DIR = "/home/ray/jobs/"` and a frozenset of Ray script
+A transform's runnable half is a KEY, not a program path. Nothing in this shared library validates
 filenames, so the word "Ray", a directory and three filenames reach every API client through the
 catalog's published OpenAPI — and no second engine can be declared at all.
 
@@ -40,24 +40,9 @@ def test_a_spec_declares_a_task() -> None:
     assert _spec().task == "stage-transform"
 
 
-def test_an_OLD_record_naming_entrypoint_still_READS() -> None:
-    """The migration mechanism. `extra="forbid"` would otherwise refuse every record written before
-    this change, and a refused declaration means the mover runs the chart's program while an operator
-    believes the stored record governs it."""
-    spec = TransformSpec.model_validate(
-        {
-            "name": "dummy",
-            "project": "acme",
-            "from_id": "bronze$events",
-            "to_id": "silver$dummy",
-            "entrypoint": "python /home/ray/jobs/ray_stage_job.py",
-        }
-    )
-    assert spec.task == "python /home/ray/jobs/ray_stage_job.py"
-
-
-def test_writing_produces_the_NEW_name() -> None:
-    """An alias that also wrote the old name would keep the engine noun alive in every new record."""
+def test_the_record_carries_ONLY_the_new_name() -> None:
+    """One spelling on disk. A model that also accepted an older one would keep the engine noun alive
+    in every record written by anything that still spoke it."""
     assert "task" in _spec().model_dump_json()
     assert "entrypoint" not in _spec().model_dump_json()
 

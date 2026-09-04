@@ -45,7 +45,7 @@ def _spec(**over: object) -> TransformSpec:
         "project": "acme",
         "from_id": "acme-bronze$events",
         "to_id": "acme-silver$dummy",
-        "entrypoint": "python /home/ray/jobs/ray_stage_job.py",
+        "task": "stage-transform",
         "params": {},
         "code_version": "",
     }

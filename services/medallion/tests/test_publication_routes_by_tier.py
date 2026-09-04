@@ -144,6 +144,6 @@ class TestTheDeploymentPath:
     def test_the_JSON_env_form_parses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The chart renders this as a JSON string. A dict works in a constructor and proves nothing
         about the path a pod actually takes."""
-        monkeypatch.setenv("MEDALLION_LANE_ROUTES", json.dumps(ROUTES))
+        monkeypatch.setenv("MEDALLION_TRANSFORM_ROUTES", json.dumps(ROUTES))
 
         assert MedallionSettings().transform_routes == ROUTES

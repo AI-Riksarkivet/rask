@@ -68,7 +68,7 @@ def test_the_record_forbids_unknown_fields() -> None:
     """`extra="forbid"`, like every sibling record: a misspelled field must not be silently dropped
     into a registration that then means something else."""
     with pytest.raises(ValidationError):
-        _reg(entrypoint="python /home/ray/jobs/ray_stage_job.py")
+        _reg(comand="python /home/ray/jobs/ray_stage_job.py")  # a plausible typo for `command`
 
 
 def test_obligations_are_CLAIMED_here_and_verified_elsewhere() -> None:

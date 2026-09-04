@@ -821,24 +821,29 @@ async def rename_table(
     authorization: Annotated[str | None, Header()] = None,
     force: bool = False,
 ) -> RenameTableResponse:
-    """Rename the table at ``id`` IN-PROCESS (#5b), then migrate its FGA ownership and emit dest←source
-    lineage.
+    """Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.
 
     Lance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and
-    the ``dir`` backend's ``rename_table`` is a hard 501 — 501 is also off-spec (the Namespace REST spec
-    makes rename a first-class Metadata op). So the rename is done in-process: the self-contained dataset
-    root is byte-copied to the destination location (preserving version history) and the source pointer is
-    deregistered (``dataplane.rename_table``). The caller must hold ``can_drop`` on the source (owner tier,
-    gated by the router ``authorize``) AND ``can_create_table`` on the DESTINATION parent — else a source
-    owner could plant their table into a namespace/tenant they lack create rights on. FGA tuples migrate
-    from the old id to the new; a versionless REGISTER marker records the (re)attachment at the new location
-    so the destination appears in the graph with its provenance (#23 reconcile back-fills its on-disk
-    version). Source missing → 404 ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``."""
+    the ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec — the Namespace REST spec
+    makes rename a first-class Metadata op. It is served here as what the spec describes: the destination id
+    is registered at the SOURCE's existing location and the source id is deregistered. **No data byte is
+    read, written or deleted**, so the cost is O(1) rather than the dataset's size — see
+    ``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
+    shape (a V1 root-namespace table) it refuses.
+
+    The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
+    ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
+    namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
+    versionless REGISTER marker records the attachment at the new id so the destination appears in the
+    graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
+    ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)  # a contradictory body id is a 400, like every {id} route
-    # #73: a rename DELETES the source bytes (byte-copy + deregister below), so the source's protection
-    # gates it exactly like drop. `force` rides the query string as on the sibling doors. Checked FIRST —
-    # before the parent/create gates — so a protected source refuses identically regardless of destination.
+    # #73: a rename RETIRES the source id, so the source's protection gates it exactly like drop even
+    # though no byte moves. The bytes surviving is not the point — a protected table's protection record,
+    # its policies and every grant are keyed on the id, and a rename takes the table out from under all
+    # three. `force` rides the query string as on the sibling doors. Checked FIRST — before the
+    # parent/create gates — so a protected source refuses identically regardless of destination.
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
@@ -861,20 +866,23 @@ async def rename_table(
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)
     await fga_deps.require_create_on_parent(client, settings, token, resource="table", segments=new_segments)
     new_segments, location = await run_in_threadpool(dataplane.rename_table, ns, so, segments, body.new_table_name, body.new_namespace_id)
-    # Emit the SOURCE's terminal DROP marker BEFORE revoking its tuples. The default ``http`` lineage
-    # transport runs ``enforce_output_authz`` (``can_write_data`` on the source); revoking first deletes the
+    # Emit the SOURCE's terminal marker BEFORE revoking its tuples. The default ``http`` lineage transport
+    # runs ``enforce_output_authz`` (``can_write_data`` on the source); revoking first deletes the
     # parent→writer edge, so even an admin would 403 and this best-effort emit would be silently swallowed —
-    # the sibling drop/deregister endpoints emit-before-revoke for exactly this reason (audit 2026-07-14). A
-    # rename DELETES the source bytes, so it is a DROP (not a deregister, which keeps data); without this
-    # marker the source's most recent successful run stays a WRITE and it looks alive forever
-    # (``dropped_at()`` never fires; reconcile WARNs ``missing_on_storage`` against the deleted location).
+    # the sibling drop/deregister endpoints emit-before-revoke for exactly this reason (audit 2026-07-14).
+    #
+    # DEREGISTER, NOT DROP, and the distinction is the whole change: the bytes survive under the new id.
+    # A DROP marker says the data is gone — `dropped_at()` fires and the reconciler stops expecting the
+    # location — which would be a lie about a dataset that is still there, still governed, and still the
+    # destination's own history. DEREGISTER says exactly what happened at this id: no longer catalogued
+    # here, bytes retained. The destination's REGISTER marker below completes the pair.
     await emit_write_event(
         emitter,
         segments,
         delimiter=settings.delimiter,
         author=token.sub if token is not None else None,
         version=None,
-        operation=DROP_TABLE,
+        operation=DEREGISTER_TABLE,
         authorization=authorization,
     )
     # SEED THE DESTINATION FIRST, then revoke the source. The order is the fix, and it is a deliberate

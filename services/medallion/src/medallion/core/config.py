@@ -192,9 +192,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: accepted keys outright — `populate_by_name` does not apply to it — so without the name here,
     #: constructing settings by field name silently yields the default. Found by a test, which had
     #: been passing the name and getting the chart's entrypoint back.
-    transform_routes: dict[str, str] = Field(
-        default_factory=dict, validation_alias=AliasChoices("transform_routes", "MEDALLION_TRANSFORM_ROUTES", "MEDALLION_LANE_ROUTES")
-    )
+    transform_routes: dict[str, str] = Field(default_factory=dict, validation_alias=AliasChoices("transform_routes", "MEDALLION_TRANSFORM_ROUTES"))
     #: Where each MOVER answers, by mover name — the producer proxies the cascade's operator routes
     #: (`/movers/{name}/stages/...`) to these. Movers are deliberately bus-only, with no gateway row
     #: and no Ingress, so the producer is the only door a person can reach; it authenticates and
@@ -319,7 +317,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: Named-but-UNDECLARED is a REFUSAL, never a fallback to the settings above — see
     #: ``medallion.services.transform_spec``. A fallback would run the old program under the declaration's name
     #: while an operator believed the record governed it, with nothing anywhere red.
-    transform: str = Field(default="", validation_alias=AliasChoices("transform", "MEDALLION_TRANSFORM", "MEDALLION_LANE"))
+    transform: str = Field(default="", validation_alias=AliasChoices("transform", "MEDALLION_TRANSFORM"))
     # The catalog service a mover ASKS where its output table lives (`ensure_stage_output`) and then
     # PUBLISHES that version through. Empty by default: the lane fails at the seam naming the env
     # var, never guessing — a gold table the catalog cannot govern must not report success.
