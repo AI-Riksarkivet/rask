@@ -100,7 +100,10 @@ submission id needs both. So C2 forwards, exactly as `terminate` does.
 | --- | --- | --- |
 | C1 | **One trigger shape, two producers** — `build_stage_trigger`; the publication head is its first caller, pinned by an AST gate that also refuses a hand-built dict beside the call | ✅ **LANDED** `e1baef1c`, gate strengthened + mutation-proven `921a7c15` |
 | C4 | **Surface the silent refusals** — two rules mirroring `MedallionStageDenied` over `medallion_stage_refused_total{lance_medallion_reason}` and `medallion_stage_other_lane_total`, with `for:`, a Perses row, a `routing_disabled` runbook section, and invariant tests binding rule↔counter. Promote L5's `log.debug` ack to a counted refusal when the namespace is tier-shaped. **Chart-only; no new state** | next |
-| C3 | **The lag gauge** — per declared edge, the source's `published` tag version vs the highest `to_version` the destination's latest run consumed, as `medallion_cascade_lag{edge,project}` evaluated with `for:`. Never a per-tick counter or log (row 23's lesson) | after C4 |
+| C3a | **Record the consumed range** — the `lance` run facet carries `from_version`/`to_version` beside the `version` it wrote, gated so the emit cannot stop passing them | ✅ **LANDED** `498b5531`, deployed `c3a-498b5531` and proven live in the mover |
+| C3-core | **The lag arithmetic** — pure over injected readers; `known=False` never collapses to 0 | ✅ **LANDED** `a17cd748` |
+| C3b | **Make the range QUERYABLE** — lineage emits it but does not expose it. `RunStatus` folds `operation` and `promotion_status` off the lance facet and not the range, so a reader cannot ask "what has silver consumed?". Four sites, following that exact pattern: the event model, the Cypher SET, the row model, the SELECT | **BLOCKS C3** |
+| C3 | **The lag gauge** — wire C3-core to the two readers, publish `medallion_cascade_lag{edge,project}` evaluated with `for:`, on a producer cron. Never a per-tick counter or log (row 23's lesson) | after C3b |
 | C2 | **The re-run verb** — edge-addressed, `token` optional per R1, forwarded per R5, authorized per R4, 409 per R2, mode PREDICTED per R3 | last |
 
 **C4 depends on `open_alert.md`:** `alerting.enabled` is `false` in `chart/values.yaml` and `true`
@@ -110,6 +113,10 @@ only in `values-prod.yaml`, so a new rule is inert on a fresh install and live i
 lineage infers edges from prior runs and is blind there. **Its every-replica answer is convergence**:
 read-only and idempotent, so every replica firing is harmless, the same answer the control relay takes.
 Recorded here rather than deferred, per the rask-dapr rule.
+
+**C3 is BLIND TO HISTORY, and that is not a bug to fix.** C3a records the range going forward, so the
+detector reports `known=False` for every edge whose last run predates its deploy — until each has run
+once. An operator must be told that, or the first tick's unknowns read as an outage.
 
 **C3 falsifies five prose sites** that currently say *nothing ever re-reads the `published` tag*
 (`publication_trigger.py`, `control_relay.py`, `values.yaml`, `publication.py`). C3 **is** that reader.
