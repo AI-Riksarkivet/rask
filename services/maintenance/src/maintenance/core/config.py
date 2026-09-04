@@ -105,6 +105,16 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
     work_pubsub: str = Field(default="maintenance-work-pubsub", alias="MAINTENANCE_WORK_PUBSUB")
     work_topic: str = Field(default="", alias="MAINTENANCE_WORK_TOPIC")
+    #: Does THIS pod consume the work queue? (M1, `open_maintenance_compute.md`.)
+    #:
+    #: `work_topic` cannot express this, and that is the whole reason the switch exists: a PLANNER
+    #: needs the topic to PUBLISH onto and must not also subscribe, or splitting the deployment
+    #: achieves nothing. An EXECUTOR sets no cron binding names and consumes.
+    #:
+    #: TRUE by default, so an estate that has not opted in keeps one pod doing both — the split is a
+    #: chart decision, never a code default. Mirrors Lakekeeper, which disables workers on its API pods
+    #: with `LAKEKEEPER__TASK_EXPIRE_SNAPSHOTS_WORKERS=0` and runs dedicated worker pods beside them.
+    execute_work: bool = Field(default=True, alias="MAINTENANCE_EXECUTE_WORK")
     #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
     #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
     #: per-dataset boundary was supposed to fix.

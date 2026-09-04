@@ -1356,6 +1356,30 @@ maintenance:
   # one replica (`replicas: 1` is hardcoded in maintenance.yaml), so the queue's scaling payoff is not
   # available until that pin and the in-process sweep lock are retired together.
   workTopic: ""
+  # DEDICATED MAINTENANCE WORKERS (`open_maintenance_compute.md` M1).
+  #
+  # One deployment does the planning AND the compaction today, at `replicas: 1` and 512Mi — so the
+  # work is bounded to fit the pod (`compactThreads`, `scanBatchSize`) rather than the pod sized to fit
+  # the work. Lakekeeper states the same split as its production practice: "we recommend running expire
+  # snapshots workers in dedicated pods to avoid impacting REST API performance", with the API pod's
+  # worker count set to zero.
+  #
+  # rask needs no new mechanism: the tick already plans and publishes one unit per dataset, the work
+  # Component already carries `queueGroupName`, so replicas are competing consumers. The `replicas: 1`
+  # pin belongs to the PLANNER alone (its sweep lock, because `bindings.cron` fires on every replica
+  # with no lease); the executor has never needed it, because the broker single-flights a unit.
+  #
+  # OFF BY DEFAULT — a split arriving by upgrade would move compaction onto a pod nobody sized.
+  # Requires `workTopic`: with no queue there is nothing for a worker to consume.
+  dedicatedWorkers:
+    enabled: false
+    replicas: 2
+    resources:
+      requests: { cpu: 250m, memory: 1Gi }
+      # Sized for the WORK, unlike the planner's 512Mi. Compaction reads whole fragments: on bronze,
+      # whose rows are ~1.8MB page images, `scanBatchSize: 64` is ~115MB in flight before Lance's own
+      # overhead. Raise this and `scanBatchSize` together — the batch is what the limit bounds.
+      limits: { cpu: 2, memory: 4Gi }
   # Sign each compaction's WRITE with a credential vended per table by the catalog, instead of the
   # deployment's ambient root key. OFF by default: it needs the catalog reachable AND the subject below
   # holding `can_write_data` on what it maintains, and a deployment missing either falls back to the

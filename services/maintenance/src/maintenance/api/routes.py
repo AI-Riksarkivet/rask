@@ -210,6 +210,12 @@ def build_router(settings: MaintenanceSettings) -> APIRouter:
         (settings.binding_name, on_cron, ack_binding),
         (settings.reconcile_binding_name, on_reconcile_cron, ack_reconcile_binding),
     ):
+        # AN UNNAMED BINDING MOUNTS NOTHING. Unconditional, this served `f"/{''}"` — a token-guarded
+        # cron door at the pod ROOT — which an EXECUTOR pod (M1: no cron, work queue only) would have
+        # published by simply not configuring a binding. Opt-in on a configured name is the same rule
+        # the control relay and the cascade-lag cron already follow.
+        if not name:
+            continue
         router.add_api_route(f"/{name}", on_post, methods=["POST"], dependencies=[Depends(require_dapr_token)])
         router.add_api_route(f"/{name}", on_options, methods=["OPTIONS"], include_in_schema=False)
     return router

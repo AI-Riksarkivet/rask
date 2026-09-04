@@ -1,50 +1,23 @@
-{{- if .Values.maintenance.enabled }}
+{{- /* DEDICATED MAINTENANCE WORKERS (`open_maintenance_compute.md` M1).
+
+     The planner's own Deployment, with the cron binding names BLANKED and its own sizing. It
+     consumes `maintenance.work.v1` as a competing consumer (the Component carries
+     `queueGroupName: maintenance`), so replicas share the queue with no code change and the
+     broker single-flights each unit — no lock, which is why this half may scale while the
+     planner may not.
+
+     Rendered from the SAME block as the planner so the two cannot drift in their storage,
+     credential or lineage wiring; only the role switches and the resources differ. */}}
+{{- if and .Values.maintenance.enabled .Values.maintenance.dedicatedWorkers.enabled .Values.maintenance.workTopic }}
 {{- $root := . }}
 {{- $port := .Values.maintenance.port }}
-{{- if .Values.dapr.enabled }}
-# Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
-# as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
-# Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
-# would fail to apply (the service still renders below; its cron route just never fires).
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.maintenance.bindingName }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: bindings.cron
-  version: v1
-  metadata:
-    - { name: schedule, value: {{ .Values.maintenance.schedule | quote }} }
-scopes:
-  - {{ .Values.maintenance.daprAppId }}
----
-# The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
-# two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
-# stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
-# the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.maintenance.reconcileBindingName }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: bindings.cron
-  version: v1
-  metadata:
-    - { name: schedule, value: {{ .Values.maintenance.reconcileSchedule | quote }} }
-scopes:
-  - {{ .Values.maintenance.daprAppId }}
----
-{{- end }}
-# Table maintenance service — runs uvicorn maintenance.service:app (shares the catalog image).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "lance.fullname" . }}-maintenance
+  name: {{ include "lance.fullname" . }}-maintenance-worker
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.maintenance.dedicatedWorkers.replicas }}
   selector:
     matchLabels: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
@@ -124,7 +97,10 @@ spec:
             {{- if .Values.maintenance.dedicatedWorkers.enabled }}
             # THE PLANNER PUBLISHES AND DOES NOT CONSUME. It still needs the topic — it enqueues onto
             # it — which is exactly why `workTopic` cannot express this and a second switch exists.
-            - { name: MAINTENANCE_EXECUTE_WORK, value: "false" }
+            # THE EXECUTOR CONSUMES. No cron names below, so `build_router` mounts nothing and this pod
+            # runs no sweep of its own beside the planner's.
+            - { name: MAINTENANCE_BINDING_NAME, value: "" }
+            - { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: "" }
             {{- end }}
             {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
@@ -172,7 +148,6 @@ spec:
             - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
             - { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
             {{- end }}
-            - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
             - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
             - { name: MAINTENANCE_SCAN_BATCH_SIZE, value: {{ .Values.maintenance.scanBatchSize | quote }} }
             - { name: MAINTENANCE_COMPACT_THREADS, value: {{ .Values.maintenance.compactThreads | quote }} }
@@ -234,7 +209,6 @@ spec:
                    registries say what exists, object storage holds the bytes. Every one of these mirrors a
                    CATALOG setting and must match it — a divergent fga_root_object reports the estate root as
                    a ghost forever, and a divergent warehouses_enabled reports every namespace as unbound. */}}
-            - { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: {{ .Values.maintenance.reconcileBindingName | quote }} }
             - { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
             - { name: MAINTENANCE_CONTROL_ROOT, value: {{ .Values.maintenance.controlRoot | default "" | quote }} }
             {{- /* The #50 POLICY registry root. Rendered nowhere until 2026-08-16, so an operator who
@@ -263,13 +237,4 @@ spec:
             {{- include "lance.tmpMount" . | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "lance.fullname" . }}-maintenance
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  ports: [{ name: http, port: {{ $port }}, targetPort: http }]
-  selector: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
 {{- end }}

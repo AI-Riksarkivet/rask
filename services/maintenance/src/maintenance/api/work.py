@@ -68,7 +68,7 @@ def register_work_route(app: FastAPI, settings: MaintenanceSettings) -> DaprApp 
     Returns the :class:`DaprApp` so a caller can hang further subscriptions off the same wrapper; a
     second ``DaprApp(app)`` would re-register ``/dapr/subscribe``.
     """
-    if not settings.work_topic:
+    if not settings.work_topic or not settings.execute_work:
         return None
     dapr_app = DaprApp(app)
 
