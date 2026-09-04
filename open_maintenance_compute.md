@@ -50,6 +50,47 @@ lease for the executor, and the planner is what is unscalable.
 single-flights a unit. Splitting the two into different deployments makes the executor horizontally
 scalable without touching the planner's constraint.
 
+## What Lakekeeper does — and why it cannot answer THIS question
+
+The estate audited Lakekeeper's maintenance assignment on 2026-09-03 and the conclusion is recorded in
+`docs/DECISIONS.md`. Two halves, and only the first is usually remembered:
+
+1. **Its task queue lives in the catalog's own Postgres**, enqueued inside the catalog transaction and
+   drained by workers polling `FOR UPDATE ... SKIP LOCKED`. That was REJECTED here with a measured
+   reason: Lakekeeper's queue is sound because every Iceberg commit goes through the catalog — the
+   commit pointer lives in it. rask deliberately does not have that (Lance puts the CAS in the object
+   store, which is why this estate needs no relational DB), and the medallion movers call
+   `lance.write_dataset` directly, so a catalog-directed decider would be blind to the highest-churn
+   writer in the estate.
+2. **Lakekeeper performs ZERO COMPACTION.** Its queue drives expiration and purge — work whose "is it
+   due" is a pure function of a timestamp the catalog already holds.
+
+So on the question this file asks — *where does expensive maintenance COMPUTE run* — Lakekeeper is
+silent, because it does not do the expensive part. Reaching for it here would be borrowing an answer
+to a different question. What it DID contribute has already landed: the producer/consumer SHAPE
+(plan-and-enqueue, workers execute one unit), which is N4, taken without moving the source of truth.
+
+**The one thing still worth taking from it** is per-dataset ADAPTIVE cadence — Lakekeeper reschedules
+from the previous run's outcome with a 1-day floor and ceiling, which the policy's fixed `interval`
+cannot express. Unstarted, and orthogonal to everything below.
+
+## The design the format itself prescribes
+
+Lance ships the answer, and rask already serves half of it. `Compaction.plan` →
+`CompactionTask.execute` → `Compaction.commit` exists precisely so the three phases can run in
+different places: **the catalog plans and commits (metadata, cheap, transactional); a separate engine
+executes the bytes (IO-bound, unbounded in the data).**
+
+That is the same separation every table format converged on — in the Iceberg and Delta world the
+metadata service coordinates the commit while `rewrite_data_files` / `OPTIMIZE` run on a Spark or Flink
+cluster sized for the job. Stated as context rather than as audited fact; what IS audited is that Lance
+gives the identical split, and that rask exposes it and consumes it nowhere.
+
+**So M2 is not an optimisation of M1 — M2 is the correct design, and M1 is a stopgap** that buys a
+memory budget while leaving compaction on a general-purpose pod. M1 is still worth doing first because
+it is cheap, unblocks nothing and removes the 512Mi ceiling today; it just must not be mistaken for
+the destination.
+
 ## The three shapes, and what each buys
 
 | # | Shape | Buys | Costs |
@@ -58,10 +99,12 @@ scalable without touching the planner's constraint.
 | M2 | **Executor consumes the distributed protocol** — `compaction_plan` → run `CompactionTask`s → `compaction_commit`, instead of in-pod `compact_files` | The credential split becomes real on the write path, and a task becomes portable | The estate's first `CompactionTask` executor |
 | M3 | **BYO compute** — M2's tasks submitted as a `RayJob` CR, admitted by Kueue | Maintenance sized by the cluster, not by a pod limit; quota and gang scheduling | Blocked on `open_compute-decoupling.md` §7.4 steps 3–4, which are owner-sequenced |
 
-**M1 is the honest first step**: it is a chart change plus a route-mounting condition, needs no new
-protocol, and is what makes the 512Mi ceiling stop being the estate's compaction budget. M2 is where
-the distributed seam finally earns what it cost to build. M3 is the cloud-native end state and is
-sequenced behind work the owner has already ordered.
+**Do M1 first and do not mistake it for the answer.** It is a chart change plus a route-mounting
+condition, needs no new protocol, and stops 512Mi being the estate's compaction budget — but it keeps
+the bytes on a general-purpose pod. **M2 is the correct design** (see above: the format itself
+prescribes plan-here / execute-elsewhere / commit-here) and is where the distributed seam finally earns
+what it cost to build. M3 is the cloud-native end state and is sequenced behind
+`open_compute-decoupling.md` §7.4 steps 3-4, which the owner already ordered.
 
 ## What must be decided before M2
 
