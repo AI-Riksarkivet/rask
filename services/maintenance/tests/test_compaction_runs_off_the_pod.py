@@ -23,6 +23,7 @@ table it rewrites and expiring in 900s.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -131,9 +132,9 @@ def test_the_EXECUTE_credential_is_the_one_this_worker_was_given(tmp_path: Path)
     seen: list[dict[str, str]] = []
     real = ce._open_for_rewrite
 
-    def _spy(location: str, write_options: Any) -> Any:
+    def _spy(uri: str, write_options: Mapping[str, str]) -> lance.LanceDataset:
         seen.append(dict(write_options))
-        return real(location, {})  # opened for real against the local fixture; the OPTIONS are the assertion
+        return real(uri, {})  # opened for real against the local fixture; the OPTIONS are the assertion
 
     ce._open_for_rewrite = _spy  # type: ignore[assignment]
     try:
@@ -164,7 +165,7 @@ def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Pat
     calls = {"n": 0}
     real_execute = ce._execute_one
 
-    def _flaky(task_json: str, dataset: Any) -> str:
+    def _flaky(task_json: str, dataset: lance.LanceDataset) -> str:
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("worker OOM on task 2")
@@ -197,7 +198,7 @@ def test_EVERY_task_failing_commits_NOTHING(tmp_path: Path) -> None:
     catalog = _Catalog(uri)
     real_execute = ce._execute_one
 
-    def _always_fails(task_json: str, dataset: Any) -> str:
+    def _always_fails(task_json: str, dataset: lance.LanceDataset) -> str:
         raise RuntimeError("no capacity")
 
     ce._execute_one = _always_fails  # type: ignore[assignment]
