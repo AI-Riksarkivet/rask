@@ -29,6 +29,9 @@ log = logging.getLogger(__name__)
 #: a level that the next tick will re-measure anyway.
 _TIMEOUT_SECONDS = 10.0
 
+#: The tag the catalog moves on a successful publish. One string, matching `publication.PUBLISHED_TAG`.
+_PUBLISHED_TAG = "published"
+
 
 def declared_edges(settings: Any) -> Sequence[tuple[str, str]]:  # noqa: ANN401 — the settings seam
     """Every (edge, project) pair this deployment declares.
@@ -55,12 +58,18 @@ def published_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings sea
     def _read(edge: str, project: str) -> int | None:
         source = edge.split("->", 1)[0]
         table_id = f"{project}-{source}" if project else source
-        url = f"{str(settings.catalog_url).rstrip('/')}/v1/table/{table_id}/publication"
+        # `GET /v1/table/{id}/tags/list` — the spec's ListTableTags, with a GET compat alias. There is
+        # NO route exposing the published version directly: the publication router serves `POST
+        # /{id}/publish` and nothing else, which the first live tick proved by failing every edge.
+        url = f"{str(settings.catalog_url).rstrip('/')}/v1/table/{table_id}/tags/list"
         response = httpx.get(url, timeout=_TIMEOUT_SECONDS)
         if response.status_code == 404:
-            return None  # never published — the tick reads that as an idle, healthy edge
+            return None  # no such table yet — an idle edge, not a failure
         response.raise_for_status()
-        version = response.json().get("published_version")
+        # `{"tags": {"<name>": {"version": N, "branch": ..., "manifest_size": ...}}}`, verified against
+        # the installed client's `TagContents` rather than assumed.
+        tag = (response.json().get("tags") or {}).get(_PUBLISHED_TAG)
+        version = tag.get("version") if isinstance(tag, dict) else None
         return version if isinstance(version, int) and version >= 0 else None
 
     return _read
