@@ -1118,8 +1118,16 @@ no relational DB), and the medallion movers call `lance.write_dataset` directly,
 decider would be blind to the highest-churn writer in the estate. Two supporting facts: the selection
 function is whole-estate (`_protected_roots` must open every manifest in every bucket, because a shallow
 clone in bucket B is the only thing that knows bucket A's dataset must not be rewritten), and datasets
-carrying no policy have no record to poll. Note also that Lakekeeper performs zero compaction — its
-queue drives work whose "is it due" is a pure function of a timestamp it already holds.
+carrying no policy have no record to poll. Note also that Lakekeeper performs zero compaction (no
+`rewrite_data_files`, no `OPTIMIZE`) — so on the DATA-REWRITING half it is no reference and Lance's own
+`Compaction.plan`/`.execute`/`.commit` is the guide. It is NOT, however, a catalog that only does cheap
+work, and an earlier version of this sentence said so: its orphan-file removal "performs a full
+recursive listing of the table's storage location, which can be expensive for tables with many files",
+and its scheduling is adaptive rather than a timestamp comparison — the next run is timed to reclaim a
+target number of bytes at the last run's observed rate, clamped to [1 day, ceiling]. Where that work
+runs it answers explicitly: "we recommend running expire snapshots workers in dedicated pods to avoid
+impacting REST API performance", with the API pod's worker count set to zero. See
+`open_maintenance_compute.md` — checked against docs.lakekeeper.io 2026-09-04.
 
 **A vended credential must use the `aws_`-prefixed storage-option spellings.** Every fleet pod exports
 AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and with the bare spellings object_store BLENDS the two

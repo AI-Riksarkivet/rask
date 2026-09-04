@@ -50,29 +50,46 @@ lease for the executor, and the planner is what is unscalable.
 single-flights a unit. Splitting the two into different deployments makes the executor horizontally
 scalable without touching the planner's constraint.
 
-## What Lakekeeper does — and why it cannot answer THIS question
+## What Lakekeeper actually does — corrected 2026-09-04 against the docs
 
-The estate audited Lakekeeper's maintenance assignment on 2026-09-03 and the conclusion is recorded in
-`docs/DECISIONS.md`. Two halves, and only the first is usually remembered:
+**An earlier version of this file said Lakekeeper "is silent on where expensive maintenance compute
+runs, because it does not do the expensive part". That was wrong on both halves**, and it was written
+from a recorded summary instead of the source. Fetched from
+`docs.lakekeeper.io/docs/latest/table-maintenance/`:
 
-1. **Its task queue lives in the catalog's own Postgres**, enqueued inside the catalog transaction and
-   drained by workers polling `FOR UPDATE ... SKIP LOCKED`. That was REJECTED here with a measured
-   reason: Lakekeeper's queue is sound because every Iceberg commit goes through the catalog — the
-   commit pointer lives in it. rask deliberately does not have that (Lance puts the CAS in the object
-   store, which is why this estate needs no relational DB), and the medallion movers call
-   `lance.write_dataset` directly, so a catalog-directed decider would be blind to the highest-churn
-   writer in the estate.
-2. **Lakekeeper performs ZERO COMPACTION.** Its queue drives expiration and purge — work whose "is it
-   due" is a pure function of a timestamp the catalog already holds.
+**It DOES do expensive maintenance.** Orphan-file removal carries this warning verbatim:
 
-So on the question this file asks — *where does expensive maintenance COMPUTE run* — Lakekeeper is
-silent, because it does not do the expensive part. Reaching for it here would be borrowing an answer
-to a different question. What it DID contribute has already landed: the producer/consumer SHAPE
-(plan-and-enqueue, workers execute one unit), which is N4, taken without moving the source of truth.
+> *"Every run performs a full recursive listing of the table's storage location, which can be expensive
+> for tables with many files."*
 
-**The one thing still worth taking from it** is per-dataset ADAPTIVE cadence — Lakekeeper reschedules
-from the previous run's outcome with a 1-day floor and ceiling, which the policy's fixed `interval`
-cannot express. Unstarted, and orthogonal to everything below.
+**And it has an explicit, documented answer for where that runs** — the one this file called a stopgap:
+
+> *"For production workloads, we recommend running expire snapshots workers in dedicated pods to avoid
+> impacting REST API performance."*
+
+Concretely: API pods set `LAKEKEEPER__TASK_EXPIRE_SNAPSHOTS_WORKERS=0` to disable workers entirely,
+and separate worker pods carry the load (2 by default, tunable via
+`LAKEKEEPER__TASK_REMOVE_ORPHAN_FILES_WORKERS`). **That is M1, and it is Lakekeeper's documented
+production recommendation — not a compromise.**
+
+**Its scheduling is adaptive and commit-driven, not cron.** Expire-snapshots tasks are *"intelligently
+scheduled immediately after table commits when needed, eliminating the overhead of cron-based
+polling"*, and orphan removal self-tunes: *"the next run is timed to reclaim roughly this many bytes
+based on the last run's observed rate. Clamped to [1 day, `maximum-interval-seconds`]"* (ceiling
+default 90 days, with idle tables still getting a periodic safety check).
+
+**What remains true and unchanged:** Lakekeeper performs **no compaction** — no `rewrite_data_files`,
+no `OPTIMIZE`, no bin-packing appears anywhere on that page. So for the DATA-FILE REWRITING half, it
+offers no reference and Lance's own protocol is the guide. And the rejection of a catalog-directed
+DISCOVERY still stands on its own separate reason (rask's catalog is not the commit coordinator).
+
+### What this changes here
+
+| | Before | After |
+| --- | --- | --- |
+| M1 | "a stopgap" | **the documented best practice**, with Lakekeeper's own worker-pod split as the reference |
+| Scheduling | fixed `interval` per policy | Lakekeeper's adaptive shape is now a CONCRETE algorithm to copy, not an aspiration |
+| M2 | correct design | unchanged — Lakekeeper does no compaction, so Lance's plan/execute/commit remains the only guide for that half |
 
 ## The design the format itself prescribes
 
@@ -86,10 +103,11 @@ metadata service coordinates the commit while `rewrite_data_files` / `OPTIMIZE` 
 cluster sized for the job. Stated as context rather than as audited fact; what IS audited is that Lance
 gives the identical split, and that rask exposes it and consumes it nowhere.
 
-**So M2 is not an optimisation of M1 — M2 is the correct design, and M1 is a stopgap** that buys a
-memory budget while leaving compaction on a general-purpose pod. M1 is still worth doing first because
-it is cheap, unblocks nothing and removes the 512Mi ceiling today; it just must not be mistaken for
-the destination.
+**M1 and M2 answer DIFFERENT questions, and both are correct answers.** M1 is *where maintenance runs*
+— dedicated workers off the request path, which is Lakekeeper's documented production recommendation
+and applies to every maintenance operation. M2 is *how the bytes get rewritten* — the plan/execute/commit
+split, which only compaction needs and on which Lakekeeper is genuinely silent because it does none.
+Doing M1 does not defer M2, and doing M2 does not remove the reason for M1.
 
 ## The three shapes, and what each buys
 
@@ -99,9 +117,11 @@ the destination.
 | M2 | **Executor consumes the distributed protocol** — `compaction_plan` → run `CompactionTask`s → `compaction_commit`, instead of in-pod `compact_files` | The credential split becomes real on the write path, and a task becomes portable | The estate's first `CompactionTask` executor |
 | M3 | **BYO compute** — M2's tasks submitted as a `RayJob` CR, admitted by Kueue | Maintenance sized by the cluster, not by a pod limit; quota and gang scheduling | Blocked on `open_compute-decoupling.md` §7.4 steps 3–4, which are owner-sequenced |
 
-**Do M1 first and do not mistake it for the answer.** It is a chart change plus a route-mounting
-condition, needs no new protocol, and stops 512Mi being the estate's compaction budget — but it keeps
-the bytes on a general-purpose pod. **M2 is the correct design** (see above: the format itself
+**Do M1 first, and it is more than a stopgap** — it is what Lakekeeper explicitly recommends for
+production, reached here independently and then confirmed against its docs: dedicated worker pods, with
+the API pod's worker count set to zero. It is a chart change plus a route-mounting condition, needs no
+new protocol, and stops 512Mi being the estate's compaction budget. **M2 remains the correct design for
+the COMPACTION half specifically**, where Lakekeeper offers no reference because it does no compaction (see above: the format itself
 prescribes plan-here / execute-elsewhere / commit-here) and is where the distributed seam finally earns
 what it cost to build. M3 is the cloud-native end state and is sequenced behind
 `open_compute-decoupling.md` §7.4 steps 3-4, which the owner already ordered.
