@@ -27,6 +27,7 @@ import pytest
 
 import medallion.services.transform as mover
 from medallion.core.config import MedallionSettings
+from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
 
 
@@ -66,7 +67,7 @@ def _staged(outbox_dir: Path) -> dict[str, dict[str, Any]]:
 def _fake_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fake the read and the write: these tests exercise the EMIT path, not Lance."""
     monkeypatch.setattr(mover, "read_upstream", lambda uri, _so: UpstreamFacts(uri=uri, version=1))
-    monkeypatch.setattr(mover, "transform_stage", lambda *_a, **_k: WriteResult(version=1, row_count=1, size_bytes=1))
+    monkeypatch.setattr(inprocess_executor, "transform_stage", lambda *_a, **_k: WriteResult(version=1, row_count=1, size_bytes=1))
 
 
 def test_a_failed_complete_publish_does_not_get_overwritten_by_a_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

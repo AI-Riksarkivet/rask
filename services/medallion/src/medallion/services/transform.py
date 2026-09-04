@@ -50,16 +50,20 @@ from medallion.core.metrics import (
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, engine_choice, promotion_band, promotion_hold
 from medallion.services import gate as gate_svc
-from medallion.services.compute import WriteResult, existing_row_count, measure_stage, read_upstream, transform_stage
+from medallion.services.compute import WriteResult, existing_row_count, measure_stage, read_upstream
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.gate_decision import GateOutcome, gate_decision, promotion_status_for, refusal_message
+from medallion.services.inprocess_executor import IN_PROCESS_ENGINE, InProcessExecutor
 from medallion.services.promotion import promotion_lineage
 from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform_async
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.executor import RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.quality import Assertion, assert_quality
+from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
+from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.transform_specs import TransformSpec
 from service_kit.lakehouse.warehouse_registry import (
     UnresolvableProjectError,
@@ -68,6 +72,7 @@ from service_kit.lakehouse.warehouse_registry import (
     project_gold_root,
     project_root,
 )
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
 
 log = logging.getLogger(__name__)
@@ -673,6 +678,89 @@ class StageWrite(BaseModel):
     assertions: list[Assertion] = Field(default_factory=list)
 
 
+def _work_order(
+    settings: MedallionSettings,
+    *,
+    identity: StageIdentity,
+    from_uri: str,
+    to_uri: str,
+    lineage_doc: LineageDoc,
+    token: str | None,
+    declared: TransformSpec | None,
+    project: str,
+) -> WorkOrder:
+    """This run, stated so that ANY engine could take it — §7.4 step 1's whole point.
+
+    Every field is the platform's own: where to read, where to write, what to stamp, whose run it is.
+    Nothing here names an engine, and `credential_ref` NAMES a credential rather than carrying one —
+    the executor resolves it, so an order is safe to log, queue or replay.
+
+    `idempotency_key` is the run's identity to a synchronous engine, the way a deterministic
+    submission id is to Ray: it is what makes a redelivered order re-attach to a recorded outcome
+    instead of doing the work twice.
+    """
+    return WorkOrder(
+        task=declared.task if declared else settings.to_namespace,
+        source=WorkSource(uri=from_uri, table_id=identity.from_dataset),
+        destination=WorkDestination(uri=to_uri, table_id=identity.to_dataset),
+        stamp=WorkStamp(
+            stage=settings.to_namespace,
+            cardinality=declared.cardinality if declared else ONE_TO_ONE,
+            lineage_document=lineage_doc.to_json(),
+        ),
+        identity=WorkIdentity(run_id=lineage_doc.run_id, project=project, code_version=settings.ray_code_version),
+        params=declared.params if declared else settings.ray_job_params,
+        idempotency_key=f"{settings.to_namespace}:{token or 'notoken'}:{identity.from_dataset}->{identity.to_dataset}",
+    )
+
+
+async def _run_in_process(
+    settings: MedallionSettings,
+    *,
+    identity: StageIdentity,
+    from_uri: str,
+    to_uri: str,
+    lineage_doc: LineageDoc,
+    token: str | None,
+    declared: TransformSpec | None,
+    project: str,
+) -> WriteResult:
+    """Run the stage on the IN-PROCESS engine, through the platform's `Executor` port (§7.4 step 2).
+
+    The port is what makes this a contract rather than a description of Ray: `submit` runs the work
+    and hands back a handle, `status` answers from the recorded outcome, and `cancel` refuses because
+    this engine advertises no such capability. A port that could not express a SYNCHRONOUS engine
+    would be a Ray-shaped interface wearing a neutral name.
+
+    A failure is RAISED, so the mover's own RETRY path owns it exactly as it did when the writer was
+    called directly. The port classifies the error; it does not change who handles it.
+
+    The result is read back through the adapter rather than measured a second time. `result()` is
+    beyond the port and says so — the platform's contract is to RE-DERIVE what was written (§2.5), and
+    that re-derivation belongs at the acceptance door, where it gates something. Re-measuring here
+    would gate nothing and cost real IO: `transform_stage` already calls `measure(to_uri)` internally,
+    so a `measure_stage` here would be a second stats read plus an upstream open, for numbers
+    identical by construction — both build from `measure(to_uri)` + the prior count + `_column_map`
+    over the same blob-field expression.
+    """
+    executor = InProcessExecutor(settings.storage_options)
+    order = _work_order(settings, identity=identity, from_uri=from_uri, to_uri=to_uri, lineage_doc=lineage_doc, token=token, declared=declared, project=project)
+    # The command an in-process engine runs is its own call, NAMED rather than parsed — the rule the
+    # registry states for every engine: the platform forwards a command and never interprets one.
+    registration = TaskRegistration(task=order.task, engine=IN_PROCESS_ENGINE, command="medallion.transform_stage")
+    handle, _outcome = await executor.submit(order, registration)
+    if (state := await executor.status(handle)) is not RunState.SUCCEEDED:
+        detail = await executor.failure(handle)
+        # THE ENGINE'S MESSAGE, UNWRAPPED. It becomes the run's FAIL `errorMessage`, which is what an
+        # operator reads to diagnose — a prefix would push the cause behind a label. The port's
+        # classification (`detail.kind`) is a machine's field and rides the executor's own log line.
+        raise RuntimeError(detail.message if detail else f"the in-process engine reported {state}")
+    written = executor.result(handle)
+    if written is None:  # pragma: no cover - SUCCEEDED with no measurement would be an adapter defect
+        raise RuntimeError("the in-process engine reported success and produced no measurement")
+    return written
+
+
 async def _write_stage(
     settings: MedallionSettings,
     trigger: StageTrigger,
@@ -686,6 +774,7 @@ async def _write_stage(
     transition: str,
     lineage_doc: LineageDoc,
     declared: TransformSpec | None,
+    project: str,
 ) -> WriteResult | None:
     """Run (or dispatch) the transform and govern its output. ``None`` means DISPATCHED, not failed."""
     from_dataset = identity.from_dataset
@@ -761,22 +850,9 @@ async def _write_stage(
             settings.storage_options(),
         )
     else:
-        if not settings.ray_enabled:  # the blob fallback above already named the path
-            span.set_attribute("lance.medallion.compute", "in_process")
-        result = await run_in_threadpool(
-            transform_stage,
-            from_uri,
-            to_uri,
-            settings.storage_options(),
-            stage=settings.to_namespace,
-            lineage=lineage_doc,
-            # DECLARE the canonical name. `to_uri` is composed from the NAMESPACE
-            # alone, while `to_dataset` is the project-qualified table id — so nothing
-            # downstream can derive one from the other (`medallion/bronze` is both
-            # `bronze$events` and `bronze$pages`). The writer is the only party holding
-            # both, so it stamps it; the maintenance sweep reads it back to emit this
-            # dataset's provenance and its FAIL events.
-            dataset_id=to_dataset,
+        span.set_attribute("lance.medallion.compute", "in_process")
+        result = await _run_in_process(
+            settings, identity=identity, from_uri=from_uri, to_uri=to_uri, lineage_doc=lineage_doc, token=token, declared=declared, project=project
         )
     # GOVERNANCE IS THE CASCADE'S, NOT ONE LANE'S. Every branch above that WROTE
     # converges here (the dispatch branch returned before writing), so this is the
@@ -941,6 +1017,7 @@ async def _run_compute(
                     transition=transition,
                     lineage_doc=lineage_doc,
                     declared=declared,
+                    project=project,
                 )
                 if result is None:
                     # S1 — the job is on the cluster and the workflow owns the rest of this run.

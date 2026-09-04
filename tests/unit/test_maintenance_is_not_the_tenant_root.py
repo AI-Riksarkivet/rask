@@ -54,9 +54,7 @@ def test_a_provisioned_key_replaces_the_tenant_root() -> None:
         "rustfs.maintenanceSecretKey=maintenance-secret",
     )
     env = _maintenance_env(rendered)
-    assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rask-maintenance", (
-        "maintenance still renders the tenant root even with a scoped user provisioned"
-    )
+    assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rask-maintenance", "maintenance still renders the tenant root even with a scoped user provisioned"
     assert "rustfsadmin" not in env.get("MAINTENANCE_S3_ACCESS_KEY_ID", "")
 
 

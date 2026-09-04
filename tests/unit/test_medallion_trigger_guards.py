@@ -34,6 +34,7 @@ from dapr.aio.clients import DaprClient
 
 import medallion.services.transform as mover
 from medallion.core.config import MedallionSettings
+from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.train import _safe_name as _train_safe_name
 from medallion.services.transform import handle_stage
@@ -80,7 +81,7 @@ def reads(monkeypatch: pytest.MonkeyPatch) -> _Reads:
         return UpstreamFacts(uri=uri, version=1)
 
     monkeypatch.setattr(mover, "read_upstream", _read_upstream)
-    monkeypatch.setattr(mover, "transform_stage", lambda *_a, **_k: WriteResult(version=1, row_count=1, size_bytes=1))
+    monkeypatch.setattr(inprocess_executor, "transform_stage", lambda *_a, **_k: WriteResult(version=1, row_count=1, size_bytes=1))
     return recorder
 
 

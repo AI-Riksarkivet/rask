@@ -23,9 +23,7 @@ from tests.unit.test_invariants import _helm_template
 
 def _producer_env() -> dict[str, str]:
     docs = [d for d in yaml.safe_load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true")) if d]
-    producer = next(
-        d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-medallion-producer")
-    )
+    producer = next(d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-medallion-producer"))
     return {e["name"]: e.get("value", "") for c in producer["spec"]["template"]["spec"]["containers"] for e in (c.get("env") or [])}
 
 

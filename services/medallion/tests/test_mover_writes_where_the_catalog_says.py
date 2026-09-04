@@ -22,7 +22,7 @@ import pyarrow as pa
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import transform
+from medallion.services import inprocess_executor, transform
 
 
 VENDED = "the-catalog-said-here"
@@ -65,13 +65,13 @@ def _event() -> dict[str, Any]:
 def wrote_to(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
     """Capture the URI the compute step actually writes to."""
     written: list[str] = []
-    real = transform.transform_stage
+    real = inprocess_executor.transform_stage
 
     def _spy(from_uri: str, to_uri: str, *a: Any, **k: Any) -> Any:
         written.append(to_uri)
         return real(from_uri, str(upstream / "actual.lance"), *a, **k)
 
-    monkeypatch.setattr(transform, "transform_stage", _spy)
+    monkeypatch.setattr(inprocess_executor, "transform_stage", _spy)
     monkeypatch.setattr(
         transform.catalog_register,
         "ensure_stage_output",
@@ -100,9 +100,9 @@ class TestWithoutACatalog:
         """No catalog URL is the dev/local shape — it already warns loudly that the write is
         ungoverned, and must keep working rather than failing to resolve a location."""
         written: list[str] = []
-        real = transform.transform_stage
+        real = inprocess_executor.transform_stage
         monkeypatch.setattr(
-            transform,
+            inprocess_executor,
             "transform_stage",
             lambda f, t, *a, **k: (written.append(t), real(f, str(upstream / "out.lance"), *a, **k))[1],
         )

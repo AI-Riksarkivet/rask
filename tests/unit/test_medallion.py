@@ -23,6 +23,7 @@ import medallion.services.transform as mover
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
+from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
@@ -301,7 +302,7 @@ def test_mover_write_is_single_flight_under_concurrent_delivery(monkeypatch: pyt
         active -= 1
         return WriteResult(version=1, row_count=1, size_bytes=1)
 
-    monkeypatch.setattr(mover, "transform_stage", slow_transform)
+    monkeypatch.setattr(inprocess_executor, "transform_stage", slow_transform)
     _fake_upstream(monkeypatch)
 
     async def _run_two() -> list[dict[str, str]]:
@@ -338,7 +339,7 @@ def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -
         transformed.append(stage)
         return WriteResult(version=2, row_count=1, size_bytes=10)
 
-    monkeypatch.setattr(mover, "transform_stage", fake_transform)
+    monkeypatch.setattr(inprocess_executor, "transform_stage", fake_transform)
     _fake_upstream(monkeypatch)
     dapr = _FakeDapr()
 
@@ -540,7 +541,7 @@ def test_mover_emits_fail_event_on_transform_failure(monkeypatch: pytest.MonkeyP
     def _boom(*_a: Any, **_k: Any) -> WriteResult:
         raise RuntimeError("lance write failed")
 
-    monkeypatch.setattr(mover, "transform_stage", _boom)
+    monkeypatch.setattr(inprocess_executor, "transform_stage", _boom)
     _fake_upstream(monkeypatch)
 
     dapr = _AttemptDapr(fail_at=99)  # publishing works; the WRITE is what fails

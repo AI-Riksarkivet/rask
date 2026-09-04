@@ -37,7 +37,7 @@ import pyarrow as pa
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import transform
+from medallion.services import inprocess_executor, transform
 
 
 class _Dapr:
@@ -74,7 +74,7 @@ def _event() -> dict[str, Any]:
 def order(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
     """Record the sequence of the two steps that decide whether S5 is reachable."""
     seen: list[str] = []
-    real_write = transform.transform_stage
+    real_write = inprocess_executor.transform_stage
 
     def _ask(**k: Any) -> str:
         seen.append("register")
@@ -85,7 +85,7 @@ def order(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
         return real_write(from_uri, str(upstream / "actual.lance"), *a, **k)
 
     monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", _ask)
-    monkeypatch.setattr(transform, "transform_stage", _write)
+    monkeypatch.setattr(inprocess_executor, "transform_stage", _write)
     return seen
 
 
@@ -106,7 +106,7 @@ class TestRegistrationPrecedesTheFirstRow:
             order.append("write")
             raise RuntimeError("compute died mid-write")
 
-        monkeypatch.setattr(transform, "transform_stage", _boom)
+        monkeypatch.setattr(inprocess_executor, "transform_stage", _boom)
 
         result = asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream), _event()))
 
@@ -119,13 +119,13 @@ class TestTheUngovernedShapeIsUnchanged:
         """A dev stack with no catalog has no registration to precede anything. It must keep working
         rather than acquiring a hard dependency as a side effect of closing S5."""
         wrote: list[str] = []
-        real_write = transform.transform_stage
+        real_write = inprocess_executor.transform_stage
 
         def _write(from_uri: str, to_uri: str, *a: Any, **k: Any) -> Any:
             wrote.append(to_uri)
             return real_write(from_uri, str(upstream / "actual.lance"), *a, **k)
 
-        monkeypatch.setattr(transform, "transform_stage", _write)
+        monkeypatch.setattr(inprocess_executor, "transform_stage", _write)
 
         asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream, MEDALLION_CATALOG_URL=""), _event()))
 
