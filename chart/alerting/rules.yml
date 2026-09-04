@@ -132,6 +132,32 @@ groups:
             token, URI and dataset are on the mover's WARNING log line; this alert carries only the
             bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
+      # THE LOSS DETECTOR, and it is DISJOINT from the two refusal rules above rather than a third
+      # variation of them. A refusal counter can only see a hop that ARRIVED and was declined; it is
+      # structurally blind to one that never happened — a dropped trigger, a publish that never
+      # landed, a mover that was down. `medallion_cascade_lag` measures the other side: how many
+      # source versions a destination tier has not consumed, which rises whether or not anything was
+      # ever refused. Neither substitutes for the other, and an estate with only the counters is
+      # blind to exactly the failure the cascade-repair work exists for.
+      #
+      # An UNKNOWN lag publishes NO POINT at all, deliberately: there is no sentinel value that is
+      # not also a real lag, so `absent()` would fire on a healthy estate whose cron has simply not
+      # ticked yet. The gauge going missing is a different alarm, and not this one's job.
+      - alert: MedallionCascadeLag
+        expr: max by (lance_medallion_edge, lance_medallion_project) (medallion_cascade_lag) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: medallion
+        annotations:
+          summary: "Cascade edge {{ $labels.lance_medallion_edge }} is behind its source"
+          description: >-
+            A destination tier has not consumed versions its source has published, and has stayed behind
+            for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost
+            trigger, a publish that did not land, a mover that was down — which no counter can see. The
+            repair is edge-addressed: POST /api/movers/stages/rerun with the published table, the range,
+            and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
       - alert: MedallionStageDenied
         expr: sum(rate(medallion_stage_denied_total[5m])) > 0
         for: 5m

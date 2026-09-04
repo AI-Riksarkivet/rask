@@ -98,3 +98,51 @@ def test_every_counter_is_classified() -> None:
 def test_the_exemptions_still_exist() -> None:
     stale = sorted(set(_NOT_ALERTED) - _emitted())
     assert not stale, f"exempted counters that no longer exist: {stale}"
+
+
+def test_every_promtool_expectation_matches_the_rule_it_asserts() -> None:
+    """`rules_test.yml`'s `exp_annotations` must equal the rule's own annotation TEXT.
+
+    MEASURED 2026-09-04, which is how this was found: six expectations carried the literal six
+    characters `\\u2014` where the rule carries an em dash, so `promtool test rules` had been FAILING —
+    and nothing noticed, because the only gate over that file asserts a case EXISTS for each alert,
+    never that the case passes. `make alert-rules-check` runs promtool and would have caught it; it
+    needs a binary the unit tier does not have, so this asserts the same equality in pure Python and
+    runs on every commit.
+
+    Compared after collapsing whitespace, because a rule's `>-` folded block and a test's inline
+    string differ in line breaks and mean the same thing — the failure this catches is a WRONG
+    character, not a reflow. Templated annotations are skipped for the same reason in the other
+    direction: promtool renders `{{ $labels.x }}` against the firing series, so the two are SUPPOSED
+    to differ there.
+    """
+    import re
+
+    rules = yaml.safe_load(_RULES.read_text(encoding="utf-8"))
+    tests = yaml.safe_load((REPO / "chart/alerting/rules_test.yml").read_text(encoding="utf-8"))
+
+    def _flat(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    declared = {
+        rule["alert"]: {k: _flat(str(v)) for k, v in (rule.get("annotations") or {}).items()}
+        for group in rules["groups"]
+        for rule in group.get("rules", [])
+        if "alert" in rule
+    }
+    mismatched: list[str] = []
+    for case in tests.get("tests", []):
+        for assertion in case.get("alert_rule_test", []):
+            name = assertion.get("alertname")
+            for expected in assertion.get("exp_alerts") or []:
+                for key, value in (expected.get("exp_annotations") or {}).items():
+                    actual = declared.get(name, {}).get(key)
+                    # TEMPLATED annotations are skipped, not compared. promtool RENDERS
+                    # `{{ $labels.x }}` against the firing series, so the rule's text and the test's
+                    # expectation legitimately differ. The class this catches is a wrong CHARACTER in
+                    # literal text, which is what silently broke six of these.
+                    if actual is None or "{{" in actual:
+                        continue
+                    if _flat(str(value)) != actual:
+                        mismatched.append(f"{name}.{key}")
+    assert not mismatched, f"promtool expectations that cannot match their rule: {sorted(set(mismatched))}"

@@ -458,7 +458,7 @@ tests:
               severity: "critical"
               service: "lineage"
             exp_annotations:
-              summary: "Lineage ingest dead-lettering \u2014 provenance is being LOST"
+              summary: "Lineage ingest dead-lettering — provenance is being LOST"
               description: "A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal). Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # M24 d. A flat dead-letter counter is the healthy estate; it must stay silent.
@@ -485,7 +485,7 @@ tests:
               severity: "critical"
               service: "medallion"
             exp_annotations:
-              summary: "Medallion mover has registry resolution OFF \u2014 every tenant trigger it receives halts here"
+              summary: "Medallion mover has registry resolution OFF — every tenant trigger it receives halts here"
               description: >-
                 A tenant trigger arrived with no control root configured. The code calls this "a DEPLOYMENT gap, and therefore permanent": it is not a transient fault and will not clear on its own, so every trigger this mover ever receives is dropped and the cascade stops for that tenant with every pod green. Set MEDALLION_CONTROL_ROOT on the mover. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
@@ -517,7 +517,38 @@ tests:
             exp_annotations:
               summary: "Medallion pre-flight is dropping triggers (unconfined_uri)"
               description: >-
-                A deterministic refusal before any byte was read \u2014 malformed, unconfined_uri, bad_project or unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending token, URI and dataset are on the mover's WARNING log line; this alert carries only the bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+                A deterministic refusal before any byte was read — malformed, unconfined_uri, bad_project or unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending token, URI and dataset are on the mover's WARNING log line; this alert carries only the bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+  # C3 a. A LOST hop, which no refusal counter can see. The lag rises and STAYS up: a tier that is
+  # merely mid-run catches up within the `for:`, while one whose trigger never arrived does not.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_cascade_lag{lance_medallion_edge="silver->gold",lance_medallion_project="acme"}'
+        values: "3x39"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MedallionCascadeLag
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "medallion"
+              lance_medallion_edge: "silver->gold"
+              lance_medallion_project: "acme"
+            exp_annotations:
+              summary: "Cascade edge silver->gold is behind its source"
+              description: >-
+                A destination tier has not consumed versions its source has published, and has stayed behind for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost trigger, a publish that did not land, a mover that was down — which no counter can see. The repair is edge-addressed: POST /api/movers/stages/rerun with the published table, the range, and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+  # C3 b. A tier that CATCHES UP inside the window must not page. Lag is normal mid-cascade; only a
+  # lag that persists is a lost hop, which is the entire reason this rule carries a `for:`.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_cascade_lag{lance_medallion_edge="bronze->silver",lance_medallion_project="acme"}'
+        values: "2 2 2 2 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MedallionCascadeLag
+        exp_alerts: []
 
   # M24 e. A mover denied its grant stalls the cascade at that stage → fires on the first denial.
   - interval: 1m
@@ -532,7 +563,7 @@ tests:
               severity: "warning"
               service: "medallion"
             exp_annotations:
-              summary: "Medallion stage FGA-denied \u2014 the cascade may stall at this stage"
+              summary: "Medallion stage FGA-denied — the cascade may stall at this stage"
               description: "A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # M24 f. Sweep failures accumulating over 30m → MaintenanceDatasetsFailing fires.
@@ -566,7 +597,7 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "No table-maintenance sweep has COMPLETED in 30 minutes"
-              description: "At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight \u2014 compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
+              description: "At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight — compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
 
   # M24 h. A sweep that keeps completing must not page.
   - interval: 1m
@@ -711,7 +742,7 @@ tests:
               lance_notifications_lane: feed
             exp_annotations:
               summary: "The notifications feed lane has stopped reporting entirely"
-              description: "No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an idle estate \u2014 an idle reconciler still emits a zero-valued counter. Either the pod is gone, its OTLP export is broken, or the lane label changed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              description: "No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an idle estate — an idle reconciler still emits a zero-valued counter. Either the pod is gone, its OTLP export is broken, or the lane label changed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
       # ...and the `== 0` rule must NOT fire here: it cannot evaluate over an empty vector. That is
       # the whole reason the absence rule has to exist separately.
       - eval_time: 35m
