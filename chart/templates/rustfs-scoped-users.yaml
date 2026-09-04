@@ -14,18 +14,22 @@
 # maintenance is permitted to do. A credential that can rewrite its own governing policy can turn off
 # the shallow-clone guard that stops a compaction destroying another dataset's source.
 #
-# TWO POLICY LESSONS, each of which cost a broken cascade when the Ray plane's policy was written
-# (estate-verification row 32) and neither of which is recoverable by reading the docs:
+# THREE POLICY LESSONS, each of which cost a broken cascade, and none of which is recoverable by
+# reading the docs:
 #
 #   * `s3:ListBucket` is BUCKET-scoped, not object-scoped. An object-scoped rule constrains a LIST not
 #     at all — the first attempt allowed the whole control plane to be listed and looked like RustFS
 #     ignoring Deny.
 #   * the prefix condition must be `medallion*`, NOT `medallion/*`: Lance lists with `prefix=medallion/`
 #     and `StringLike` does not match a trailing-slash pattern against it.
+#   * a bucket-NAME allow-list cannot govern this estate at all, because the buckets that hold tenant
+#     data are minted at runtime by `POST /v1/warehouses`. See the long note above the policies.
 #
-# IDEMPOTENT. `mc admin policy create` and `mc admin user add` are re-run on every upgrade with the
-# same content; a `|| true` on the create keeps an existing policy from failing the hook, while the
-# attach is unconditional so a policy edit actually takes effect.
+# IDEMPOTENT. `mc admin policy create` OVERWRITES an existing policy — probed against this estate's
+# RustFS 1.0.0-beta.8 on 2026-09-04: a second create with different content returned exit 0 and the
+# readback showed the new document. So the create carries no `|| true`; the only thing one could
+# swallow is a REAL failure (malformed JSON, admin denied), leaving the credential on its previous
+# policy while the hook reports success. `user add` and `attach` keep theirs, which do guard a re-run.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -75,26 +79,43 @@ spec:
               until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"; do echo wait-rustfs; sleep 3; done
 
               {{- /*
-                THE POLICY'S BUCKET SET MUST EQUAL THE SWEPT SET. `maintenance.yaml` builds
-                MAINTENANCE_S3_EXTRA_BUCKETS from exactly this union — the medallion storage zones plus
-                the approved multi-base data bases — so it is recomputed here rather than approximated.
-                A policy NARROWER than the swept set is the worse failure of the two: the sweep is
-                configured to maintain a bucket and gets AccessDenied on it, which surfaces as a
-                per-dataset `open:` error and reads like a broken dataset rather than a missing grant.
-                Pinned by `test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep`.
+                THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so neither policy enumerates one.
 
-                PER-WAREHOUSE BUCKETS ARE MINTED AT RUNTIME and are appended to the sweep by the
-                operator as tenants are onboarded, so they are outside any static render — this policy
-                and that env var are wrong together, which is the point of deriving them from one place.
+                Both credentials open buckets that no value in this chart names. `catalog.warehouses.enabled`
+                (on by default) provisions one physically separate bucket per warehouse at
+                `POST /v1/warehouses`, with an operator-chosen name; the Ray stage/train jobs then read and
+                write `<that warehouse root>/medallion/<tier>` for every tenant trigger, and the sweep
+                enumerates the same buckets itself out of the registry (`sweep.py::_buckets_to_sweep`).
+                An allow-list built from `rustfs.bucket` + `medallion.buckets` + `catalog.multibase.dataBases`
+                covers none of them: those three name the shared bucket, the cascade storage zones and the
+                fragment-spreading allowlist, and a per-warehouse bucket is by construction in none.
+
+                MEASURED 2026-09-04, and it is the quiet failure in both directions: a re-run of project
+                `acme`'s bronze->silver edge submitted a Ray job that died `AccessDenied` listing
+                `acme-bucket?prefix=medallion/_versions/` — reported by the mover as a failed job, by nothing
+                as a missing grant — while on the sweep side `compact_one` records AccessDenied per dataset
+                as an `open:` error, which reads as a broken dataset and is acked SUCCESS.
+
+                So the shape is inverted to the one the Sids always claimed: ALLOW the data planes on every
+                bucket, and DENY the control plane precisely. What is given up is bucket-name scoping, which
+                was never enforcing anything an operator could rely on; what is kept, and now applies in
+                EVERY bucket rather than only the statically-named ones, is the deny that this user exists
+                for. Neither credential gets `s3:ListAllMyBuckets` except the reconciler that needs it, so
+                "list a bucket you can name" is not "enumerate the estate".
+
+                The control bucket keeps its tight listing through `StringNotLike` on `s3:prefix` rather
+                than through its name. That operator was PROBED against this estate's RustFS
+                (1.0.0-beta.8) before being depended on: with `Deny s3:ListBucket` conditioned
+                `StringNotLike s3:prefix medallion*`, `lance-catalog/medallion/` listed while
+                `lance-catalog/` and `lance-catalog/_projects/` were denied and other buckets listed
+                freely. Enforced, not ignored — which matters, because a condition RustFS dropped would
+                turn a Deny into a hole rather than a hard failure.
+
+                Outcomes are pinned by `tests/unit/test_scoped_policies_reach_runtime_minted_warehouses.py`,
+                which evaluates the rendered JSON as IAM does instead of grepping it for a bucket name — a
+                grep is what let the old shape render green.
               */}}
-              {{- $dataBuckets := list .Values.rustfs.bucket }}
-              {{- range $ns, $bkt := .Values.medallion.buckets }}
-              {{- $dataBuckets = append $dataBuckets $bkt }}
-              {{- end }}
-              {{- range .Values.catalog.multibase.dataBases }}
-              {{- $dataBuckets = append $dataBuckets (. | replace "s3://" "" | trimSuffix "/") }}
-              {{- end }}
-              {{- $dataBuckets = uniq (compact $dataBuckets) }}
+              {{- $control := .Values.rustfs.bucket }}
 
               {{- if $maint }}
               # --- MAINTENANCE: rewrite data, never the records that govern the rewrite. -------------
@@ -109,31 +130,27 @@ spec:
                     "Resource": ["arn:aws:s3:::*"]
                   },
                   {
-                    "Sid": "SurveyAndRewriteData",
+                    "Sid": "RewriteDataInAnyBucketTheSweepDiscovers",
                     "Effect": "Allow",
                     "Action": [
                       "s3:ListBucket",
+                      "s3:GetBucketLocation",
                       "s3:GetObject",
                       "s3:PutObject",
                       "s3:DeleteObject",
-                      "s3:AbortMultipartUpload"
+                      "s3:AbortMultipartUpload",
+                      "s3:ListMultipartUploadParts"
                     ],
-                    "Resource": [
-              {{- range $i, $b := $dataBuckets }}
-                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}", "arn:aws:s3:::{{ $b }}/*"
-              {{- end }}
-                    ]
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
                   },
                   {
                     "Sid": "NeverTheRecordsThatGovernMaintenance",
                     "Effect": "Deny",
                     "Action": ["s3:PutObject", "s3:DeleteObject"],
                     "Resource": [
-              {{- range $i, $b := $dataBuckets }}
-                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}/_projects/*",
-                      "arn:aws:s3:::{{ $b }}/_protection/*",
-                      "arn:aws:s3:::{{ $b }}/_warehouses/*"
-              {{- end }}
+                      "arn:aws:s3:::*/_projects/*",
+                      "arn:aws:s3:::*/_protection/*",
+                      "arn:aws:s3:::*/_warehouses/*"
                     ]
                   },
                   {
@@ -145,6 +162,10 @@ spec:
                 ]
               }
               POLICY
+              # The deny is on WRITES only: the sweep must READ `_warehouses/` to resolve the buckets it
+              # sweeps and `_protection/` to compute the pre-pass verdict, and blinding it there would
+              # widen what it destroys rather than narrow it.
+              #
               # `_policies/` is NOT denied, and that exception is load-bearing rather than an oversight:
               # `_stamp_cadence` writes the per-dataset cadence stamp under `_policies/state/` on every
               # maintained dataset, and `_policy_skip_reason` reads a missing stamp as "maintain" — so
@@ -152,7 +173,7 @@ spec:
               # dataset on every tick, with nothing going red. The POLICY RECORDS themselves live at
               # `_policies/<kind>/` and are written only by the catalog, which holds a different
               # credential; this user can reach them, and narrowing that needs the stamp to move first.
-              mc admin policy create rfs rask-maintenance /tmp/maintenance.json || true
+              mc admin policy create rfs rask-maintenance /tmp/maintenance.json
               mc admin user add rfs {{ .Values.rustfs.maintenanceAccessKey }} "$MAINTENANCE_SECRET_KEY" || true
               mc admin policy attach rfs rask-maintenance --user {{ .Values.rustfs.maintenanceAccessKey }} || true
               echo "provisioned scoped user {{ .Values.rustfs.maintenanceAccessKey }} (rask-maintenance)"
@@ -165,25 +186,35 @@ spec:
                 "Version": "2012-10-17",
                 "Statement": [
                   {
-                    "Sid": "CascadeDataOnly",
+                    "Sid": "CascadeDataInAnyWarehouse",
                     "Effect": "Allow",
-                    "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
-                    "Resource": [
-              {{- range $i, $b := $dataBuckets }}
-                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}", "arn:aws:s3:::{{ $b }}/*"
-              {{- end }}
-                    ]
+                    "Action": [
+                      "s3:ListBucket",
+                      "s3:GetBucketLocation",
+                      "s3:GetObject",
+                      "s3:PutObject",
+                      "s3:DeleteObject",
+                      "s3:AbortMultipartUpload",
+                      "s3:ListMultipartUploadParts"
+                    ],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  },
+                  {
+                    "Sid": "TheControlBucketOnlyUnderTheCascadePrefix",
+                    "Effect": "Deny",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::{{ $control }}"],
+                    "Condition": { "StringNotLike": { "s3:prefix": "medallion*" } }
                   },
                   {
                     "Sid": "NeverTheControlPlane",
                     "Effect": "Deny",
                     "Action": ["s3:*"],
                     "Resource": [
-              {{- range $i, $b := $dataBuckets }}
-                      {{ if $i }},{{ end }}"arn:aws:s3:::{{ $b }}/_projects/*",
-                      "arn:aws:s3:::{{ $b }}/_protection/*",
-                      "arn:aws:s3:::{{ $b }}/_policies/*"
-              {{- end }}
+                      "arn:aws:s3:::*/_projects/*",
+                      "arn:aws:s3:::*/_protection/*",
+                      "arn:aws:s3:::*/_policies/*",
+                      "arn:aws:s3:::*/_warehouses/*"
                     ]
                   },
                   {
@@ -195,7 +226,12 @@ spec:
                 ]
               }
               POLICY
-              mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json || true
+              # The Ray lane's deny is TOTAL where maintenance's is write-only: a stage job reads
+              # `FROM_URI` and writes `TO_URI` and touches nothing else (`scripts/ray_stage_job.py`), so it
+              # has no reason to read a governance record either. `medallion*` and not `medallion/*` —
+              # Lance lists with `prefix=medallion/` and `StringLike` does not match a trailing-slash
+              # pattern against it, a lesson that cost a cascade the first time this policy was written.
+              mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json
               mc admin user add rfs {{ .Values.rustfs.rayComputeAccessKey }} "$RAY_COMPUTE_SECRET_KEY" || true
               mc admin policy attach rfs rask-ray-compute --user {{ .Values.rustfs.rayComputeAccessKey }} || true
               echo "provisioned scoped user {{ .Values.rustfs.rayComputeAccessKey }} (rask-ray-compute)"

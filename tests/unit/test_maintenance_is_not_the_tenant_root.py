@@ -28,6 +28,7 @@ import re
 import pytest
 
 from tests.unit.test_invariants import _helm_template
+from tests.unit.test_scoped_policies_reach_runtime_minted_warehouses import _policy, allowed
 
 
 def _maintenance_env(rendered: str) -> dict[str, str]:
@@ -119,10 +120,13 @@ def test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep() -> None:
     swept = [env["MAINTENANCE_S3_BUCKET"], *[b for b in env.get("MAINTENANCE_S3_EXTRA_BUCKETS", "").split(",") if b]]
     assert len(swept) > 1, "set an extra bucket, or this gate only ever checks the primary one"
 
-    job = rendered[rendered.index("component: rustfs-scoped-users") :]
-    policy = job[: job.index("rask-ray-compute") if "rask-ray-compute" in job else len(job)]
+    # EVALUATED, not grepped. This asserted `arn:aws:s3:::<bucket>/*` appeared verbatim, which tied it
+    # to one policy shape and — worse — could only ever check the CONFIGURED buckets, while
+    # `sweep.py::_buckets_to_sweep` extends that list from the warehouse registry at runtime. The
+    # registry-discovered half is gated by `test_scoped_policies_reach_runtime_minted_warehouses`.
+    policy = _policy(rendered, "maintenance")
     for bucket in swept:
-        assert f"arn:aws:s3:::{bucket}/*" in policy, (
+        assert allowed(policy, action="s3:PutObject", bucket=bucket, key="medallion/silver/data/0.lance"), (
             f"the sweep is configured to maintain {bucket!r} and the policy does not grant it — every dataset there will 403"
         )
 

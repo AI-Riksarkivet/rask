@@ -1,0 +1,252 @@
+"""The scoped RustFS users must reach the buckets their consumers actually open.
+
+`chart/templates/rustfs-scoped-users.yaml` derives both policies' resource list from three STATIC
+values — `rustfs.bucket`, `medallion.buckets` and `catalog.multibase.dataBases`. None of them names a
+per-warehouse bucket, because `catalog.warehouses.enabled` (on by default) provisions one physically
+separate bucket per warehouse at `POST /v1/warehouses` time, with an operator-chosen name. The
+template's own comment says so — *"PER-WAREHOUSE BUCKETS ARE MINTED AT RUNTIME … outside any static
+render"* — and then writes an allow-list of statically-known buckets anyway.
+
+Both consumers open those runtime buckets:
+
+* the Ray stage/train jobs read `FROM_URI` and write `TO_URI`, which `_resolve_roots` sets to
+  ``<the project's warehouse root>/medallion/<tier>`` whenever a trigger carries a project;
+* the sweep enumerates them itself — `sweep.py::_buckets_to_sweep` extends the configured list with
+  `warehouse_records.maintainable_buckets(registry)`, carrying a comment about the exact leak this
+  file gates ("silent: the sweep reported success over the buckets it did know").
+
+MEASURED on the live estate 2026-09-04, which is what these tests encode. Project `acme` has an
+active warehouse at `s3://acme-bucket` holding `medallion/bronze` at version 39; a cascade re-run for
+that edge submitted a Ray job that died `AccessDenied` on
+``GET /acme-bucket?list-type=2&prefix=medallion/_versions/``. From the Ray credential itself,
+`acme-bucket/medallion/bronze` was DENIED while `lance-catalog/medallion/bronze` and
+`lakehouse-wh/medallion/bronze` were allowed — the live policy reaches warehouses only through a
+`*-wh` name pattern, and `acme-bucket` does not match it. The chart's rendered policy is narrower
+still: it names `lance-catalog` alone.
+
+The fix inverts the shape the Sids already claim — allow the DATA planes on every bucket, and deny the
+control plane precisely — which needs `StringNotLike` on `s3:prefix` to keep the control bucket's
+listing as tight as it is today. That operator was probed against this estate's RustFS
+(1.0.0-beta.8) before the policy was written to depend on it: with a `Deny s3:ListBucket` on the
+control bucket conditioned `StringNotLike s3:prefix medallion*`, listing `lance-catalog/medallion/`
+was ALLOWED while `lance-catalog/` and `lance-catalog/_projects/` were DENIED and any other bucket
+listed freely — enforced, not ignored.
+
+The evaluator below is deliberately small and IAM-shaped (explicit Deny wins, otherwise an Allow must
+match) so each test states the OUTCOME a credential gets rather than grepping for a bucket name. A
+string grep is what let this hole render green: `test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep`
+checks the CONFIGURED buckets, and a registry-discovered one is by definition not among them.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import textwrap
+from fnmatch import fnmatchcase
+
+import pytest
+
+from tests.unit.test_invariants import _helm_template
+
+
+#: A bucket name no static value in the render can possibly contain — the shape `POST /v1/warehouses`
+#: mints. Deliberately NOT `*-wh`: that suffix is a convention, not a rule, and the live estate's
+#: `acme-bucket` is the counterexample that broke the cascade.
+RUNTIME_BUCKET = "acme-bucket"
+CONTROL_BUCKET = "lance-catalog"
+OBSERVABILITY_BUCKET = "rask-observability"
+
+_BUCKET_ACTIONS = frozenset({"s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets"})
+
+
+def _render() -> str:
+    return _helm_template(
+        "rustfs.maintenanceAccessKey=rask-maintenance",
+        "rustfs.maintenanceSecretKey=m-secret",
+        "rustfs.rayComputeAccessKey=rask-ray-compute",
+        "rustfs.rayComputeSecretKey=r-secret",
+    )
+
+
+def _policy(rendered: str, name: str) -> dict:
+    """The policy document the Job writes for `name`, parsed.
+
+    Read out of the heredoc rather than out of a values file on purpose: what governs the credential
+    is the JSON `mc admin policy create` is handed, and a template that renders valid YAML around
+    invalid JSON is exactly the failure this parse catches.
+    """
+    job = rendered[rendered.index("component: rustfs-scoped-users") :]
+    start = job.index(f"cat >/tmp/{name}.json <<'POLICY'")
+    body = job[start:]
+    body = body[body.index("\n") + 1 :]
+    body = body[: body.index("POLICY\n")]
+    return json.loads(textwrap.dedent(body))
+
+
+def _matches(pattern: str, value: str) -> bool:
+    return fnmatchcase(value, pattern)
+
+
+def _condition_holds(condition: dict, *, prefix: str | None) -> bool:
+    """Only the operators these policies use. An UNKNOWN operator raises rather than passing.
+
+    A condition this evaluator silently ignored would make a Deny look narrower (or an Allow wider)
+    than RustFS treats it, which is the one way a policy test can be worse than no test at all.
+    """
+    for operator, clauses in condition.items():
+        for key, patterns in clauses.items():
+            if key != "s3:prefix":
+                raise AssertionError(f"unhandled condition key {key!r} — teach the evaluator before relying on it")
+            wanted = [patterns] if isinstance(patterns, str) else list(patterns)
+            # An ABSENT key resolves differently per direction, and getting it backwards makes a Deny
+            # look narrower than it is: a positive operator fails vacuously, a NEGATED one holds
+            # vacuously. RustFS agrees in the direction that matters — the live probe listed the
+            # control bucket's root under exactly this policy and got AccessDenied, which is the
+            # `StringNotLike` Deny applying to a listing that carries no useful prefix.
+            hit = prefix is not None and any(_matches(p, prefix) for p in wanted)
+            if operator == "StringLike" and not hit:
+                return False
+            if operator == "StringNotLike" and hit:
+                return False
+            if operator not in {"StringLike", "StringNotLike"}:
+                raise AssertionError(f"unhandled condition operator {operator!r}")
+    return True
+
+
+def _statement_applies(stmt: dict, *, action: str, arn: str, prefix: str | None) -> bool:
+    actions = stmt["Action"] if isinstance(stmt["Action"], list) else [stmt["Action"]]
+    if not any(_matches(a, action) for a in actions):
+        return False
+    resources = stmt["Resource"] if isinstance(stmt["Resource"], list) else [stmt["Resource"]]
+    if not any(_matches(r, arn) for r in resources):
+        return False
+    return _condition_holds(stmt.get("Condition") or {}, prefix=prefix)
+
+
+def allowed(policy: dict, *, action: str, bucket: str, key: str = "", prefix: str | None = None) -> bool:
+    """IAM evaluation, cut to what these two policies use: explicit Deny wins, else an Allow must match."""
+    arn = f"arn:aws:s3:::{bucket}" if action in _BUCKET_ACTIONS else f"arn:aws:s3:::{bucket}/{key}"
+    statements = policy["Statement"]
+    if any(s["Effect"] == "Deny" and _statement_applies(s, action=action, arn=arn, prefix=prefix) for s in statements):
+        return False
+    return any(s["Effect"] == "Allow" and _statement_applies(s, action=action, arn=arn, prefix=prefix) for s in statements)
+
+
+@pytest.fixture(scope="module")
+def ray() -> dict:
+    return _policy(_render(), "ray-compute")
+
+
+@pytest.fixture(scope="module")
+def maintenance() -> dict:
+    return _policy(_render(), "maintenance")
+
+
+# ---- the Ray compute lane -----------------------------------------------------------------------
+
+
+def test_the_ray_lane_reads_a_runtime_minted_warehouse_bucket(ray: dict) -> None:
+    """The measured failure. `_resolve_roots` points a tenant's stage at its warehouse root, so a
+    policy that names only static buckets 403s every project whose bucket was minted at runtime —
+    and the mover reports it as a failed Ray job, never as a missing grant."""
+    assert allowed(ray, action="s3:ListBucket", bucket=RUNTIME_BUCKET, prefix="medallion/"), (
+        "the stage job cannot even LIST its upstream — this is the AccessDenied that killed the acme cascade"
+    )
+    assert allowed(ray, action="s3:GetObject", bucket=RUNTIME_BUCKET, key="medallion/bronze/_versions/1.manifest")
+    assert allowed(ray, action="s3:PutObject", bucket=RUNTIME_BUCKET, key="medallion/silver/data/0.lance")
+
+
+def test_the_ray_lane_still_cannot_list_the_control_bucket_outside_the_cascade(ray: dict) -> None:
+    """The property the live hand-written policy has and the rendered one lost: the control bucket is
+    listable only under `medallion*`. Widening the data allow must not widen this."""
+    assert allowed(ray, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix="medallion/")
+    assert not allowed(ray, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix="_projects/")
+    assert not allowed(ray, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix="_warehouses/"), "the compute lane can enumerate the warehouse registry"
+    # Both shapes of "list the bucket root": `mc ls bucket/` sends `prefix=` (the empty string, which
+    # is not like `medallion*`), a bare ListBucket sends none at all. Neither may enumerate the
+    # control plane's top-level prefixes, and the empty-string case is the one measured live.
+    assert not allowed(ray, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix=""), "a root listing enumerates the control plane's prefixes"
+    assert not allowed(ray, action="s3:ListBucket", bucket=CONTROL_BUCKET)
+
+
+@pytest.mark.parametrize("guarded", ["_projects", "_protection", "_policies", "_warehouses"])
+def test_the_ray_lane_cannot_touch_control_records_in_ANY_bucket(ray: dict, guarded: str) -> None:
+    """Widening the allow to every bucket widens the deny with it, or a tenant warehouse's own control
+    records become reachable — which the static policy never had to think about because it reached no
+    tenant bucket at all."""
+    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
+        assert not allowed(ray, action="s3:GetObject", bucket=bucket, key=f"{guarded}/x.json"), f"{bucket}/{guarded} is readable"
+        assert not allowed(ray, action="s3:PutObject", bucket=bucket, key=f"{guarded}/x.json"), f"{bucket}/{guarded} is writable"
+
+
+def test_the_ray_lane_never_reaches_the_observability_store(ray: dict) -> None:
+    assert not allowed(ray, action="s3:GetObject", bucket=OBSERVABILITY_BUCKET, key="anything")
+    assert not allowed(ray, action="s3:ListBucket", bucket=OBSERVABILITY_BUCKET, prefix="")
+
+
+# ---- the maintenance sweep ----------------------------------------------------------------------
+
+
+def test_the_sweep_rewrites_a_bucket_it_discovered_from_the_registry(maintenance: dict) -> None:
+    """`_buckets_to_sweep` extends the configured list from the warehouse registry, so the policy has
+    to cover buckets no render can name. Its failure mode is the quiet one the sweep's own comment
+    describes: `compact_one` reports AccessDenied per dataset as an `open:` error, which reads as a
+    broken dataset rather than a missing grant, and `ack_for` acks it as SUCCESS."""
+    assert allowed(maintenance, action="s3:ListBucket", bucket=RUNTIME_BUCKET, prefix="medallion/")
+    assert allowed(maintenance, action="s3:PutObject", bucket=RUNTIME_BUCKET, key="medallion/silver/data/0.lance")
+    assert allowed(maintenance, action="s3:DeleteObject", bucket=RUNTIME_BUCKET, key="medallion/silver/_versions/1.manifest")
+
+
+@pytest.mark.parametrize("guarded", ["_projects", "_protection", "_warehouses"])
+def test_the_sweep_cannot_rewrite_the_records_that_govern_it_in_ANY_bucket(maintenance: dict, guarded: str) -> None:
+    """The whole point of the scoped user: a compaction credential that can rewrite `_protection/` can
+    turn off the shallow-clone guard that stops it destroying another dataset's source."""
+    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
+        assert not allowed(maintenance, action="s3:PutObject", bucket=bucket, key=f"{guarded}/x.json")
+        assert not allowed(maintenance, action="s3:DeleteObject", bucket=bucket, key=f"{guarded}/x.json")
+
+
+def test_the_sweep_still_reads_the_records_it_must_read(maintenance: dict) -> None:
+    """READ, not write. It resolves the buckets to sweep out of `_warehouses/` and the per-object
+    protection verdict out of `_protection/`; denying the read would blind the pre-pass rather than
+    constrain it."""
+    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_warehouses/acme-bucket.json")
+    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_protection/table.json")
+    assert allowed(maintenance, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix="_warehouses/")
+
+
+def test_the_sweep_keeps_writing_its_own_cadence_stamp(maintenance: dict) -> None:
+    """`_stamp_cadence` writes under `_policies/state/` on every maintained dataset and
+    `_policy_skip_reason` reads a missing stamp as "maintain" — so denying this prefix does not fail
+    loudly, it silently compacts every policied dataset on every tick. Pinned so a future tightening
+    has to argue with a test rather than a comment."""
+    assert allowed(maintenance, action="s3:PutObject", bucket=CONTROL_BUCKET, key="_policies/state/some-dataset.json")
+    assert allowed(maintenance, action="s3:PutObject", bucket=RUNTIME_BUCKET, key="_policies/state/some-dataset.json")
+
+
+def test_the_sweep_never_reaches_the_observability_store(maintenance: dict) -> None:
+    assert not allowed(maintenance, action="s3:GetObject", bucket=OBSERVABILITY_BUCKET, key="anything")
+
+
+def test_the_drift_report_can_still_enumerate_the_account(maintenance: dict) -> None:
+    """`reconcile` lists every bucket to find orphans — a bucket claimed by no warehouse record. It is
+    the one thing here that is deliberately account-wide."""
+    assert allowed(maintenance, action="s3:ListAllMyBuckets", bucket="*")
+
+
+# ---- the provisioning step itself ----------------------------------------------------------------
+
+
+def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attached() -> None:
+    """`mc admin policy create` OVERWRITES an existing policy on this RustFS — probed 2026-09-04: a
+    second create with different content returned exit 0 and the readback showed the new document. So
+    the `|| true` that used to sit on the create was not protecting against "already exists"; all it
+    could do was swallow a REAL failure (malformed JSON, admin denied) and let the hook report success
+    while the credential kept its old policy. The user-add keeps its `|| true`, which genuinely does
+    guard a re-run."""
+    rendered = _render()
+    job = rendered[rendered.index("component: rustfs-scoped-users") :]
+    creates = re.findall(r"mc admin policy create rfs \S+ \S+( \|\| true)?", job)
+    assert creates, "no policy is created at all"
+    assert not any(creates), "a policy create still swallows its failure — a bad policy renders as a successful hook"
