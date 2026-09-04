@@ -992,6 +992,12 @@ def _build_stage_event(
         duration_seconds=stage_seconds,
         source_uri=to_uri if result else None,
         schema_fields=result.fields if result else None,
+        # THE DELTA BOUNDARY THIS RUN READ, beside the version it wrote. Without it the boundary is
+        # unauditable after the fact: the range lives on the acked trigger and in the Ray job's
+        # `BASE_VERSION` env, and neither survives the run, so nothing could answer "did this tier ever
+        # consume source version N?" — which is exactly the question a cascade lag detector asks.
+        from_version=trigger.from_version,
+        to_version=trigger.to_version,
         # Field-to-field column lineage (#1): the compute declares which upstream column each output
         # column came from — declared by the in-process transform, reconstructed from the on-disk schemas
         # on the Ray path — so the LIVE cascade populates the columnLineage graph (not just seed).

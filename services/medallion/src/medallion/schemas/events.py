@@ -174,6 +174,12 @@ def build_run_event(
     token: str | None = None,
     cascade_id: str | None = None,
     project: str | None = None,
+    #: WHICH SOURCE VERSIONS this run consumed — the delta boundary, beside the version it wrote.
+    #: Distinct from `version`: that is what this run WROTE, these are what it READ. Without them the
+    #: boundary is unauditable after the fact, because the range lives only on the acked trigger and
+    #: in the Ray job's `BASE_VERSION` env, so nothing can answer "did silver ever consume bronze 7?".
+    from_version: int | None = None,
+    to_version: int | None = None,
     originator: str | None = None,
     event_type: str = "COMPLETE",
     error_message: str | None = None,
@@ -233,6 +239,14 @@ def build_run_event(
         lance_fields["cascade_id"] = cascade_id
     if project:
         lance_fields["project"] = project
+    # OMITTED, never zero-filled. `from_version` is None on a first publication and means "everything
+    # up to `to`"; a 0 would assert a prior publication at version 0 that did not happen — the same
+    # rule `build_stage_trigger` applies on the wire. A run with no range (a full rescan, a promotion)
+    # carries neither key, because a sentinel is indistinguishable from a real boundary.
+    if from_version is not None:
+        lance_fields["from_version"] = from_version
+    if to_version is not None:
+        lance_fields["to_version"] = to_version
     # The HUMAN this run is running for, when `author` is a service. A mover authors with a chart role
     # literal, which is true and unaddressable; the notifications plane reads this to reach the person
     # whose cascade it is. Carried, never substituted for `author` — see `NotificationReason.ORIGINATOR`.
