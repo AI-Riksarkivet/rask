@@ -77,6 +77,21 @@ different, and would lock out exactly the non-admin validator the rung exists fo
 cannot derive `toNamespace`/`requiredAction` from `mover_urls` (name→URL only), so that mapping has to
 be rendered.
 
+## C3 AND C4 COVER DISJOINT FAILURES — neither substitutes for the other
+
+Established 2026-09-04, and it corrects a wrong first reading of this plan (that C4 might deliver most
+of C3's value cheaply). It does not, and the reason is structural:
+
+* **The REFUSAL class** — the trigger ARRIVED and `_preflight` dropped it. Countable by construction:
+  `record_refused` fires with a bounded `reason` label. **C4 covers exactly this, and only this.**
+* **The LOSS class** — the trigger never arrived, so `_preflight` never ran and **nothing increments**.
+  No counter, no log, no DLQ, no lineage event. This is the failure O2 names in its own words: *a
+  missed hop is undetectable*.
+
+So a counter cannot see a lost hop, ever, no matter what is alerted on. **C3 is the only thing that
+can detect the class O2 is about**, and it is not optional; C4 is cheap, disjoint, and closes a real
+hole that happens to be adjacent. Sequencing them is a question of cost, never of substitution.
+
 ## Ordered steps
 
 | # | Step | State |
@@ -84,16 +99,20 @@ be rendered.
 | C1 | **One trigger shape, two producers** — extract `build_stage_trigger`; the publication head becomes its first caller, pinned by an AST anti-drift gate | ✅ **LANDED** `e1baef1c` (503 medallion tests, tests/unit 3705, ruff clean) |
 | C2 | **The re-run verb** — `POST /movers/{mover}/rerun` on the producer, body `{project, from_version, to_version}`, same-token default, R2's Ray-liveness 409, R4's authz, reports the path taken per R3. No gateway row needed: `Route("/api/movers", "/movers", *medallion)` plus prefix matching already carries it | next |
 | C3 | **The reconciler** — the detection half. `bindings.cron` on the producer, read-only, reports drift and repairs nothing, modelled on `maintenance/services/reconcile.py`. Must pick and record its answer to bindings.cron firing on every replica | not started |
-| C4 | **Surface the silent refusals** — see below | not started |
+| C4 | **Surface the silent refusals** — alert on `medallion_stage_refused`, `reason="routing_disabled"` first. Chart only: no new state, no service code | not started |
 
 ## Found while investigating, NOT in §O2 — three silent-failure classes
 
-1. **A DROP is an ack, and `routing_disabled` is permanent.** `_preflight` has six deterministic
-   refusals, all DROPs. The counters exist (`medallion.stage.refused`, `medallion.stage.other_lane`)
-   and appear in **neither** `chart/alerting/rules.yml` nor `chart/templates/perses-dashboards.yaml`.
-   The code calls `routing_disabled` "a DEPLOYMENT gap, and therefore permanent: every tenant trigger
-   this mover ever receives halts here" — an estate-wide halt behind a series nothing reads. This is
-   C4 and is arguably higher value than C3, because it needs no new state at all.
+1. **A DROP is an ack, and `routing_disabled` is permanent.** `_preflight` refuses deterministically
+   and DROPs. `record_refused(transition, reason)` counts each one with `reason` as a LABEL over a
+   closed vocabulary — `malformed`, `unconfined_uri`, `bad_project`, `routing_disabled`,
+   `unresolvable_lane` — so an alert can target the permanent one specifically. Verified 2026-09-04:
+   `medallion_stage_refused` and `medallion_stage_other_lane` appear in **neither**
+   `chart/alerting/rules.yml` (whose three medallion alerts are `MedallionCascadeDeadLettering`,
+   `MedallionStageOutcomesFailing`, `MedallionStageDenied`) **nor**
+   `chart/templates/perses-dashboards.yaml`. The code calls `routing_disabled` "a DEPLOYMENT gap, and
+   therefore permanent: every tenant trigger this mover ever receives halts here" — an estate-wide
+   halt behind a series nothing reads. That is C4, and it needs no new state at all.
 2. **A gap the outbox does not cover.** The lineage outbox stages AFTER the Lance commit, so a pod
    kill between commit and `stage_event` loses the cascade head with the data on disk. Lineage's sweep
    back-fills the GRAPH only — it does not republish (only the drain has a publisher) — so data
