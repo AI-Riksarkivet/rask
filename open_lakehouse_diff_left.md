@@ -683,6 +683,7 @@ section above point at it rather than repeat it.
 | High | **No cascade reconciler and no re-run verb** — a missed hop is undetectable and unrepairable. **SPEC: `open_cascade_repair.md`** (C1 landed; C4 → C3 → C2). Also tracked at `open_estate-verification.md` row 35 (D) and `open_compute-decoupling.md` §7.4 step 6 — all four end together | `open_estate-verification.md` row 35 (D) |
 | High | **No Dapr Workflow versioning seam** — two replay divergences already shipped; "drain before deploying" is the only safe answer | K sequences the retreat; this is the cost of staying meanwhile |
 | Medium | Submission bypasses the `RayJob` CRD, so Kueue admits nothing | |
+| High | **Maintenance compaction runs in a 512Mi pod while the distributed seam it should use has no executor** — `compaction_plan`/`compaction_commit` are served and nothing consumes a `CompactionTask`. SPEC: `open_maintenance_compute.md` | Found 2026-09-04 |
 | Medium | 1,367 orphan rows in `daprstate`, no TTL, no alert | |
 | Medium | The workflow status metric reports success on a dying path | |
 | Owner | Ray GCS is not fault-tolerant: a head restart kills in-flight jobs. The platform now degrades in one poll interval instead of 24 h (row 34), but fault tolerance itself needs an external Redis, which this estate refuses by standing rule | |
