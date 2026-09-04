@@ -941,7 +941,7 @@ catalog:
   # Why the control lane needs durability at all, when the events are documented as refresh hints: most
   # of them are, and `table_published` is not. The mover does not fire the next stage's topic, and
   # `/publication-arrival` receiving this event is the ONLY thing that WAKES silver->gold. The cascade-lag
-  # cron re-reads the `published` tag since `open_cascade_repair.md` C3, but it only MEASURES: it reports
+  # cron re-reads the `published` tag since docs/DECISIONS.md "Cascade repair" (C3), but it only MEASURES: it reports
   # how far a tier has fallen behind and advances nothing, so this lane's durability is still the whole
   # of what carries the cascade forward. A 5s publish timeout during a NATS
   # blip ended the cascade outright with every pod green.
@@ -1057,7 +1057,7 @@ medallion:
   # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Movers are idempotent on
   # top (MERGE on run_id). medallion-producer is a subscriber too (/bronze-arrival). All stateless.
   producerReplicas: 1
-  # THE CASCADE LAG DETECTOR (`open_cascade_repair.md` C3) — the LOSS half of cascade monitoring.
+  # THE CASCADE LAG DETECTOR (docs/DECISIONS.md "Cascade repair" (C3)) — the LOSS half of cascade monitoring.
   #
   # C4's refusal alerts see triggers that ARRIVED and were dropped. A trigger that never arrived
   # increments no counter, runs no `_preflight`, writes no log and parks on no DLQ: the only evidence
@@ -1179,7 +1179,7 @@ medallion:
   # this release.
   rayAddress: ""
   # SUBMIT A STAGE AS A `RayJob` CUSTOM RESOURCE instead of a POST to Ray's Jobs API
-  # (`open_compute-decoupling.md` §7.4 step 3). Off by default: the Jobs API path is what this estate
+  # (docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 3). Off by default: the Jobs API path is what this estate
   # has run and proven, and this is the newer of the two.
   #
   # What it buys is a DURABLE run record. Ray's GCS is not fault-tolerant here (no external Redis, a
@@ -1400,7 +1400,7 @@ maintenance:
   # one replica (`replicas: 1` is hardcoded in maintenance.yaml), so the queue's scaling payoff is not
   # available until that pin and the in-process sweep lock are retired together.
   workTopic: ""
-  # DEDICATED MAINTENANCE WORKERS (`open_maintenance_compute.md` M1).
+  # DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Cascade repair" (M1)).
   #
   # One deployment does the planning AND the compaction today, at `replicas: 1` and 512Mi — so the
   # work is bounded to fit the pod (`compactThreads`, `scanBatchSize`) rather than the pod sized to fit

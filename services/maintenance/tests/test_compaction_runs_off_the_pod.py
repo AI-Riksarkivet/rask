@@ -1,4 +1,4 @@
-"""The rewrite's BYTES leave the pod that plans and commits them — `open_maintenance_compute.md` M2.
+"""The rewrite's BYTES leave the pod that plans and commits them — docs/DECISIONS.md "Cascade repair" (M2).
 
 The defect this closes: `compact_files()` does all three phases in one process, so the maintenance
 pod's memory ceiling is a function of the largest table anyone owns. Lance ships the split precisely

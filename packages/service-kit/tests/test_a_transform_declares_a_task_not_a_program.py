@@ -1,6 +1,6 @@
 """A `TransformSpec` names a registered TASK, not a Ray program path.
 
-`open_compute-decoupling.md` §2.1, step 1 of §7.4, and the change that makes clause 1 true: today
+docs/DECISIONS.md "The compute plane is decoupled" (§2.1), step 1 of §7.4, and the change that makes clause 1 true: today
 A transform's runnable half is a KEY, not a program path. Nothing in this shared library validates
 filenames, so the word "Ray", a directory and three filenames reach every API client through the
 catalog's published OpenAPI — and no second engine can be declared at all.

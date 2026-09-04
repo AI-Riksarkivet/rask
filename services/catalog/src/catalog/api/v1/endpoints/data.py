@@ -193,7 +193,7 @@ async def plan_table_compaction(
     segments = parse_identifier(id, settings.delimiter)
     # A branch has its own version sequence and its own fragments; planning against main and reporting
     # it as the branch's work would compact the wrong dataset with a 200. Refuse until the plan/commit
-    # pair opens the branch ref (`open_lakehouse_lanes.md`).
+    # pair opens the branch ref (docs/DECISIONS.md "A rename moves a POINTER, not bytes").
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="plan_table_compaction")
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:

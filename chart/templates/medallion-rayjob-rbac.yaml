@@ -1,4 +1,4 @@
-{{- /* THE PRODUCER MAY CREATE A RayJob — `open_compute-decoupling.md` §7.4 step 3.
+{{- /* THE PRODUCER MAY CREATE A RayJob — docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 3.
 
      Submitting a stage as a CUSTOM RESOURCE rather than a POST to Ray's Jobs API is what makes the
      run record DURABLE: a RayJob is an etcd object and survives a head restart, which Ray's own GCS

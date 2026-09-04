@@ -1,6 +1,6 @@
 """The task registry — what may be run, written by the plane that can run it and merely CONSULTED here.
 
-`open_compute-decoupling.md` §2.2, step 1 of the owner-ordered §7.4.
+docs/DECISIONS.md "The compute plane is decoupled" (§2.2), step 1 of the owner-ordered §7.4.
 
 A transform declares a TASK: a key under `<control_root>/_tasks/<hash>.json` naming an engine, a
 command that engine understands, and the shapes it supports. The platform never parses the command

@@ -1,6 +1,6 @@
 """A `WorkOrder` says WHAT must happen, in no engine's vocabulary, and carries no secret.
 
-`open_compute-decoupling.md` §2.3, step 1 of the owner-ordered §7.4. It lifts the dict
+docs/DECISIONS.md "The compute plane is decoupled" (§2.3), step 1 of the owner-ordered §7.4. It lifts the dict
 `ray_submit.py` already builds — that dict IS the executor contract; only its transport and the
 program's name were ever Ray-shaped.
 

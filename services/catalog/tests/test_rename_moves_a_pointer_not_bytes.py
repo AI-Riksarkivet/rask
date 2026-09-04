@@ -1,4 +1,4 @@
-"""A rename edits `__manifest`; it does not copy a dataset — `open_lakehouse_lanes.md`.
+"""A rename edits `__manifest`; it does not copy a dataset — docs/DECISIONS.md "A rename moves a POINTER, not bytes".
 
 A rename's cost was the DATASET's size, paid inside a request handler that answered 200. That is the
 same class as the compact door before it became a 202, and it is unbounded in a way no pod sizing

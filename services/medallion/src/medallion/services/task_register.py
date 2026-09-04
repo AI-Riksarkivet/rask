@@ -1,6 +1,6 @@
 """Register what this estate's Ray plane can run — the WRITE half of the task registry.
 
-`open_compute-decoupling.md` §7.4 step 1. A transform declares a TASK; the registry says what
+docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 1. A transform declares a TASK; the registry says what
 running it means. The two are separated so the catalog's declaration door can refuse an unrunnable
 transform without learning any engine's vocabulary — which is only true if the registry is written
 by a plane that HAS one.

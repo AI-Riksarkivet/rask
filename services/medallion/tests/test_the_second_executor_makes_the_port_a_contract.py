@@ -1,4 +1,4 @@
-"""The IN-PROCESS engine conforms to the `Executor` port — `open_compute-decoupling.md` §7.4 step 2.
+"""The IN-PROCESS engine conforms to the `Executor` port — docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 2.
 
 That file calls this "the cheapest possible proof the contract is real, because the second engine
 already exists", and the reason it matters is stated there too: **a port with one implementation is a

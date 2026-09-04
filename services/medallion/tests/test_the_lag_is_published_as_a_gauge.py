@@ -1,6 +1,6 @@
 """The per-edge lag reaches the metrics plane as a GAUGE, and an unknown edge publishes NOTHING.
 
-`open_cascade_repair.md` C3. A lag is a LEVEL — true continuously, read by asking — so it is a gauge
+docs/DECISIONS.md "Cascade repair" (C3). A lag is a LEVEL — true continuously, read by asking — so it is a gauge
 set on each tick, never a counter and never a log line. Row 23 of `open_estate-verification.md` is what
 the other choice costs: a repeating condition emitted per tick counted one gap 1210 times and buried
 every other service's errors for ten hours.

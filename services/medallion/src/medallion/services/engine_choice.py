@@ -1,6 +1,6 @@
 """WHICH compute engine runs a stage — answered by the RECORD, not by a deployment flag.
 
-`open_compute-decoupling.md` §7.4. **Two axes, and this module is only the second one.**
+docs/DECISIONS.md "The compute plane is decoupled" (§7.4.) **Two axes, and this module is only the second one.**
 
 * **ORCHESTRATION** — when a stage runs, what happens next, what happens if it dies — is Dapr
   Workflow's and Dapr pub/sub's, estate-wide and by recorded decision (`.claude/skills/rask-dapr`).

@@ -1,6 +1,6 @@
 """The `Executor` port — what the platform may ask of a compute engine, naming none of them.
 
-`open_compute-decoupling.md` §2.4, step 1 of the owner-ordered §7.4. Together with `work_order.py` this
+docs/DECISIONS.md "The compute plane is decoupled" (§2.4), step 1 of the owner-ordered §7.4. Together with `work_order.py` this
 is the whole of the decoupling claim: `WorkOrder` says WHAT must happen, this says how the platform
 asks for it and how it learns the outcome. **`service-kit` must not gain a `ray` dependency**, and this
 module adds none — it imports pydantic and the standard library.

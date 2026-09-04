@@ -1,4 +1,4 @@
-"""Ray as a `RayJob` CR rather than a POST to the Jobs API — `open_compute-decoupling.md` §7.4 step 3.
+"""Ray as a `RayJob` CR rather than a POST to the Jobs API — docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 3.
 
 **Why it is worth doing at all, stated as the capability it changes.** Ray's GCS is not fault-tolerant
 in this estate (no external Redis, a standing rule), so a head restart takes every job record with it —

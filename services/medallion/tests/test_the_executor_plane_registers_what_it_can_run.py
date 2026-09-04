@@ -1,6 +1,6 @@
 """The registry's WRITE half, and the submit path's refusal to run what it cannot.
 
-`open_compute-decoupling.md` §7.4 step 1. The catalog refuses a transform naming an unregistered
+docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 1. The catalog refuses a transform naming an unregistered
 task — which is only a real gate if something actually registers. The plane that submits to Ray is
 the plane that says what Ray can run here, and it stamps its own engine rather than trusting a chart
 row to spell it: a typo in `engine` would register a task no submitter answers to, producing a

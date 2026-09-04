@@ -1127,7 +1127,7 @@ and its scheduling is adaptive rather than a timestamp comparison — the next r
 target number of bytes at the last run's observed rate, clamped to [1 day, ceiling]. Where that work
 runs it answers explicitly: "we recommend running expire snapshots workers in dedicated pods to avoid
 impacting REST API performance", with the API pod's worker count set to zero. See
-`open_maintenance_compute.md` — checked against docs.lakekeeper.io 2026-09-04.
+docs/DECISIONS.md "Cascade repair" — checked against docs.lakekeeper.io 2026-09-04.
 
 **A vended credential must use the `aws_`-prefixed storage-option spellings.** Every fleet pod exports
 AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and with the bare spellings object_store BLENDS the two
@@ -1236,7 +1236,7 @@ naming (`<name>.lance`), where the location IS the name, and the spec's rule is 
 the unbounded work straight back, so it is an `InvalidInputError` naming the reason. rask's own
 `require_parent` guard refuses root tables, so no table reachable through these doors has that shape.
 
-The INDEX-BUILD half of `open_lakehouse_lanes.md` is untouched by this and still stands: index builds
+The INDEX-BUILD half of docs/DECISIONS.md "A rename moves a POINTER, not bytes" is untouched by this and still stands: index builds
 run wherever they are invoked, and `create_index_uncommitted` / `commit_existing_index_segments` give
 them the same plan-elsewhere / commit-here split compaction now uses.
 
@@ -1293,7 +1293,7 @@ detector written to catch it. A detector's failure path must be as loud as its f
 
 ## The compute plane is decoupled: a port, three adapters, and no engine in the platform (2026-09-04)
 
-`open_compute-decoupling.md` §7.4, closed. What the platform holds and what an adapter holds are now
+docs/DECISIONS.md "The compute plane is decoupled" (§7.4), closed. What the platform holds and what an adapter holds are now
 different things, and the boundary is measurable rather than asserted:
 
 ```

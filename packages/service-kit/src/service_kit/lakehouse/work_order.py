@@ -1,6 +1,6 @@
 """`WorkOrder` — WHAT must happen, in no engine's vocabulary.
 
-`open_compute-decoupling.md` §2.3, step 1 of the owner-ordered §7.4. It lifts the dict
+docs/DECISIONS.md "The compute plane is decoupled" (§2.3), step 1 of the owner-ordered §7.4. It lifts the dict
 `medallion/services/ray_submit.py` already builds: that dict IS the executor contract, and only its
 transport and the program's name were ever Ray-shaped. Naming it here makes the platform able to state
 what a conforming unit of work is without naming the engine that runs it — which is the whole of the

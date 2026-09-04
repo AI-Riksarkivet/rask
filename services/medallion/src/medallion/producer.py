@@ -182,7 +182,7 @@ app.include_router(promotions_router)
 # human auth and forwards. See `api/mover_ops.py` for why the split is forced rather than chosen.
 app.include_router(mover_ops_router)
 
-# THE RE-RUN VERB (open_cascade_repair.md C2). Beside the operator proxy above but NOT through it:
+# THE RE-RUN VERB (docs/DECISIONS.md "Cascade repair" (C2)). Beside the operator proxy above but NOT through it:
 # it mints the stage trigger here rather than forwarding, because the only reason to forward was a
 # Ray-liveness check the design dropped — and this app already mints stage triggers, in the
 # `table_published` subscription. `build_stage_trigger` was written for exactly these two callers.

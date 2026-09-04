@@ -1,4 +1,4 @@
-"""An index build is queued work, not a request — `open_lakehouse_lanes.md`, the index half.
+"""An index build is queued work, not a request — docs/DECISIONS.md "A rename moves a POINTER, not bytes", the index half.
 
 `create_index` / `create_scalar_index` ran the whole build inside the catalog's own handler, so the
 cost of a request was a property of the TABLE rather than of the request: unbounded work no pod

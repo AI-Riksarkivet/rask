@@ -1,4 +1,4 @@
-{{- /* DEDICATED MAINTENANCE WORKERS (`open_maintenance_compute.md` M1).
+{{- /* DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Cascade repair" (M1)).
 
      The planner's own Deployment, with the cron binding names BLANKED and its own sizing. It
      consumes `maintenance.work.v1` as a competing consumer (the Component carries

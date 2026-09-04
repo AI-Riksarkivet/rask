@@ -1,6 +1,6 @@
 """WHO runs the job comes from the RECORD, not from a deployment flag.
 
-`open_compute-decoupling.md` §7.4. Half a decoupling is worse than none: the declaration door now
+docs/DECISIONS.md "The compute plane is decoupled" (§7.4.) Half a decoupling is worse than none: the declaration door now
 refuses a task no engine registered, and the registry says which engine runs it — but if dispatch
 still branches on a chart boolean, the record can say `engine: "ray"` while the code decides
 something else, and nothing anywhere is red. The vocabulary moved; the control has to move with it.

@@ -1,6 +1,6 @@
 """How far behind its source a destination tier has fallen — the cascade's LOSS detector.
 
-`open_cascade_repair.md` C3. C4 alerts on refusals, which are triggers that ARRIVED and were dropped;
+docs/DECISIONS.md "Cascade repair" (C3). C4 alerts on refusals, which are triggers that ARRIVED and were dropped;
 this is the other class and the one O2 names. A trigger that never arrived increments no counter, runs
 no `_preflight`, writes no log and parks on no DLQ — the only evidence it is missing is that the source
 moved and the destination did not.

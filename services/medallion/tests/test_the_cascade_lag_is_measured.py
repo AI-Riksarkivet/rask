@@ -1,6 +1,6 @@
 """Per-edge cascade lag: how far behind its source a destination tier has fallen.
 
-`open_cascade_repair.md` C3, and the ONLY thing that can see the LOSS class. C4 alerts on refusals —
+docs/DECISIONS.md "Cascade repair" (C3), and the ONLY thing that can see the LOSS class. C4 alerts on refusals —
 triggers that ARRIVED and were dropped — but a trigger that never arrived increments nothing, runs no
 `_preflight`, writes no log and parks on no DLQ. The only evidence such a hop is missing is that the
 source moved and the destination did not.

@@ -1,6 +1,6 @@
 """What a conforming stage output IS — re-derived by the platform, never believed from a self-report.
 
-`open_compute-decoupling.md` §2.5. The obligations below are what `scripts/ray_stage_job.py` enforces
+docs/DECISIONS.md "The compute plane is decoupled" (§2.5.) The obligations below are what `scripts/ray_stage_job.py` enforces
 on itself and what nothing enforces on anyone else: a second engine can write a governed tier today
 and satisfy none of them, and every status will read SUCCESS. That gap is the whole difference
 between a contract and a convention, and it is closed by deriving the answer from the WRITTEN DATASET

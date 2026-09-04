@@ -1,4 +1,4 @@
-{{- /* THE CASCADE LAG DETECTOR — the LOSS half of cascade monitoring (`open_cascade_repair.md` C3).
+{{- /* THE CASCADE LAG DETECTOR — the LOSS half of cascade monitoring (docs/DECISIONS.md "Cascade repair" (C3)).
 
      C4's alerts fire on `medallion_stage_refused_total`: triggers that ARRIVED and were dropped by
      `_preflight`. A DROP is an ack, so those halts leave a counter and nothing else — but a trigger

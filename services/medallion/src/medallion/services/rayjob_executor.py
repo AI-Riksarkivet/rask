@@ -1,4 +1,4 @@
-"""Ray as a `RayJob` CUSTOM RESOURCE, not a POST to the Jobs API — `open_compute-decoupling.md` §7.4 step 3.
+"""Ray as a `RayJob` CUSTOM RESOURCE, not a POST to the Jobs API — docs/DECISIONS.md "The compute plane is decoupled" (§7.4) step 3.
 
 The estate submits stage work by POSTing to Ray's Jobs REST API. That works and has one structural
 cost the whole watcher is built around: **Ray's GCS is not fault-tolerant here** (no external Redis,

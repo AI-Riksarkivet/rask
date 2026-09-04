@@ -1,6 +1,6 @@
 """A task is a REGISTERED KEY the platform resolves, not a program path it validates.
 
-`open_compute-decoupling.md` §2.2, step 1 of §7.4. The registry is written by the plane that can run
+docs/DECISIONS.md "The compute plane is decoupled" (§2.2), step 1 of §7.4. The registry is written by the plane that can run
 the task and merely consulted by the catalog, so the engine noun never reaches the published OpenAPI
 and a second engine needs no catalog change to be declarable.
 

@@ -1,6 +1,6 @@
 """One lag tick: read both stores per declared edge, publish what is known, stay silent on what is not.
 
-`open_cascade_repair.md` C3, last piece. The arithmetic (`lag_for_edge`) and the recorder
+docs/DECISIONS.md "Cascade repair" (C3), last piece. The arithmetic (`lag_for_edge`) and the recorder
 (`record_edge_lag`) are pure; this is the tick that feeds them, and its whole job is to be honest about
 partial failure.
 
