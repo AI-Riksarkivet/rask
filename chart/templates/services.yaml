@@ -533,6 +533,17 @@ spec:
             {{- if .Values.services.notifications }}
               {{- $subjects = append $subjects ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
             {{- end }}
+            {{- /* THE CASCADE-LAG DETECTOR reads lineage's `/runs` board to learn the highest source
+                   version each tier has CONSUMED — the half of the lag arithmetic the catalog cannot
+                   answer. Measured live 2026-09-04: without this the door refuses it outright with
+                   "service identity not allowed: service-medallion-producer", and the detector then
+                   publishes NO POINT for any edge. That failure is silent by construction — a reader
+                   that cannot read reports `known=False`, which publishes nothing and looks exactly
+                   like a healthy cascade. An allowlist entry is what makes the detector able to fail
+                   loudly instead. */}}
+            {{- if and .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
+              {{- $subjects = append $subjects .Values.medallion.producer.serviceIdentity }}
+            {{- end }}
             - { name: LINEAGE_SERVICE_SUBJECTS, value: {{ compact $subjects | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}

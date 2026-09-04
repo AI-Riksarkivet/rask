@@ -202,8 +202,23 @@ Three defects, peeled one at a time by calling the readers directly, each hidden
 
 All three are fixed and both readers now reach **403** — authenticated, and refused on authorization.
 
-**What is left is a GRANT, and it is the only thing between this gauge and working.**
-`service-medallion-producer` needs read on the source tables' tags at the catalog and on lineage's
-`/runs` board. Neither is seeded. Until they are, C3 publishes no point for any edge — and note how
-this survived: a reader that cannot read publishes NOTHING and reports nothing wrong, so an empty
-series reads as a healthy cascade. That is the same failure shape the whole file is about.
+**The chain, peeled to the bottom.** Each layer was hidden by the one in front, and every step was
+measured against the deployed estate rather than reasoned about:
+
+| # | symptom | cause | state |
+| --- | --- | --- | --- |
+| 1 | every edge `<source>->?`, empty project | `MEDALLION_LANE_DESTINATIONS` absent | stale deployment; the chart renders it |
+| 2 | consumed read 404 | `/api/v1/runs` — lineage serves `/runs` | **fixed** |
+| 3 | published read 401 | no credential sent at all | **fixed** |
+| 4 | still 401 | shared token where the door demands `service-token-<identity>` | **fixed** — delegates to `catalog_register.credential` |
+| 5 | catalog 403 | `can_get_metadata required on table:bronze` — the root-warehouse `reader` grant does not reach the medallion tiers' warehouse | **chart**: the producer joins the bootstrap `readers` list |
+| 6 | lineage 403 | `service identity not allowed` — an ALLOWLIST, not FGA | **chart**: the producer joins `LINEAGE_SERVICE_SUBJECTS` |
+| 7 | lineage 401 | the dedicated token for this subject does not exist in the store | **BLOCKED** |
+
+**Row 7 is not this file's to close.** `dedicatedServiceCredentials: false` is the estate's current
+posture and `open_estate-verification.md` row 35 (B) already tracks it — the same switch that leaves
+`LANCE_PRIVILEGED_SUBJECTS` unrendered. C3's last inch waits on that decision, not on this work.
+
+And note how six layers survived: a reader that cannot read publishes NOTHING and reports nothing
+wrong, so an empty series reads as a healthy cascade. That is the same failure shape the whole file is
+about, committed inside the detector written to catch it.

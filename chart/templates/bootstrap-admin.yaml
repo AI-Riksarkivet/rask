@@ -122,6 +122,18 @@ spec:
               {{- if .Values.services.notifications }}
               {{- $readers = append $readers ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
               {{- end }}
+              {{- if and .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
+              {{- /* THE CASCADE-LAG DETECTOR, and it is the same class of grant as the notifications
+                     reconciler above rather than a new one. It reads two governed surfaces — the source
+                     tables' `published` tag at the catalog and lineage's `/runs` board — to work out how
+                     far a tier has fallen behind. Without the grant both answer 403 and the detector
+                     publishes NO POINT for any edge, which is worse than an absent detector: the empty
+                     series reads as a healthy cascade. Measured live 2026-09-04, where every edge failed
+                     on every tick since the feature shipped.
+
+                     `reader`, never more: it observes versions and names, and writes nothing. */}}
+              {{- $readers = append $readers .Values.medallion.producer.serviceIdentity }}
+              {{- end }}
               readers = {{ $readers | toJson }}
               # WRITERS are a separate list because the rung is different and the reason is different.
               # A reader observes; the maintenance plane REWRITES bytes. It holds the root object-store
