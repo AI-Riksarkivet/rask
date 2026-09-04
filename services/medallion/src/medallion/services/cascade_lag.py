@@ -82,7 +82,11 @@ class LagGauge(Protocol):
     reader to observe an absence.
     """
 
-    def set(self, value: int, attributes: dict[str, str] | None = None) -> None: ...
+    #: POSITIONAL-ONLY, and that is not cosmetic: OTel's own `Gauge.set` names its first parameter
+    #: `amount`, so a by-name protocol would be satisfied by this module's test double and by NOTHING
+    #: in production — the shape where the suite is green and the deployed call raises. `ty` reports it
+    #: at the handing-out site; the marker is what makes the real instrument conform.
+    def set(self, value: int, /, attributes: dict[str, str] | None = None) -> None: ...
 
 
 def record_edge_lag(lag: EdgeLag, *, gauge: LagGauge) -> None:

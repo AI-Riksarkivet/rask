@@ -11,6 +11,13 @@ become underscores →
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    # Type-only: the instruments module must not import a service at runtime.
+    from medallion.services.cascade_lag import LagGauge
+
 from collections import OrderedDict
 from typing import Final
 
@@ -236,11 +243,15 @@ def record_media_underivable(transition: str) -> None:
     _stage_media_underivable.add(1, {"lance.medallion.transition": transition})
 
 
-def cascade_lag_gauge() -> object:
+def cascade_lag_gauge() -> LagGauge:
     """The lag gauge itself, for `cascade_lag.record_edge_lag` to set.
 
     Handed out rather than wrapped, because the decision this metric turns on — publish, or stay
     silent — belongs with the arithmetic that knows whether the value is known, not here.
+
+    Typed as the PROTOCOL rather than `object`: the caller passes it straight to `record_edge_lag`, and
+    `object` erases the one method that call needs — which `ty` reports at the call site rather than
+    here, where the mistake is.
     """
     return _cascade_lag
 

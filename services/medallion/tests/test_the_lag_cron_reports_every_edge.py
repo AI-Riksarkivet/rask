@@ -26,8 +26,8 @@ class _Gauge:
     def __init__(self) -> None:
         self.points: list[tuple[int, dict[str, str]]] = []
 
-    def set(self, value: int, attributes: dict[str, str] | None = None) -> None:
-        self.points.append((value, attributes or {}))
+    def set(self, amount: int, /, attributes: dict[str, str] | None = None) -> None:
+        self.points.append((amount, attributes or {}))
 
 
 EDGES = [("bronze->silver", "acme"), ("silver->gold", "acme")]
