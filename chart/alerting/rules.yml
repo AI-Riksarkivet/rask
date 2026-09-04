@@ -99,6 +99,39 @@ groups:
             means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell
             them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
+      # A _preflight refusal returns DROP, and a DROP is an ACK: Dapr neither redelivers nor
+      # dead-letters, so there is no DLQ alarm, no retry and no error. `medallion_stage_refused_total`
+      # is the ONLY evidence the halt happened, which is why these two rules exist and why the counter
+      # carries a bounded `reason` label rather than the offending token.
+      - alert: MedallionStageRoutingDisabled
+        expr: sum(rate(medallion_stage_refused_total{lance_medallion_reason="routing_disabled"}[15m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: medallion
+        annotations:
+          summary: "Medallion mover has registry resolution OFF — every tenant trigger it receives halts here"
+          description: >-
+            A tenant trigger arrived with no control root configured. The code calls this "a DEPLOYMENT
+            gap, and therefore permanent": it is not a transient fault and will not clear on its own,
+            so every trigger this mover ever receives is dropped and the cascade stops for that tenant
+            with every pod green. Set MEDALLION_CONTROL_ROOT on the mover.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+      - alert: MedallionStageRefused
+        expr: sum by (lance_medallion_reason) (rate(medallion_stage_refused_total{lance_medallion_reason!="routing_disabled"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: medallion
+        annotations:
+          summary: "Medallion pre-flight is dropping triggers ({{ $labels.lance_medallion_reason }})"
+          description: >-
+            A deterministic refusal before any byte was read — malformed, unconfined_uri, bad_project or
+            unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending
+            token, URI and dataset are on the mover's WARNING log line; this alert carries only the
+            bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
       - alert: MedallionStageDenied
         expr: sum(rate(medallion_stage_denied_total[5m])) > 0
         for: 5m

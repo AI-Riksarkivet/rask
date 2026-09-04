@@ -471,6 +471,54 @@ tests:
         alertname: LineageIngestDeadLettering
         exp_alerts: []
 
+  # C4 a. A mover with registry resolution OFF halts every tenant trigger it ever receives. The code
+  # calls this permanent, so the rule is critical and must fire on a steady dribble, not a burst.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_stage_refused_total{lance_medallion_reason="routing_disabled"}'
+        values: "0+1x19"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: MedallionStageRoutingDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "medallion"
+            exp_annotations:
+              summary: "Medallion mover has registry resolution OFF \u2014 every tenant trigger it receives halts here"
+              description: >-
+                A tenant trigger arrived with no control root configured. The code calls this "a DEPLOYMENT gap, and therefore permanent": it is not a transient fault and will not clear on its own, so every trigger this mover ever receives is dropped and the cascade stops for that tenant with every pod green. Set MEDALLION_CONTROL_ROOT on the mover. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+  # C4 b. routing_disabled must NOT also fire the generic refusal alert — the two are exclusive, or an
+  # operator gets paged twice for one halt and learns to mute the pair.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_stage_refused_total{lance_medallion_reason="routing_disabled"}'
+        values: "0+1x19"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: MedallionStageRefused
+        exp_alerts: []
+
+  # C4 c. A deterministic pre-flight refusal that is NOT routing_disabled: warning, and labelled by
+  # the reason so the page says which of the four it was.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_stage_refused_total{lance_medallion_reason="unconfined_uri"}'
+        values: "0+1x19"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: MedallionStageRefused
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "medallion"
+              lance_medallion_reason: "unconfined_uri"
+            exp_annotations:
+              summary: "Medallion pre-flight is dropping triggers (unconfined_uri)"
+              description: >-
+                A deterministic refusal before any byte was read \u2014 malformed, unconfined_uri, bad_project or unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending token, URI and dataset are on the mover's WARNING log line; this alert carries only the bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
   # M24 e. A mover denied its grant stalls the cascade at that stage → fires on the first denial.
   - interval: 1m
     input_series:
