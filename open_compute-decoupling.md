@@ -707,9 +707,16 @@ The earlier draft was imprecise and the owner was right to challenge it.
    engine is expressible: `submit` returns a handle already terminal, `status` answers `UNKNOWN` for a
    handle this process never saw, `cancel` REFUSES because the capability is not advertised. A port
    that could not express that would be a Ray-shaped interface wearing a neutral name.
-3. **`RayJobExecutor` — submit as a `RayJob` CR** rather than the Jobs REST API. First adapter, and
-   the thing that makes Kueue functional.
-4. **Kueue admission** — queues, quota, gang scheduling. Unblocked by (3), impossible before it.
+3. ✅ **DONE 2026-09-04, PROVEN LIVE.** `RayJobExecutor` creates a `RayJob` CR. httpx against the k8s
+   API with the projected ServiceAccount token — no client library, because this ships in an image
+   seven lance services share, and `ray_submit` already states the rule ("only httpx … no ray package
+   in the mover image"). It is the first adapter that may honestly advertise `DURABLE_RECORD`: a CR is
+   an etcd object, so `may_resubmit` REFUSES a resubmit on `UNKNOWN` and the watcher's
+   `MAX_UNSEEN_POLLS`/`MAX_RESUBMITS` machinery is switched off BY THE CAPABILITY rather than deleted.
+4. ✅ **DONE 2026-09-04, PROVEN LIVE.** The CR carries `kueue.x-k8s.io/queue-name` and is created
+   SUSPENDED — one decision, not two: Kueue admits by unsuspending, so a workload created running has
+   already bypassed the admission its label asked for. An empty queue yields no label and no suspend,
+   because a label naming a queue that does not exist parks every job forever with nothing saying why.
 5. **`Transform` CRD + reconciler** — the declaration moves to git; the catalog record becomes the
    projection.
 6. ✅ **DONE 2026-09-04** — `POST /api/movers/stages/rerun`. It touches the Jobs API not at all: the
@@ -730,3 +737,47 @@ mid-provision; a `Transform` CRD belongs to `rask-operator` for the same reason.
 
 Steps 1, 2 and 6 are done and their specs are deleted. Nothing here needs Argo, Airflow, Dagster,
 Temporal, or a second control plane.
+
+
+## Steps 3 and 4, proven live (2026-09-04)
+
+A Dagger-built image deployed to the k3s estate, the executor driven from the producer pod:
+
+```
+capabilities: ['cancel', 'durable_record', 'failure_detail']
+submit -> submitted  handle=rask-stage-7aefad3312a77af9
+status -> pending
+resubmit the same order -> reattached  (the API server is the arbiter)
+may_resubmit on UNKNOWN with a durable record -> False
+```
+
+and Kueue saw it as an admittable WORKLOAD, which a Jobs-API POST can never be:
+
+```
+NAME                                       QUEUE   ADMITTED
+rayjob-rask-stage-7aefad3312a77af9-91fbb   rask    Finished
+```
+
+**Two things the cluster taught that reading could not.** KubeRay's validating webhook refuses a
+RayJob naming no cluster (`spec.rayClusterSpec: Required value`), so the cluster shape is now CONFIG —
+a `clusterSelector` for an existing RayCluster or a `rayClusterSpec` for an ephemeral one — and the
+executor invents neither, the rule the registration's `command` already follows. `shutdownAfterJobFinishes`
+follows from which was given, and getting it backwards is destructive: tearing down a SHARED cluster
+because one job finished takes every other job with it.
+
+And this estate has **no `RayCluster` CR at all** — its Ray head is the hand-applied `ray-lance-head`
+Deployment that `docs/DECISIONS.md` already records as not chart-owned. So the ephemeral shape is the
+one that works here today, and a `clusterSelector` deployment needs that head to become a real
+RayCluster first.
+
+## Step 5 — DEFERRED, with a precedent rather than a shrug
+
+The `Transform` CRD + reconciler belongs to `rask-operator`, not here. `docs/DECISIONS.md`
+(2026-08-16) rules exactly this for the `Project` CRD: a CRD without its controller renders
+unreconciled CRs as objects stuck mid-provision, and `open_estate-verification.md` row 21 re-verified
+it live. Shipping a `Transform` CRD into this chart would repeat that verbatim.
+
+What it would buy — the declaration living in git with the catalog record as a projection — is real,
+and it is the one thing that would also retire the DUAL SOURCE this plane still carries: a mover row's
+`stageJob`/`ray_entrypoint`/`ray_job_params` beside the declaration that supersedes it. That row moves
+to `open_lakehouse_diff_left.md`, which is where a wanted-but-not-owned change belongs.
