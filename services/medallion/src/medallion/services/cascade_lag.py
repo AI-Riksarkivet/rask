@@ -21,9 +21,14 @@ that mistake costs, one gap counted 1210 times and every other service's errors 
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from pydantic import BaseModel
+
+
+log = logging.getLogger(__name__)
 
 
 class EdgeLag(BaseModel):
@@ -98,3 +103,62 @@ def record_edge_lag(lag: EdgeLag, *, gauge: LagGauge) -> None:
     if not lag.known or lag.lag is None:
         return
     gauge.set(lag.lag, {"lance.medallion.edge": lag.edge, "lance.medallion.project": lag.project})
+
+
+class LagTickReport(BaseModel):
+    """What one tick measured. ``edges`` is the denominator every other field is read against.
+
+    ``unknown`` and ``failed`` are separate on purpose: unknown means the stores were read and
+    DISAGREED, failed means one could not be read at all. Folding them would hide a systematic outage
+    inside what looks like ordinary disagreement.
+    """
+
+    edges: int
+    published_points: int
+    unknown: int
+    failed: int
+
+
+#: Reads the source's published version for one edge. Raising is expected and contained per edge.
+VersionReader = Callable[[str, str], int | None]
+
+
+def run_lag_tick(
+    *,
+    edges: Sequence[tuple[str, str]],
+    published: VersionReader,
+    consumed: VersionReader,
+    gauge: LagGauge,
+) -> LagTickReport:
+    """Measure every declared edge, publish what is known, and report what was not.
+
+    READ FAILURES ARE CONTAINED PER EDGE. One unreadable table must not blank the estate: the other
+    edges' answers are still true, and abandoning them would turn a single bad table into an
+    estate-wide silence that reads exactly like a healthy idle cascade. It is the discipline
+    ``maintenance/services/reconcile.py`` already applies — an unavailable category stays OUT of the
+    counts while the categories that completed still report.
+
+    THE EVERY-REPLICA ANSWER IS CONVERGENCE. ``bindings.cron`` fires on every replica with no lease, and
+    a new cron owes that question an answer rather than an oversight. This tick is READ-ONLY and
+    idempotent: two replicas compute the same lag and set the same level, which is precisely what a
+    gauge tolerates. So no lock, no ``replicas: 1`` pin and no dedupe key — unlike lineage's reconciler,
+    which takes an advisory lock because it WRITES.
+    """
+    report = LagTickReport(edges=len(edges), published_points=0, unknown=0, failed=0)
+    for edge, project in edges:
+        try:
+            lag = lag_for_edge(edge=edge, project=project, published=published(edge, project), consumed=consumed(edge, project))
+        except Exception as exc:  # noqa: BLE001 — one edge's read must never end the tick
+            log.warning("cascade_lag_edge_unreadable", extra={"edge": edge, "project": project, "error": str(exc)})
+            report.failed += 1
+            continue
+        if not lag.known:
+            report.unknown += 1
+            continue
+        record_edge_lag(lag, gauge=gauge)
+        report.published_points += 1
+    log.info(
+        "cascade_lag_tick",
+        extra={"edges": report.edges, "published": report.published_points, "unknown": report.unknown, "failed": report.failed},
+    )
+    return report
