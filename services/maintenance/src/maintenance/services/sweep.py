@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
@@ -33,8 +33,8 @@ from maintenance.core.metrics import (
     record_run_started,
     record_trashed_skipped,
 )
-from maintenance.services import credentials, purge
-from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
+from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
+from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.lakehouse import base_refs, maintenance_policies, trash, warehouse_records
@@ -446,6 +446,50 @@ def _stamp_cadence(uri: str, plan: DatasetPlan, result: DatasetResult, *, settin
         log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
 
 
+def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> Rewriter | None:
+    """The off-pod rewrite, or ``None`` when this deployment does not do it.
+
+    Gated on BOTH the flag and a catalog URL, because the two metadata halves are the catalog's own
+    doors: the flag alone would produce a worker that plans against nothing. `None` leaves the in-pod
+    `compact_files()` exactly as it was, which is what an estate that has not opted in must get.
+
+    Built per unit rather than held, matching what `credentials.write_options_for` does one line
+    above its caller and for the same reason: a unit can wait in the queue for as long as the
+    stream's max-age, and anything resolved at planning time is that stale by the time it is used.
+    """
+    if not (settings.distributed_compaction and settings.catalog_url):
+        return None
+
+    def _rewrite(uri: str, *, table_id: str, options: Mapping[str, Any]) -> compaction_executor.DistributedOutcome:
+        # The two memory bounds ride the PLAN, and that is not where they look like they belong.
+        # Measured on pylance 10.0.0 (2026-09-04): a planned task's JSON bakes `batch_size` and
+        # `num_threads`, and `CompactionTask.execute(dataset)` accepts no options — so a plan made
+        # without them condemns the rewrite to Lance's 8192-row default, which against ~1.8 MB bronze
+        # rows is ~15 GB per compute thread. The in-pod path bounds both; this must too.
+        policy: dict[str, Any] = {}
+        if (target := options.get("target_rows_per_fragment")) is not None:
+            policy["target_rows_per_fragment"] = target
+        if (batch := options.get("batch_size")) is not None:
+            policy["batch_size"] = batch
+        if (threads := options.get("num_threads")) is not None:
+            policy["num_threads"] = threads
+        outcome = compaction_executor.compact_distributed(
+            uri,
+            table_id=table_id,
+            # The SAME credential the in-pod rewrite would have used — vended and table-scoped where
+            # the door offers one, ambient otherwise. Resolved by the caller, never re-derived here.
+            write_options=write_options,
+            plan=lambda tid, pol: catalog_compaction.plan_via_catalog(tid, pol, settings=settings),
+            commit=lambda tid, results: catalog_compaction.commit_via_catalog(tid, results, settings=settings),
+            policy=policy,
+        )
+        if outcome is None:  # pragma: no cover - `compact_distributed` returns an outcome or raises
+            raise compaction_executor.CompactionPlaneUnavailable(f"no outcome for {table_id}")
+        return outcome
+
+    return _rewrite
+
+
 def _maintain_one(
     uri: str,
     plan: DatasetPlan,
@@ -471,6 +515,10 @@ def _maintain_one(
             uri,
             options,
             plan.older_than,
+            # THE SAME credential the in-pod rewrite uses — vended and table-scoped where the door
+            # offers one. `options` reached here already resolved; re-deriving it for the distributed
+            # path would be a second answer to "what signs these bytes".
+            rewrite=_rewriter(settings, options),
             retain_versions=plan.retain_versions,
             target_rows_per_fragment=plan.target_rows_per_fragment,
             cleanup_enabled=plan.cleanup_enabled,

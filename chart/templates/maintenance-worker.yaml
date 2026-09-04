@@ -89,6 +89,15 @@ spec:
             # per-table credential. Those are reads.
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ $root.Values.maintenance.catalogServiceIdentity | quote }} }
+            {{- if $root.Values.maintenance.distributedCompaction }}
+            # THE REWRITE'S BYTES LEAVE THIS POD. `compact_files()` plans, executes and commits in one
+            # call, so this pod's memory ceiling is a function of the largest table anyone owns rather
+            # than of its request rate. With this on, the catalog plans and commits (metadata only,
+            # under its own key) and only the byte rewrite happens here, signed by the table-scoped
+            # credential the block above vends. Gated on the vending flag because the plan and commit
+            # doors are the catalog's — the flag alone would plan against nothing.
+            - { name: MAINTENANCE_DISTRIBUTED_COMPACTION, value: "true" }
+            {{- end }}
             {{- end }}
             {{- if .Values.maintenance.workTopic }}
             - { name: MAINTENANCE_WORK_PUBSUB, value: {{ .Values.maintenance.workPubsub | quote }} }

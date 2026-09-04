@@ -271,6 +271,20 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # credential scoped to that one table and expiring in 900s. See `services/credentials.py` for what
     # deliberately STAYS on the root key (the whole-estate protection pre-pass, which is a read).
     catalog_url: str = Field(default="", alias="MAINTENANCE_CATALOG_URL")
+    #: Rewrite fragments through the catalog's PLAN/EXECUTE/COMMIT protocol instead of one in-pod
+    #: ``compact_files()``. Off by default and gated on ``catalog_url``, because the two metadata
+    #: halves are the catalog's doors.
+    #:
+    #: What it buys is not a nicety: ``compact_files`` does all three phases here, so this pod's
+    #: memory ceiling is a function of the largest table anyone owns rather than of its request rate.
+    #: With this on, the only phase performed here is the byte rewrite, and it is signed by the
+    #: table-scoped credential rather than the root key.
+    #:
+    #: FALLS BACK to the in-pod rewrite when the plan door cannot answer — nothing has been planned
+    #: at that point, so nothing has been written, and a hardening that could stop a maintenance run
+    #: would be a new way to stop reclaiming disk. It does NOT fall back once a task has run: see
+    #: `compaction_executor.CompactionPlaneUnavailable`.
+    distributed_compaction: bool = Field(default=False, alias="MAINTENANCE_DISTRIBUTED_COMPACTION")
     #: The subject this service claims at the catalog's identity door, paired with the Dapr app token
     #: daprd injects. Both halves or neither — the door requires both, and sending one is a refusal
     #: whose reason is invisible from this side.

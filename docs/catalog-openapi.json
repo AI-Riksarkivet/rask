@@ -3050,8 +3050,21 @@
       },
       "CompactionPlanRequest": {
         "additionalProperties": false,
-        "description": "Ask the catalog what compaction this table needs \u2014 a metadata read that mints nothing.\n\nThe knobs are POLICY (what shape the table should end up in), never mechanics (how many threads a\nmachine should use): the executor owns the machine, so its own knobs never cross this door. An\nunrecognized field is refused rather than dropped \u2014 see ``dataplane.plan_compaction``.",
+        "description": "Ask the catalog what compaction this table needs \u2014 a metadata read that mints nothing.\n\nMost knobs are POLICY: what shape the table should end up in. Two are MECHANICS \u2014 how much memory\nthe rewrite may use \u2014 and they are here because **Lance bakes them into the task at plan time**.\nMeasured on pylance 10.0.0 (2026-09-04): a planned task's JSON carries an ``options`` object\nholding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute(dataset)`` accepts no\noptions at all. So an executor that plans without them can never set them, and every distributed\nrewrite runs on Lance's defaults.\n\nThat is not a preference. Lance's default batch is 8192 ROWS, and rows are not a unit of memory:\nagainst ~1.8 MB bronze page-image rows it is ~15 GB *per compute thread*, times a thread count\ndefaulting to the HOST's cores rather than the pod's limit. The maintenance plane bounds both\n(``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS``); refusing them here would make\nthe distributed path the one route that cannot be bounded.\n\nThe catalog still does not INTERPRET them \u2014 it forwards the executor's own numbers into the plan\nbecause the format gives the executor no later chance to state them. An unrecognized field is\nrefused rather than dropped \u2014 see ``dataplane.plan_compaction``.",
         "properties": {
+          "batch_size": {
+            "anyOf": [
+              {
+                "maximum": 8192.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Size"
+          },
           "materialize_deletions": {
             "anyOf": [
               {
@@ -3099,6 +3112,19 @@
               }
             ],
             "title": "Max Rows Per Group"
+          },
+          "num_threads": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Threads"
           },
           "target_rows_per_fragment": {
             "anyOf": [

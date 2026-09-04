@@ -730,9 +730,22 @@ class CommitFragmentsResponse(BaseModel):
 class CompactionPlanRequest(BaseModel):
     """Ask the catalog what compaction this table needs — a metadata read that mints nothing.
 
-    The knobs are POLICY (what shape the table should end up in), never mechanics (how many threads a
-    machine should use): the executor owns the machine, so its own knobs never cross this door. An
-    unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
+    Most knobs are POLICY: what shape the table should end up in. Two are MECHANICS — how much memory
+    the rewrite may use — and they are here because **Lance bakes them into the task at plan time**.
+    Measured on pylance 10.0.0 (2026-09-04): a planned task's JSON carries an ``options`` object
+    holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute(dataset)`` accepts no
+    options at all. So an executor that plans without them can never set them, and every distributed
+    rewrite runs on Lance's defaults.
+
+    That is not a preference. Lance's default batch is 8192 ROWS, and rows are not a unit of memory:
+    against ~1.8 MB bronze page-image rows it is ~15 GB *per compute thread*, times a thread count
+    defaulting to the HOST's cores rather than the pod's limit. The maintenance plane bounds both
+    (``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS``); refusing them here would make
+    the distributed path the one route that cannot be bounded.
+
+    The catalog still does not INTERPRET them — it forwards the executor's own numbers into the plan
+    because the format gives the executor no later chance to state them. An unrecognized field is
+    refused rather than dropped — see ``dataplane.plan_compaction``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -747,6 +760,11 @@ class CompactionPlanRequest(BaseModel):
     #: the field ``threadhold``; the name is carried verbatim because renaming it here would mean
     #: forwarding nothing.
     materialize_deletions_threadhold: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: The executor's memory bounds, forwarded because the task bakes them (see the class docstring).
+    #: Same ceilings the maintenance settings enforce, so a caller cannot ask the plan for a read the
+    #: sweep's own configuration forbids.
+    batch_size: int | None = Field(default=None, ge=1, le=8192)
+    num_threads: int | None = Field(default=None, ge=1, le=64)
 
 
 class CompactionPlanResponse(BaseModel):

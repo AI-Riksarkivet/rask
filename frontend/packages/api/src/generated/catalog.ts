@@ -4874,11 +4874,26 @@ export interface components {
          * CompactionPlanRequest
          * @description Ask the catalog what compaction this table needs — a metadata read that mints nothing.
          *
-         *     The knobs are POLICY (what shape the table should end up in), never mechanics (how many threads a
-         *     machine should use): the executor owns the machine, so its own knobs never cross this door. An
-         *     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
+         *     Most knobs are POLICY: what shape the table should end up in. Two are MECHANICS — how much memory
+         *     the rewrite may use — and they are here because **Lance bakes them into the task at plan time**.
+         *     Measured on pylance 10.0.0 (2026-09-04): a planned task's JSON carries an ``options`` object
+         *     holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute(dataset)`` accepts no
+         *     options at all. So an executor that plans without them can never set them, and every distributed
+         *     rewrite runs on Lance's defaults.
+         *
+         *     That is not a preference. Lance's default batch is 8192 ROWS, and rows are not a unit of memory:
+         *     against ~1.8 MB bronze page-image rows it is ~15 GB *per compute thread*, times a thread count
+         *     defaulting to the HOST's cores rather than the pod's limit. The maintenance plane bounds both
+         *     (``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS``); refusing them here would make
+         *     the distributed path the one route that cannot be bounded.
+         *
+         *     The catalog still does not INTERPRET them — it forwards the executor's own numbers into the plan
+         *     because the format gives the executor no later chance to state them. An unrecognized field is
+         *     refused rather than dropped — see ``dataplane.plan_compaction``.
          */
         CompactionPlanRequest: {
+            /** Batch Size */
+            batch_size?: number | null;
             /** Materialize Deletions */
             materialize_deletions?: boolean | null;
             /** Materialize Deletions Threadhold */
@@ -4887,6 +4902,8 @@ export interface components {
             max_bytes_per_file?: number | null;
             /** Max Rows Per Group */
             max_rows_per_group?: number | null;
+            /** Num Threads */
+            num_threads?: number | null;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
         };

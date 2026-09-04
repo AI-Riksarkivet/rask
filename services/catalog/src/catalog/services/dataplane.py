@@ -776,13 +776,27 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
 #: that gap is absorbed — narrow enough that everything else in the two functions below stays checked.
 _RewriteResult: Any = lance_optimize.RewriteResult
 
-#: The maintenance knobs a POLICY sets, and the whole of what the plan door accepts. Lance's
-#: ``CompactionOptions`` carries a dozen more (thread counts, buffer sizes, encoding modes) that describe
-#: how a machine should do the work rather than what the table needs — those belong to the executor that
-#: owns the machine, so the catalog neither takes them nor forwards them. Names are Lance's, verbatim,
-#: including ``materialize_deletions_threadhold``: it is spelled that way in ``lance.optimize`` and
-#: renaming it here would mean silently dropping whatever a caller sent.
-_COMPACTION_POLICY_KNOBS = ("target_rows_per_fragment", "max_rows_per_group", "max_bytes_per_file", "materialize_deletions", "materialize_deletions_threadhold")
+#: What the plan door accepts. Mostly POLICY — what shape the table should end up in — plus the two
+#: MEMORY BOUNDS the executor owns but cannot set later: measured on pylance 10.0.0 (2026-09-04), a
+#: planned task's JSON carries an ``options`` object holding ``batch_size`` and ``num_threads``, and
+#: ``CompactionTask.execute(dataset)`` takes no options, so a plan made without them condemns every
+#: distributed rewrite to Lance's defaults (8192 ROWS per batch, host-core thread count — ~15 GB per
+#: thread against 1.8 MB rows). Forwarded, never interpreted.
+#:
+#: The rest of ``CompactionOptions`` (buffer sizes, encoding modes, index-remap strategy) stays out:
+#: those describe how a machine should do the work and, unlike these two, the executor has other ways
+#: to reach them. Names are Lance's, verbatim, including ``materialize_deletions_threadhold``: it is
+#: spelled that way in ``lance.optimize`` and renaming it here would mean silently dropping whatever a
+#: caller sent.
+_COMPACTION_POLICY_KNOBS = (
+    "target_rows_per_fragment",
+    "max_rows_per_group",
+    "max_bytes_per_file",
+    "materialize_deletions",
+    "materialize_deletions_threadhold",
+    "batch_size",
+    "num_threads",
+)
 
 #: The compaction result's non-retryable remedy. A lost race voids the PLAN, not just the commit — the
 #: fragments the result names were chosen against a version that no longer exists.

@@ -48,7 +48,7 @@ from medallion.core.metrics import (
     record_transition,
 )
 from medallion.schemas.events import build_run_event
-from medallion.services import catalog_register, promotion_band, promotion_hold
+from medallion.services import catalog_register, engine_choice, promotion_band, promotion_hold
 from medallion.services import gate as gate_svc
 from medallion.services.compute import WriteResult, existing_row_count, measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
@@ -60,6 +60,7 @@ from service_kit.governed import fga
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.quality import Assertion, assert_quality
+from service_kit.lakehouse.transform_specs import TransformSpec
 from service_kit.lakehouse.warehouse_registry import (
     UnresolvableProjectError,
     is_safe_project,
@@ -320,6 +321,13 @@ class StagePreflight(BaseModel):
     trigger: StageTrigger
     project: str
     identity: StageIdentity
+    #: The resolved declaration, or ``None`` when this mover declares no transform.
+    #:
+    #: CARRIED rather than re-resolved downstream, and the reason is the one this class exists for:
+    #: pre-flight already read it, already refused an undeclared one, and a second read could answer
+    #: differently — an operator editing the record mid-run would have the engine chosen from one
+    #: version and the identity from another. One resolution, one run.
+    declared: TransformSpec | None = None
 
 
 async def _authorize(
@@ -536,7 +544,7 @@ async def _preflight(
     verdict = await _authorize(fga_client, settings, to_namespace=to_namespace, transition=transition, token=token)
     if verdict is not None:
         return verdict
-    return StagePreflight(trigger=trigger, project=project, identity=identity)
+    return StagePreflight(trigger=trigger, project=project, identity=identity, declared=declared_lane)
 
 
 class StageRoots(BaseModel):
@@ -677,12 +685,19 @@ async def _write_stage(
     event_time: str,
     transition: str,
     lineage_doc: LineageDoc,
+    declared: TransformSpec | None,
 ) -> WriteResult | None:
     """Run (or dispatch) the transform and govern its output. ``None`` means DISPATCHED, not failed."""
     from_dataset = identity.from_dataset
     to_dataset = identity.to_dataset
 
-    use_ray = settings.ray_enabled
+    # WHICH ENGINE COMES FROM THE RECORD when there is one. A declaration names a task, and the task's
+    # registration names the plane that can run it — so a chart boolean deciding here would let the
+    # record say one thing while the code did another, with nothing red anywhere. An estate that has
+    # declared nothing still follows `MEDALLION_RAY_ENABLED` exactly as before; see `engine_choice`,
+    # which also carries why ORCHESTRATION (Dapr Workflow) is a separate axis this does not touch.
+    use_ray = await engine_choice.engine_for_async(settings, spec=declared) == engine_choice.RAY_ENGINE
+    span.set_attribute("lance.medallion.engine_source", "declaration" if declared is not None else "chart")
     if use_ray and not trigger.ray_job_done:
         # S1 — DISPATCH, and return. This branch used to submit and then measure on the
         # very next line, which is the defect `medallion.workflow` exists to close:
@@ -825,6 +840,7 @@ async def _run_compute(
     event_time: str,
     transition: str,
     project: str,
+    declared: TransformSpec | None,
 ) -> StageWrite:
     """The compute step: build the run's provenance document, write the tier, assert its quality.
 
@@ -924,6 +940,7 @@ async def _run_compute(
                     event_time=event_time,
                     transition=transition,
                     lineage_doc=lineage_doc,
+                    declared=declared,
                 )
                 if result is None:
                     # S1 — the job is on the cluster and the workflow owns the rest of this run.
@@ -1509,6 +1526,7 @@ async def handle_stage(
             event_time=event_time,
             transition=transition,
             project=project,
+            declared=pre.declared,
         )
         if write.dispatched:
             return _SUCCESS

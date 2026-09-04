@@ -1412,6 +1412,20 @@ maintenance:
   # a bounded improvement rather than a switch that either works or fails. See `docs/DECISIONS.md`,
   # "The lakehouse cloud-native cutover".
   vendWriteCredentials: false
+  # WHERE THE REWRITE'S BYTES ARE MOVED. Off = one in-pod `compact_files()`, which plans, executes and
+  # commits in a single call — so this pod's memory ceiling is a function of the largest table anyone
+  # owns rather than of its request rate, and no amount of sizing fixes that for the next table.
+  #
+  # On, the catalog plans and commits (metadata only, no data byte, under its own key) and this pod
+  # performs only the rewrite, signed by the credential `vendWriteCredentials` vends for that one
+  # table. Needs that flag: the plan and commit doors are the catalog's, so without a reachable
+  # catalog this would plan against nothing.
+  #
+  # It DEGRADES rather than fails: a plan door that cannot answer falls back to the in-pod rewrite,
+  # because nothing has been planned at that point and a hardening that could stop a maintenance run
+  # would be a new way to stop reclaiming disk. Which path ran is recorded per dataset
+  # (`DatasetResult.compaction_mode`), so a permanent degradation is a count rather than a guess.
+  distributedCompaction: false
   # The subject this service claims at the catalog's identity door. It is what the bootstrap-admin hook
   # grants `writer` on each warehouse, and what the catalog audits on every vend.
   catalogServiceIdentity: service-maintenance

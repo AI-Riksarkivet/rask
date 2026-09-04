@@ -101,16 +101,21 @@ def test_a_worker_executes_the_task_and_the_catalog_commits_the_result(tmp_path:
 
 
 def test_a_policy_knob_this_door_does_not_honour_is_refused_not_dropped(tmp_path: Path) -> None:
-    """Lance's option set is wider than the policy set this door forwards.
+    """Lance's option set is wider than the set this door forwards.
 
-    Silently dropping an unrecognized knob is the dropped-parameter defect: the caller tunes
-    `num_threads`, the plan ignores it, and the 200 says it worked. Refuse instead, naming what is
-    accepted.
+    Silently dropping an unrecognized knob is the dropped-parameter defect: the caller tunes a buffer
+    size, the plan ignores it, and the 200 says it worked. Refuse instead, naming what is accepted.
+
+    `io_buffer_size` is the right example precisely because it is the SHAPE of knob this door does
+    forward two of — a machine-level bound. The two that cross (`batch_size`, `num_threads`) do so on
+    a measured necessity: Lance bakes them into the task at plan time and gives the executor no later
+    chance to set them. `io_buffer_size` is baked the same way but nothing in this estate configures
+    it, and forwarding a knob nobody sets would widen the door for no reason.
     """
     uri = _seed(tmp_path, fragments=2)
     with pytest.raises(InvalidInputError) as caught:
-        plan_compaction(uri, {}, num_threads=8)
-    assert "num_threads" in str(caught.value)
+        plan_compaction(uri, {}, io_buffer_size=8192)
+    assert "io_buffer_size" in str(caught.value)
 
 
 def test_a_table_that_needs_no_compaction_plans_no_work(tmp_path: Path) -> None:
@@ -182,3 +187,39 @@ def test_the_worker_writes_the_bytes_before_the_catalog_is_asked_to_commit(tmp_p
 
     commit_compaction(uri, {}, results)
     assert {p.name for p in data_dir.iterdir()} - before == written_by_the_worker
+
+
+def test_the_executors_MEMORY_BOUNDS_survive_the_plan_because_the_task_bakes_them(tmp_path: Path) -> None:
+    """The plan door must forward `batch_size`/`num_threads`, and the reason is a measured fact.
+
+    They read like machine knobs the executor should own, and the door refused them on exactly that
+    reasoning. Lance gives the executor no later chance to state them: measured on pylance 10.0.0
+    (2026-09-04), a planned task's JSON carries an `options` object holding both, and
+    `CompactionTask.execute(dataset)` accepts no options at all. A plan made without them condemns
+    every distributed rewrite to Lance's defaults — an 8192-ROW batch, which against ~1.8 MB bronze
+    page-image rows is ~15 GB per compute thread, times a thread count taken from the HOST's cores
+    rather than the pod's limit.
+
+    That is the unbounded read the maintenance plane already bounds for the in-pod path
+    (MAINTENANCE_SCAN_BATCH_SIZE=64, MAINTENANCE_COMPACT_THREADS=2). Refusing them here would make
+    the distributed path the one route in the estate that cannot be bounded at all.
+    """
+    uri = _seed(tmp_path, fragments=3)
+
+    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2)
+
+    assert planned.tasks, "the fixture must have something to compact or this proves nothing"
+    baked = json.loads(planned.tasks[0])["options"]
+    assert baked["batch_size"] == 64, f"the executor's read bound did not reach the task: {baked}"
+    assert baked["num_threads"] == 2, f"the executor's thread bound did not reach the task: {baked}"
+
+
+def test_a_plan_made_WITHOUT_the_bounds_runs_on_lances_defaults(tmp_path: Path) -> None:
+    """The other half of the same fact, stated so a future reader does not have to re-measure it: a
+    task planned without the bounds carries nulls, and nothing downstream can fill them in."""
+    uri = _seed(tmp_path, fragments=3)
+
+    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024)
+
+    baked = json.loads(planned.tasks[0])["options"]
+    assert baked["batch_size"] is None and baked["num_threads"] is None

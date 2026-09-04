@@ -11,8 +11,9 @@ kept the dead name, which is how a reader ends up grepping for a symbol that has
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import timedelta
-from typing import Any
+from typing import Any, Protocol
 
 import lance
 import pyarrow.fs as pafs
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
+from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome
 from maintenance.services.index_health import inspect_indices
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
@@ -36,10 +38,34 @@ from service_kit.lakehouse.objectfs import dataset_root_probe
 log = logging.getLogger(__name__)
 
 
+class Rewriter(Protocol):
+    """How a caller offers the off-pod rewrite.
+
+    A PROTOCOL rather than a client this module builds, for the reason this module's own docstring
+    gives — it keeps IO at the edges so the orchestration stays testable with fakes — and because the
+    transport is the sweep's business: today the catalog's HTTP doors, at M3 a `RayJob` submission,
+    with nothing here changing either time.
+
+    `table_id` is keyword-only, and that is a real guard rather than style: it and `uri` are both
+    `str`, so positionally they are silently swappable — a caller that transposed them would sign a
+    rewrite for one table against another's location and nothing would type-check it wrong.
+    """
+
+    def __call__(self, uri: str, *, table_id: str, options: Mapping[str, Any]) -> DistributedOutcome: ...
+
+
 class DatasetResult(BaseModel):
     """What one dataset's maintenance pass did (or why it was skipped)."""
 
     uri: str
+    #: ``in_pod`` or ``distributed`` — WHICH path rewrote the bytes.
+    #:
+    #: Carried rather than inferred, because the fallback is silent by design: a plan door that
+    #: cannot answer degrades to the in-pod rewrite so disk keeps being reclaimed, and without this
+    #: field an estate could run every compaction on the path it was configured away from while every
+    #: counter read clean. The value is what a sweep summary counts, so the degradation is a number
+    #: rather than an inference.
+    compaction_mode: str = "in_pod"
     #: Why the policy layer skipped this dataset this tick (``policy_disabled`` / ``policy_interval``);
     #: ``None`` when maintenance ran.
     skipped: str | None = None
@@ -146,6 +172,8 @@ def _compact_files(
     target_rows_per_fragment: int | None,
     scan_batch_size: int | None,
     compact_threads: int | None,
+    rewrite: Rewriter | None = None,
+    table_id: str | None = None,
 ) -> None:
     """STEP 1 — merge small fragments, or record why the rewrite was declined.
 
@@ -167,6 +195,31 @@ def _compact_files(
         size_kw["batch_size"] = scan_batch_size
     if compact_threads is not None:
         size_kw["num_threads"] = compact_threads
+    # THE REWRITE OFF THIS POD, when a rewriter was supplied and this dataset is one the catalog can
+    # name. `compact_files` below does plan, execute and commit in one call, so the pod's memory
+    # ceiling is a function of the largest table anyone owns; the distributed protocol leaves only the
+    # byte rewrite here, signed by the table-scoped credential. Tried BEFORE the refusal ladder's
+    # rewrite so a refusal still skips both paths, and after `size_kw` so both are bounded the same.
+    if refusal is None and rewrite is not None and table_id:
+        try:
+            outcome = rewrite(uri, table_id=table_id, options=size_kw)
+        except CompactionPlaneUnavailable as exc:
+            # Nothing was planned, so nothing was written: falling back is safe and is the only
+            # answer that keeps reclaiming disk when the catalog is briefly unreachable. INFO rather
+            # than WARNING — the sweep is doing its job — but `compaction_mode` records which path
+            # ran, so a permanent degradation is a count rather than a guess.
+            log.info("compaction_plane_unavailable_falling_back", extra={"uri": uri, "table_id": table_id, "reason": str(exc)})
+        else:
+            result.compaction_mode = "distributed"
+            result.fragments_added = outcome.fragments_added
+            result.fragments_removed = outcome.fragments_removed
+            if outcome.tasks_failed:
+                # Reported, never swallowed: the successful tasks committed, so the pass DID work —
+                # but a half-done compaction that read as clean is worse than either outcome alone.
+                result.error = f"compaction: {outcome.tasks_failed} of {outcome.tasks_planned} task(s) failed"
+                result.error_type = "PartialCompaction"
+            return
+
     if refusal is not None:
         # Root-scoped work still runs below; only the rewrite is skipped. Recorded on the result so
         # the reason is visible without inferring it from a zero, and logged once per dataset.
@@ -362,6 +415,7 @@ def compact_one(
     auto_cleanup_interval_commits: int | None = None,
     protected: BaseRefs | None = None,
     index_columns: list[str] | None = None,
+    rewrite: Rewriter | None = None,
 ) -> DatasetResult:
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
     in ``error`` so one bad dataset can't abort the whole pass.
@@ -499,6 +553,13 @@ def compact_one(
             target_rows_per_fragment=target_rows_per_fragment,
             scan_batch_size=scan_batch_size,
             compact_threads=compact_threads,
+            rewrite=rewrite,
+            # The id the PRODUCER stamped on the dataset, already resolved above. Deriving a second
+            # one from the path here would be a second answer to the same question, and the two
+            # disagree for most of the estate — `credentials.write_options_for` measures it: of eleven
+            # top-level roots, path derivation answers for six, and the five it misses include the
+            # cascade. Passing `None` correctly leaves this dataset on the in-pod rewrite.
+            table_id=result.declared_table_id,
         )
         _optimize_indices(ds, result, uri=uri, enabled=optimize_indices_enabled, index_columns=index_columns)
         _reclaim_versions(

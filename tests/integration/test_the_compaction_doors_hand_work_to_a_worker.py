@@ -91,14 +91,32 @@ def test_a_healthy_table_plans_no_work_and_is_not_an_error(real_ns_client: TestC
 
 
 def test_an_option_the_door_does_not_forward_is_refused_at_the_wire(real_ns_client: TestClient) -> None:
-    """`num_threads` is an EXECUTOR knob, and the executor is not this pod.
+    """Pydantic's `extra="forbid"` refuses an unforwarded knob at the wire — before
+    `plan_compaction`'s own guard — so a caller tuning something the plan ignores learns it.
 
-    Pydantic's `extra="forbid"` refuses it at the wire — before `plan_compaction`'s own guard — so a
-    caller tuning a machine the catalog does not own learns it instead of watching the plan ignore it.
+    `io_buffer_size` rather than a thread count, and the distinction is worth stating: two executor
+    knobs (`batch_size`, `num_threads`) DO cross this door, because Lance bakes them into the task at
+    plan time and `CompactionTask.execute(dataset)` accepts no options — an executor that could not
+    send them here could never bound its own read. `io_buffer_size` is baked the same way, but
+    nothing in this estate sets it, and a door widened for a knob nobody uses is a door widened for
+    nothing.
     """
     _fragmented_table(real_ns_client)
-    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"num_threads": 8})
+    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"io_buffer_size": 8192})
     assert response.status_code == 422, response.text
+
+
+def test_the_executors_own_MEMORY_BOUNDS_are_accepted_at_the_wire(real_ns_client: TestClient) -> None:
+    """The two that must cross, asserted through the real door rather than the function.
+
+    Against ~1.8 MB bronze rows, Lance's 8192-row default batch is ~15 GB per compute thread on a
+    thread count taken from the host's cores. The maintenance plane bounds both for the in-pod
+    rewrite; if this door refused them the distributed path would be the one route in the estate that
+    could not be bounded at all.
+    """
+    _fragmented_table(real_ns_client)
+    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 1024, "batch_size": 64, "num_threads": 2})
+    assert response.status_code == 200, response.text
 
 
 def test_the_commit_door_refuses_an_empty_result_set(real_ns_client: TestClient) -> None:
