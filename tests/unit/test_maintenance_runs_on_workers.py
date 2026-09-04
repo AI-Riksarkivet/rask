@@ -223,3 +223,16 @@ def test_a_plan_made_WITHOUT_the_bounds_runs_on_lances_defaults(tmp_path: Path) 
 
     baked = json.loads(planned.tasks[0])["options"]
     assert baked["batch_size"] is None and baked["num_threads"] is None
+
+
+def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: Path) -> None:
+    """A declared-or-registered table that was never written must say so.
+
+    MEASURED LIVE 2026-09-04, which is how it was found: a table declared into a namespace bound to
+    one warehouse, with its data written to another bucket, reached `lance.dataset()` and pylance's
+    "Dataset at path ... was not found" escaped as a bare 500 "Internal Server Error". That tells an
+    operator nothing and reads as a catalog fault rather than as a table nobody wrote — and the
+    distinction is the whole diagnosis.
+    """
+    with pytest.raises(InvalidInputError, match="never written"):
+        plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024)

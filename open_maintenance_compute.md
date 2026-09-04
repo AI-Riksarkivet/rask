@@ -114,7 +114,7 @@ Doing M1 does not defer M2, and doing M2 does not remove the reason for M1.
 | # | Shape | Buys | Costs |
 | --- | --- | --- | --- |
 | M1 | **Split the deployment** — planner (`replicas: 1`, tiny) and executor (scalable, sized for compaction) as separate Deployments over the same queue | Horizontal scale and a real memory budget, with NO new mechanism — the queue, the unit and the consumer group all exist | Two deployments; the cron must land only on the planner |
-| M2 | **Executor consumes the distributed protocol** — `compaction_plan` → run `CompactionTask`s → `compaction_commit`, instead of in-pod `compact_files` | The credential split becomes real on the write path, and a task becomes portable | The estate's first `CompactionTask` executor |
+| M2 | ✅ **LANDED AND PROVEN LIVE 2026-09-04.** `compaction_plan` → `CompactionTask` → `compaction_commit`, with the rewrite signed by the vended per-table credential | The credential split is real on the write path | — |
 | M3 | **BYO compute** — M2's tasks submitted as a `RayJob` CR, admitted by Kueue | Maintenance sized by the cluster, not by a pod limit; quota and gang scheduling | Blocked on `open_compute-decoupling.md` §7.4 steps 3–4, which are owner-sequenced |
 
 **Do M1 first, and it is more than a stopgap** — it is what Lakekeeper explicitly recommends for
@@ -139,3 +139,48 @@ what it cost to build. M3 is the cloud-native end state and is sequenced behind
 
 M1 is landed and verified in-cluster, and M2 and M3 are either done or explicitly deferred with a
 recorded reason — not merely unstarted.
+
+
+## M2, proven live (2026-09-04)
+
+Not asserted. A Dagger-built image (`lance-rest-catalog:m2-173140`) was deployed to the k3s estate and
+the REAL production path driven inside the maintenance pod — `compaction_executor.compact_distributed`
+with the real `catalog_compaction` callables and the real vended credential:
+
+```
+location (vended, not composed): s3://bind86-wh/ab590dc9_silver$m2-proof-1788537352
+credential for the REWRITE: SCOPED to this table (vended, 900s)
+   key id: 536H5FARWTW3GAZV5KOK  (maintenance's own is rask-maintenance)
+   fragments=6 rows=300 version=6
+{"read_version":6,"tasks_planned":1,"tasks_executed":1,"tasks_failed":0,
+ "version":8,"fragments_added":1,"fragments_removed":6}
+after: fragments=1 rows=300 version=8
+```
+
+**Four things the live run found that no test could.**
+
+*The fallback is load-bearing and it fired for two different reasons.* On the first sweep every
+dataset logged `compaction_plane_unavailable_falling_back` and the sweep still completed. Two distinct
+causes, each confirmed by calling the door directly: `service-maintenance` lacks `can_write_data` on
+some tables (403 on `lakehouse$gold`), and the catalog was still on the previous image, whose plan
+door refuses `batch_size` (422 `body.batch_size`). Both degraded to the in-pod rewrite, disk kept
+being reclaimed, and `compaction_mode` recorded it — which is exactly what the design promised.
+
+*A missing S3 secret is the sole-source rule working.* An `exec`'d process starts with an EMPTY
+secret because it never ran the lifespan; the secret comes from the Dapr store and nothing else. The
+proof calls `apply_dapr_secrets` for that reason.
+
+*The maintenance credential CANNOT write a tenant warehouse.* Seeding the fixture with it was refused
+`403 AccessDenied` on `bind86-wh`. The credential that may write a table is the one the catalog vends
+FOR that table — so the proof seeds with the vended credential, which strengthens it: the same 900s
+scoped key both wrote the fragments and signed the rewrite.
+
+*A registered-but-unwritten table 500'd.* `plan_compaction` let pylance's "Dataset at path ... was not
+found" escape as a bare `500 Internal Server Error`, which reads as a catalog fault rather than as a
+table nobody wrote. Fixed to an `InvalidInputError` naming the location, with a test.
+
+## Still owed
+
+M1's dedicated-worker Deployment is rendered and chart-verified but has not run in-cluster — this
+proof ran the executor inside the planner pod, so it demonstrates the PROTOCOL and the CREDENTIAL
+split, not the second pod. M3 stays deferred behind `open_compute-decoupling.md` §7.4 steps 3-4.

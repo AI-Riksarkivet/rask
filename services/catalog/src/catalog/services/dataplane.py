@@ -840,7 +840,16 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
     if unknown:
         raise InvalidInputError(f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS)}")
     options = {k: v for k, v in policy.items() if v is not None}
-    dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    try:
+        dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    except ValueError as exc:
+        # A REGISTERED TABLE WHOSE BYTES ARE NOT THERE. Measured live 2026-09-04: a table declared into
+        # a namespace bound to one warehouse, with its data written to another bucket, reached this
+        # line and pylance's "Dataset at path ... was not found" escaped as a bare 500 "Internal
+        # Server Error" — which tells an operator nothing and looks like a catalog fault rather than
+        # a table that was never written. It is a client-visible condition with a specific cause, so
+        # it gets a specific answer.
+        raise InvalidInputError(f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}") from exc
     plan = lance_optimize.Compaction.plan(dataset, cast(Any, options))
     return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
 
