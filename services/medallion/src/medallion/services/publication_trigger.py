@@ -107,6 +107,64 @@ def _originator(extra: dict[str, Any]) -> str:
     return originator.strip() if isinstance(originator, str) else ""
 
 
+def build_stage_trigger(*, object_id: str, event_id: str, extra: dict[str, Any]) -> dict[str, Any] | None:
+    """The stage trigger for one published edge — THE shape, in one place.
+
+    Two producers mint this: the `table_published` subscription below, and the operator's re-run verb.
+    They must agree exactly, because every field is read by a different guard on the mover and a
+    mismatch is not a loud failure but a wrong one — the wrong lane DROPped as another's, the wrong
+    delta range, or a composed path instead of the bytes the catalog actually vended. `stage_stamp.py`
+    exists because two hand-maintained copies of one transform drifted into different schemas; its
+    docstring is the rule this follows: *a mirror maintained by hand is a mirror that drifts*.
+
+    Returns ``None`` when the object names no cascade lane. The CALLER decides what that means — the
+    subscription acks it (a table outside the cascade is published constantly), while the re-run verb
+    owes the operator a 404. Deciding here would force one of those answers on both.
+    """
+    table = _table_name(object_id, DELIMITER)
+    if table is None:
+        return None
+    project = str(extra.get("project") or "")
+    # The LANE is `<tier>$<table>`, the same string for every tenant — `transform.py` compares the
+    # arrived name against the raw `settings.from_dataset`, and the tenant travels separately in
+    # `project`. Publishing the CATALOG identifier as the lane once meant `acme$events` was compared
+    # against `bronze$events` and every tenant's publication DROPped as another lane's.
+    source = _source_namespace(object_id, DELIMITER, project)
+    if not source:
+        return None
+    trigger: dict[str, Any] = {
+        "token": event_id,
+        "dataset": f"{source}{DELIMITER}{table}",
+        "namespace": source,
+        # THE RANGE (D-R3). A consumer resolves it with `_row_created_at_version > from AND <= to` and
+        # keeps no bookmark. `from_version` is None on a dataset's first publication, meaning
+        # "everything up to `to`" — carried as-is rather than coerced to 0, because "no prior
+        # publication" and "published from version 0" are different claims.
+        "from_version": extra.get("from_version"),
+        "to_version": extra.get("to_version"),
+        # The catalog's VENDED location. Carried so the mover reads the table that was actually
+        # written instead of composing a path of its own (I2).
+        "from_uri": extra.get("location"),
+    }
+    # Read, never derived. Absent means a single-tenant estate (or a catalog predating the field), and
+    # omitting it is what the mover reads as "no tenant" — `""` would be refused as garbage.
+    if project:
+        trigger["project"] = project
+    # THE BATCH IDENTITY, carried across the tier boundary (§8 change 9). `token` is minted per
+    # publication, so without this every tier is a fresh run with nothing joining it to the ingest
+    # that started the batch.
+    cascade_id = str(extra.get("cascade_id") or "")
+    if cascade_id:
+        trigger["cascade_id"] = cascade_id
+    # THE HUMAN, beside the batch identity — the two fields a publication-driven cascade would
+    # otherwise lose at exactly the same hop. Omitted rather than blank: `""` is carried to an inbox
+    # actor named "".
+    originator = _originator(extra)
+    if originator:
+        trigger["originator"] = originator
+    return trigger
+
+
 async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) -> dict[str, str]:  # noqa: ANN401 — the Dapr client + settings seams
     """Turn a `table_published` control event into a stage trigger carrying the RANGE.
 
@@ -122,54 +180,15 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     if data.get("action") != PUBLISHED_ACTION:
         return _SUCCESS  # a governance notice, not a readiness one
 
-    table = _table_name(str(data.get("object_id") or ""), DELIMITER)
-    if table is None:
-        return _SUCCESS
-    # The LANE is `<tier>$<table>`, the same string for every tenant — `transform.py` compares the
-    # arrived name against the raw `settings.from_dataset`, and the tenant travels separately. This
-    # head published the CATALOG identifier as the lane once, so `acme$events` was compared against
-    # `bronze$events` and every tenant's publication was DROPped as another lane's.
     extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
-    project = str(extra.get("project") or "")
-    # WHICH LANE was published. Undeclared namespaces are acked and driven nowhere: a table outside
-    # the cascade is published all the time, and waking bronze for it fires compute no lane owns.
-    source = _source_namespace(str(data.get("object_id") or ""), DELIMITER, project)
-    topic = settings.transform_routes.get(source or "")
-    if not topic:
-        log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id"), "source": source})
+    trigger = build_stage_trigger(object_id=str(data.get("object_id") or ""), event_id=str(data.get("event_id") or ""), extra=extra)
+    if trigger is None:
+        log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id")})
         return _SUCCESS
-    trigger: dict[str, Any] = {
-        "token": str(data.get("event_id") or ""),
-        # The LANE, tier-qualified from the medallion's own setting — the same string for every
-        # tenant, which is what makes the mover's discriminator work at all.
-        "dataset": f"{source}{DELIMITER}{table}",
-        "namespace": source,
-        # THE RANGE (D-R3). A consumer resolves it with `_row_created_at_version > from AND <= to`
-        # and keeps no bookmark. `from_version` is None on a dataset's first publication, meaning
-        # "everything up to `to`" — carried as-is rather than coerced to 0, because "no prior
-        # publication" and "published from version 0" are different claims.
-        "from_version": extra.get("from_version"),
-        "to_version": extra.get("to_version"),
-        # The catalog's VENDED location for the published table. Carried so the mover reads the table
-        # that was actually written instead of composing a path of its own (I2).
-        "from_uri": extra.get("location"),
-    }
-    # Read, never derived. Absent means a single-tenant estate (or a catalog that predates the field),
-    # and omitting it is what the mover reads as "no tenant" — `""` would be refused as garbage.
-    if project:
-        trigger["project"] = project
-    # THE BATCH IDENTITY, carried across the tier boundary (§8 change 9). This is the hop that used to
-    # lose it: `token` above is minted from the publication event id, so without this every tier is a
-    # fresh run with nothing joining it to the ingest that started the batch.
-    cascade_id = str(extra.get("cascade_id") or "")
-    if cascade_id:
-        trigger["cascade_id"] = cascade_id
-    # THE HUMAN, carried across the tier boundary beside the batch identity — the two fields that a
-    # publication-driven cascade would otherwise lose at exactly the same hop. Omitted rather than
-    # blank: `""` would be carried to an inbox actor named "".
-    originator = _originator(extra)
-    if originator:
-        trigger["originator"] = originator
+    topic = settings.transform_routes.get(str(trigger["namespace"]))
+    if not topic:
+        log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id"), "source": trigger["namespace"]})
+        return _SUCCESS
 
     landed = await dapr_publish.publish_json(
         dapr,
