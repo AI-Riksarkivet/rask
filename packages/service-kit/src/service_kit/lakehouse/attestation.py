@@ -52,6 +52,7 @@ from typing import Any, Final
 import pyarrow as pa
 from pydantic import BaseModel, ConfigDict
 
+from service_kit.lakehouse.quality import tier_contract_violations
 from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, stamp_stage
 
 
@@ -125,26 +126,53 @@ def verify_stage_output(
     """
     schema: pa.Schema = dataset.schema
     names = set(schema.names)
-    out: list[Assertion] = [
-        _assert(
-            "O1",
-            required := {ID_COLUMN, STAGE_COLUMN, SOURCE_ROWID_COLUMN} <= names and (not expect_lineage or LINEAGE_COLUMN in names),
-            f"columns {sorted(names)}" if not required else "identity, stage and provenance columns present",
-        ),
-        _assert(
-            "O2",
-            SOURCE_ROWID_COLUMN in names and pa.types.is_uint64(schema.field(SOURCE_ROWID_COLUMN).type),
-            f"{SOURCE_ROWID_COLUMN} is {schema.field(SOURCE_ROWID_COLUMN).type if SOURCE_ROWID_COLUMN in names else 'absent'}",
-        ),
-    ]
+    out: list[Assertion] = _o1_o2_o7b_the_tier_contract(schema, dataset, expect_lineage=expect_lineage)
     out.append(_o3_schema_matches_the_reference(schema, upstream_schema))
     out.extend(_o4_and_o5_provenance(dataset, names, upstream_schema, scan=scan))
     out.append(_o6_cardinality(dataset, cardinality=cardinality, rows_in=rows_in))
-    out.extend(_o7_storage_shape(dataset))
+    out.append(_o7_storage_version(dataset))
     out.append(_o8_blob_columns_survive(schema, upstream_schema))
     out.append(_o10_and_o11_the_destination_exists(dataset))
     out.append(_o12_dataset_id_stamped(schema))
     return out
+
+
+def _o1_o2_o7b_the_tier_contract(schema: pa.Schema, dataset: Any, *, expect_lineage: bool) -> list[Assertion]:  # noqa: ANN401
+    """O1, O2 and O7b, delegated to `quality.tier_contract_violations`.
+
+    DELEGATED rather than restated, and that is the point: the same three rules already gate the
+    catalog's publish door under owner ruling D1, and a second definition of a safety rule is how two
+    doors end up disagreeing about what a governed tier is. What lives here is only the mapping from
+    its findings onto the obligation ids.
+
+    The door's rule is OPT-IN BY CLAIM — a table carrying none of the three columns is not a governed
+    tier and is left alone — and that stays a DOOR policy rather than a contract property. Here the
+    caller has already said this is a stage output, so an absent column is a failure rather than an
+    exemption; `expect_lineage` is the one part the caller supplies, because a run given no lineage
+    document has nothing to stamp.
+    """
+    problems = tier_contract_violations(schema, has_stable_row_ids=getattr(dataset, "has_stable_row_ids", None))
+    missing = [p for p in problems if p.startswith("missing")]
+    mistyped = [p for p in problems if SOURCE_ROWID_COLUMN in p and "uint64" in p]
+    unstable = [p for p in problems if "stable" in p.lower() and p not in mistyped]
+    absent = not (set(schema.names) & {STAGE_COLUMN, LINEAGE_COLUMN, SOURCE_ROWID_COLUMN})
+    lineage_missing = expect_lineage and LINEAGE_COLUMN not in schema.names
+    return [
+        _assert(
+            "O1",
+            not absent and not missing and not lineage_missing and ID_COLUMN in schema.names,
+            f"columns {sorted(schema.names)}" if (absent or missing or lineage_missing) else "identity, stage and provenance columns present",
+        ),
+        # SKIPPED, not failed, when the column is ABSENT. O1 already reports that, and reporting one
+        # defect as two failures makes a failure count meaningless — a reader cannot then tell a table
+        # with two problems from a table with one.
+        _assert("O2", not mistyped, mistyped[0] if mistyped else f"{SOURCE_ROWID_COLUMN} is uint64")
+        if SOURCE_ROWID_COLUMN in schema.names
+        else _skip("O2", f"no {SOURCE_ROWID_COLUMN} column to type-check; O1 carries its absence"),
+        _assert("O7b", not unstable, unstable[0] if unstable else "stable row ids enabled")
+        if getattr(dataset, "has_stable_row_ids", None) is not None
+        else _skip("O7b", "this dataset handle does not report stable row ids"),
+    ]
 
 
 def _o3_schema_matches_the_reference(schema: pa.Schema, upstream: pa.Schema | None) -> Assertion:
@@ -209,22 +237,18 @@ def _o6_cardinality(dataset: Any, *, cardinality: str, rows_in: int | None) -> A
     return _assert("O6", rows_out == rows_in, f"{rows_in} in, {rows_out} out")
 
 
-def _o7_storage_shape(dataset: Any) -> list[Assertion]:  # noqa: ANN401
-    """The manifest's own answers: storage version and stable row ids.
+def _o7_storage_version(dataset: Any) -> Assertion:  # noqa: ANN401
+    """The manifest's storage version. Its sibling (stable row ids) is O7b, answered above by the
+    tier contract — one reading, one definition.
 
-    Both are read through `getattr` because they are pylance surface this package deliberately does
-    not depend on — an absent attribute is an UNKNOWN and reported as SKIPPED, never as a pass.
+    Read through `getattr` because it is pylance surface this package deliberately does not depend on;
+    an absent attribute is an UNKNOWN and reported SKIPPED, never as a pass.
     """
-    version = getattr(getattr(dataset, "data_storage_version", None), "__str__", lambda: "")()
-    stable = getattr(dataset, "has_stable_row_ids", None)
-    return [
-        _assert("O7", version == REQUIRED_STORAGE_VERSION, f"data_storage_version={version or 'unknown'}")
-        if version
-        else _skip("O7", "this dataset handle does not report a storage version"),
-        _assert("O7b", bool(stable), f"has_stable_row_ids={stable}")
-        if stable is not None
-        else _skip("O7b", "this dataset handle does not report stable row ids"),
-    ]
+    raw = getattr(dataset, "data_storage_version", None)
+    version = str(raw) if raw is not None else ""
+    if not version:
+        return _skip("O7", "this dataset handle does not report a storage version")
+    return _assert("O7", version == REQUIRED_STORAGE_VERSION, f"data_storage_version={version}")
 
 
 def _o8_blob_columns_survive(schema: pa.Schema, upstream: pa.Schema | None) -> Assertion:

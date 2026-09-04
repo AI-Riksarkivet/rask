@@ -65,16 +65,22 @@ def test_a_CONFORMING_output_fails_nothing(tmp_path: Path) -> None:
     assert failed(assertions) == [], [a.model_dump() for a in failed(assertions)]
 
 
-def test_a_MISSING_provenance_column_fails_O1_and_O2(tmp_path: Path) -> None:
-    """The shape a second engine most plausibly writes: the data is right and the provenance is not."""
+def test_a_MISSING_provenance_column_fails_ONE_obligation_not_three(tmp_path: Path) -> None:
+    """The shape a second engine most plausibly writes: the data is right and the provenance is not.
+
+    O1 carries the absence. O2 SKIPS — there is no column to type-check, and reporting one defect as
+    several failures makes a failure count meaningless, since a reader cannot then tell a table with
+    three problems from a table with one. O4 still FAILS, because "no row carries provenance" is a
+    true and separate statement about the data rather than an unanswerable question.
+    """
     upstream = _upstream()
     written = _write(tmp_path, pa.table({"id": pa.array([1, 2, 3], pa.int64()), "stage": ["silver"] * 3}))
 
     verdicts = _verdicts(verify_stage_output(written, upstream_schema=upstream.schema, rows_in=3))
 
     assert verdicts["O1"] is Verdict.FAILED
-    assert verdicts["O2"] is Verdict.FAILED
-    assert verdicts["O4"] is Verdict.FAILED, "a missing column is missing provenance, not an unanswerable question"
+    assert verdicts["O2"] is Verdict.SKIPPED
+    assert verdicts["O4"] is Verdict.FAILED
 
 
 def test_an_INT64_source_rowid_fails_O2_while_passing_everything_around_it(tmp_path: Path) -> None:
