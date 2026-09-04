@@ -680,7 +680,7 @@ section above point at it rather than repeat it.
 | Priority | Item | Note |
 | --- | --- | --- |
 | In progress | **The executor contract** — `BAKED_JOBS_DIR` + `BAKED_CLUSTER_JOBS` live in the shared library and the catalog enforces them, so a non-Ray lane cannot be declared and the word "Ray" reaches every API client through the published OpenAPI | The agnosticism claim rests on this; D5 is the BYO half |
-| High | **No cascade reconciler and no re-run verb** — a missed hop is undetectable and unrepairable | `open_estate-verification.md` row 35 (D) |
+| High | **No cascade reconciler and no re-run verb** — a missed hop is undetectable and unrepairable. **SPEC: `open_cascade_repair.md`** (C1 landed; C4 → C3 → C2). Also tracked at `open_estate-verification.md` row 35 (D) and `open_compute-decoupling.md` §7.4 step 6 — all four end together | `open_estate-verification.md` row 35 (D) |
 | High | **No Dapr Workflow versioning seam** — two replay divergences already shipped; "drain before deploying" is the only safe answer | K sequences the retreat; this is the cost of staying meanwhile |
 | Medium | Submission bypasses the `RayJob` CRD, so Kueue admits nothing | |
 | Medium | 1,367 orphan rows in `daprstate`, no TTL, no alert | |

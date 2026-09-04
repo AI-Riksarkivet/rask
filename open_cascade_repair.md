@@ -1,127 +1,130 @@
 # Cascade repair — make a missed hop DETECTABLE, then REPAIRABLE
 
-Carried out of `open_lakehouse_diff_left.md` §O2 (line 683, priority High) because a register row is
-not a plan: that file gives this one line and a cross-reference, and everything below was established
-by reading the tree and had nowhere to live. Same reason `open_lakehouse_lanes.md` was split out of
-the cloud-native plan when it closed.
+Carries `open_lakehouse_diff_left.md` §O2 line 683 (High). **Rewritten 2026-09-04** after a five-agent
+audit found the first draft's central recommendation unimplementable from its own inputs; what that
+audit confirmed is recorded below as the reasoning, not as prose to re-derive.
 
 > | High | **No cascade reconciler and no re-run verb** — a missed hop is undetectable and unrepairable |
 
-Cross-ref: `open_estate-verification.md` row 35 (D) — "Zero `bindings.cron` reconcilers on the
-medallion and no re-run verb — forward-only AND unrepairable."
-
-**Verified 2026-09-04:** `grep -rn "bindings.cron" services/medallion/src` returns nothing, and
-`chart/templates/medallion.yaml` renders no cron component, while compute-prune, notifications,
-catalog-control-relay, ingest and maintenance all have one. The operator surface is `GET /movers`,
-`GET /movers/{m}/stages/{id}`, `POST .../terminate`, the promotions pair, and `POST /stages/{id}/terminate`
-— every re-entry point (`/produce`, `/ingest-media`, `/train`) starts NEW work. Nothing repairs.
+**This row is tracked in four places and all four must end together** — see *Delete this file when*.
 
 ## The defect, stated precisely
 
-**The hop that never ran.** `table_published` is published, the trigger is lost, no mover wakes, and
-**no workflow instance is ever created**. Every pod is green. This shape is what makes the verb
-edge-addressed: there is no instance id, no serialized input, nothing to load, so an
-instance-addressed `POST /stages/{id}/rerun` is structurally unable to repair it.
+Not "the trigger is lost" in general: `d58ffaff` (2026-08-31) landed the catalog's control relay
+(`api/control_relay.py` + `catalog-control-relay-cron.yaml`, `controlOutbox.enabled: true` by
+default), and mover consumers are durable queue-group with a DLQ on `/publication-arrival`. The
+residual loss legs, each verified:
 
-## Established by reading the tree (2026-09-04, adversarially verified)
+| # | Leg | Why it is silent |
+| --- | --- | --- |
+| L1 | the catalog's commit → `stage_event` window | an ACCEPTED trade (`docs/DECISIONS.md`) — recorded, not new |
+| L2 | `handle_publication` RETRY exhaustion | parks on the DLQ **only if** `MEDALLION_DLQ_TOPIC` is set; it defaults `""` |
+| L3 | mover-side `maxDeliver` exhaustion | `transform.py`: "no DLQ is configured, so the drop is final" |
+| L4 | `_preflight` DROPs | counted, alerted by nothing — **C4** |
+| L5 | the not-a-lane ack | `log.debug` + SUCCESS, so a `transform_routes` typo makes every publication a silent no-op |
 
-Recorded because each was expensive to establish and two of them corrected a wrong first answer.
+**Two failure SHAPES, and conflating them was the first draft's central error:**
 
-### R1 · The same token is the correct default; a fresh one is the exception
-
-At the pinned versions (`dapr_ext_workflow` 1.18.3, runtime 1.18.1) the instance-id guard bites on a
-**LIVE** instance only. From the installed library, `dapr/ext/workflow/dapr_workflow_client.py`:
-
-> `reuse_id_policy`: Deprecated and has no effect... **A workflow instance ID can always be reused
-> once the existing instance with that ID has reached a terminal state** (e.g. COMPLETED, FAILED, or
-> TERMINATED).
-
-`transform.py` reaches `_stage_workflow_exists` only when `schedule_new_workflow` RAISES, which it
-does not for a terminal instance. So re-publishing the VERBATIM trigger walks `stage_run` →
-`submit_stage` → `submit_or_reattach`, which sees SUCCEEDED, returns `reattached`, and **recomputes
-nothing** — the hop is repaired at zero GPU cost through the path already under test.
-
-A fresh token changes `stage_submission_id(...)` and forces a full Ray recompute of a hop that already
-succeeded, plus a second lineage run node for a run whose only defect was the wake-up. Keep it as an
-explicit opt-in for the narrower "it ran and wrote garbage" case, and note that it cuts against
-`bronze_arrival.py`'s standing distinction — *"the token distinguishes EVENTS, while
-`stage_submission_id` distinguishes WORK, and merging the two questions is the defect"* — so it is a
-deliberate exception, not the mechanism.
-
-### R2 · The safety gate is the RAY JOB, not the workflow instance
-
-`terminate_stage` stops the WATCH and leaves the Ray job running — its own 202 says so. So "the
-instance is terminal" is satisfied by exactly the state an operator creates just before wanting a
-re-run, and a re-run would then put a second Ray job on the same `to_uri`, one possibly wiping the
-directory. `_write_lock` does not help: it is an unkeyed process-wide `asyncio.Lock` released the
-moment pass 1 dispatches, and it never spans a job's lifetime.
-
-**The gate must read Ray**: resolve `stage_submission_id(...)` and refuse **409** unless the job is
-terminal. Where no id is resolvable there is nothing in flight to race, and the deterministic-id
-reattach is the residual guard.
-
-### R3 · Two horizons, and the verb cannot know its cost from the request
-
-Workflow history retention bounds the instance-addressed form (168h COMPLETED / 720h FAILED+TERMINATED)
-— that is how long a SPEC stays readable, not a dedupe window. The tighter and previously unrecorded
-one: the no-recompute path depends on the Ray head still holding the SUCCEEDED job, and
-`workflow.py` states Ray's GCS is not fault-tolerant here. **After a head restart the same-token
-re-run silently becomes a full recompute.** The verb must therefore REPORT the path it took.
-
-### R4 · Authorization is the mover's own rung, not the produce door
-
-Gate on that mover's `fga_required_action` (`can_create_table`, or `can_promote` for silver→gold)
-against `namespace:<project>-<toNamespace>`, via `authenticate_subject` plus an explicit check —
-`promotions.py` states the reason verbatim: `authorize_produce`'s `can_administer` is "coarser AND
-different, and would lock out exactly the non-admin validator the rung exists for." The producer
-cannot derive `toNamespace`/`requiredAction` from `mover_urls` (name→URL only), so that mapping has to
-be rendered.
+* **the hop that NEVER RAN** — no workflow instance, therefore no Ray job. A re-run costs full compute
+  whatever token it carries.
+* **the hop that RAN and lost its wake-up** — the job SUCCEEDED, `publish_stage_ready` never fired.
+  Here and only here can a re-run reattach and recompute nothing.
 
 ## C3 AND C4 COVER DISJOINT FAILURES — neither substitutes for the other
-
-Established 2026-09-04, and it corrects a wrong first reading of this plan (that C4 might deliver most
-of C3's value cheaply). It does not, and the reason is structural:
 
 * **The REFUSAL class** — the trigger ARRIVED and `_preflight` dropped it. Countable by construction:
   `record_refused` fires with a bounded `reason` label. **C4 covers exactly this, and only this.**
 * **The LOSS class** — the trigger never arrived, so `_preflight` never ran and **nothing increments**.
-  No counter, no log, no DLQ, no lineage event. This is the failure O2 names in its own words: *a
-  missed hop is undetectable*.
+  No counter, no log, no DLQ, no lineage event. This is what O2 means by *undetectable*.
 
-So a counter cannot see a lost hop, ever, no matter what is alerted on. **C3 is the only thing that
-can detect the class O2 is about**, and it is not optional; C4 is cheap, disjoint, and closes a real
-hole that happens to be adjacent. Sequencing them is a question of cost, never of substitution.
+A counter cannot see a hop that never happened. **C3 is the only detector for the class O2 is about**
+and is not optional; C4 is cheap, disjoint, and closes a real adjacent hole.
+
+## Established by reading the tree
+
+### R1 · A re-run's token is OPTIONAL, and supplying it is what makes the cheap path reachable
+
+The token is the `table_published` event's `event_id` (`uuid4().hex`), which the control outbox drops
+on ack and which no durable store retains — so **a verb whose body is `{project, from, to}` cannot
+re-mint it**. The first draft made "same token" the default and was unimplementable.
+
+* **`token` supplied** (an operator has it from the DLQ log line, which carries it) → verbatim re-mint
+  through `build_stage_trigger` → same deterministic instance id → dedupes for free against a merely
+  DELAYED original, and reattaches to a SUCCEEDED job in the ran-and-lost-its-wake-up shape.
+* **`token` absent** → a fresh one. Full recompute, a second lineage run node. Honest, and the common
+  case for the never-ran shape where nothing exists to reattach to anyway.
+
+At the pinned versions (`dapr-ext-workflow` 1.18.3, runtime 1.18.1) a terminal instance id is freely
+reusable — *"reuse_id_policy: Deprecated and has no effect... A workflow instance ID can always be
+reused once the existing instance with that ID has reached a terminal state"*. **Docstring-verified,
+not observed live**; a sidecar-backed test is owed.
+
+### R2 · The 409 is for the FRESH-token path only
+
+A duplicate id whose Ray job is RUNNING returns `"reattached"` (`TERMINAL_BAD = ("FAILED","STOPPED")`),
+so the same-token path starts no second job — it is the ideal repair, not a hazard. Only a fresh token
+(or a changed `code_version`) yields a different submission id and can race a live job, and the check
+must then LIST jobs by `(stage, from_uri, to_uri)` rather than look one up by id. "Wiping the
+directory" was wrong: the stage write is `mode="overwrite"`, a Lance commit, and `bronze_arrival.py`
+calls it overwrite-convergent.
+
+### R3 · Three horizons, and the verb can only PREDICT its cost
+
+The no-recompute path needs the Ray head to still hold the SUCCEEDED job, and Ray's GCS is not
+fault-tolerant here — already recorded at §O2's Owner row. Two further horizons: the Ray id folds
+`code_version` while the workflow id does not, so a same-token re-run **after a deploy** is a full
+recompute; and the path is decided inside `submit_stage` *after* the verb's 202, so the verb reports a
+PREDICTED mode, never the taken one.
+
+### R4 · Authorization is the mover's own rung — retained verbatim from the first draft
+
+Gate on that mover's `fga_required_action` (`can_create_table`, or `can_promote` for silver→gold)
+against `namespace:<project>-<toNamespace>`, via `authenticate_subject` plus an explicit check.
+`promotions.py` states the reason: `authorize_produce`'s `can_administer` is *"coarser AND different,
+and would lock out exactly the non-admin validator the rung exists for."*
+
+**And say so out loud:** the sibling verb `terminate` is gated on `authorize_produce` ("whoever may
+start this tenant's pipeline may stop it"). Two verbs on one router will sit on two rungs. That is
+defensible — stopping is not re-driving — but it must be written down, not discovered.
+
+### R5 · The producer authorizes; the MOVER executes
+
+`mover_ops.py` records the shape: the producer authenticates and authorizes, then forwards to the
+mover under the service token. The Ray-liveness check **cannot** run on the producer — `to_uri` is
+resolved by the mover at run time and `MEDALLION_RAY_CODE_VERSION` is rendered on movers only, and the
+submission id needs both. So C2 forwards, exactly as `terminate` does.
 
 ## Ordered steps
 
 | # | Step | State |
 | --- | --- | --- |
-| C1 | **One trigger shape, two producers** — extract `build_stage_trigger`; the publication head becomes its first caller, pinned by an AST anti-drift gate | ✅ **LANDED** `e1baef1c` (503 medallion tests, tests/unit 3705, ruff clean) |
-| C2 | **The re-run verb** — `POST /movers/{mover}/rerun` on the producer, body `{project, from_version, to_version}`, same-token default, R2's Ray-liveness 409, R4's authz, reports the path taken per R3. No gateway row needed: `Route("/api/movers", "/movers", *medallion)` plus prefix matching already carries it | next |
-| C3 | **The reconciler** — the detection half. `bindings.cron` on the producer, read-only, reports drift and repairs nothing, modelled on `maintenance/services/reconcile.py`. Must pick and record its answer to bindings.cron firing on every replica | not started |
-| C4 | **Surface the silent refusals** — alert on `medallion_stage_refused`, `reason="routing_disabled"` first. Chart only: no new state, no service code | not started |
+| C1 | **One trigger shape, two producers** — `build_stage_trigger`; the publication head is its first caller, pinned by an AST gate that also refuses a hand-built dict beside the call | ✅ **LANDED** `e1baef1c`, gate strengthened + mutation-proven `921a7c15` |
+| C4 | **Surface the silent refusals** — two rules mirroring `MedallionStageDenied` over `medallion_stage_refused_total{lance_medallion_reason}` and `medallion_stage_other_lane_total`, with `for:`, a Perses row, a `routing_disabled` runbook section, and invariant tests binding rule↔counter. Promote L5's `log.debug` ack to a counted refusal when the namespace is tier-shaped. **Chart-only; no new state** | next |
+| C3 | **The lag gauge** — per declared edge, the source's `published` tag version vs the highest `to_version` the destination's latest run consumed, as `medallion_cascade_lag{edge,project}` evaluated with `for:`. Never a per-tick counter or log (row 23's lesson) | after C4 |
+| C2 | **The re-run verb** — edge-addressed, `token` optional per R1, forwarded per R5, authorized per R4, 409 per R2, mode PREDICTED per R3 | last |
 
-## Found while investigating, NOT in §O2 — three silent-failure classes
+**C4 depends on `open_alert.md`:** `alerting.enabled` is `false` in `chart/values.yaml` and `true`
+only in `values-prod.yaml`, so a new rule is inert on a fresh install and live in this estate's prod.
 
-1. **A DROP is an ack, and `routing_disabled` is permanent.** `_preflight` refuses deterministically
-   and DROPs. `record_refused(transition, reason)` counts each one with `reason` as a LABEL over a
-   closed vocabulary — `malformed`, `unconfined_uri`, `bad_project`, `routing_disabled`,
-   `unresolvable_lane` — so an alert can target the permanent one specifically. Verified 2026-09-04:
-   `medallion_stage_refused` and `medallion_stage_other_lane` appear in **neither**
-   `chart/alerting/rules.yml` (whose three medallion alerts are `MedallionCascadeDeadLettering`,
-   `MedallionStageOutcomesFailing`, `MedallionStageDenied`) **nor**
-   `chart/templates/perses-dashboards.yaml`. The code calls `routing_disabled` "a DEPLOYMENT gap, and
-   therefore permanent: every tenant trigger this mover ever receives halts here" — an estate-wide
-   halt behind a series nothing reads. That is C4, and it needs no new state at all.
-2. **A gap the outbox does not cover.** The lineage outbox stages AFTER the Lance commit, so a pod
-   kill between commit and `stage_event` loses the cascade head with the data on disk. Lineage's sweep
-   back-fills the GRAPH only — it does not republish (only the drain has a publisher) — so data
-   landed, graph correct, cascade never ran, nothing red.
-3. **`ray_kit.submission_id` collisions.** It folds every character outside `[A-Za-z0-9_-]` to `-` and
-   truncates at 200, so two distinct tokens can land on one submission id, which `submit_or_reattach`
-   reads as a successful re-attach — the second stage's work silently never runs.
+**C3's home is the PRODUCER**, because only it holds `transform_routes` and can see a first-ever hop —
+lineage infers edges from prior runs and is blind there. **Its every-replica answer is convergence**:
+read-only and idempotent, so every replica firing is harmless, the same answer the control relay takes.
+Recorded here rather than deferred, per the rask-dapr rule.
+
+**C3 falsifies five prose sites** that currently say *nothing ever re-reads the `published` tag*
+(`publication_trigger.py`, `control_relay.py`, `values.yaml`, `publication.py`). C3 **is** that reader.
+Rewrite them in the same commit — falsified prose is rewritten, never annotated.
+
+**Why C2 may precede decoupling's step 6:** it re-mints a trigger behind `build_stage_trigger`, so only
+the fresh-token 409 touches the Jobs API — one call to port when `RayJobExecutor` lands.
+
+## Not worth building
+
+A separate DLQ-replay door. Dapr exposes no stream replay, and the optional-`token` verb already
+covers the parked class without a second seam.
 
 ## Delete this file when
 
-C2, C3 and C4 are landed AND verified in-cluster, and §O2's row is struck from
-`open_lakehouse_diff_left.md` in the same commit.
+C4, C3 and C2 are landed AND verified in-cluster, and **in the same commit**: §O2's row struck from
+`open_lakehouse_diff_left.md`, row 35 (D) struck from `open_estate-verification.md`, and
+`open_compute-decoupling.md` §7.4 step 6 marked done. One row, four trackers, one truth.

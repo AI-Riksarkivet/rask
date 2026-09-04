@@ -706,7 +706,7 @@ The earlier draft was imprecise and the owner was right to challenge it.
 4. **Kueue admission** — queues, quota, gang scheduling. Unblocked by (3), impossible before it.
 5. **`Transform` CRD + reconciler** — the declaration moves to git; the catalog record becomes the
    projection.
-6. **The re-run door** — `POST /movers/{m}/stages/rerun` over the existing delta machinery.
+6. **The re-run door** — `POST /movers/{m}/stages/rerun` over the existing delta machinery. **Specified in `open_cascade_repair.md` C2**, which also records why it may precede this step: the verb re-mints a trigger behind `build_stage_trigger`, so only its fresh-token 409 touches the Jobs API — one call to port when (3) lands.
 
 Steps 1-3 are required for a second engine. Steps 4-6 are required for the GitOps/cloud-native goal.
 Nothing here needs Argo, Airflow, Dagster, Temporal, or a second control plane.
