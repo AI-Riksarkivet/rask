@@ -33,6 +33,7 @@ from medallion.api.mover_ops import router as mover_ops_router
 from medallion.api.produce import router as produce_router
 from medallion.api.promotions import register_promotion_route
 from medallion.api.promotions import router as promotions_router
+from medallion.api.rerun import router as rerun_router
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
 from medallion.core.config import get_settings
@@ -180,6 +181,12 @@ app.include_router(promotions_router)
 # — `terminate_workflow` resolves the instance through the calling app's app-id — so this end does the
 # human auth and forwards. See `api/mover_ops.py` for why the split is forced rather than chosen.
 app.include_router(mover_ops_router)
+
+# THE RE-RUN VERB (open_cascade_repair.md C2). Beside the operator proxy above but NOT through it:
+# it mints the stage trigger here rather than forwarding, because the only reason to forward was a
+# Ray-liveness check the design dropped — and this app already mints stage triggers, in the
+# `table_published` subscription. `build_stage_trigger` was written for exactly these two callers.
+app.include_router(rerun_router)
 register_promotion_route(app, _dapr_app)
 # The cascade-lag cron door. Opt-in on a configured binding name, like the control relay: an unnamed
 # binding means no Component, and mounting an always-live door would add a catalog+lineage scan surface

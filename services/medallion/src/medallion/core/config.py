@@ -56,6 +56,23 @@ class RayTaskDeclaration(BaseModel):
     code_version: str = ""
 
 
+class MoverGate(BaseModel):
+    """One cascade edge's authorization facts, as the CHART declares them.
+
+    Two fields because the check needs both and neither is derivable from the other: the FGA object is
+    `namespace:<project>-<to_namespace>` and the relation is that mover's own required action. A
+    re-run that guessed either would either refuse a legitimate operator or, worse, accept one who
+    could not have driven the hop themselves.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: The tier this edge writes — the FGA object's second half.
+    to_namespace: str = Field(min_length=1)
+    #: `can_create_table`, or `can_promote` for an edge into gold. Lance's own relation names.
+    required_action: str = Field(min_length=1)
+
+
 class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     """Config for one medallion service (a mover stage, or the medallion-producer producer).
 
@@ -199,6 +216,21 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: authorizes, then forwards, and the MOVER runs the terminate under its own app-id — which is the
     #: whole reason the routes cannot simply live on the producer.
     mover_urls: dict[str, str] = Field(default_factory=dict, validation_alias=AliasChoices("mover_urls", "MEDALLION_MOVER_URLS"))
+    #: Each cascade edge's AUTHORIZATION, keyed by the edge's SOURCE namespace — what the re-run verb
+    #: gates on.
+    #:
+    #: Keyed by source rather than by mover name because that is what the caller can name: an operator
+    #: re-running a missed hop has the published table, whose namespace IS the source. The mover's own
+    #: name is an implementation detail of the deployment.
+    #:
+    #: The RUNG IS THE MOVER'S OWN, not `/produce`'s. `promotions.py` records why: `authorize_produce`'s
+    #: `can_administer` is "coarser AND different, and would lock out exactly the non-admin validator
+    #: the rung exists for". So a silver->gold re-run asks `can_promote`, exactly as the mover does
+    #: when it runs the hop itself. The sibling verb `terminate` DOES sit on `authorize_produce`
+    #: ("whoever may start this tenant's pipeline may stop it") — two verbs on one plane, two rungs,
+    #: which is defensible because stopping is not re-driving, and is written down here rather than
+    #: discovered.
+    mover_gates: dict[str, MoverGate] = Field(default_factory=dict, validation_alias=AliasChoices("mover_gates", "MEDALLION_MOVER_GATES"))
 
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.

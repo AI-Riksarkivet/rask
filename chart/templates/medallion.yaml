@@ -179,6 +179,16 @@ spec:
             {{- $_ := set $moverUrls .name (printf "http://%s-%s:%v" (include "lance.fullname" $) .name $port) }}
             {{- end }}
             - { name: MEDALLION_MOVER_URLS, value: {{ toJson $moverUrls | quote }} }
+            {{- /* Each edge's AUTHORIZATION, keyed by its SOURCE namespace — what the re-run verb gates
+                   on. Built from the SAME mover list, so an added mover gets its gate with no second
+                   edit, and the rung is the mover's OWN `requiredAction` rather than /produce's
+                   `can_administer` (which is coarser AND different, and would lock out exactly the
+                   non-admin validator `can_promote` exists for). */}}
+            {{- $moverGates := dict }}
+            {{- range .Values.medallion.movers }}
+            {{- $_ := set $moverGates .fromNamespace (dict "to_namespace" .toNamespace "required_action" (.requiredAction | default "can_create_table")) }}
+            {{- end }}
+            - { name: MEDALLION_MOVER_GATES, value: {{ toJson $moverGates | quote }} }
             {{- /* The producer needs the catalog for the PROMOTION RESUME, not for a stage of its own:
                    an approved hold publishes the version it was taken on, which is a call to this door.
 

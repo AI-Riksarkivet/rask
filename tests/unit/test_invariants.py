@@ -98,6 +98,10 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # The variable is now `topic` — resolved per publication from `settings.lane_routes` rather than
     # fixed to bronze, which is what let a silver publication fire a bronze trigger.
     ("services/medallion/src/medallion/services/publication_trigger.py", "topic"): "trigger",
+    # The re-run verb, and a TRIGGER for the same reason its subscription sibling is: it instructs a
+    # mover to re-drive one edge and describes no committed write. Both mint through
+    # `build_stage_trigger`, so the two publishes carry the identical shape.
+    ("services/medallion/src/medallion/api/rerun.py", "topic"): "trigger",
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
     # The on-demand compaction door. A TRIGGER, not lineage: it publishes an instruction to maintain one
     # dataset, and the lineage for that maintenance is emitted by the EXECUTOR once the work is actually

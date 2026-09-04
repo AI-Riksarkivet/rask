@@ -82,10 +82,17 @@ remove. Three consequences for C2, none of which the first draft accounts for:
   The reachable key is `(stage, project, transform)`, which names the same edge and is arguably the
   better one, but it is a different check from the one R2 describes.
 
-**Decide this before implementing C2.** The options are: accept the capped listing and say so in the
-verb's response; carry from/to into the job metadata so a narrower key exists; or drop the
-fresh-token 409 and document that a fresh-token re-run may race a live job, which is the honest
-reading of "full recompute" anyway since `mode="overwrite"` is convergent.
+**DECIDED 2026-09-04: the fresh-token 409 is dropped.** The stage write is `mode="overwrite"`, a Lance
+commit that R2 itself calls overwrite-convergent, so two concurrent writers reach a correct final
+state and waste only compute. Buying that back with an unbounded listing that has already OOM-killed
+this pod — on the path the verb does not even recommend — is the wrong trade. What C2 ships instead:
+
+* **same-token** (the recommended repair): `submit_or_reattach` already answers this for free. A
+  duplicate id whose job is RUNNING returns `"reattached"`, so no second job starts and no extra call
+  is made;
+* **fresh-token**: no liveness check, and the verb's response SAYS SO. An operator re-running with no
+  token is asking for a full recompute; being told it may duplicate a live job's work is honest, while
+  a 409 derived from a capped listing would be a guarantee the listing cannot make.
 
 ### R2 · The 409 is for the FRESH-token path only
 
@@ -115,7 +122,13 @@ and would lock out exactly the non-admin validator the rung exists for."*
 start this tenant's pipeline may stop it"). Two verbs on one router will sit on two rungs. That is
 defensible — stopping is not re-driving — but it must be written down, not discovered.
 
-### R5 · The producer authorizes; the MOVER executes
+### R5 · The producer authorizes; the MOVER executes — SUPERSEDED by R2a
+
+Retained because the reasoning is still right about `terminate` and about why the split exists at all.
+It is wrong about C2 for one reason: **its whole case for forwarding was the Ray-liveness check**, and
+R2a drops that. With no liveness check the verb needs neither `to_uri` nor `MEDALLION_RAY_CODE_VERSION`
+and therefore nothing the mover holds — while the producer already mints stage triggers in its
+`table_published` subscription. C2 publishes from the producer.
 
 `mover_ops.py` records the shape: the producer authenticates and authorizes, then forwards to the
 mover under the service token. The Ray-liveness check **cannot** run on the producer — `to_uri` is
@@ -132,7 +145,7 @@ submission id needs both. So C2 forwards, exactly as `terminate` does.
 | C3-core | **The lag arithmetic** — pure over injected readers; `known=False` never collapses to 0 | ✅ **LANDED** `a17cd748` |
 | C3b | **Make the range QUERYABLE** — lineage emits it but does not expose it. `RunStatus` folds `operation` and `promotion_status` off the lance facet and not the range, so a reader cannot ask "what has silver consumed?". Four sites, following that exact pattern: the event model, the Cypher SET, the row model, the SELECT | **BLOCKS C3** |
 | C3 | **The lag gauge** — wire C3-core to the two readers, publish `medallion_cascade_lag{edge,project}` evaluated with `for:`, on a producer cron. Never a per-tick counter or log (row 23's lesson) | after C3b |
-| C2 | **The re-run verb** — edge-addressed, `token` optional per R1, forwarded per R5, authorized per R4, 409 per R2, mode PREDICTED per R3 | last |
+| C2 | **The re-run verb** — edge-addressed, `token` optional per R1, authorized per R4 on the edge's own rung, mode PREDICTED per R3 | ✅ **LANDED** — `POST /api/movers/stages/rerun`. Two of the draft's rules did NOT survive contact: the 409 is dropped (R2a), and with it the forward — **R5's only reason to forward was the Ray-liveness check**, so the producer mints the trigger itself, exactly as its `table_published` subscription already does. `build_stage_trigger` now has the two callers its docstring named. |
 
 **C4 depends on `open_alert.md`:** `alerting.enabled` is `false` in `chart/values.yaml` and `true`
 only in `values-prod.yaml`, so a new rule is inert on a fresh install and live in this estate's prod.
