@@ -154,6 +154,8 @@ class LineageRepository:
                     # The promotion verdict (HELD/BLOCKED/REFUSED); "" for every run that refused no
                     # promotion, which is almost all of them.
                     "ps": event.promotion_status or "",
+                    # -1 is "this event did not say" — see the sticky SET in cypher.py.
+                    "ctv": event.consumed_to_version if event.consumed_to_version is not None else -1,
                 },
             )
             progress = event.progress
@@ -637,6 +639,7 @@ class LineageRepository:
                 operation=(r[11] or None),
                 source_run_id=(r[12] or None),
                 promotion_status=(r[13] or None),
+                consumed_to_version=(r[14] if len(r) > 14 and isinstance(r[14], int) and r[14] >= 0 else None),
             )
             for r in rows
         ]

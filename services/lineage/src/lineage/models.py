@@ -441,6 +441,25 @@ class RunEvent(BaseModel):
         return value if isinstance(value, str) and value else None
 
     @property
+    def consumed_to_version(self) -> int | None:
+        """The highest SOURCE version this run consumed, from the ``lance`` run facet (``to_version``).
+
+        Distinct from :meth:`output_version`, which is what the run WROTE. This is the delta boundary it
+        READ — the other half of the cascade's lag predicate, and unanswerable before the medallion
+        began stamping it: the range lived on the acked trigger and in the Ray job's ``BASE_VERSION``
+        env, and neither survived the run.
+
+        STRICTLY an ``int``, and negatives are refused. The facet is producer-supplied, so a string that
+        merely parses would let an external producer write a version no catalog ever published; and
+        ``-1`` is the sentinel the run-node SET uses for "this event did not say", which a producer must
+        not be able to send as data and thereby mean "keep the old value".
+        """
+        lance = (self.run.facets or {}).get("lance")
+        value = lance.get("to_version") if isinstance(lance, dict) else None
+        # `bool` first: it is an `int` subclass, and `True` would otherwise record as version 1.
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    @property
     def source_run_id(self) -> str | None:
         """The PRODUCER'S OWN run id, from the ``lance`` run facet (``run_id``).
 

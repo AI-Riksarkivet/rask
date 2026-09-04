@@ -400,6 +400,10 @@ class RunStatus(BaseModel):
     #: that separates a question for a person from an outage. ``None`` for the overwhelming majority of
     #: runs, which refused no promotion.
     promotion_status: str | None = None
+    #: The highest SOURCE version this run consumed — the cascade's delta boundary, and the half of the
+    #: lag predicate the catalog cannot answer. ``None`` for a run that declared no range (a full
+    #: rescan, a promotion) and for every run that predates the medallion stamping it.
+    consumed_to_version: int | None = None
 
 
 class Runs(BaseModel):

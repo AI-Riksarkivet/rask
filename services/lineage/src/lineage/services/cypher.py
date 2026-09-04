@@ -56,6 +56,12 @@ MERGE_RUN: Final = (
     # for the same graph run carries no lance facet, and clobbering the verdict to null would turn a
     # recorded hold back into an ordinary failure on the next tick.
     "r.promotion_status=(CASE WHEN $ps = '' THEN r.promotion_status ELSE $ps END), "
+    # consumed_to_version is STICKY for the same reason as the three above, with a NUMERIC sentinel:
+    # a version is an int, so the empty string those use is not available. -1 means "this event did not
+    # say", which `RunEvent.consumed_to_version` refuses as producer data precisely so the two cannot
+    # collide. Clobbering it would erase the cascade's delta boundary on the next reconcile tick — the
+    # one fact the lag detector reads.
+    "r.consumed_to_version=(CASE WHEN $ctv < 0 THEN r.consumed_to_version ELSE $ctv END), "
     "r.started_at=coalesce(r.started_at, $tm), r.events_count=coalesce(r.events_count, 0)+1 "
     "RETURN 1"
 )
@@ -70,7 +76,7 @@ RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
 LIST_RUNS: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
-    "r.promotion_status"
+    "r.promotion_status, r.consumed_to_version"
 )
 # Discovery / browse — the "what exists?" lists. Like LIST_RUNS these fetch every node and are governed in
 # Python, so a caller can browse the estate without already knowing an exact name.
