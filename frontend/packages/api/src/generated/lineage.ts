@@ -1438,6 +1438,8 @@ export interface components {
         RunStatus: {
             /** Author */
             author?: string | null;
+            /** Consumed To Version */
+            consumed_to_version?: number | null;
             /** Error Message */
             error_message?: string | null;
             /**

@@ -55,6 +55,7 @@ def _settings(**over: object) -> Any:
 @pytest.mark.asyncio
 async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """A run under a declaration names it, so the job page can link back to the record."""
+    from service_kit.lakehouse.task_registry import TaskRegistration
     from service_kit.lakehouse.transform_specs import TransformSpec
 
     spec = TransformSpec.model_validate(
@@ -63,7 +64,7 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
             "project": "acme",
             "from_id": "acme-bronze$events",
             "to_id": "acme-silver$browserlane",
-            "entrypoint": "python /home/ray/jobs/ray_stage_job.py",
+            "task": "stage-transform",
             "params": {"demo": "1"},
             "code_version": "8bfb93d9",
         }
@@ -72,7 +73,14 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
     async def _resolve(_settings: Any, *, project: str = "") -> TransformSpec:
         return spec
 
+    # The declaration names a TASK; the registry says what running it means. Both reads are stubbed
+    # here because this case is about what lands in the job's `metadata`, not about either lookup —
+    # each has its own suite.
+    async def _resolve_task(_settings: Any, *, task: str, engine: str) -> TaskRegistration:
+        return TaskRegistration(task=task, engine=engine, command="python /home/ray/jobs/ray_stage_job.py")
+
     monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(ray_submit, "resolve_task_async", _resolve_task)
 
     await ray_submit.submit_stage_job(
         _settings(lane="browserlane"),

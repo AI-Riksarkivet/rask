@@ -1563,6 +1563,17 @@
             ],
             "title": "Author"
           },
+          "consumed_to_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed To Version"
+          },
           "error_message": {
             "anyOf": [
               {

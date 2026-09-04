@@ -10,7 +10,7 @@ the chart's ``ray_entrypoint``/``ray_job_params``/``ray_code_version`` govern ex
 estate that has declared nothing is unchanged rather than quietly running under a new scheme — the
 stance ``ray_code_version`` already takes.
 
-**A named-but-undeclared transform REFUSES.** It must never fall back to the chart entrypoint, because
+**A named-but-undeclared transform REFUSES.** It must never fall back to the chart's own program, because
 that is precisely the failure the record exists to eliminate: the mover would run the OLD program
 while an operator believes the declaration governs it, and nothing anywhere would be red. The
 refusal is the mover's form of the door's 422 — same sentence, same named key.
@@ -23,7 +23,8 @@ from typing import Protocol
 
 from fastapi.concurrency import run_in_threadpool
 
-from service_kit.lakehouse import transform_specs
+from service_kit.lakehouse import task_registry, transform_specs
+from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.transform_specs import TransformSpec
 
 
@@ -84,3 +85,41 @@ async def resolve_transform_async(settings: _TransformSettings, *, project: str)
     if not getattr(settings, "transform", ""):
         return None  # no IO to do; skip the threadpool hop entirely
     return await run_in_threadpool(resolve_transform, settings, project=project)
+
+
+class UnrunnableTaskError(UndeclaredTransformError):
+    """The transform is declared, but names a task THIS executor cannot run.
+
+    A subclass rather than a sibling so the mover's existing handler keeps its answer: both mean an
+    operator must act and a redelivery changes nothing, which is a DROP with a trace, never a RETRY.
+    The distinct type is what lets a caller that cares tell "nobody declared the transform" from
+    "the transform names a task no engine here registered".
+    """
+
+
+def resolve_task(settings: _TransformSettings, *, task: str, engine: str) -> TaskRegistration:
+    """The registration for a declared task, refusing anything this engine cannot run.
+
+    Two refusals, and the second is the one a path-shaped allowlist could never make. An
+    UNREGISTERED task means the executor plane never said it could run this — submitting it anyway
+    would run whatever the string happens to mean on the cluster. A registration for ANOTHER engine
+    means the transform is real and belongs to a plane that is not this one; running it here would
+    hand a Ray submitter a command written for something else.
+    """
+    registration = task_registry.get_task(settings.control_root, settings.storage_options(), task)
+    if registration is None:
+        raise UnrunnableTaskError(
+            f"no task is registered as {task!r}; a task is registered by the plane that can run it, "
+            f"under {settings.control_root}/_tasks/. Refusing rather than submitting the key as a command."
+        )
+    if registration.engine != engine:
+        raise UnrunnableTaskError(
+            f"task {task!r} is registered for engine {registration.engine!r}, and this submitter runs {engine!r}. "
+            "The declaration is valid; it belongs to another executor."
+        )
+    return registration
+
+
+async def resolve_task_async(settings: _TransformSettings, *, task: str, engine: str) -> TaskRegistration:
+    """:func:`resolve_task` off the event loop — the object-store read is blocking."""
+    return await run_in_threadpool(resolve_task, settings, task=task, engine=engine)

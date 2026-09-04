@@ -707,9 +707,14 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
     of truth for what a lane runs, with the GOVERNED one winning. The chart's values are deliberately
     set to different, wrong-looking values here so a pass cannot be a coincidence.
     """
-    from service_kit.lakehouse import transform_specs
+    from service_kit.lakehouse import task_registry, transform_specs
+    from service_kit.lakehouse.task_registry import TaskRegistration
     from service_kit.lakehouse.transform_specs import TransformSpec
 
+    # BOTH REAL RECORDS, written to the same control root the submit path reads. The declaration
+    # names a task; the registration says what running it means — and the two reads together are
+    # what the submitted `entrypoint` has to come out of, so stubbing either would test the stub.
+    task_registry.put_task(str(tmp_path), {}, TaskRegistration(task="dummy-lane", engine="ray", command="python /home/ray/jobs/ray_dummy_job.py"))
     transform_specs.put_spec(
         str(tmp_path),
         {},
@@ -719,7 +724,7 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
                 "project": "acme",
                 "from_id": "bronze$events",
                 "to_id": "silver$dummy",
-                "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
+                "task": "dummy-lane",
                 "params": {"EMBED_DIM": "8"},
                 "code_version": "main-declared",
             }
@@ -744,7 +749,7 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
     asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
     body = api.posts[0]
-    assert body["entrypoint"] == "python /home/ray/jobs/ray_dummy_job.py", "the DECLARED entrypoint must win"
+    assert body["entrypoint"] == "python /home/ray/jobs/ray_dummy_job.py", "the REGISTERED command for the declared task must win over the chart's"
     env = body["runtime_env"]["env_vars"]
     assert env["RASK_PARAM_EMBED_DIM"] == "8"
     assert "RASK_PARAM_FROM_THE_CHART" not in env, "the chart's params must not leak in alongside the declaration"

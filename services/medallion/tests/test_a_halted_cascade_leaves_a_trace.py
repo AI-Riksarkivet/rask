@@ -99,7 +99,7 @@ async def test_a_declared_lane_with_no_namespace_is_counted(refusals: list[tuple
         project="acme",
         from_id="acme-bronze$events",
         to_id="nonamespace",
-        entrypoint="/home/ray/jobs/ray_stage_job.py",
+        task="stage-transform",
     )
 
     async def _declared(_settings: Any, *, project: str = "") -> TransformSpec:

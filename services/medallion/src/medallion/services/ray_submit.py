@@ -28,7 +28,8 @@ from contextlib import suppress
 import httpx
 
 from medallion.core.config import MedallionSettings, get_settings
-from medallion.services.transform_spec import resolve_transform_async
+from medallion.services.task_register import RAY_ENGINE
+from medallion.services.transform_spec import resolve_task_async, resolve_transform_async
 from ray_kit import submit as rk
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 
@@ -157,7 +158,12 @@ async def submit_stage_job(
     # A named-but-undeclared lane RAISES rather than falling back: a fallback would run the chart's
     # old program under the declaration's name. Unset lane keeps the chart settings.
     spec = await resolve_transform_async(settings, project=project)
-    entrypoint = spec.entrypoint if spec else settings.ray_entrypoint
+    # THE DECLARATION NAMES A TASK; the REGISTRY says what running it means. Two reads rather than
+    # one, and the split is the point: the record an operator writes carries no engine vocabulary, so
+    # the same declaration is submittable by any plane that registered a task under that key. This
+    # submitter runs Ray, so a task registered for anything else is refused here rather than handed
+    # to the Jobs API as a command it cannot mean.
+    entrypoint = (await resolve_task_async(settings, task=spec.task, engine=RAY_ENGINE)).command if spec else settings.ray_entrypoint
     job_params = spec.params if spec else settings.ray_job_params
     code_version = spec.code_version if spec else settings.ray_code_version
     # THE LANE'S ROW CARDINALITY. Chart lanes have never declared one and are 1:1, which is exactly
@@ -264,7 +270,7 @@ async def submit_stage_job(
     # `Dict[str, str]`, so every value here is already a string.
     # `rask.transform` joins the identity keys for the reason the block above already gives: a reader
     # OUTSIDE the job needs it after the job is gone. The job page shows what a run is DOING, and
-    # without the lane it could name the stage but not the declaration — the entrypoint and params
+    # without the lane it could name the stage but not the declaration — the task and params
     # the run is actually executing — so a person watching a job had no path back to the record that
     # governs it. Omitted when no lane is declared, like every other key here: that run is off the
     # chart's settings and there is no record to link to, and `""` would render as a lane named

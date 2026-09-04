@@ -9757,6 +9757,70 @@
         "title": "RegisterTableResponse",
         "type": "object"
       },
+      "RegisteredTaskResponse": {
+        "description": "One registered task, as the door answers it.\n\n``command`` is included and is DELIBERATELY not interpreted here: an operator choosing a task\nneeds to see what it will actually run, and the platform's rule is that it never parses the\nstring \u2014 showing it and parsing it are different acts.",
+        "properties": {
+          "cardinalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cardinalities",
+            "type": "array"
+          },
+          "code_version": {
+            "default": "",
+            "title": "Code Version",
+            "type": "string"
+          },
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "obligations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Obligations",
+            "type": "array"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "engine",
+          "command"
+        ],
+        "title": "RegisteredTaskResponse",
+        "type": "object"
+      },
+      "RegisteredTasksResponse": {
+        "description": "What may be named in a transform declaration, so the vocabulary is discoverable.\n\nAnswered per project because that is the tier of the caller who needs it \u2014 the same\n``can_administer`` that declaring requires \u2014 even though the registry itself is estate-wide: one\ncluster runs a task for every tenant, and a per-tenant registry would make the same capability\nneed one record per project.",
+        "properties": {
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/RegisteredTaskResponse"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "title": "RegisteredTasksResponse",
+        "type": "object"
+      },
       "RelationGrants": {
         "description": "One ``can_*`` action and every user subject holding it (``\"*\"`` = a public wildcard grant).",
         "properties": {
@@ -10586,7 +10650,7 @@
       },
       "TransformSpecRequest": {
         "additionalProperties": false,
-        "description": "Declare one transform. The project comes from the gated PATH, never from here.\n\nOmitting ``project`` is the security half, not an ergonomic one: a body-supplied project would\nlet an admin of one tenant pass the ``can_administer`` gate on their own project while writing a\ntransform into somebody else's.\n\nField semantics \u2014 including why an entrypoint must reference a script baked into the image \u2014 live\non ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates\ninto and the one the mover reads. One definition, two services.",
+        "description": "Declare one transform. The project comes from the gated PATH, never from here.\n\nOmitting ``project`` is the security half, not an ergonomic one: a body-supplied project would\nlet an admin of one tenant pass the ``can_administer`` gate on their own project while writing a\ntransform into somebody else's.\n\nField semantics \u2014 including why ``task`` must name a REGISTERED task rather than a program \u2014 live\non ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates\ninto and the one the mover reads. One definition, two services.",
         "properties": {
           "cardinality": {
             "default": "1:1",
@@ -10596,10 +10660,6 @@
           "code_version": {
             "default": "",
             "title": "Code Version",
-            "type": "string"
-          },
-          "entrypoint": {
-            "title": "Entrypoint",
             "type": "string"
           },
           "from_id": {
@@ -10617,6 +10677,10 @@
             "title": "Params",
             "type": "object"
           },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
           "to_id": {
             "title": "To Id",
             "type": "string"
@@ -10626,7 +10690,7 @@
           "name",
           "from_id",
           "to_id",
-          "entrypoint"
+          "task"
         ],
         "title": "TransformSpecRequest",
         "type": "object"
@@ -10641,10 +10705,6 @@
           "code_version": {
             "default": "",
             "title": "Code Version",
-            "type": "string"
-          },
-          "entrypoint": {
-            "title": "Entrypoint",
             "type": "string"
           },
           "from_id": {
@@ -10666,6 +10726,10 @@
             "title": "Project",
             "type": "string"
           },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
           "to_id": {
             "title": "To Id",
             "type": "string"
@@ -10676,7 +10740,7 @@
           "project",
           "from_id",
           "to_id",
-          "entrypoint"
+          "task"
         ],
         "title": "TransformSpecResponse",
         "type": "object"
@@ -17464,7 +17528,7 @@
     },
     "/v1/project/{id}/transform/set": {
       "post": {
-        "description": "Declare (or re-declare) one lane \u2014 admin-gated; idempotent.\n\nThe spec model does the platform-level validation: a DNS-safe lane key, string params that\ncannot collide with the ``RASK_PARAM_`` namespace, and an entrypoint that references a script\nBAKED into the image. That last one is why declaration is the right place for this check \u2014 Ray\ndocuments ``runtime_env`` as development-only, and a lane that cannot be declared can never be\nsubmitted, whereas a submit-time check has to be remembered by every submit path.\n\nThe platform validates SHAPE and never meaning: what a param does belongs to the workload.",
+        "description": "Declare (or re-declare) one lane \u2014 admin-gated; idempotent.\n\nThe spec model does the platform-level validation: a DNS-safe lane key and string params that\ncannot collide with the ``RASK_PARAM_`` namespace. The task is checked HERE, against the\nregistry, because that check needs IO the model must not do \u2014 and because a lane that cannot be\ndeclared can never be submitted, whereas a submit-time check has to be remembered by every\nsubmit path.\n\nThe platform validates SHAPE and never meaning: what a param does belongs to the workload, and\nwhat a task's ``command`` says belongs to the engine that registered it. This handler reads\nneither.",
         "operationId": "set_transform_v1_project__id__transform_set_post",
         "parameters": [
           {
@@ -18033,6 +18097,120 @@
         "summary": "List Project Policies",
         "tags": [
           "policy"
+        ]
+      }
+    },
+    "/v1/projects/{id}/tasks": {
+      "get": {
+        "description": "What may be named as a transform's ``task`` \u2014 the vocabulary, so it is discoverable.\n\nWithout this the declaration door refuses an unregistered task correctly and leaves the operator\nguessing what IS registered, which turns a governed field into a trap. Same ``can_administer``\ntier as declaring: being able to see the choices and being able to make one are the same act.\n\nESTATE-WIDE records answered under a project path. The registry is not per-tenant \u2014 one cluster\nruns a task for everyone \u2014 but the caller who needs the list is a project admin, and gating on\nthe project they are already administering adds no new authorization object.",
+        "operationId": "list_registered_tasks_v1_projects__id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredTasksResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Registered Tasks",
+        "tags": [
+          "transform"
         ]
       }
     },
@@ -21642,7 +21820,7 @@
     },
     "/v1/table/{id}/compaction_plan": {
       "post": {
-        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. `open_cloudnative.md` N1.\n\nWriter tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the\ntable default, which is the correct rung \u2014 a compaction preserves every row (Lance commits it as a\n``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
+        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, \"The lakehouse cloud-native cutover\".\n\nWriter tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the\ntable default, which is the correct rung \u2014 a compaction preserves every row (Lance commits it as a\n``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
         "operationId": "plan_table_compaction_v1_table__id__compaction_plan_post",
         "parameters": [
           {

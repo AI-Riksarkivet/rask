@@ -41,7 +41,7 @@ def _declare(tmp_path: Path, **over: object) -> TransformSpec:
             "project": "acme",
             "from_id": "bronze$events",
             "to_id": "silver$dummy",
-            "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
+            "task": "dummy-lane",
             "params": {"embed_dim": "8"},
             "code_version": "main-abc1234",
         }
@@ -62,7 +62,7 @@ def test_a_declared_lane_resolves_to_its_record(tmp_path: Path) -> None:
     spec = resolve_transform(_settings(tmp_path, transform="dummy"), project="acme")
 
     assert spec is not None
-    assert spec.entrypoint == "python /home/ray/jobs/ray_dummy_job.py"
+    assert spec.task == "dummy-lane"
     assert spec.params == {"embed_dim": "8"}
     assert spec.code_version == "main-abc1234"
 

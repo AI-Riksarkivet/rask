@@ -718,7 +718,7 @@ def test_an_unknown_cardinality_is_refused_rather_than_defaulted() -> None:
 # …AND A LANE MUST BE ABLE TO DECLARE IT. The contract above is unreachable if nothing sets
 # STAGE_CARDINALITY: the job would support a fan-out that no project can ask for, which is the
 # half-built shape this estate keeps finding in its own audits. `TransformSpec` is where a project
-# already declares its entrypoint and params through the catalog's admin-gated door, so it is where
+# already declares its task and params through the catalog's admin-gated door, so it is where
 # the cardinality belongs too.
 
 
@@ -731,7 +731,7 @@ def test_a_declared_lane_can_ask_for_a_FANOUT_and_it_reaches_the_job() -> None:
         project="acme",
         from_id="bronze$events",
         to_id="silver$frames",
-        entrypoint="python /home/ray/jobs/ray_stage_job.py",
+        task="stage-transform",
         cardinality="1:N",
     )
     assert spec.cardinality == "1:N"
@@ -741,7 +741,7 @@ def test_a_declared_lane_defaults_to_1to1() -> None:
     """An un-migrated declaration keeps the shape it has always had — the default must not loosen."""
     from service_kit.lakehouse.transform_specs import TransformSpec
 
-    spec = TransformSpec(name="x", project="acme", from_id="a", to_id="b", entrypoint="python /home/ray/jobs/ray_stage_job.py")
+    spec = TransformSpec(name="x", project="acme", from_id="a", to_id="b", task="stage-transform")
     assert spec.cardinality == job.ONE_TO_ONE
 
 
@@ -753,7 +753,7 @@ def test_a_declared_cardinality_the_job_cannot_honour_is_refused_at_DECLARATION_
     from service_kit.lakehouse.transform_specs import TransformSpec
 
     with pytest.raises(pydantic.ValidationError):
-        TransformSpec(name="x", project="acme", from_id="a", to_id="b", entrypoint="python /home/ray/jobs/ray_stage_job.py", cardinality="one-to-many")
+        TransformSpec(name="x", project="acme", from_id="a", to_id="b", task="stage-transform", cardinality="one-to-many")
 
 
 def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
@@ -773,8 +773,6 @@ def test_the_catalog_DOOR_accepts_a_declared_cardinality() -> None:
     forbidden extra is a 422, so the caller is told the field does not exist."""
     from catalog.schemas import TransformSpecRequest, TransformSpecResponse
 
-    body = TransformSpecRequest(
-        name="frames", from_id="bronze$events", to_id="silver$frames", entrypoint="python /home/ray/jobs/ray_stage_job.py", cardinality="1:N"
-    )
+    body = TransformSpecRequest(name="frames", from_id="bronze$events", to_id="silver$frames", task="stage-transform", cardinality="1:N")
     assert body.cardinality == "1:N"
     assert "cardinality" in TransformSpecResponse.model_fields, "a declared cardinality must be readable back, or nobody can audit what governs a lane"

@@ -2,10 +2,12 @@
  * Transform contracts — the wire shapes of the catalog's transform-declaration door.
  *
  * A TRANSFORM IS NOT A RAY JOB, and this module is where that distinction is kept honest. The record the
- * catalog stores is a `TransformSpec`: one governed medallion edge — read `from_id`, run
- * `entrypoint`, write `to_id`. Ray is one of two ways to execute it (`MEDALLION_RAY_ENABLED`
- * defaults to FALSE and the in-process path is the default), so naming any of this after Ray would
- * tie a platform record to one execution engine — the coupling the agnostic ruling forbids.
+ * catalog stores is a `TransformSpec`: one governed medallion edge — read `from_id`, run `task`,
+ * write `to_id`. A `task` is a KEY, registered by whichever plane can run it; what running it means
+ * lives in that registration and never in this record. Ray is one of two ways to execute a
+ * transform (`MEDALLION_RAY_ENABLED` defaults to FALSE and the in-process path is the default), so
+ * naming any of this after Ray would tie a platform record to one execution engine — the coupling
+ * the agnostic ruling forbids.
  *
  * Declared here rather than imported from the generated catalog client on the estate's usual
  * grounds: a hand-written valibot schema is the boundary CHECK, and a generated type is only a
@@ -28,11 +30,45 @@ export const TransformSpecSchema = v.object({
 	project: v.string(),
 	from_id: v.string(),
 	to_id: v.string(),
-	entrypoint: v.string(),
+	task: v.string(),
 	params: v.optional(v.record(v.string(), v.string()), {}),
 	code_version: v.optional(v.string(), ''),
 });
 export type TransformSpec = v.InferOutput<typeof TransformSpecSchema>;
+
+/** One task the estate can run, as `GET /v1/projects/{id}/tasks` answers it.
+ *
+ * `command` is shown and never parsed — an operator choosing a task needs to see what it will
+ * actually run, and displaying a string is not the same act as interpreting one. `cardinalities`
+ * EMPTY MEANS ALL: a task that constrains nothing need not enumerate the vocabulary, so an empty
+ * array must render as "any shape" rather than as "no shape".
+ */
+export const RegisteredTaskSchema = v.object({
+	task: v.string(),
+	engine: v.string(),
+	command: v.string(),
+	code_version: v.optional(v.string(), ''),
+	cardinalities: v.optional(v.array(v.string()), []),
+	obligations: v.optional(v.array(v.string()), []),
+});
+export type RegisteredTask = v.InferOutput<typeof RegisteredTaskSchema>;
+
+/** `GET /v1/projects/{id}/tasks`. Absent, not `[]`, when nothing is registered
+ *  (`response_model_exclude_none=True`), so the fallback is load-bearing. */
+export const RegisteredTasksSchema = v.object({
+	tasks: v.optional(v.array(RegisteredTaskSchema), []),
+});
+export type RegisteredTasks = v.InferOutput<typeof RegisteredTasksSchema>;
+
+/** `transform/delete`. A DIFFERENT shape from the spec — `status` tells "I removed it" from "it was
+ *  already gone", and none of the record's own fields come back. Parsing the answer as a spec made
+ *  every successful delete read as a shape drift, because the fields it requires are not sent. */
+export const TransformDeleteSchema = v.object({
+	status: v.string(),
+	project: v.string(),
+	name: v.string(),
+});
+export type TransformDelete = v.InferOutput<typeof TransformDeleteSchema>;
 
 /** `GET /v1/projects/{id}/transforms`. The key is absent, not `[]`, on an estate that has declared
  *  nothing — `response_model_exclude_none=True` — so the fallback is load-bearing. */
@@ -48,7 +84,7 @@ export const TransformDraftSchema = v.object({
 	name: v.pipe(v.string(), v.trim(), v.minLength(1, 'A transform needs a name.')),
 	from_id: v.pipe(v.string(), v.trim(), v.minLength(1, 'A transform reads from a table.')),
 	to_id: v.pipe(v.string(), v.trim(), v.minLength(1, 'A transform writes to a table.')),
-	entrypoint: v.pipe(v.string(), v.trim(), v.minLength(1, 'A transform runs an entrypoint.')),
+	task: v.pipe(v.string(), v.trim(), v.minLength(1, 'A transform runs a registered task.')),
 	params: v.optional(v.record(v.string(), v.string()), {}),
 	code_version: v.optional(v.string(), ''),
 });

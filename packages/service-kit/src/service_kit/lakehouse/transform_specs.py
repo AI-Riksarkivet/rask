@@ -16,10 +16,10 @@ transforms are per-tenant, so two projects may both declare ``dummy`` without co
 **The platform validates the SHAPE and never the meaning.** ``params`` are opaque strings forwarded
 to the workload; what they mean belongs to the runner. What the platform does enforce is the handful
 of invariants that are its own business: a safe transform name, string params that cannot collide with the
-``RASK_PARAM_`` namespace, and — the load-bearing one — an entrypoint that is a path BAKED into the
-image. Ray documents ``runtime_env`` as a development convenience, and checking "is this the
-production shape?" at declaration time means an undeclarable transform can never be submitted at all,
-rather than every submit path having to remember.
+``RASK_PARAM_`` namespace, and — the load-bearing one — a TASK the executor plane has REGISTERED
+(``task_registry``). Checking that at declaration time means an undeclarable transform can never be
+submitted at all, rather than every submit path having to remember; and because the check is a
+lookup rather than a path match, the platform learns no engine's vocabulary doing it.
 
 **NEVER A SECRET.** Same rule as the env channel this replaces: these records are readable by anyone
 who can read the control bucket. A workload needing a credential resolves it from the Dapr secret
@@ -48,25 +48,6 @@ log = logging.getLogger(__name__)
 #: Public so tests and operators can name the prefix without re-typing the literal.
 SPECS_PREFIX = "_transforms"
 
-#: The directory a transform's entrypoint MUST live under — the path `.docker/ray-cluster.dockerfile`
-#: bakes its job scripts into. Anything else is either a runtime_env upload (development-only, per
-#: Ray's own docs) or a path the deployed image does not contain, which fails as `exit 2` with
-#: nothing naming the image.
-BAKED_JOBS_DIR = "/home/ray/jobs/"
-
-#: The job scripts `.docker/ray-cluster.dockerfile` ACTUALLY bakes — the image the chart's KubeRay
-#: cluster runs.
-#:
-#: THE DIRECTORY IS NOT ENOUGH, which is what this closes. The validator below used to accept any
-#: path under `BAKED_JOBS_DIR`, so a declaration naming `ray_lance_job.py` — a real script, baked
-#: into `.docker/ray-lance.dockerfile` for the standalone demo but NOT into the cluster image —
-#: passed the door and then died `exit 2 / can't open file` on the cluster, with nothing in the
-#: failure naming the image. A refusal at declaration time is the last moment that is cheap.
-#:
-#: Held here rather than derived, because this library runs inside a container that has no
-#: dockerfile to read. `tests/unit/test_ray_job_images.py` asserts the two agree, so the drift this
-#: constant could introduce fails a test instead of a cluster.
-BAKED_CLUSTER_JOBS = frozenset({"ray_stage_job.py", "ray_train_job.py", "ray_dummy_job.py"})
 
 #: DNS-safe, lowercase, bounded. The name becomes an object-store key fragment and rides into
 #: identifiers elsewhere; a traversing or shell-shaped name must never reach either.
@@ -95,7 +76,20 @@ class TransformSpec(BaseModel):
     project: str = Field(min_length=1, max_length=64)
     from_id: str = Field(min_length=1, description="upstream catalog table identifier, e.g. bronze$events")
     to_id: str = Field(min_length=1, description="downstream catalog table identifier, e.g. silver$dummy")
-    entrypoint: str = Field(description=f"the Ray entrypoint; must reference a script baked under {BAKED_JOBS_DIR}")
+    #: A registered TASK KEY, resolved against `<control_root>/_tasks/` by the declaration door — opaque
+    #: to this library and to the catalog, which is what keeps an engine's name out of the published
+    #: OpenAPI and lets a second engine be declared without a catalog change.
+    #:
+    #: ACCEPTS `entrypoint` ON READ, and the alias is a migration mechanism rather than politeness —
+    #: the same reason recorded for `lane`->`name` below. This model is `extra="forbid"`, so an
+    #: un-aliased field name REFUSES every record that spells it the other way, and a refused
+    #: declaration means a mover runs the chart's program while an operator believes the stored
+    #: record governs it.
+    task: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("task", "entrypoint"),
+        description="a task registered in <control_root>/_tasks/",
+    )
     params: dict[str, str] = Field(default_factory=dict, description="opaque workload parameters; never secrets")
     #: How many output rows this lane may emit per input row. DECLARED, never inferred: a stage
     #: driver cannot tell a deliberate fan-out from a transform that lost rows, and guessing in
@@ -122,30 +116,6 @@ class TransformSpec(BaseModel):
     def _safe_name(cls, value: str) -> str:
         if not TRANSFORM_NAME_RE.match(value):
             raise ValueError(f"invalid transform name {value!r}: must match {TRANSFORM_NAME_RE.pattern}")
-        return value
-
-    @field_validator("entrypoint")
-    @classmethod
-    def _baked_entrypoint(cls, value: str) -> str:
-        # Substring rather than prefix: the entrypoint is a command line ("python /home/ray/jobs/x.py"),
-        # so the path sits after the interpreter.
-        if BAKED_JOBS_DIR not in value:
-            raise ValueError(
-                f"entrypoint {value!r} does not reference a baked job under {BAKED_JOBS_DIR!r}; "
-                "Ray documents runtime_env as development-only, so a transform must name a script the deployed image contains"
-            )
-        # AND IT MUST BE ONE THE CLUSTER IMAGE ACTUALLY CARRIES. The directory check alone accepted
-        # `ray_lance_job.py` — a real script, baked into the standalone demo image but not into the
-        # one the chart runs — and the run then died `exit 2 / can't open file` on the cluster with
-        # nothing naming the image. Refusing here names the script AND what is available.
-        named = next((token for token in value.split() if BAKED_JOBS_DIR in token), "")
-        script = named.rsplit("/", 1)[-1]
-        if script not in BAKED_CLUSTER_JOBS:
-            raise ValueError(
-                f"entrypoint {value!r} names {script!r}, which the cluster image does not bake; "
-                f"available: {sorted(BAKED_CLUSTER_JOBS)}. Add it to .docker/ray-cluster.dockerfile "
-                "or name one of these — an unbaked script fails as `exit 2` on the cluster, naming nothing."
-            )
         return value
 
     @field_validator("params")

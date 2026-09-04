@@ -27,8 +27,9 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import transforms
-from service_kit.lakehouse import transform_specs
+from service_kit.lakehouse import task_registry, transform_specs
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.task_registry import TaskRegistration
 
 
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
@@ -37,7 +38,7 @@ VALID: dict[str, Any] = {
     "name": "dummy",
     "from_id": "bronze$events",
     "to_id": "silver$dummy",
-    "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
+    "task": "dummy-lane",
     "params": {"batch_size": "64"},
     "code_version": "main-abc1234",
 }
@@ -56,6 +57,14 @@ def app(control_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]
     own semantics are pinned in the fga_deps suite, and what this module asserts is that THIS door
     calls it, on the right object, before touching storage.
     """
+    # THE REGISTRY THE DOOR CONSULTS. Seeded here rather than mocked because the door's refusal is a
+    # real lookup against the control root, and a mock would let the two spellings of "registered"
+    # drift — the executor plane writes the same record this reads.
+    task_registry.put_task(
+        control_root, {}, TaskRegistration(task="dummy-lane", engine="ray", command="python /home/ray/jobs/ray_dummy_job.py", cardinalities=["1:1"])
+    )
+    task_registry.put_task(control_root, {}, TaskRegistration(task="stage-transform", engine="ray", command="python /home/ray/jobs/ray_stage_job.py"))
+
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(transforms.router)
@@ -98,7 +107,7 @@ def test_declaring_a_lane_persists_it_and_answers_with_the_stored_record(client:
     # Read back through the registry directly — no request, no app, no shared memory. This is the
     # same call a mover pod makes, and it is what "survives a pod restart" reduces to.
     stored = transform_specs.get_spec(control_root, {}, "acme", "dummy")
-    assert stored is not None and stored.entrypoint == VALID["entrypoint"]
+    assert stored is not None and stored.task == VALID["task"]
 
 
 def test_a_body_supplied_project_is_REFUSED_rather_than_honoured(client: TestClient) -> None:
@@ -140,12 +149,33 @@ def test_an_unknown_transform_is_422_NAMING_the_key(client: TestClient) -> None:
     assert "nosuchlane" in body["errors"][0]["message"], "the message must name the undeclared key"
 
 
-def test_an_undeclarable_entrypoint_is_422_at_the_DOOR(client: TestClient) -> None:
-    """`runtime_env`-style entrypoints cannot be declared, so they can never be submitted."""
-    response = client.post("/v1/project/acme/transform/set", json={**VALID, "entrypoint": "python my_script.py"})
+def test_an_UNREGISTERED_task_is_422_at_the_DOOR(client: TestClient) -> None:
+    """A task no executor registered cannot be declared, so it can never be submitted.
+
+    The refusal is the whole reason the registry is consulted HERE. A submit-time check has to be
+    remembered by every submit path, and the one that forgets fails deep on the cluster with an
+    error naming an image rather than the key nobody registered.
+    """
+    response = client.post("/v1/project/acme/transform/set", json={**VALID, "task": "nobody-registered-this"})
 
     assert response.status_code == 422, response.text
-    assert "baked" in response.text
+    body = response.json()
+    assert "body.task" in [e["field"] for e in body["errors"]], f"the 422 must name the task field; got {body['errors']}"
+    assert "nobody-registered-this" in response.text, "the message must name the unregistered task"
+
+
+def test_a_cardinality_the_TASK_cannot_honour_is_422_at_the_DOOR(client: TestClient) -> None:
+    """The check a path-shaped allowlist could never make.
+
+    `dummy-lane` merge-inserts one row per input. Declaring it 1:N passes the job's own count check —
+    the job enforces the shape it was TOLD — so the mismatch is a silent data defect unless it is
+    refused where the declaration and the registration are both in scope.
+    """
+    response = client.post("/v1/project/acme/transform/set", json={**VALID, "cardinality": "1:N"})
+
+    assert response.status_code == 422, response.text
+    assert "body.cardinality" in [e["field"] for e in response.json()["errors"]]
+    assert "dummy-lane" in response.text, "the message must name the task that cannot honour it"
 
 
 def test_an_unsafe_lane_key_is_422(client: TestClient) -> None:
@@ -225,10 +255,11 @@ def test_listing_is_scoped_to_the_project(client: TestClient, control_root: str)
 
 
 def test_the_OLD_wire_spelling_is_still_accepted(client: TestClient) -> None:
-    """§8 change 7 renamed `lane` to `name` on this door. A caller still sending `lane` must work.
+    """This door renamed `lane` to `name` and `entrypoint` to `task`. A caller still sending the old
+    spellings must work.
 
     The frontend ships in the same release and was updated with it, but this door is public and an
-    external caller was not. `populate_by_name` plus `AliasChoices("name", "lane")` is what makes the
+    external caller was not. `populate_by_name` plus `AliasChoices` is what makes each
     rename a rename rather than a breaking change — and the models are `extra="forbid"`, so without
     the alias the old body would be REFUSED rather than ignored.
 
@@ -237,7 +268,38 @@ def test_the_OLD_wire_spelling_is_still_accepted(client: TestClient) -> None:
     """
     declared = client.post(
         "/v1/project/acme/transform/set",
-        json={"lane": "legacy", "from_id": "bronze$events", "to_id": "silver$legacy", "entrypoint": "/home/ray/jobs/ray_stage_job.py"},
+        json={"lane": "legacy", "from_id": "bronze$events", "to_id": "silver$legacy", "entrypoint": "stage-transform"},
     )
     assert declared.status_code == 200, declared.text
     assert declared.json()["name"] == "legacy", "the old spelling was accepted but answered under a different name"
+    assert declared.json()["task"] == "stage-transform", "the old `entrypoint` spelling must land on `task`"
+
+
+def test_the_REGISTERED_TASKS_are_discoverable_at_the_same_tier(client: TestClient) -> None:
+    """A refused field whose vocabulary cannot be read is a trap, not a gate.
+
+    The door refuses an unregistered task correctly; without this listing an operator learns only
+    that their guess was wrong. Same `can_administer` tier as declaring — seeing the choices and
+    making one are the same act.
+    """
+    listed = client.get("/v1/projects/acme/tasks")
+
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["project"] == "acme"
+    assert [t["task"] for t in body["tasks"]] == ["dummy-lane", "stage-transform"], "the listing must be ordered and complete"
+    dummy = body["tasks"][0]
+    assert dummy["engine"] == "ray", "the engine is the executor's, and an operator must see whose task this is"
+    assert dummy["command"] == "python /home/ray/jobs/ray_dummy_job.py", "showing the command is not parsing it"
+    assert dummy["cardinalities"] == ["1:1"], "the shape a task honours is what makes a refusal predictable"
+
+
+def test_listing_tasks_is_REFUSED_to_a_non_admin(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The vocabulary is not public: a task's `command` names what executes on shared compute."""
+
+    async def _deny(*_a: Any, **_k: Any) -> None:
+        raise PermissionDeniedError("nope")
+
+    monkeypatch.setattr(transforms.fga_deps, "require_relation", _deny)
+
+    assert client.get("/v1/projects/acme/tasks").status_code == 403

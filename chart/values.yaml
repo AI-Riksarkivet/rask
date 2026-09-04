@@ -1178,6 +1178,27 @@ medallion:
   # The template defaults it to `<release>-ray-head-svc:8265`; set it only to point at a Ray outside
   # this release.
   rayAddress: ""
+  # WHAT THIS ESTATE'S RAY PLANE CAN RUN. The producer registers each of these into
+  # `<control_root>/_tasks/` at boot, and the catalog's transform door refuses a declaration naming a
+  # task nobody registered — so an unrunnable transform is a 422 at declaration instead of an
+  # `exit 2` on the cluster hours later, with an error that names the image rather than the key.
+  #
+  # `engine` is deliberately ABSENT: the registering plane stamps its own (`ray`), so a typo here
+  # cannot register a task no submitter answers to. `command` is the engine's business and the
+  # platform never parses it — but the script it names must be baked into the image the cluster runs,
+  # which `tests/unit/test_ray_job_images.py` checks against `.docker/ray-cluster.dockerfile`'s own
+  # COPY list. Adding a job to that dockerfile without a row here (or the reverse) fails that test.
+  #
+  # `cardinalities` is what a path-shaped allowlist could never express. EMPTY MEANS ALL. The generic
+  # stage job reads `STAGE_CARDINALITY` and enforces both shapes; the dummy lane merge-inserts and is
+  # 1:1 only, so declaring it 1:N is refused at the door rather than passing a count check the job
+  # was told the answer to.
+  rayTasks:
+    - { task: stage-transform, command: "python /home/ray/jobs/ray_stage_job.py", cardinalities: ["1:1", "1:N"] }
+    - { task: dummy-lane, command: "python /home/ray/jobs/ray_dummy_job.py", cardinalities: ["1:1"] }
+    # The training job is not a row transform — it reads a governed table and emits a MODEL — so it
+    # constrains no cardinality rather than claiming one the vocabulary cannot express.
+    - { task: train, command: "python /home/ray/jobs/ray_train_job.py" }
   # When true, after the compute writes a stage's Lance dataset the mover runs data-quality assertions on it
   # (row_count > 0, key column non-null) and BLOCKS promotion on failure — the failed run + its
   # dataQualityAssertions facet are still emitted (auditable in lineage), but the next stage is NOT

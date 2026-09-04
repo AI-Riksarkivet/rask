@@ -1121,13 +1121,15 @@ export interface paths {
          * Set Transform
          * @description Declare (or re-declare) one lane — admin-gated; idempotent.
          *
-         *     The spec model does the platform-level validation: a DNS-safe lane key, string params that
-         *     cannot collide with the ``RASK_PARAM_`` namespace, and an entrypoint that references a script
-         *     BAKED into the image. That last one is why declaration is the right place for this check — Ray
-         *     documents ``runtime_env`` as development-only, and a lane that cannot be declared can never be
-         *     submitted, whereas a submit-time check has to be remembered by every submit path.
+         *     The spec model does the platform-level validation: a DNS-safe lane key and string params that
+         *     cannot collide with the ``RASK_PARAM_`` namespace. The task is checked HERE, against the
+         *     registry, because that check needs IO the model must not do — and because a lane that cannot be
+         *     declared can never be submitted, whereas a submit-time check has to be remembered by every
+         *     submit path.
          *
-         *     The platform validates SHAPE and never meaning: what a param does belongs to the workload.
+         *     The platform validates SHAPE and never meaning: what a param does belongs to the workload, and
+         *     what a task's ``command`` says belongs to the engine that registered it. This handler reads
+         *     neither.
          */
         post: operations["set_transform_v1_project__id__transform_set_post"];
         delete?: never;
@@ -1240,6 +1242,34 @@ export interface paths {
          *     operation.
          */
         get: operations["list_project_policies_v1_projects__id__policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Registered Tasks
+         * @description What may be named as a transform's ``task`` — the vocabulary, so it is discoverable.
+         *
+         *     Without this the declaration door refuses an unregistered task correctly and leaves the operator
+         *     guessing what IS registered, which turns a governed field into a trap. Same ``can_administer``
+         *     tier as declaring: being able to see the choices and being able to make one are the same act.
+         *
+         *     ESTATE-WIDE records answered under a project path. The registry is not per-tenant — one cluster
+         *     runs a task for everyone — but the caller who needs the list is a project admin, and gating on
+         *     the project they are already administering adds no new authorization object.
+         */
+        get: operations["list_registered_tasks_v1_projects__id__tasks_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1846,6 +1876,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/compaction_commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit Table Compaction
+         * @description Commit the workers' rewrite results as ONE metadata-only version.
+         *
+         *     Every data file this publishes was written by the worker that executed the task and already exists
+         *     when this is called, so no data byte transits the catalog — the same property that makes the sibling
+         *     ``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite
+         *     is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
+         *     malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
+         *
+         *     The lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and
+         *     recording it as one would put phantom writes on the graph at every maintenance pass.
+         */
+        post: operations["commit_table_compaction_v1_table__id__compaction_commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/table/{id}/compaction_plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Plan Table Compaction
+         * @description Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
+         *
+         *     Rewriting a table's data files is unbounded work whose cost is set by the table rather than by the
+         *     request. Doing it here would make this pod's memory ceiling a function of the largest table anyone
+         *     owns and turn a maintenance pass into an availability incident for every other door on it. So the
+         *     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
+         *     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
+         *     and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
+         *
+         *     Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
+         *     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
+         *     ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
+         *
+         *     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
+         *     to queue.
+         */
+        post: operations["plan_table_compaction_v1_table__id__compaction_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/count_rows": {
         parameters: {
             query?: never;
@@ -2334,6 +2427,17 @@ export interface paths {
          * Compact Maintenance
          * @description Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
          *     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
+         *
+         *     WHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two
+         *     answers are not a feature flag — they are the same choice ``services/maintenance`` already makes for
+         *     the scheduled lane, read off the same topic name so the two cannot disagree about whether a worker
+         *     exists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever
+         *     execute that unit, so the rewrite runs here as it always has.
+         *
+         *     What stays in the handler either way is the BOUNDED half — parsing the identifier, opening the
+         *     dataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half
+         *     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
+         *     whose fragment count nobody bounded.
          */
         post: operations["compact_maintenance_v1_table__id__maintenance_compact_post"];
         delete?: never;
@@ -4708,6 +4812,27 @@ export interface components {
             deregister_table?: components["schemas"]["DeregisterTableResponse"] | null;
         };
         /**
+         * CompactAccepted
+         * @description The 202 body: the door enqueued the rewrite rather than performing it.
+         *
+         *     It reports no fragment counts because it has none — the executor that will produce them is another
+         *     process, and inventing zeroes here would make an accepted request indistinguishable from a
+         *     completed no-op. ``protected_by`` is returned because it is the one verdict that can turn the
+         *     enqueued unit into a refusal at execution time, and a caller watching a table that never compacts
+         *     otherwise has nothing to read.
+         */
+        CompactAccepted: {
+            /**
+             * Accepted
+             * @default true
+             */
+            accepted: boolean;
+            /** Protected By */
+            protected_by?: string | null;
+            /** Uri */
+            uri: string;
+        };
+        /**
          * CompactRequest
          * @description Optional #76 target-size override for a one-off compaction (None → Lance's default fragment sizing).
          */
@@ -4723,6 +4848,57 @@ export interface components {
             fragments_removed: number;
             /** Ok */
             ok: boolean;
+        };
+        /**
+         * CompactionCommitRequest
+         * @description The workers' rewrite results, come back to be committed as one metadata-only version.
+         */
+        CompactionCommitRequest: {
+            /** Results */
+            results: string[];
+        };
+        /** CompactionCommitResponse */
+        CompactionCommitResponse: {
+            /** Files Added */
+            files_added: number;
+            /** Files Removed */
+            files_removed: number;
+            /** Fragments Added */
+            fragments_added: number;
+            /** Fragments Removed */
+            fragments_removed: number;
+            /** Version */
+            version: number;
+        };
+        /**
+         * CompactionPlanRequest
+         * @description Ask the catalog what compaction this table needs — a metadata read that mints nothing.
+         *
+         *     The knobs are POLICY (what shape the table should end up in), never mechanics (how many threads a
+         *     machine should use): the executor owns the machine, so its own knobs never cross this door. An
+         *     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
+         */
+        CompactionPlanRequest: {
+            /** Materialize Deletions */
+            materialize_deletions?: boolean | null;
+            /** Materialize Deletions Threadhold */
+            materialize_deletions_threadhold?: number | null;
+            /** Max Bytes Per File */
+            max_bytes_per_file?: number | null;
+            /** Max Rows Per Group */
+            max_rows_per_group?: number | null;
+            /** Target Rows Per Fragment */
+            target_rows_per_fragment?: number | null;
+        };
+        /**
+         * CompactionPlanResponse
+         * @description The planned work. ``tasks`` are opaque strings for a queue — one worker, one task.
+         */
+        CompactionPlanResponse: {
+            /** Read Version */
+            read_version: number;
+            /** Tasks */
+            tasks: string[];
         };
         /**
          * CountTableRowsRequest
@@ -7637,6 +7813,46 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * RegisteredTaskResponse
+         * @description One registered task, as the door answers it.
+         *
+         *     ``command`` is included and is DELIBERATELY not interpreted here: an operator choosing a task
+         *     needs to see what it will actually run, and the platform's rule is that it never parses the
+         *     string — showing it and parsing it are different acts.
+         */
+        RegisteredTaskResponse: {
+            /** Cardinalities */
+            cardinalities?: string[];
+            /**
+             * Code Version
+             * @default
+             */
+            code_version: string;
+            /** Command */
+            command: string;
+            /** Engine */
+            engine: string;
+            /** Obligations */
+            obligations?: string[];
+            /** Task */
+            task: string;
+        };
+        /**
+         * RegisteredTasksResponse
+         * @description What may be named in a transform declaration, so the vocabulary is discoverable.
+         *
+         *     Answered per project because that is the tier of the caller who needs it — the same
+         *     ``can_administer`` that declaring requires — even though the registry itself is estate-wide: one
+         *     cluster runs a task for every tenant, and a per-tenant registry would make the same capability
+         *     need one record per project.
+         */
+        RegisteredTasksResponse: {
+            /** Project */
+            project: string;
+            /** Tasks */
+            tasks?: components["schemas"]["RegisteredTaskResponse"][];
+        };
+        /**
          * RelationGrants
          * @description One ``can_*`` action and every user subject holding it (``"*"`` = a public wildcard grant).
          */
@@ -8031,7 +8247,7 @@ export interface components {
          *     let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
          *     transform into somebody else's.
          *
-         *     Field semantics — including why an entrypoint must reference a script baked into the image — live
+         *     Field semantics — including why ``task`` must name a REGISTERED task rather than a program — live
          *     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
          *     into and the one the mover reads. One definition, two services.
          */
@@ -8046,8 +8262,6 @@ export interface components {
              * @default
              */
             code_version: string;
-            /** Entrypoint */
-            entrypoint: string;
             /** From Id */
             from_id: string;
             /** Name */
@@ -8056,6 +8270,8 @@ export interface components {
             params?: {
                 [key: string]: string;
             };
+            /** Task */
+            task: string;
             /** To Id */
             to_id: string;
         };
@@ -8071,8 +8287,6 @@ export interface components {
              * @default
              */
             code_version: string;
-            /** Entrypoint */
-            entrypoint: string;
             /** From Id */
             from_id: string;
             /** Name */
@@ -8083,6 +8297,8 @@ export interface components {
             };
             /** Project */
             project: string;
+            /** Task */
+            task: string;
             /** To Id */
             to_id: string;
         };
@@ -10668,6 +10884,44 @@ export interface operations {
             };
         };
     };
+    list_registered_tasks_v1_projects__id__tasks_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisteredTasksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_transforms_v1_projects__id__transforms_get: {
         parameters: {
             query?: {
@@ -11761,6 +12015,94 @@ export interface operations {
             };
         };
     };
+    commit_table_compaction_v1_table__id__compaction_commit_post: {
+        parameters: {
+            query?: {
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompactionCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactionCommitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_table_compaction_v1_table__id__compaction_plan_post: {
+        parameters: {
+            query?: {
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CompactionPlanRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactionPlanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     count_table_rows_compat_get: {
         parameters: {
             query?: {
@@ -12619,7 +12961,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CompactResult"];
+                    "application/json": components["schemas"]["CompactResult"] | components["schemas"]["CompactAccepted"];
+                };
+            };
+            /** @description Enqueued onto the maintenance work queue; no fragment counts exist yet. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactAccepted"];
                 };
             };
             /** @description Validation Error */

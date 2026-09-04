@@ -37,7 +37,7 @@ def _spec(**overrides: object) -> TransformSpec:
         "project": "acme",
         "from_id": "bronze$events",
         "to_id": "silver$dummy",
-        "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
+        "task": "dummy-lane",
         "params": {"batch_size": "64"},
         "code_version": "main-abc1234",
     }
@@ -60,7 +60,7 @@ def test_a_written_spec_is_readable_by_a_reader_that_never_saw_the_write(tmp_pat
     loaded = transform_specs.get_spec(root, {}, "acme", "dummy")
 
     assert loaded is not None, "the spec did not survive the write — a restarted mover sees no lane"
-    assert loaded.entrypoint == "python /home/ray/jobs/ray_dummy_job.py"
+    assert loaded.task == "dummy-lane"
     assert loaded.params == {"batch_size": "64"}
     assert loaded.code_version == "main-abc1234"
 
@@ -123,20 +123,26 @@ def test_listing_is_scoped_and_skips_an_unreadable_record(tmp_path: Path) -> Non
 # --- the platform-level invariants a declaration must satisfy --------------------------------------
 
 
-def test_a_runtime_env_style_entrypoint_is_REFUSED_at_declaration() -> None:
-    """B3/production-way, enforced where it can be enforced ONCE.
+def test_the_task_is_OPAQUE_to_this_model() -> None:
+    """The model shape-checks a task and never interprets one.
 
-    Ray documents `runtime_env` as a development convenience; the estate's rule is that a lane runs
-    from a path baked into the image. Checking that at submit time means every submit path has to
-    remember; checking it at DECLARATION means an undeclarable lane can never be submitted at all.
+    Whether a task can actually run is a REGISTRY question — is it registered, for an engine this
+    estate runs, honouring this cardinality — and answering it needs IO this model must not do. It
+    is answered at the declaration door instead (`services/catalog/tests/test_transform_door.py`),
+    which is still before any submit path could forget to ask.
+
+    What must NOT come back is a rule that reads a task as a program: any check here that parsed the
+    string would put an engine's vocabulary back into the shared library.
     """
-    with pytest.raises(ValidationError, match="baked"):
-        _spec(entrypoint="python my_local_script.py")
+    for opaque in ("stage-transform", "spark::compact", "inprocess.transform", "python my_local_script.py"):
+        assert _spec(task=opaque).task == opaque
 
 
-def test_an_entrypoint_outside_the_baked_jobs_directory_is_REFUSED() -> None:
-    with pytest.raises(ValidationError, match="baked"):
-        _spec(entrypoint="python /tmp/uploaded_job.py")
+def test_an_empty_task_is_REFUSED() -> None:
+    """The one thing the model CAN say about a task without knowing an engine: a declaration that
+    names nothing runnable is not a declaration."""
+    with pytest.raises(ValidationError):
+        _spec(task="")
 
 
 @pytest.mark.parametrize("lane", ["", "Has Space", "../escape", "UPPER", "a" * 65])
@@ -157,7 +163,7 @@ def test_params_are_strings_because_the_platform_forwards_them_as_env() -> None:
                 "project": "acme",
                 "from_id": "bronze$events",
                 "to_id": "silver$dummy",
-                "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
+                "task": "dummy-lane",
                 "params": {"batch_size": 64},
                 "code_version": "main-abc1234",
             }

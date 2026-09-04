@@ -8,9 +8,20 @@
 	import { formatParams, parseParams, type TransformSpec } from '$lib/transforms';
 	import { parseColumns } from '$lib/gates';
 	import { clearGate, getGate, setGate } from '$lib/remote/gates.remote';
-	import { deleteTransform, listTransforms, setLane } from '$lib/remote/transforms.remote';
+	import {
+		deleteTransform,
+		listRegisteredTasks,
+		listTransforms,
+		setLane,
+	} from '$lib/remote/transforms.remote';
 
 	const transforms = $derived(listTransforms());
+	// THE VOCABULARY THE `task` FIELD IS CHECKED AGAINST. Read separately from the transforms so a
+	// denial on one does not blank the other: an operator who may list declarations but not tasks
+	// still sees their transforms, and the field renders with the reason instead of pretending the
+	// estate can run nothing.
+	const tasks = $derived(listRegisteredTasks());
+	const registered = $derived(tasks.current?.ok ? (tasks.current.data.tasks ?? []) : []);
 	const gate = $derived(getGate());
 	// The record or null; null means the DEPLOYMENT governs, which is a different statement from a
 	// band of zero and is rendered as such.
@@ -85,7 +96,7 @@
 	let transform = $state('');
 	let fromId = $state('');
 	let toId = $state('');
-	let entrypoint = $state('');
+	let task = $state('');
 	let codeVersion = $state('');
 	let paramsText = $state('');
 
@@ -97,7 +108,7 @@
 
 	const parsedParams = $derived(parseParams(paramsText));
 	const complete = $derived(
-		transform.trim() !== '' && fromId.trim() !== '' && toId.trim() !== '' && entrypoint.trim() !== '',
+		transform.trim() !== '' && fromId.trim() !== '' && toId.trim() !== '' && task.trim() !== '',
 	);
 	const submittable = $derived(complete && parsedParams.bad.length === 0 && !busy);
 
@@ -105,14 +116,14 @@
 		transform = spec.name;
 		fromId = spec.from_id;
 		toId = spec.to_id;
-		entrypoint = spec.entrypoint;
+		task = spec.task;
 		codeVersion = spec.code_version;
 		paramsText = formatParams(spec.params);
 		outcome = null;
 	}
 
 	function reset() {
-		transform = fromId = toId = entrypoint = codeVersion = paramsText = '';
+		transform = fromId = toId = task = codeVersion = paramsText = '';
 		outcome = null;
 	}
 
@@ -128,7 +139,7 @@
 			tone: 'fail',
 			text:
 				result.status === 403
-					? 'Refused: declaring a transform needs `can_administer` on this project. A transform names an entrypoint that will EXECUTE on the shared Ray cluster against this tenant’s data, so it is an administrative act.'
+					? 'Refused: declaring a transform needs `can_administer` on this project. A transform names a task that will EXECUTE on shared compute against this tenant’s data, so it is an administrative act.'
 					: result.status === 400
 						? (result.detail ?? 'No active project.')
 						: result.status === 422
@@ -145,7 +156,7 @@
 			name: transform.trim(),
 			from_id: fromId.trim(),
 			to_id: toId.trim(),
-			entrypoint: entrypoint.trim(),
+			task: task.trim(),
 			params: parsedParams.params,
 			code_version: codeVersion.trim(),
 		});
@@ -175,10 +186,10 @@
 	<div>
 		<h1 class="text-lg font-semibold">Transforms</h1>
 		<p class="text-muted-foreground text-sm">
-			A transform is one governed medallion edge — read a table, run an entrypoint, write another. This
-			is the door that declares what a transform runs, so it changes here, audited and admin-gated,
-			rather than by editing a Deployment. Ray is one of two ways to execute a transform, not what a transform
-			is.
+			A transform is one governed medallion edge — read a table, run a task, write another. This is
+			the door that declares what a transform runs, so it changes here, audited and admin-gated,
+			rather than by editing a Deployment. Ray is one of two ways to execute a transform, not what a
+			transform is.
 		</p>
 	</div>
 
@@ -195,7 +206,8 @@
 					? 'You do not hold `can_administer` on this project, so its transforms cannot be listed. This is a denial, not an empty estate.'
 					: transforms.current.status === 404
 						? 'The catalog answered 404 for the transform door. That is the DOOR being absent, not this project: a catalog build predating the transform endpoints serves no /transform routes at all. Check the deployed catalog image before reading this as "no transforms".'
-						: (transforms.current.detail ?? `Could not list transforms (${transforms.current.status}).`)}
+						: (transforms.current.detail ??
+							`Could not list transforms (${transforms.current.status}).`)}
 			</p>
 		</Card>
 	{:else if transforms.current}
@@ -224,7 +236,7 @@
 									<Badge variant="outline">{spec.code_version}</Badge>
 								{/if}
 							</div>
-							<code class="text-muted-foreground text-xs break-all">{spec.entrypoint}</code>
+							<code class="text-muted-foreground text-xs break-all">{spec.task}</code>
 							{#if Object.keys(spec.params).length > 0}
 								<span class="text-muted-foreground text-xs">
 									{Object.keys(spec.params).length} param(s), forwarded as RASK_PARAM_*
@@ -366,13 +378,52 @@
 		</div>
 
 		<label class="flex flex-col gap-1 text-sm">
-			<span>Entrypoint</span>
-			<Input bind:value={entrypoint} placeholder="python /home/ray/jobs/ray_stage_job.py" />
+			<span>Task</span>
+			<Input bind:value={task} placeholder="stage-transform" />
 			<span class="text-muted-foreground text-xs">
-				Must reference a script BAKED INTO the cluster image. An entrypoint the image lacks dies
-				exit 2, and the stage reports FAILED with nothing naming the image.
+				A REGISTERED key, not a program. The plane that can run it registers what running it means,
+				and a task nobody registered is refused here — so it can never reach a cluster and die there
+				naming an image instead of the key.
 			</span>
 		</label>
+
+		<!-- The vocabulary, beside the field it governs. Chips rather than a picker so the field stays
+		     typeable: a task registered after this page loaded is still declarable, and a listing that
+		     was refused leaves a reason rather than an empty control. -->
+		<div class="flex flex-col gap-1">
+			{#if registered.length > 0}
+				<span class="text-muted-foreground text-xs">Registered here:</span>
+				<div class="flex flex-wrap gap-2">
+					{#each registered as candidate (candidate.task)}
+						<button
+							type="button"
+							class="border-border hover:bg-muted flex flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left"
+							onclick={() => (task = candidate.task)}
+						>
+							<span class="font-mono text-xs font-medium">{candidate.task}</span>
+							<span class="text-muted-foreground font-mono text-[10px] break-all">
+								{candidate.engine} · {candidate.command}
+							</span>
+							<span class="text-muted-foreground text-[10px]">
+								{candidate.cardinalities.length > 0
+									? candidate.cardinalities.join(', ')
+									: 'any cardinality'}
+							</span>
+						</button>
+					{/each}
+				</div>
+			{:else if tasks.current && !tasks.current.ok}
+				<span class="text-muted-foreground text-xs">
+					Could not read the registered tasks ({tasks.current.status}). The field still accepts a
+					key, and the door refuses one nobody registered.
+				</span>
+			{:else if tasks.current}
+				<span class="text-muted-foreground text-xs">
+					No task is registered in this estate yet — every declaration will be refused until an
+					executor registers one.
+				</span>
+			{/if}
+		</div>
 
 		<label class="flex flex-col gap-1 text-sm">
 			<span>Parameters <span class="text-muted-foreground">(one KEY=value per line)</span></span>
@@ -398,7 +449,7 @@
 					? 'A write is already in flight.'
 					: parsedParams.bad.length > 0
 						? 'Every parameter line must read KEY=value.'
-						: 'Transform, both tables and an entrypoint are required.'}
+						: 'Transform, both tables and a task are required.'}
 			>
 				<Button onclick={save}>{busy ? 'Saving…' : 'Save transform'}</Button>
 			</GatedAction>

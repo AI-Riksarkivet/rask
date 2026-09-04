@@ -31,12 +31,23 @@ from medallion.core.config import MedallionSettings
 
 
 _REPO = Path(__file__).parents[2]
+_VALUES = _REPO / "chart" / "values.yaml"
 _DOCKERFILE = _REPO / ".docker" / "ray-lance.dockerfile"
 _JOB_DIR = "/home/ray/jobs/"
 
 
 def _dockerfile() -> str:
     return _DOCKERFILE.read_text(encoding="utf-8")
+
+
+def _chart_ray_tasks() -> list[dict[str, object]]:
+    """`medallion.rayTasks` as the chart declares it — the estate's statement of what Ray can run."""
+    import yaml
+
+    values = yaml.safe_load(_VALUES.read_text(encoding="utf-8"))
+    tasks = values["medallion"]["rayTasks"]
+    assert isinstance(tasks, list) and tasks, "chart/values.yaml declares no medallion.rayTasks"
+    return tasks
 
 
 def _lance_image_baked_jobs() -> set[str]:
@@ -177,25 +188,59 @@ def test_every_baked_ray_job_exists_on_disk() -> None:
     assert not missing, f"{_CLUSTER_DOCKERFILE.name} copies scripts that do not exist: {missing}"
 
 
-def test_the_declared_transform_door_knows_what_the_cluster_image_bakes() -> None:
-    """`BAKED_CLUSTER_JOBS` must equal what `.docker/ray-cluster.dockerfile` actually COPYs.
+def test_the_registered_ray_tasks_match_what_the_cluster_image_bakes() -> None:
+    """`medallion.rayTasks` must name exactly the jobs `.docker/ray-cluster.dockerfile` COPYs.
 
-    The door validates a declaration's entrypoint against that constant, which is held in
-    `service_kit` because the library runs inside a container with no dockerfile to read. That is a
-    drift risk, and this is the thing that makes the drift fail a test rather than a cluster: a job
-    added to the image but not the constant is refused at declaration time for no reason, and one
-    removed from the image but left in the constant is accepted and then dies `exit 2` on the
-    cluster — which is exactly the failure the constant was added to prevent.
+    That list is what the producer registers into `_tasks/`, and the catalog's transform door refuses
+    anything absent from it — so a disagreement between the chart and the image is the one failure the
+    registry exists to move earlier, arriving later instead. A job added to the image but not the
+    chart is refused at declaration for no reason; one removed from the image but left in the chart is
+    accepted and dies `exit 2` on the cluster, with an error naming the image rather than the key.
+
+    The check reads the CHART rather than a Python constant on purpose: the registry is written by the
+    plane that runs the tasks, and this estate's Ray plane is described by its deployment. Nothing in
+    `service_kit` may hold a jobs directory or a script name, or the platform names an engine again.
     """
-    from service_kit.lakehouse.transform_specs import BAKED_CLUSTER_JOBS
-
-    baked = {name for name in _cluster_baked_jobs() if name.endswith(".py")}
+    declared = {task["command"] for task in _chart_ray_tasks()}
+    baked = {f"python {_JOB_DIR}{name}" for name in _cluster_baked_jobs() if name.endswith(".py")}
     assert baked, "the cluster dockerfile bakes no .py jobs — the scan is broken, not the estate"
-    assert set(BAKED_CLUSTER_JOBS) == baked, (
-        f"BAKED_CLUSTER_JOBS is {sorted(BAKED_CLUSTER_JOBS)} but ray-cluster.dockerfile bakes {sorted(baked)}. "
-        "A declaration door that disagrees with the image either refuses a valid job or accepts one that "
-        "cannot run."
+    assert declared == baked, (
+        f"medallion.rayTasks declares {sorted(declared)} but ray-cluster.dockerfile bakes {sorted(baked)}. "
+        "A registry that disagrees with the image either refuses a valid task or accepts one that cannot run."
     )
+
+
+def test_every_registered_ray_task_is_uniquely_keyed() -> None:
+    """Two rows sharing a `task` silently collapse: `put_task` hashes the key and overwrites, so the
+    second row's command wins and the first task resolves to something its author never wrote."""
+    keys = [task["task"] for task in _chart_ray_tasks()]
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    assert not duplicates, f"medallion.rayTasks declares {duplicates} more than once; a later row silently overwrites the earlier"
+
+
+def test_the_chart_declaration_parses_into_the_setting_that_reads_it() -> None:
+    """The chart renders these rows as ONE JSON string; the producer parses that string back.
+
+    A field the model forbids, or a row missing one it requires, renders perfectly and then fails at
+    the producer's own construction — which is a CrashLoopBackOff at the cascade head, discovered on
+    a cluster. `extra="forbid"` is what makes a typo'd key a failure at all, and this is where that
+    failure is cheap.
+    """
+    from medallion.core.config import RayTaskDeclaration
+
+    for task in _chart_ray_tasks():
+        RayTaskDeclaration.model_validate(task)
+
+
+def test_a_registered_cardinality_is_in_the_platform_vocabulary() -> None:
+    """A chart typo here refuses every declaration for that shape, and refuses it at the door with a
+    message naming a vocabulary the operator's value is simply not in — so catch it in the tier where
+    the vocabulary is importable."""
+    from service_kit.lakehouse.stage_stamp import CARDINALITIES
+
+    for task in _chart_ray_tasks():
+        unknown = sorted(set(task.get("cardinalities") or []) - CARDINALITIES)
+        assert not unknown, f"task {task['task']!r} declares cardinalities {unknown}, not in {sorted(CARDINALITIES)}"
 
 
 # ---------------------------------------------------------------------------------------------

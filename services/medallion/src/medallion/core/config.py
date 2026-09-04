@@ -17,7 +17,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import Self
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.control_events import CONTROL_TOPIC
@@ -29,6 +29,31 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 # definition lives in service-kit beside `is_safe_project`; every existing `from medallion.core.config
 # import project_namespace` keeps working.
 from service_kit.lakehouse.warehouse_registry import project_namespace as project_namespace
+
+
+class RayTaskDeclaration(BaseModel):
+    """One task the estate's Ray plane can run, as the CHART declares it.
+
+    The engine is deliberately absent: this plane submits to Ray, so it stamps ``engine="ray"`` on
+    the registration itself. Letting the chart supply it would make a typo register a task no
+    submitter here answers to — a declaration that validates at the catalog door and then resolves
+    to nothing at submit, which is the failure the registry exists to move earlier.
+
+    ``command`` is the ENGINE's business and the platform never parses it. For Ray it is the Jobs
+    API entrypoint; the script it names must be baked into the image the cluster runs, which
+    `tests/unit/test_ray_job_images.py` checks against the dockerfile's own COPY list.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task: str = Field(min_length=1, description="the key a TransformSpec names")
+    command: str = Field(min_length=1, description="the Ray Jobs entrypoint")
+    #: EMPTY MEANS ALL — a task that constrains nothing need not enumerate the vocabulary.
+    cardinalities: list[str] = Field(default_factory=list)
+    #: Which of O1..O12 this task CLAIMS. A claim, never a proof: the platform re-derives them.
+    obligations: list[str] = Field(default_factory=list)
+    #: Defaults to the mover's own ``ray_code_version`` when empty, so one build stamp governs both.
+    code_version: str = ""
 
 
 class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
@@ -238,6 +263,14 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")
     ray_address: str = Field(default="http://ray-lance-head:8265", alias="MEDALLION_RAY_ADDRESS")
     ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_stage_job.py", alias="MEDALLION_RAY_ENTRYPOINT")
+    #: WHAT THIS ESTATE'S RAY PLANE CAN RUN — registered into ``<control_root>/_tasks/`` at producer
+    #: boot, and consulted by the catalog when a transform is declared.
+    #:
+    #: The registry is written by the plane that can run the task rather than by the catalog, which
+    #: is what keeps an engine's name out of the published OpenAPI: a second engine registers its own
+    #: tasks under the same prefix and the declaration door learns nothing new. Empty leaves the
+    #: registry untouched — an estate that declares no transforms needs none.
+    ray_tasks: list[RayTaskDeclaration] = Field(default_factory=list, alias="MEDALLION_RAY_TASKS")
     #: THE WORKLOAD'S OWN PARAMETERS — the channel that makes ``ray_entrypoint`` usable.
     #:
     #: A per-lane JSON object, forwarded into the job's ``runtime_env.env_vars`` under the

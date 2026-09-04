@@ -274,9 +274,9 @@
 					<CircleX class="h-5 w-5 shrink-0" />
 					<span>
 						{#if failedStatus === 403}
-							<strong>You do not have access to this run.</strong> It may well exist — the ingest
-							plane refused to describe it to you, which is a different thing from it being gone. Ask
-							an admin for the grant the door names below, rather than hunting for a lost run.
+							<strong>You do not have access to this run.</strong> It may well exist — the ingest plane
+							refused to describe it to you, which is a different thing from it being gone. Ask an admin
+							for the grant the door names below, rather than hunting for a lost run.
 						{:else if failedStatus === 404}
 							<strong>No such run.</strong> The ingest plane has no record of
 							<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for
@@ -287,7 +287,8 @@
 							behind an engine that is momentarily unreachable. Retry before concluding anything.
 						{:else}
 							<strong>This run could not be read.</strong> The ingest plane refused the request for
-							<span class="font-mono">{runId}</span>{failedStatus ? ` with HTTP ${failedStatus}` : ''}.
+							<span class="font-mono">{runId}</span
+							>{failedStatus ? ` with HTTP ${failedStatus}` : ''}.
 						{/if}
 						{#if failedDetail}
 							<span class="mt-2 block font-mono text-xs opacity-80">{failedDetail}</span>
@@ -309,7 +310,8 @@
 							: run.status ===
 								  'COMPLETE_WITH_ERRORS'
 								? 'border-amber-600/30'
-								: run.status === 'TERMINATED'
+								: run.status ===
+									  'TERMINATED'
 									? 'border-muted-foreground/30'
 									: ''}"
 					data-testid="run-status"

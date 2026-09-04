@@ -3,9 +3,13 @@ import * as v from 'valibot';
 import { ACTIVE_PROJECT_COOKIE } from '@rask/api/bff';
 import type { ApiResult } from '@rask/api/client';
 import {
+	RegisteredTasksSchema,
+	TransformDeleteSchema,
 	TransformDraftSchema,
 	TransformListSchema,
 	TransformSpecSchema,
+	type RegisteredTasks,
+	type TransformDelete,
 	type TransformList,
 	type TransformSpec,
 } from '$lib/transforms';
@@ -57,6 +61,18 @@ export const listTransforms = query(async (): Promise<ApiResult<TransformList>> 
 	return parsed(await catalogJSON(`/v1/projects/${enc(project)}/transforms`), TransformListSchema);
 });
 
+/** What may be named as a transform's `task`.
+ *
+ * The declaration door refuses an unregistered task correctly, and without this the operator learns
+ * only that their guess was wrong — a governed field whose vocabulary cannot be read is a trap, not
+ * a gate. Estate-wide records answered under the project path, at the same `can_administer` tier as
+ * declaring: seeing the choices and making one are the same act. */
+export const listRegisteredTasks = query(async (): Promise<ApiResult<RegisteredTasks>> => {
+	const project = activeProject();
+	if (project === '') return noProject<RegisteredTasks>();
+	return parsed(await catalogJSON(`/v1/projects/${enc(project)}/tasks`), RegisteredTasksSchema);
+});
+
 /** Declare or replace one transform.
  *
  * `set` is an UPSERT at the door, so this is both create and edit — the catalog keys on
@@ -64,38 +80,45 @@ export const listTransforms = query(async (): Promise<ApiResult<TransformList>> 
  * Single-flights its own list read so the table re-renders from the server's answer rather than
  * from an assumption about what the write did — `void`, never `await`, so the refresh cannot gate
  * the mutation's own return. */
-export const setLane = command(TransformDraftSchema, async (draft): Promise<ApiResult<TransformSpec>> => {
-	const project = activeProject();
-	if (project === '') return noProject<TransformSpec>();
-	const result = parsed(
-		await catalogJSON(`/v1/project/${enc(project)}/transform/set`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(draft),
-		}),
-		TransformSpecSchema,
-	);
-	void listTransforms().refresh();
-	return result;
-});
+export const setLane = command(
+	TransformDraftSchema,
+	async (draft): Promise<ApiResult<TransformSpec>> => {
+		const project = activeProject();
+		if (project === '') return noProject<TransformSpec>();
+		const result = parsed(
+			await catalogJSON(`/v1/project/${enc(project)}/transform/set`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(draft),
+			}),
+			TransformSpecSchema,
+		);
+		void listTransforms().refresh();
+		return result;
+	},
+);
 
 /** Delete one transform by name.
  *
  * An unknown transform is 422 NAMING THE KEY, not 404 — the URL is right and the key inside it is not,
  * which is malformed in exactly the way a bad enum value is. The page surfaces that distinction
- * rather than flattening both to "gone". */
+ * rather than flattening both to "gone". Delete itself is idempotent, and `status` is what tells
+ * "I removed it" from "it was already gone". */
 export const deleteTransform = command(
 	v.object({ name: v.pipe(v.string(), v.trim(), v.minLength(1)) }),
-	async ({ name }): Promise<ApiResult<TransformSpec>> => {
+	async ({ name }): Promise<ApiResult<TransformDelete>> => {
 		const project = activeProject();
-		if (project === '') return noProject<TransformSpec>();
+		if (project === '') return noProject<TransformDelete>();
+		// PARSED AS A DELETE ANSWER, not as a spec. The door replies `{status, project, name}` — none
+		// of the record's own fields come back, so validating it as a spec turned every successful
+		// delete into a shape drift.
 		const result = parsed(
 			await catalogJSON(`/v1/project/${enc(project)}/transform/delete`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ name }),
 			}),
-			TransformSpecSchema,
+			TransformDeleteSchema,
 		);
 		void listTransforms().refresh();
 		return result;

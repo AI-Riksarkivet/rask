@@ -910,7 +910,7 @@ class TransformSpecRequest(BaseModel):
     let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
     transform into somebody else's.
 
-    Field semantics — including why an entrypoint must reference a script baked into the image — live
+    Field semantics — including why ``task`` must name a REGISTERED task rather than a program — live
     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
     into and the one the mover reads. One definition, two services.
     """
@@ -920,13 +920,48 @@ class TransformSpecRequest(BaseModel):
     name: str = Field(validation_alias=AliasChoices("name", "lane"))
     from_id: str
     to_id: str
-    entrypoint: str
+    #: Aliased for the same reason ``name`` is: this model is ``extra="forbid"``, so a caller still
+    #: spelling it the other way would be REFUSED rather than understood, and a refused declaration
+    #: leaves the mover running the chart's program while an operator believes the record governs it.
+    task: str = Field(validation_alias=AliasChoices("task", "entrypoint"))
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
     #: Row cardinality. Validated by `TransformSpec`, not here — one definition, two services — so an
     #: unknown value is refused at declaration time with the field named, rather than becoming a
     #: stage FAIL on the cluster hours later.
     cardinality: str = ONE_TO_ONE
+
+
+class RegisteredTaskResponse(BaseModel):
+    """One registered task, as the door answers it.
+
+    ``command`` is included and is DELIBERATELY not interpreted here: an operator choosing a task
+    needs to see what it will actually run, and the platform's rule is that it never parses the
+    string — showing it and parsing it are different acts.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    task: str
+    engine: str
+    command: str
+    code_version: str = ""
+    #: EMPTY MEANS ALL — a task that constrains nothing need not enumerate the vocabulary.
+    cardinalities: list[str] = Field(default_factory=list)
+    obligations: list[str] = Field(default_factory=list)
+
+
+class RegisteredTasksResponse(BaseModel):
+    """What may be named in a transform declaration, so the vocabulary is discoverable.
+
+    Answered per project because that is the tier of the caller who needs it — the same
+    ``can_administer`` that declaring requires — even though the registry itself is estate-wide: one
+    cluster runs a task for every tenant, and a per-tenant registry would make the same capability
+    need one record per project.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    project: str
+    tasks: list[RegisteredTaskResponse] = Field(default_factory=list)
 
 
 class TransformNameRequest(BaseModel):
@@ -970,7 +1005,7 @@ class TransformSpecResponse(BaseModel):
     project: str
     from_id: str
     to_id: str
-    entrypoint: str
+    task: str
     params: dict[str, str] = Field(default_factory=dict)
     code_version: str = ""
     #: Read back so an operator can audit which contract governs a lane. A declared value that cannot

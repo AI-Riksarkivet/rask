@@ -113,6 +113,13 @@ spec:
             # never be configured through the chart (409 "train head not configured" on every POST).
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
             - { name: MEDALLION_RAY_ADDRESS, value: {{ .Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" .)) | quote }} }
+            {{- if .Values.medallion.rayTasks }}
+            # WHAT THIS RAY PLANE CAN RUN, registered into `<control_root>/_tasks/` at this app's boot.
+            # Declared HERE because the chart is what deploys the image these commands run in — and read
+            # by the catalog's transform door, which learns no engine's vocabulary doing it (the engine
+            # is stamped by the registering plane, not by this list).
+            - { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }
+            {{- end }}
             {{- end }}
             {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}
             # Rendered under fgaEnabled OR auth.enabled: the #64 human door below NEEDS the FGA client

@@ -245,7 +245,9 @@
 					     so nobody learns a knob would enable it. The reason rides in the label. -->
 					{#each sources as source (source.kind)}
 						<option value={source.kind} disabled={source.available === false}>
-							{source.label}{source.available === false ? ` — ${source.unavailable_reason ?? 'unavailable here'}` : ''}
+							{source.label}{source.available === false
+								? ` — ${source.unavailable_reason ?? 'unavailable here'}`
+								: ''}
 						</option>
 					{/each}
 				</select>

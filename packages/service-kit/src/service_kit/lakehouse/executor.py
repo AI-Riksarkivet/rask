@@ -22,9 +22,12 @@ rather than a rule each caller must remember.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
+
+from service_kit.lakehouse.task_registry import TaskRegistration
+from service_kit.lakehouse.work_order import WorkOrder
 
 
 class RunState(StrEnum):
@@ -110,11 +113,22 @@ class Executor(Protocol):
     name: str
     capabilities: frozenset[Capability]
 
-    def validate_task(self, reg: Any) -> None:  # noqa: ANN401 — TaskRegistration, avoiding an import cycle
-        """Refuse at DECLARATION time a task this engine cannot honour."""
+    def validate_task(self, registration: TaskRegistration) -> None:
+        """Refuse at DECLARATION time a task this engine cannot honour.
+
+        Raises rather than returning a bool so the refusal carries its reason to the door's 422 — an
+        operator told "no" without being told which of the registration's claims this engine cannot
+        meet has to guess, and guessing at a declaration door is what the registry exists to end.
+        """
         ...
 
-    async def submit(self, order: Any, reg: Any) -> tuple[RunHandle, SubmitOutcome]:  # noqa: ANN401
+    async def submit(self, order: WorkOrder, registration: TaskRegistration) -> tuple[RunHandle, SubmitOutcome]:
+        """Start the work, or re-attach to the run already doing it.
+
+        BOTH ARGUMENTS, and neither is redundant: the order says what must happen (this is the
+        platform's, identical across engines), the registration says what running it means here (this
+        is the engine's own). Collapsing them would make one of the two a per-engine shape.
+        """
         ...
 
     async def status(self, handle: RunHandle) -> RunState: ...
