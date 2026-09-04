@@ -118,9 +118,15 @@ Recorded here rather than deferred, per the rask-dapr rule.
 detector reports `known=False` for every edge whose last run predates its deploy — until each has run
 once. An operator must be told that, or the first tick's unknowns read as an outage.
 
-**C3 falsifies five prose sites** that currently say *nothing ever re-reads the `published` tag*
-(`publication_trigger.py`, `control_relay.py`, `values.yaml`, `publication.py`). C3 **is** that reader.
-Rewrite them in the same commit — falsified prose is rewritten, never annotated.
+**C3 falsifies TWO prose sites, not five** — counted 2026-09-04 rather than taken on report:
+`chart/values.yaml:943` and `services/catalog/src/catalog/api/control_relay.py:10`. Both say *"the
+medallion plane runs no cron, so nothing ever re-reads the `published` tag"*.
+
+**And only their PREMISE is falsified.** Each sentence continues *"`/publication-arrival` receiving
+this event is the ONLY thing that wakes silver→gold"*, and that stays TRUE: C3 is read-only and
+reports lag without repairing it. The durability argument both comments support therefore survives
+intact. Rewrite the premise when the cron lands — in that commit, not before, because until then the
+claim is still true — and do not delete the conclusion with it.
 
 **Why C2 may precede decoupling's step 6:** it re-mints a trigger behind `build_stage_trigger`, so only
 the fresh-token 409 touches the Jobs API — one call to port when `RayJobExecutor` lands.

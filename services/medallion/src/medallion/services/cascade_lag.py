@@ -21,6 +21,8 @@ that mistake costs, one gap counted 1210 times and every other service's errors 
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from pydantic import BaseModel
 
 
@@ -65,3 +67,34 @@ def lag_for_edge(*, edge: str, project: str, published: int | None, consumed: in
     if consumed > published:
         return EdgeLag(edge=edge, project=project, lag=None, known=False)
     return EdgeLag(edge=edge, project=project, lag=published - consumed, known=True)
+
+
+class LagGauge(Protocol):
+    """The one method this module needs of a gauge — injected so the recording rule is drivable.
+
+    A Protocol rather than the OTel instrument type because the rule under test is *when a point is
+    published at all*, and asserting that against a real meter would mean standing up a provider and a
+    reader to observe an absence.
+    """
+
+    def set(self, value: int, attributes: dict[str, str] | None = None) -> None: ...
+
+
+def record_edge_lag(lag: EdgeLag, *, gauge: LagGauge) -> None:
+    """Publish one edge's lag, or publish NOTHING when it is unknown.
+
+    THE SILENCE IS THE POINT. A gauge has no "unknown", so every sentinel becomes a number somebody
+    reads: ``-1`` renders as a dip, and ``0`` renders as perfect health — which is exactly what a
+    HEALTHY edge reports, so an unreadable catalog would present as a clean bill of health. Publishing
+    nothing leaves the series STALE, and staleness is a condition an alert can express while "this
+    zero is a lie" is not.
+
+    Zero itself is published, and that is not in tension with the above: a measured 0 means the
+    destination is level with its source, which is the normal state and must be visible as such.
+
+    Attributes are BOUNDED by construction — ``edge`` comes from the declared lane set and ``project``
+    from the registry. Neither is caller-supplied, which is what keeps this series finite.
+    """
+    if not lag.known or lag.lag is None:
+        return
+    gauge.set(lag.lag, {"lance.medallion.edge": lag.edge, "lance.medallion.project": lag.project})

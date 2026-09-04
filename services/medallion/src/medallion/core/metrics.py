@@ -51,6 +51,23 @@ _stage_other_lane = _meter.create_counter(
     description="Stage triggers DROPped as another ingest lane's (the arrived dataset is not this mover's input).",
 )
 
+#: HOW FAR BEHIND its source a destination tier is, in source versions. A LEVEL, not an event: true
+#: continuously and read by asking, so a gauge evaluated with `for:` rather than a per-tick counter —
+#: row 23 of `open_estate-verification.md` records what the other choice costs, one gap counted 1210
+#: times with every other service's errors buried under it.
+#:
+#: SYNCHRONOUS, not observable. The value comes from a catalog read and a lineage query; an observable
+#: gauge would run that IO inside an SDK collection callback, where it blocks the exporter and fails
+#: invisibly. The cron tick does the reads and sets the level it found.
+#:
+#: An UNKNOWN lag publishes no point at all — see `cascade_lag.record_edge_lag` for why no sentinel is
+#: safe here.
+_cascade_lag = _meter.create_gauge(
+    "medallion.cascade.lag",
+    unit="{version}",
+    description="Source versions a destination tier has not yet consumed — the LOSS detector a refusal counter cannot be.",
+)
+
 _stage_refused = _meter.create_counter(
     "medallion.stage.refused",
     unit="{trigger}",
@@ -217,6 +234,15 @@ def record_media_underivable(transition: str) -> None:
     blocks the gate never issued — bad bytes in bronze and a tuned-too-tight gate are different pages.
     """
     _stage_media_underivable.add(1, {"lance.medallion.transition": transition})
+
+
+def cascade_lag_gauge() -> object:
+    """The lag gauge itself, for `cascade_lag.record_edge_lag` to set.
+
+    Handed out rather than wrapped, because the decision this metric turns on — publish, or stay
+    silent — belongs with the arithmetic that knows whether the value is known, not here.
+    """
+    return _cascade_lag
 
 
 def record_other_lane(transition: str) -> None:
