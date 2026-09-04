@@ -22,6 +22,9 @@ a mirror that drifts."*
 
 from __future__ import annotations
 
+import ast
+import pathlib
+
 import pytest
 
 from medallion.services.publication_trigger import DELIMITER, build_stage_trigger
@@ -97,15 +100,52 @@ def test_a_table_outside_the_cascade_yields_no_trigger() -> None:
     assert build_stage_trigger(object_id="not-a-table-id", event_id="evt-1", extra=_extra()) is None
 
 
-def test_the_publication_head_uses_this_function_rather_than_its_own_copy() -> None:
-    """The anti-drift gate. A second hand-built trigger dict in this module means the re-run and the
-    event lane can disagree about the shape, which is the defect `stage_stamp.py` was created to end."""
-    import ast
-    import pathlib
+def _handler_ast() -> ast.AsyncFunctionDef:
 
-    source = pathlib.Path(services_dir := __file__).parent.parent / "src" / "medallion" / "services" / "publication_trigger.py"
-    assert source.exists(), services_dir
+    source = pathlib.Path(__file__).parent.parent / "src" / "medallion" / "services" / "publication_trigger.py"
+    assert source.exists(), source
     tree = ast.parse(source.read_text())
-    handler = next(node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_publication")
+    return next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "handle_publication")
+
+
+def test_the_publication_head_calls_the_shared_builder() -> None:
+
+    handler = _handler_ast()
     builds = [n for n in ast.walk(handler) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "build_stage_trigger"]
     assert builds, "handle_publication builds its own trigger dict instead of calling build_stage_trigger"
+
+
+def test_the_publication_head_ALSO_builds_no_trigger_of_its_own() -> None:
+    """The half the first assertion misses, and it is the half that matters.
+
+    "Calls the builder" is satisfied by a handler that calls it AND keeps a hand-built dict beside it —
+    which is exactly the drift this gate exists to refuse, and exactly what the first version of this
+    test allowed. So the shape is banned outright: no dict literal in this handler may carry two or
+    more of the trigger's own keys.
+
+    Two is the threshold rather than one because `extra` and the ack dicts legitimately mention a
+    single field; a literal naming two of `token`/`dataset`/`namespace`/`from_version`/`to_version`/
+    `from_uri` is not a coincidence, it is a second trigger.
+
+    READING the trigger is not BUILDING one, and that distinction is the gate: the handler's own log
+    line names three trigger keys and is correct, because every value it takes is `trigger[...]`. A
+    literal offends only when at least one value comes from somewhere else — which is what composing a
+    shape looks like, and what reading one never does.
+    """
+
+    trigger_keys = {"token", "dataset", "namespace", "from_version", "to_version", "from_uri"}
+
+    def _reads_the_built_trigger(value: ast.expr) -> bool:
+        """`trigger["dataset"]` is a READ. Composing from anything else is a BUILD."""
+        return isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name) and value.value.id == "trigger"
+
+    offenders = [
+        node.lineno
+        for node in ast.walk(_handler_ast())
+        if isinstance(node, ast.Dict)
+        and len({k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)} & trigger_keys) >= 2
+        and not all(_reads_the_built_trigger(v) for v in node.values)
+    ]
+    assert not offenders, (
+        f"handle_publication builds a trigger-shaped dict of its own at line(s) {offenders} — the shape must come from build_stage_trigger alone"
+    )
