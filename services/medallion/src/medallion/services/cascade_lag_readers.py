@@ -22,6 +22,9 @@ from typing import Any
 
 import httpx
 
+from medallion.core.config import dedicated_token_for
+from medallion.services import catalog_register
+
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +55,28 @@ def _destination(settings: Any, source: str) -> str:  # noqa: ANN401 — the set
     return str(lanes.get(source) or "?")
 
 
+def _service_headers(settings: Any) -> dict[str, str]:  # noqa: ANN401 — the settings seam
+    """The credential these reads present, built by the SAME function every other medallion client uses.
+
+    Measured live 2026-09-04, in two stages, and the second is why this delegates rather than
+    reimplements. Both readers first sent a bare `httpx.get` with no headers at all → **401 on every
+    edge**. Adding the obvious pair (`dapr-api-token` + `x-lance-service-identity`) still 401'd,
+    because `service-medallion-producer` is a PRIVILEGED subject: the door binds it to
+    `service-token-<identity>` and refuses the estate's shared token. `catalog_register._credential`
+    has resolved that since 2026-08-26 — a second hand-written copy of a credential rule is exactly
+    how one caller ends up refused while every other works.
+
+    The gauge's own `known=False` path is what made this survive: a reader that cannot read publishes
+    NOTHING and reports nothing wrong, so an empty series read as a healthy cascade.
+    """
+    return catalog_register.credential(
+        token=None,
+        app_token=getattr(settings, "app_api_token", "") or None,
+        service_identity=getattr(settings, "catalog_service_identity", "") or None,
+        dedicated_token=dedicated_token_for(settings),
+    )
+
+
 def published_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings seam
     """Read the source table's ``published`` tag version from the catalog."""
 
@@ -62,7 +87,7 @@ def published_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings sea
         # NO route exposing the published version directly: the publication router serves `POST
         # /{id}/publish` and nothing else, which the first live tick proved by failing every edge.
         url = f"{str(settings.catalog_url).rstrip('/')}/v1/table/{table_id}/tags/list"
-        response = httpx.get(url, timeout=_TIMEOUT_SECONDS)
+        response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=_service_headers(settings))
         if response.status_code == 404:
             return None  # no such table yet — an idle edge, not a failure
         response.raise_for_status()
@@ -85,8 +110,13 @@ def consumed_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings seam
 
     def _read(edge: str, project: str) -> int | None:
         destination = edge.split("->", 1)[1]
-        url = f"{str(settings.train_lineage_url).rstrip('/')}/api/v1/runs"
-        response = httpx.get(url, timeout=_TIMEOUT_SECONDS)
+        # `/runs`, NOT `/api/v1/runs`. Lineage mounts its run board at the root — measured live
+        # 2026-09-04 by probing all three spellings against the deployed service: `/v1/runs` 404,
+        # `/api/v1/runs` 404, `/runs` 401 (present, and asking for the credential below). This is the
+        # SECOND instance of the same defect in this file's short history, the first being a catalog
+        # route that did not exist; a route is not a thing to derive from a prefix convention.
+        url = f"{str(settings.train_lineage_url).rstrip('/')}/runs"
+        response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=_service_headers(settings))
         response.raise_for_status()
         seen = [
             run["consumed_to_version"]

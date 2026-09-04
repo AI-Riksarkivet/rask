@@ -26,11 +26,24 @@ from medallion.services.cascade_lag_readers import consumed_reader, published_re
 
 
 class _Settings:
+    """The settings surface the readers touch — including the CREDENTIAL fields.
+
+    Those three were absent, and their absence was not neutral: the readers built no headers, every
+    test passed, and the deployed gauge answered 401 on every edge. A double that omits what the code
+    under test reads does not simplify the test, it hides a class of defect from it.
+
+    `secrets_from_dapr = False` is the dev shape: no secret store, so the shared-token path applies,
+    which is what `dedicated_token_for` returns `None` for.
+    """
+
     catalog_url = "http://catalog:2333"
     train_lineage_url = "http://lineage:8000"
     transform_routes: dict[str, str] = {}
     lane_destinations: dict[str, str] = {}
     lag_projects: list[str] = []
+    app_api_token = "shared-token"
+    catalog_service_identity = "service-medallion-producer"
+    secrets_from_dapr = False
 
 
 def _capture(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], status: int = 200) -> list[str]:

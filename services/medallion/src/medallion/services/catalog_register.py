@@ -78,7 +78,7 @@ class RegisterError(RuntimeError):
     """
 
 
-def _credential(
+def credential(
     *,
     token: str | None,
     app_token: str | None,
@@ -169,7 +169,7 @@ def publish_stage_output(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot publish its output table")
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     body = {
         "version": version,
         "key_column": key_column,
@@ -239,7 +239,7 @@ def authorize_stage_write(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot authorize its write")
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             response = client.post(f"/v1/table/{table_id}/credentials", params={"tier": "write"}, headers=headers)
@@ -302,7 +302,7 @@ def ensure_stage_output(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot resolve where to write")
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     segments = table_id.split(delimiter)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
@@ -374,7 +374,7 @@ def describe_table_location(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this caller cannot ask where a table lives")
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
@@ -444,7 +444,7 @@ def register_written_dataset(
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot register the dataset it lands")
     location = relative_location(dataset_uri, catalog_root)
     segments = table_id.split(delimiter)
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             response = client.post(f"/v1/table/{table_id}/register", json={"id": segments, "location": location}, headers=headers)

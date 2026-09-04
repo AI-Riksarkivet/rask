@@ -144,7 +144,7 @@ submission id needs both. So C2 forwards, exactly as `terminate` does.
 | C3a | **Record the consumed range** — the `lance` run facet carries `from_version`/`to_version` beside the `version` it wrote, gated so the emit cannot stop passing them | ✅ **LANDED** `498b5531`, deployed `c3a-498b5531` and proven live in the mover |
 | C3-core | **The lag arithmetic** — pure over injected readers; `known=False` never collapses to 0 | ✅ **LANDED** `a17cd748` |
 | C3b | **Make the range QUERYABLE** — lineage emits it but does not expose it. `RunStatus` folds `operation` and `promotion_status` off the lance facet and not the range, so a reader cannot ask "what has silver consumed?". Four sites, following that exact pattern: the event model, the Cypher SET, the row model, the SELECT | ✅ **LANDED** `838a33c5` |
-| C3 | **The lag gauge** — wire C3-core to the two readers, publish `medallion_cascade_lag{edge,project}` evaluated with `for:`, on a producer cron. Never a per-tick counter or log (row 23's lesson) | ✅ **LANDED** `b0dec4f0`; the `for:`-evaluated rule + its two promtool cases landed 2026-09-04 — the gauge published for weeks with nothing evaluating it |
+| C3 | **The lag gauge** — wire C3-core to the two readers, publish `medallion_cascade_lag{edge,project}` evaluated with `for:`, on a producer cron. Never a per-tick counter or log (row 23's lesson) | ✅ **LANDED** `b0dec4f0`; the `for:`-evaluated rule + its two promtool cases landed 2026-09-04. **DRIVEN IN-CLUSTER 2026-09-04 and it was NON-FUNCTIONAL** — see below |
 | C2 | **The re-run verb** — edge-addressed, `token` optional per R1, authorized per R4 on the edge's own rung, mode PREDICTED per R3 | ✅ **LANDED** — `POST /api/movers/stages/rerun`. Two of the draft's rules did NOT survive contact: the 409 is dropped (R2a), and with it the forward — **R5's only reason to forward was the Ray-liveness check**, so the producer mints the trigger itself, exactly as its `table_published` subscription already does. `build_stage_trigger` now has the two callers its docstring named. |
 
 **C4 depends on `open_alert.md`:** `alerting.enabled` is `false` in `chart/values.yaml` and `true`
@@ -182,3 +182,28 @@ covers the parked class without a second seam.
 C4, C3 and C2 are landed AND verified in-cluster, and **in the same commit**: §O2's row struck from
 `open_lakehouse_diff_left.md`, row 35 (D) struck from `open_estate-verification.md`, and
 `open_compute-decoupling.md` §7.4 step 6 marked done. One row, four trackers, one truth.
+
+
+## C3, driven in-cluster 2026-09-04 — it had never worked
+
+The lag cron ticked cleanly and reported `{"edges":3,"published_points":0,"unknown":0,"failed":3}`.
+Three defects, peeled one at a time by calling the readers directly, each hidden by the one in front:
+
+1. **Every edge was named `<source>->?` with an empty project.** A stale deployment, not code: the
+   chart renders `MEDALLION_LANE_DESTINATIONS` correctly and rev 99 predates it.
+2. **`consumed_reader` asked for a route lineage does not serve.** `/api/v1/runs` → 404. Probed all
+   three spellings against the deployed service: `/v1/runs` 404, `/api/v1/runs` 404, `/runs` 401.
+   This is the SECOND route-that-does-not-exist in this file's short history — a route is not a thing
+   to derive from a prefix convention.
+3. **Neither reader sent any credential.** A bare `httpx.get` → **401 on every edge**. Adding the
+   obvious pair still 401'd: `service-medallion-producer` is a PRIVILEGED subject, and the door binds
+   it to `service-token-<identity>` rather than the estate's shared token. `catalog_register` has
+   resolved that since 2026-08-26; the readers were a second hand-written copy of a credential rule.
+
+All three are fixed and both readers now reach **403** — authenticated, and refused on authorization.
+
+**What is left is a GRANT, and it is the only thing between this gauge and working.**
+`service-medallion-producer` needs read on the source tables' tags at the catalog and on lineage's
+`/runs` board. Neither is seeded. Until they are, C3 publishes no point for any edge — and note how
+this survived: a reader that cannot read publishes NOTHING and reports nothing wrong, so an empty
+series reads as a healthy cascade. That is the same failure shape the whole file is about.
