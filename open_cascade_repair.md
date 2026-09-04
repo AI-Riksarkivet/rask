@@ -59,6 +59,34 @@ reusable — *"reuse_id_policy: Deprecated and has no effect... A workflow insta
 reused once the existing instance with that ID has reached a terminal state"*. **Docstring-verified,
 not observed live**; a sidecar-backed test is owed.
 
+### R2a · The listing R2 prescribes collides with a measured OOM — read before building the 409
+
+R2 says the fresh-token check must "LIST jobs by `(stage, from_uri, to_uri)` rather than look one up
+by id". That is right about the KEY and wrong about the cost, and the cost is not theoretical.
+`ray_kit.dashboard.list_jobs` records it: Ray's `GET /api/jobs/` **accepts no parameters at all** — no
+limit, no offset, no status filter — so it returns every job the cluster has ever seen. Measured on
+this estate: **81,155 jobs / 164.7 MB in one response, peaking at 1179 MiB RSS against a 1536 MiB
+limit, and 1488 MiB for two concurrent calls. That is an OOMKill**, and it is why `MAX_JOBS` exists.
+
+Putting that call in a request handler is the exact pattern `open_lakehouse_lanes.md` was closed to
+remove. Three consequences for C2, none of which the first draft accounts for:
+
+* **the same-token path needs no listing at all.** The id is deterministic, so one `job_status(sub_id)`
+  answers — cheap, bounded, and it is the RECOMMENDED repair anyway (R1). Only the fresh-token path
+  reaches for a list;
+* **the capped listing is sound for THIS question but not obviously so.** A live job is usually recent,
+  but a long-running job with many newer submissions behind it falls outside `MAX_JOBS` — so the check
+  can answer "no live job" wrongly, in the permissive direction;
+* **the key is not available as stated.** `ray_submit` stamps `rask.stage`, `rask.project`,
+  `rask.token`, `rask.transform` and `rask.originator` in Ray's `metadata` — not `from_uri`/`to_uri`.
+  The reachable key is `(stage, project, transform)`, which names the same edge and is arguably the
+  better one, but it is a different check from the one R2 describes.
+
+**Decide this before implementing C2.** The options are: accept the capped listing and say so in the
+verb's response; carry from/to into the job metadata so a narrower key exists; or drop the
+fresh-token 409 and document that a fresh-token re-run may race a live job, which is the honest
+reading of "full recompute" anyway since `mode="overwrite"` is convergent.
+
 ### R2 · The 409 is for the FRESH-token path only
 
 A duplicate id whose Ray job is RUNNING returns `"reattached"` (`TERMINAL_BAD = ("FAILED","STOPPED")`),
