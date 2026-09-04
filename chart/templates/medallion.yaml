@@ -197,6 +197,15 @@ spec:
                    ungovernable without anything failing. */}}
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }} }
             {{- if $.Values.medallion.cascadeLag.bindingName }}
+            {{- /* WHERE EACH LANE'S OUTPUT LANDS, derived from the mover declarations rather than kept
+                   as a second list. `movers[]` and `mediaMovers[]` already state fromNamespace ->
+                   toNamespace for every lane, so a lane added there is measured with no second edit and
+                   a renamed lane cannot half-move. Without this the lag edge is `<source>->?`, which
+                   matches no lineage run: the detector runs cleanly and measures nothing. */}}
+            {{- $lanes := dict }}
+            {{- range $.Values.medallion.movers }}{{- $_ := set $lanes .fromNamespace .toNamespace }}{{- end }}
+            {{- range ($.Values.medallion.mediaMovers | default list) }}{{- $_ := set $lanes .fromNamespace .toNamespace }}{{- end }}
+            - { name: MEDALLION_LANE_DESTINATIONS, value: {{ toJson $lanes | quote }} }
             # ONE STRING with the Component's `metadata.name` and the path the producer serves at its
             # pod root — Dapr delivers an input binding to `POST /<component name>`, so any two of the
             # three agreeing while the third does not is a cron firing into a 404 forever.
