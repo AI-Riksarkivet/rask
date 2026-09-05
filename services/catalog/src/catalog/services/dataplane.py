@@ -845,9 +845,20 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
         # a namespace bound to one warehouse, with its data written to another bucket, reached this
         # line and pylance's "Dataset at path ... was not found" escaped as a bare 500 "Internal
         # Server Error" — which tells an operator nothing and looks like a catalog fault rather than
-        # a table that was never written. It is a client-visible condition with a specific cause, so
-        # it gets a specific answer.
-        raise InvalidInputError(f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}") from exc
+        # a table that was never written.
+        #
+        # NARROWED, because `ValueError` is not that condition. Measured on pylance 10.0.0: an absent
+        # dataset raises `LanceError(IO) … not found`, and a malformed storage option raises
+        # `LanceError(IO): Generic N/A error: Encountered internal error. Please file a bug report` —
+        # both `ValueError`. Reporting the second as "never written" sends an operator to look for
+        # data that was there all along, so anything that is not a not-found propagates as itself.
+        if "not found" not in str(exc).lower():
+            raise
+        # `TableNotFoundError`, not `InvalidInputError`: code 13 tells a client its REQUEST is
+        # malformed and nothing about the policy is. What is absent is the DATA, which is what code 3
+        # says — the same answer `rename_table` gives a source that resolves to nothing, so one client
+        # branch serves both.
+        raise TableNotFoundError(f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}") from exc
     plan = lance_optimize.Compaction.plan(dataset, cast(Any, options))
     return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
 

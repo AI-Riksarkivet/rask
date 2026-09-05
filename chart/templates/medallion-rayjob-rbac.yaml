@@ -25,7 +25,12 @@ rules:
     # `create` to submit, `get`/`list`/`watch` to poll a run's state, `delete` to cancel. No `update`
     # and no `patch`: nothing here edits a job it already submitted, and a verb nobody uses is a verb
     # an attacker inherits.
-    verbs: ["create", "get", "list", "watch", "delete"]
+    # EXACTLY the verbs `RayJobExecutor` issues, and no more. It does `POST` to submit, `GET` to poll
+    # status and read a failure, and `DELETE` to cancel — measured against the methods, not the
+    # intent. `list` and `watch` would let this ServiceAccount enumerate every RayJob in the
+    # namespace, which on a shared cluster is every tenant's, for a capability the code never uses:
+    # a submitter addresses the job whose name it derived and needs no inventory.
+    verbs: ["create", "get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

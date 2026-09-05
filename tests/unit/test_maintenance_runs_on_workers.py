@@ -30,7 +30,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from lance_namespace import InvalidInputError
+from lance_namespace import InvalidInputError, TableNotFoundError
 
 from catalog.services.dataplane import commit_compaction, plan_compaction
 
@@ -233,6 +233,11 @@ def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: P
     "Dataset at path ... was not found" escaped as a bare 500 "Internal Server Error". That tells an
     operator nothing and reads as a catalog fault rather than as a table nobody wrote — and the
     distinction is the whole diagnosis.
+
+    `TableNotFoundError` (code 3, HTTP 404) rather than `InvalidInputError` (code 13, HTTP 400):
+    clients dispatch on the CODE, and 13 says the REQUEST is malformed when nothing about the policy
+    is. What is absent is the data, which is the answer `rename_table` already gives for a source
+    that resolves to nothing — one client branch for one condition.
     """
-    with pytest.raises(InvalidInputError, match="never written"):
+    with pytest.raises(TableNotFoundError, match="never written"):
         plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024)

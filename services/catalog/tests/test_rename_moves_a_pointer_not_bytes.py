@@ -28,7 +28,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from lance_namespace import CreateNamespaceRequest, DeclareTableRequest, DescribeTableRequest, InvalidInputError, connect
+from lance_namespace import CreateNamespaceRequest, DeclareTableRequest, DescribeTableRequest, InvalidInputError, TableNotFoundError, connect
 
 from catalog.services import dataplane
 
@@ -295,3 +295,44 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     assert location == source, "the rename relocated a branched dataset"
     assert lance.dataset(location).branches.list() == before, "the branch listing changed under a pointer move"
     assert ns.describe_table(DescribeTableRequest(id=new_segments)).location == source
+
+
+def test_plan_compaction_answers_NOT_FOUND_for_a_table_whose_bytes_are_absent(tmp_path: Path) -> None:
+    """A registered table with no dataset behind it is a NOT-FOUND condition, not a bad request.
+
+    `InvalidInputError` (code 13, HTTP 400) tells a client its REQUEST is malformed; nothing about
+    `{"target_rows_per_fragment": N}` is. What is absent is the data, which is what
+    `TableNotFoundError` (code 3, HTTP 404) says — the code a client dispatches on, per the spec's
+    24-code contract, and the one `rename_table` already raises for a source that resolves to nothing.
+    """
+    ns = _namespace(tmp_path)
+    location = ns.declare_table(DeclareTableRequest(id=["ns1", "empty"])).location  # declared, never written
+
+    with pytest.raises(TableNotFoundError, match="never written"):
+        dataplane.plan_compaction(location, {}, target_rows_per_fragment=100)
+
+
+def test_plan_compaction_does_not_call_an_INTERNAL_ERROR_a_missing_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The catch was `except ValueError`, and pylance raises `ValueError` for far more than absence.
+
+    MEASURED on pylance 10.0.0: an absent dataset gives `LanceError(IO) … not found`, while a
+    malformed storage option gives `LanceError(IO): Generic N/A error: Encountered internal error.
+    Please file a bug report`. Both reached one handler that reported "declared or registered but was
+    never written" — so a configuration fault was rendered as a missing table and sent the operator
+    to look for data that was there all along.
+    """
+    ns = _namespace(tmp_path)
+    written = _written(ns, ["ns1", "real"])
+
+    def _internal(*_a: object, **_k: object) -> object:
+        # Verbatim from pylance 10.0.0 for a malformed storage option — driven against a real s3 URI,
+        # because a `file://` dataset ignores AWS options and raises nothing at all, which is why this
+        # asserts the CLASSIFIER rather than provoking the fault through a local path.
+        raise ValueError("LanceError(IO): Generic N/A error: Encountered internal error. Please file a bug report")
+
+    monkeypatch.setattr(dataplane.lance, "dataset", _internal)
+    with pytest.raises(ValueError) as caught:
+        dataplane.plan_compaction(written, {})
+
+    assert "never written" not in str(caught.value), f"an internal error was reported as a missing table: {caught.value}"
+    assert not isinstance(caught.value, TableNotFoundError), "an internal error was given the not-found code"
