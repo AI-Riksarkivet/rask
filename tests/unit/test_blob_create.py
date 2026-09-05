@@ -366,16 +366,20 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
     assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
 
 
-def test_a_failed_source_deregister_leaves_ONE_dataset_under_TWO_ids(tmp_path: Path) -> None:
+def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path) -> None:
     """The pointer move is two calls, so there is a window — and what is in it is the whole safety case.
 
-    The destination is registered first, then the source retired. A failure in the second call leaves both
-    ids resolving to the SAME dataset: one copy of the data, two pointers, nothing at risk, and a
-    deregister of either id resolves it. Rolling the destination back instead would leave a rename that
-    reported success and did nothing.
+    The SOURCE is retired first. A failure there aborts before any destination exists: the source still
+    resolves, no second pointer was written, and the caller sees the error. Nothing to reconcile.
+
+    That ordering is not a preference. `register_table` accepts a second id at a location another id
+    already holds (measured on the `dir` backend), so writing the destination first leaves a window in
+    which two concurrent renames of one source both succeed — two live ids on one dataset. `drop_table`
+    removes BYTES, so dropping either then destroys the other's table while that id goes on resolving,
+    and both `describe_table` answers are identical and correct until it happens.
 
     A byte copy's equivalent window left two full COPIES of the dataset and, if the source delete had
-    already run partway, an unreadable source. That failure class does not exist here.
+    already run partway, an unreadable source. That failure class does not exist here either way.
     """
     from lance_namespace import DeregisterTableRequest
 
@@ -388,21 +392,21 @@ def test_a_failed_source_deregister_leaves_ONE_dataset_under_TWO_ids(tmp_path: P
 
     real = ns.deregister_table
 
-    def _fails(request: DeregisterTableRequest):  # noqa: ANN202 - the namespace's own response type
+    def _fails(request: DeregisterTableRequest) -> None:
         raise OSError("rustfs 503")
 
-    ns.deregister_table = _fails  # type: ignore[method-assign]
+    ns.deregister_table = _fails
     try:
-        new_segments, location = dataplane.rename_table(ns, {}, ["media", "a"], "b", None)
+        with pytest.raises(OSError, match="rustfs 503"):
+            dataplane.rename_table(ns, {}, ["media", "a"], "b", None)
     finally:
-        ns.deregister_table = real  # type: ignore[method-assign]
+        ns.deregister_table = real
 
-    assert new_segments == ["media", "b"]
-    assert location == source
-    # BOTH ids resolve, to the same dataset — recoverable by retiring either, with no data duplicated.
-    assert ns.describe_table(DescribeTableRequest(id=["media", "b"])).location == source
+    # The source is untouched and the destination was never written.
     assert ns.describe_table(DescribeTableRequest(id=["media", "a"])).location == source
-    assert _open(ns, ["media", "b"]).read_blobs("payload", indices=[0])[0][1] == b"x"
+    with pytest.raises(Exception, match="(?i)not found|does not exist|no such"):
+        ns.describe_table(DescribeTableRequest(id=["media", "b"]))
+    assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
 
 
 def test_rejected_external_create_rolls_back_and_stays_retryable(tmp_path: Path) -> None:

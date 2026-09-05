@@ -470,8 +470,9 @@ def rename_table(
             "door will not do in a request. Move the table into a namespace first."
         )
     # The destination must be free in EVERY form, checked BEFORE anything is touched. A declared-only
-    # stub is TAKEN, never adopted: adopting one skips `register_table`, the only arbiter here, so two
-    # concurrent renames into the same declared name would both claim it and both retire their sources.
+    # stub is TAKEN, never adopted: adopting one skips `register_table`, which is what arbitrates two
+    # concurrent renames into the SAME destination name — the source-side race is arbitrated by the
+    # `deregister_table` below, and the two together are what make this door safe under concurrency.
     dest_uri, _dest_only_declared = _existing_location(ns, new_segments)
     if dest_uri is not None:
         raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
@@ -480,18 +481,31 @@ def rename_table(
     # it from the namespace's own root rather than assuming the final path segment: under V2 naming a
     # location is `<hash>_<object_id>` at the root, but a backend that nests would break the guess.
     location = _relative_location(ns, source_uri)
-    ns.register_table(RegisterTableRequest(id=new_segments, location=location))
-    # The destination now resolves; retiring the source is what makes this a rename rather than a
-    # second pointer. It CANNOT roll the destination back — a failure here leaves both ids on one
-    # dataset, which is recoverable by deregistering either, while an undone destination would leave a
-    # rename that reported success and did nothing.
+    # THE SOURCE IS RETIRED FIRST, and that ordering is the whole of this door's race arbitration.
+    # `register_table` accepts a second id at a location another id already holds — measured on the
+    # `dir` backend — so a destination written first refuses nothing: two renames of one source both
+    # pass their free-destination checks, both register, and both retire the source, leaving two live
+    # ids on one dataset. `drop_table` removes BYTES, so dropping either then destroys the other's
+    # table while that id goes on resolving, and the two `describe_table` answers are identical and
+    # correct until it happens. Retiring first makes `deregister_table` the contended operation: the
+    # second caller finds the pointer already consumed and loses.
+    ns.deregister_table(DeregisterTableRequest(id=segments))
     try:
-        ns.deregister_table(DeregisterTableRequest(id=segments))
-    except Exception as exc:
-        log.warning(
-            "rename_source_pointer_retained",
-            extra={"source": ".".join(segments), "dest": ".".join(new_segments), "error": str(exc)},
-        )
+        ns.register_table(RegisterTableRequest(id=new_segments, location=location))
+    except Exception:
+        # COMPENSATE, or a rename that trips on its destination leaves the table reachable by NO id —
+        # bytes intact and invisible, which is the cost this ordering would otherwise impose on the
+        # common single-rename failure. The same call at the same location the source already had.
+        try:
+            ns.register_table(RegisterTableRequest(id=segments, location=location))
+        except Exception as restore:
+            # The source is now unreachable and the location is the only way back, so it goes in the
+            # log rather than being swallowed with the original error.
+            log.error(
+                "rename_source_pointer_lost",
+                extra={"source": ".".join(segments), "location": location, "error": str(restore)},
+            )
+        raise
     return new_segments, source_uri
 
 

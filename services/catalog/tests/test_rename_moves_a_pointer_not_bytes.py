@@ -126,3 +126,104 @@ def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidInputError, match="(?i)root"):
         dataplane.rename_table(ns, {}, ["roottable"], "renamed", None)
+
+
+def test_TWO_RENAMES_OF_ONE_SOURCE_cannot_both_succeed(tmp_path: Path) -> None:
+    """The data-loss shape, and the one a free-destination check cannot catch.
+
+    Both renames check their OWN destination and find it free, so both register a pointer at the
+    source's location and both retire the source. The result is two live ids on ONE dataset — and
+    `drop_table` removes bytes, so dropping either id destroys the other's table while that id goes on
+    resolving. Nothing in the estate reports it: the two `describe_table` answers are identical and
+    correct right up until one is dropped.
+
+    Arbitrated by retiring the SOURCE FIRST and letting the backend answer. `deregister_table` is the
+    only operation here that can fail for the second caller, because the first has already consumed the
+    source pointer — so the race resolves to one winner and one refusal instead of two winners.
+
+    MEASURED on the `dir` backend: `register_table` accepts a second id at a location another id
+    already holds, so nothing beneath this function refuses the second rename. Two ids resolving to
+    `4eb5ad08_ns1$src` was driven directly before this gate was written.
+
+    Sequential here because the first rename must consume the source for the second to be refused —
+    which is exactly the property under test. The ORDER that makes it hold under real concurrency is
+    pinned separately below; threading this would make the outcome depend on the scheduler.
+    """
+    ns = _namespace(tmp_path)
+    source = _written(ns, ["ns1", "shared"])
+
+    first, _ = dataplane.rename_table(ns, {}, ["ns1", "shared"], "winner", None)
+    with pytest.raises(Exception, match="(?i)not found|does not exist|no such"):
+        dataplane.rename_table(ns, {}, ["ns1", "shared"], "loser", None)
+
+    assert first == ["ns1", "winner"]
+    assert ns.describe_table(DescribeTableRequest(id=["ns1", "winner"])).location == source
+    with pytest.raises(Exception, match="(?i)not found|does not exist|no such"):
+        ns.describe_table(DescribeTableRequest(id=["ns1", "loser"]))
+
+
+def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
+    """Retiring the source first means a failure after it must restore it, or a legitimate rename that
+    trips on its destination leaves the table reachable by NO id — bytes intact and invisible, which is
+    the worse half of the trade this ordering makes.
+
+    The compensation is the same `register_table` call the rename itself makes, at the same location.
+    """
+    ns = _namespace(tmp_path)
+    source = _written(ns, ["ns1", "keepme"])
+
+    original = ns.register_table
+
+    def _explode_on_the_destination(request: object) -> object:
+        # ONLY the destination fails. A blanket failure would also break the compensation and prove
+        # nothing about it — the shape being modelled is a destination that becomes unavailable
+        # between the free check and the write (a racing rename taking the name), where restoring the
+        # source is exactly what must still work.
+        if list(getattr(request, "id", [])) == ["ns1", "newname"]:
+            raise RuntimeError("register refused")
+        return original(request)
+
+    ns.register_table = _explode_on_the_destination
+    try:
+        with pytest.raises(RuntimeError, match="register refused"):
+            dataplane.rename_table(ns, {}, ["ns1", "keepme"], "newname", None)
+    finally:
+        ns.register_table = original
+
+    assert ns.describe_table(DescribeTableRequest(id=["ns1", "keepme"])).location == source, (
+        "a failed rename left the table reachable by no id at all"
+    )
+
+
+def test_the_SOURCE_is_claimed_before_the_destination_exists(tmp_path: Path) -> None:
+    """The ordering IS the arbitration, and it is the only thing standing between two racing renames.
+
+    Registering the destination first leaves a window in which both callers have written a pointer and
+    neither has retired the source — and `register_table` accepts a second id at an occupied location,
+    so nothing refuses them. Retiring the source FIRST makes `deregister_table` the contended
+    operation: the second caller finds the pointer already consumed and loses, which is the outcome a
+    rename race must have.
+
+    Asserted on the call ORDER rather than on a threaded outcome, because the order is the invariant
+    and a race test that passes on timing proves nothing.
+    """
+    ns = _namespace(tmp_path)
+    _written(ns, ["ns1", "ordered"])
+    calls: list[str] = []
+    real_register, real_deregister = ns.register_table, ns.deregister_table
+
+    def _register(request: object) -> object:
+        calls.append("register")
+        return real_register(request)
+
+    def _deregister(request: object) -> object:
+        calls.append("deregister")
+        return real_deregister(request)
+
+    ns.register_table, ns.deregister_table = _register, _deregister
+    try:
+        dataplane.rename_table(ns, {}, ["ns1", "ordered"], "renamed", None)
+    finally:
+        ns.register_table, ns.deregister_table = real_register, real_deregister
+
+    assert calls[:2] == ["deregister", "register"], f"the destination was written before the source was claimed: {calls}"
