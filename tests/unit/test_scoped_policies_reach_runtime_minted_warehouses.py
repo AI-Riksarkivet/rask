@@ -260,6 +260,35 @@ def test_the_sweep_cannot_steer_the_plane_either(maintenance: dict) -> None:
             assert not allowed(maintenance, action="s3:DeleteObject", bucket=bucket, key=f"{steering}/x.json")
 
 
+def test_the_widening_DOES_disclose_the_bucket_list_and_that_is_the_trade(ray: dict) -> None:
+    """The cost of allowing the data planes on every bucket, stated rather than implied.
+
+    Neither policy grants `s3:ListAllMyBuckets` to the compute lane, and the commit that widened them
+    claimed that made "list a bucket you can name" different from "enumerate the estate". MEASURED
+    against the live RustFS with the deployed credential: `mc ls ray/` returns 104 buckets. The server
+    answers a bucket ENUMERATION by falling back to per-bucket `ListBucket`/`GetBucketLocation`, which
+    `arn:aws:s3:::*` grants everywhere — so withholding the account-level action does not withhold the
+    list, and the claim was wrong.
+
+    It stays wide, deliberately. The alternative is the bucket-name allow-list this policy replaced,
+    which could not name a runtime-minted warehouse and broke every tenant's cascade — a correctness
+    failure traded for a disclosure one. What is disclosed is bucket NAMES and, under `*/*`, object
+    reads outside the denied control prefixes; the narrowing that actually fixes it is per-table vended
+    credentials on the Ray lane, tracked as a row rather than pretended away here.
+
+    Asserted so the false claim cannot come back: the policy's own shape says the enumeration is
+    reachable, and a future edit that believes otherwise fails here.
+    """
+    assert not any(
+        "s3:ListAllMyBuckets" in (s["Action"] if isinstance(s["Action"], list) else [s["Action"]])
+        for s in ray["Statement"]
+        if s["Effect"] == "Allow"
+    ), "the compute lane now has the account-level action, which is a widening beyond the measured fallback"
+    # Every bucket answers a per-bucket list, which is what the server uses to enumerate.
+    assert allowed(ray, action="s3:ListBucket", bucket="any-tenant-bucket", prefix="medallion/")
+    assert allowed(ray, action="s3:GetBucketLocation", bucket="any-tenant-bucket")
+
+
 def test_the_ray_lane_never_reaches_the_observability_store(ray: dict) -> None:
     assert not allowed(ray, action="s3:GetObject", bucket=OBSERVABILITY_BUCKET, key="anything")
     assert not allowed(ray, action="s3:ListBucket", bucket=OBSERVABILITY_BUCKET, prefix="")

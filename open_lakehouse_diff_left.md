@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-05, from the rows below rather than asserted: 116 tracked, 107 open, 9 struck.**
+**Counted 2026-09-05, from the rows below rather than asserted: 124 tracked, 115 open, 9 struck.**
 That splits into 58 lettered rows (52 open) and 54 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -898,3 +898,16 @@ So C6 is **two-thirds proven**: the data path, the governance gate and lineage a
 end on a runtime-minted tenant; maintenance reaches the bytes and is refused at the catalog door.
 Q5-2 is the remaining work, and it is the same question as Q2-5/Q2-6 — what a cascade or maintenance
 subject is granted on a tenant that did not exist at bootstrap.
+
+## Q6. Carried from the 2026-09-04 review after the fixes landed (2026-09-05)
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q6-1 | The compute credential can enumerate every bucket | med | Measured: `mc ls ray/` returns 104 buckets with the deployed key. Withholding `s3:ListAllMyBuckets` does not withhold the list — RustFS falls back to per-bucket `ListBucket`, which `arn:aws:s3:::*` grants. The widening is the deliberate trade (the allow-list it replaced broke every tenant's cascade); the narrowing that closes it is PER-TABLE VENDED credentials on the Ray lane, a service change. Same root as Q5-2 |
+| Q6-2 | `RayJobExecutor` reports a CR whose cluster never came up as PENDING forever | med | `status()` maps only `status.jobStatus`; KubeRay records a failed cluster in `jobDeploymentStatus`. COMPUTE PLANE — deferred by the current goal |
+| Q6-3 | `RayJobExecutor` treats any 409 as REATTACHED without reading the CR, and the CR name omits `code_version` | med | COMPUTE PLANE — deferred |
+| Q6-4 | A queued index build emits no lineage anywhere | med | The door skips the emit and the worker never makes one, so an index that took an hour is invisible to the run board |
+| Q6-5 | `plan_compaction` answers 400 where every sibling door answers 404 | med | "registered but never written" is mapped to `InvalidInputError` off a bare `ValueError`; siblings raise `TableNotFoundError`. A client dispatching on the code sees a different class for the same condition |
+| Q6-6 | The halt-counter alert gate is a substring search over the whole rules dump | med | It matches annotation prose, so a rule could be deleted and the gate stay green on its own description |
+| Q6-7 | The promtool-expectation gate silently skips unknown alertnames and missing annotation keys | med | A typo in an alertname makes the expectation vacuous rather than failing |
+| Q6-8 | The RayJob Role grants `list` and `watch` the executor never issues | low | Narrow to `create,get,delete` |

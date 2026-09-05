@@ -100,8 +100,7 @@ spec:
                 bucket, and DENY the control plane precisely. What is given up is bucket-name scoping, which
                 was never enforcing anything an operator could rely on; what is kept, and now applies in
                 EVERY bucket rather than only the statically-named ones, is the deny that this user exists
-                for. Neither credential gets `s3:ListAllMyBuckets` except the reconciler that needs it, so
-                "list a bucket you can name" is not "enumerate the estate".
+                for.
 
                 The control bucket keeps its tight listing through `StringNotLike` on `s3:prefix` rather
                 than through its name. That operator was PROBED against this estate's RustFS
@@ -110,6 +109,19 @@ spec:
                 `lance-catalog/` and `lance-catalog/_projects/` were denied and other buckets listed
                 freely. Enforced, not ignored — which matters, because a condition RustFS dropped would
                 turn a Deny into a hole rather than a hard failure.
+
+                WHAT THE WIDENING COSTS, measured rather than reasoned about: the compute credential can
+                ENUMERATE the estate's buckets. Neither policy grants `s3:ListAllMyBuckets`, and that does
+                not withhold the list — RustFS answers an enumeration by falling back to per-bucket
+                `ListBucket`/`GetBucketLocation`, which `arn:aws:s3:::*` grants everywhere. Driven with the
+                deployed credential: `mc ls ray/` returned 104 buckets. Bucket NAMES are disclosed and, under
+                the object-wildcard resource, object reads outside the denied control prefixes. (Spelling
+                that wildcard out here would end this Helm comment early — the sequence closes it.)
+
+                It stays wide because the alternative is the allow-list this replaced, which could not name
+                a runtime-minted warehouse and broke every tenant's cascade — a correctness failure traded
+                for a disclosure one. The narrowing that actually closes it is per-table vended credentials
+                on the Ray lane, which is a service change rather than a policy one.
 
                 Outcomes are pinned by `tests/unit/test_scoped_policies_reach_runtime_minted_warehouses.py`,
                 which evaluates the rendered JSON as IAM does instead of grepping it for a bucket name — a
