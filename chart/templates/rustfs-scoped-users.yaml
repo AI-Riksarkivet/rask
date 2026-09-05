@@ -150,7 +150,11 @@ spec:
                     "Resource": [
                       "arn:aws:s3:::*/_projects/*",
                       "arn:aws:s3:::*/_protection/*",
-                      "arn:aws:s3:::*/_warehouses/*"
+                      "arn:aws:s3:::*/_warehouses/*",
+                      "arn:aws:s3:::*/_tasks/*",
+                      "arn:aws:s3:::*/_transforms/*",
+                      "arn:aws:s3:::*/_gates/*",
+                      "arn:aws:s3:::*/__manifest/*"
                     ]
                   },
                   {
@@ -214,8 +218,18 @@ spec:
                       "arn:aws:s3:::*/_projects/*",
                       "arn:aws:s3:::*/_protection/*",
                       "arn:aws:s3:::*/_policies/*",
-                      "arn:aws:s3:::*/_warehouses/*"
+                      "arn:aws:s3:::*/_warehouses/*",
+                      "arn:aws:s3:::*/_tasks/*",
+                      "arn:aws:s3:::*/_transforms/*",
+                      "arn:aws:s3:::*/_gates/*",
+                      "arn:aws:s3:::*/_trash/*"
                     ]
+                  },
+                  {
+                    "Sid": "NeverTheNamespaceIndex",
+                    "Effect": "Deny",
+                    "Action": ["s3:PutObject", "s3:DeleteObject"],
+                    "Resource": ["arn:aws:s3:::*/__manifest/*"]
                   },
                   {
                     "Sid": "NeverTheObservabilityStore",
@@ -228,7 +242,23 @@ spec:
               POLICY
               # The Ray lane's deny is TOTAL where maintenance's is write-only: a stage job reads
               # `FROM_URI` and writes `TO_URI` and touches nothing else (`scripts/ray_stage_job.py`), so it
-              # has no reason to read a governance record either. `medallion*` and not `medallion/*` —
+              # has no reason to read a governance record either.
+              #
+              # THE DENY LISTS EVERY CONTROL PREFIX, and the four beyond the registry pair are the ones
+              # that matter most here: `_tasks/<hash>.json` carries an ENGINE AND A COMMAND
+              # (`service_kit/lakehouse/task_registry.py`) and `engine_choice` refuses any task nobody
+              # registered — so that prefix IS the list of what this estate's compute plane may run, and the
+              # Ray lane is its untrusted consumer. `_transforms/` re-points which transform a lane runs and
+              # `_gates/` decides which output is admitted. `_trash/` is the only thing making a dropped
+              # table restorable (#75/#96), so deleting a record strands live bytes behind an `undrop` that
+              # can no longer find them — silent, and unrecoverable.
+              #
+              # `__manifest/` is split out because the two credentials need it differently: it is the
+              # authoritative namespace->table mapping (a namespace is a ROW in it, not a directory), so
+              # neither may WRITE it, while the purge must READ it to re-check a trashed id's liveness
+              # before destroying bytes (`maintenance/services/purge.py`). Write-deny, not total.
+              #
+              # `medallion*` and not `medallion/*` —
               # Lance lists with `prefix=medallion/` and `StringLike` does not match a trailing-slash
               # pattern against it, a lesson that cost a cascade the first time this policy was written.
               mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json

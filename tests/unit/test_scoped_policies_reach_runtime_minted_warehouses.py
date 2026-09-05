@@ -59,6 +59,21 @@ OBSERVABILITY_BUCKET = "rask-observability"
 
 _BUCKET_ACTIONS = frozenset({"s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets"})
 
+#: EVERY control-plane prefix under a control root, read off the constants that define them rather than
+#: retyped: `_protection`, `_gates`, `_trash`, `_transforms`, `_warehouses`, `_tasks`, `_policies` (the
+#: `*_PREFIX` finals in `service_kit/lakehouse/`) plus `_projects` (`catalog/services/projects.py`).
+#: The first policy pass denied four of the eight and the omissions were not equivalent: `_tasks/<hash>.json`
+#: names an ENGINE AND A COMMAND (`task_registry.py`), so a credential that writes one changes what the
+#: compute plane executes; `_transforms/` and `_gates/` steer which transform runs and which quality gate
+#: admits it; and deleting a `_trash/` record makes `undrop` unreachable for bytes that still exist.
+CONTROL_PREFIXES = ("_projects", "_protection", "_policies", "_warehouses", "_tasks", "_transforms", "_gates", "_trash")
+
+#: The lance-ns NAMESPACE index — one per bucket, and the authoritative namespace->table mapping (a
+#: namespace is a `__manifest` ROW, not a directory). Held apart from CONTROL_PREFIXES because the two
+#: credentials need it differently: neither may ever WRITE it, and the purge must READ it to re-check a
+#: trashed id's liveness before destroying bytes (`purge.py:257`).
+MANIFEST_PREFIX = "__manifest"
+
 
 def _render() -> str:
     return _helm_template(
@@ -170,7 +185,7 @@ def test_the_ray_lane_still_cannot_list_the_control_bucket_outside_the_cascade(r
     assert not allowed(ray, action="s3:ListBucket", bucket=CONTROL_BUCKET)
 
 
-@pytest.mark.parametrize("guarded", ["_projects", "_protection", "_policies", "_warehouses"])
+@pytest.mark.parametrize("guarded", CONTROL_PREFIXES)
 def test_the_ray_lane_cannot_touch_control_records_in_ANY_bucket(ray: dict, guarded: str) -> None:
     """Widening the allow to every bucket widens the deny with it, or a tenant warehouse's own control
     records become reachable — which the static policy never had to think about because it reached no
@@ -178,6 +193,83 @@ def test_the_ray_lane_cannot_touch_control_records_in_ANY_bucket(ray: dict, guar
     for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
         assert not allowed(ray, action="s3:GetObject", bucket=bucket, key=f"{guarded}/x.json"), f"{bucket}/{guarded} is readable"
         assert not allowed(ray, action="s3:PutObject", bucket=bucket, key=f"{guarded}/x.json"), f"{bucket}/{guarded} is writable"
+
+
+def test_the_ray_lane_cannot_STEER_the_plane_that_runs_it(ray: dict) -> None:
+    """The escalation the first pass left open, and the reason `_tasks/` is not just another record.
+
+    A registration under `<control_root>/_tasks/<hash>.json` carries an ENGINE and a COMMAND, and
+    `engine_choice.resolve_task_registration` refuses a task nobody registered rather than submitting a
+    key as a command — so the registry IS the list of what this estate's compute plane may run. A
+    credential that can write one names its own command; a credential that can write `_transforms/`
+    re-points which transform a lane runs; `_gates/` decides which output is admitted.
+
+    These are exactly the records the Ray lane is the untrusted consumer OF. It reads `FROM_URI` and
+    writes `TO_URI` (`scripts/ray_stage_job.py`) and touches no control record at all, so the deny is
+    total rather than write-only.
+    """
+    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
+        for steering in ("_tasks", "_transforms", "_gates"):
+            assert not allowed(ray, action="s3:PutObject", bucket=bucket, key=f"{steering}/x.json"), (
+                f"the compute lane can rewrite {bucket}/{steering}/ — it decides what the compute lane runs"
+            )
+            assert not allowed(ray, action="s3:GetObject", bucket=bucket, key=f"{steering}/x.json")
+            assert not allowed(ray, action="s3:DeleteObject", bucket=bucket, key=f"{steering}/x.json")
+
+
+def test_neither_credential_can_destroy_a_recoverable_drop(ray: dict, maintenance: dict) -> None:
+    """A `_trash/` record is the ONLY thing that makes a dropped table restorable.
+
+    `#75`/`#96`: a recoverable drop deregisters and files the record; `undrop` re-registers FROM it.
+    Delete the record and the bytes are still there and nothing can reach them — a data-loss shape
+    that leaves no error behind.
+
+    The two credentials differ, and the difference is the purge: `purge.py` clears the record after it
+    destroys the bytes (`trash_purge_record_not_cleared`), so maintenance must be able to delete one
+    and Ray must not be able to touch one at all. Maintenance is held to reading before it may destroy.
+    """
+    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
+        assert not allowed(ray, action="s3:DeleteObject", bucket=bucket, key="_trash/table/acme-silver$features.json"), (
+            "the compute lane can make a recoverably-dropped table unrecoverable"
+        )
+        assert not allowed(ray, action="s3:PutObject", bucket=bucket, key="_trash/table/x.json")
+    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_trash/table/x.json"), (
+        "the purge cannot read the record whose deadline it enforces"
+    )
+    assert allowed(maintenance, action="s3:DeleteObject", bucket=CONTROL_BUCKET, key="_trash/table/x.json"), (
+        "the purge destroys the bytes and then cannot clear the record, which re-runs the destruction forever"
+    )
+
+
+def test_neither_credential_can_rewrite_the_namespace_INDEX(ray: dict, maintenance: dict) -> None:
+    """`__manifest` is the authoritative namespace->table mapping — a namespace is a ROW in it.
+
+    Writing it re-points or erases what a table id resolves to, which is the whole catalog's ground
+    truth, and neither of these credentials has any business doing it: a stage job is handed its URIs,
+    and compaction rewrites DATA FILES under a dataset root. The purge is the one legitimate reader —
+    it re-checks a trashed id's liveness against `__manifest` before destroying bytes (`purge.py:257`),
+    so this deny is on WRITES, not on reads.
+    """
+    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
+        for policy, who in ((ray, "the compute lane"), (maintenance, "the sweep")):
+            assert not allowed(policy, action="s3:PutObject", bucket=bucket, key=f"{MANIFEST_PREFIX}/acme-silver.json"), (
+                f"{who} can rewrite {bucket}'s namespace index"
+            )
+            assert not allowed(policy, action="s3:DeleteObject", bucket=bucket, key=f"{MANIFEST_PREFIX}/acme-silver.json")
+    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key=f"{MANIFEST_PREFIX}/acme-silver.json"), (
+        "the purge cannot re-check liveness, so it either refuses every record or destroys live bytes"
+    )
+
+
+def test_the_sweep_cannot_steer_the_plane_either(maintenance: dict) -> None:
+    """Write-only, matching this policy's existing shape: maintenance reads records to decide what it
+    may do (`_warehouses` for the bucket set, `_protection` for the pre-pass verdict) and writes none
+    of the ones that govern it. It has no reader for `_tasks`/`_transforms`/`_gates` at all — a sweep
+    does not choose a transform — so writing one could only ever be an escalation."""
+    for bucket in (CONTROL_BUCKET, RUNTIME_BUCKET):
+        for steering in ("_tasks", "_transforms", "_gates"):
+            assert not allowed(maintenance, action="s3:PutObject", bucket=bucket, key=f"{steering}/x.json")
+            assert not allowed(maintenance, action="s3:DeleteObject", bucket=bucket, key=f"{steering}/x.json")
 
 
 def test_the_ray_lane_never_reaches_the_observability_store(ray: dict) -> None:
