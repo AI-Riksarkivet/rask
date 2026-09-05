@@ -59,7 +59,12 @@ class IndexOutcome(BaseModel):
 
 
 class UnknownIndexKindError(ValueError):
-    """The unit named a door — or a scalar index type — this worker cannot build.
+    """The unit describes an index this worker cannot build, and no redelivery will change that.
+
+    Three shapes reach it: a KIND this worker does not serve, a scalar index TYPE pylance does not
+    accept, and a COLUMN the table does not have. One type for all three because the route needs one
+    decision from them — ACK — and the reason is identical: each is a producer defect, and a defect in
+    the message is the one failure redelivery cannot repair.
 
     Refused rather than defaulted: building a scalar index where a vector one was asked for produces a
     table that answers queries wrongly rather than not at all, which is the worse failure and the
@@ -81,6 +86,15 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     Passing a value nobody chose would make this worker decide a semantics the door never offered.
     """
     dataset = lance.dataset(item.uri, storage_options=dict(write_options) or None)
+    # THE COLUMN IS CHECKED BEFORE THE BUILD, because the schema is already in hand and "does this
+    # column exist" is a question with an answer rather than a failure to classify afterwards.
+    # Measured on pylance 10.0.0: an absent column raises a bare `KeyError('nope not found in
+    # schema')` from deep inside `create_scalar_index`, which the route's catch-all answered RETRY —
+    # so the unit returned every `ackWait` forever, occupying a worker to fail identically and burying
+    # the store outages RETRY exists for. Raised as the same type the unknown-kind refusal uses, so
+    # the route acks both through one branch: neither is repairable by redelivery.
+    if item.column not in dataset.schema.names:
+        raise UnknownIndexKindError(f"column {item.column!r} is not in the schema of {item.uri}; it has {sorted(dataset.schema.names)}")
     kwargs: dict[str, Any] = dict(item.params)
     if item.name:
         kwargs["name"] = item.name
