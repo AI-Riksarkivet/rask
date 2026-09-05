@@ -62,6 +62,10 @@ MERGE_RUN: Final = (
     # collide. Clobbering it would erase the cascade's delta boundary on the next reconcile tick — the
     # one fact the lag detector reads.
     "r.consumed_to_version=(CASE WHEN $ctv < 0 THEN r.consumed_to_version ELSE $ctv END), "
+    # consumed_from_version is STICKY on the identical rule, and it is the one that must not be lost:
+    # the floor is what makes a history CONTIGUOUS. Clobbered to null on a reconcile tick, a
+    # gap-free chain of ranges reads as a gap and the loss detector becomes a permanent false alarm.
+    "r.consumed_from_version=(CASE WHEN $cfv < 0 THEN r.consumed_from_version ELSE $cfv END), "
     "r.started_at=coalesce(r.started_at, $tm), r.events_count=coalesce(r.events_count, 0)+1 "
     "RETURN 1"
 )
@@ -76,7 +80,7 @@ RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
 LIST_RUNS: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
-    "r.promotion_status, r.consumed_to_version"
+    "r.promotion_status, r.consumed_to_version, r.consumed_from_version"
 )
 # Discovery / browse — the "what exists?" lists. Like LIST_RUNS these fetch every node and are governed in
 # Python, so a caller can browse the estate without already knowing an exact name.

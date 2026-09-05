@@ -460,6 +460,25 @@ class RunEvent(BaseModel):
         return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
     @property
+    def consumed_from_version(self) -> int | None:
+        """The source version this run's delta STARTED after, from the ``lance`` run facet
+        (``from_version``). Exclusive, matching the filter the stage applies.
+
+        The floor to :meth:`consumed_to_version`'s ceiling, and the half a lag detector cannot work
+        without: a ceiling alone answers "how far did this run read to", never "did it start where the
+        last one stopped". A cascade's lost hop lives in exactly that difference, because the skipped
+        rows fall outside every later hop's filter while the ceiling keeps climbing.
+
+        ``None`` on a first publication, where the facet omits the key and the meaning is "everything up
+        to ``to_version``". Zero would assert a prior publication at version 0 that did not happen.
+        Refuses the same shapes the ceiling refuses, for the same reason: the facet is producer-supplied
+        and ``-1`` is the SET's own "this event did not say" sentinel.
+        """
+        lance = (self.run.facets or {}).get("lance")
+        value = lance.get("from_version") if isinstance(lance, dict) else None
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    @property
     def source_run_id(self) -> str | None:
         """The PRODUCER'S OWN run id, from the ``lance`` run facet (``run_id``).
 

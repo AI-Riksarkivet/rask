@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 
 from tests.unit.test_invariants import _helm_template
@@ -65,7 +66,7 @@ def test_the_destinations_come_from_the_MOVER_declarations() -> None:
     assert not stray, f"these destinations match no mover's toNamespace: {stray}"
 
 
-def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL() -> None:
+def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare `httpx.get` cannot read an authenticated estate, and the gauge cannot say so.
 
     MEASURED LIVE 2026-09-04, which is the only way this was ever going to surface: both readers sent
@@ -87,6 +88,10 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL() -> None:
             "train_lineage_url": "http://lineage:8000",
             "app_api_token": "tok",
             "catalog_service_identity": "service-medallion-producer",
+            # The lane's TABLES, without which the reader refuses before it builds a request — the
+            # credential is only observable on a call the reader is willing to make.
+            "lane_sources": {"bronze": "bronze$events"},
+            "lane_destination_datasets": {"bronze": "silver$features"},
         }
     )
     seen: list[dict[str, str]] = []
@@ -95,13 +100,9 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL() -> None:
         seen.append({k.lower(): v for k, v in dict(kwargs.get("headers") or {}).items()})
         return httpx.Response(200, json={"tags": {}, "runs": []}, request=httpx.Request("GET", url))
 
-    original = readers.httpx.get
-    readers.httpx.get = _capture  # type: ignore[assignment]
-    try:
-        readers.published_reader(settings)("bronze->silver", "acme")
-        readers.consumed_reader(settings)("bronze->silver", "acme")
-    finally:
-        readers.httpx.get = original  # type: ignore[assignment]
+    monkeypatch.setattr(readers.httpx, "get", _capture)
+    readers.published_reader(settings)("bronze->silver", "acme")
+    readers.consumed_reader(settings)("bronze->silver", "acme")
 
     assert len(seen) == 2, "both readers must make a request"
     for headers in seen:

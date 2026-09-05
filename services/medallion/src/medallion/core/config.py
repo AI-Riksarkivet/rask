@@ -364,6 +364,16 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: tier name, because a lane may fan out (`bronze-media` -> `silver-media`) and a naming convention
     #: would quietly mislabel the edge.
     lane_destinations: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_DESTINATIONS")
+    #: Each lane's SOURCE table, by source namespace — `bronze` -> `bronze$events`. The lag detector
+    #: asks the catalog for a TABLE, and a table's name is chosen by the deployment rather than implied
+    #: by its tier: composing `<project>-<namespace>` named an id `require_parent` refuses at every
+    #: create door, so the tags route 404'd on every tick and a never-run cascade reported lag 0.
+    lane_sources: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_SOURCES")
+    #: Each lane's DESTINATION table, by source namespace — `bronze` -> `silver$features`. Distinct
+    #: from `lane_destinations`, which names the destination NAMESPACE for the edge label: matching a
+    #: lineage run needs the full table id, because a namespace is a substring of every tenant's and
+    #: every fan-out lane's output name.
+    lane_destination_datasets: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_DESTINATION_DATASETS")
     #: The catalog's own CONNECTION ROOT — read by the producer, which registers rather than asks.
     #:
     #: A mover needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER

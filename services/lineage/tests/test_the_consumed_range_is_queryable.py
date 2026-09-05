@@ -75,3 +75,76 @@ def test_the_board_query_returns_it() -> None:
     from lineage.services.cypher import LIST_RUNS
 
     assert "r.consumed_to_version" in LIST_RUNS, "LIST_RUNS does not return the consumed range, so the board cannot show it"
+
+
+def test_the_consumed_FLOOR_is_read_off_the_facet() -> None:
+    """The other end of the range, and the half the lag detector could not see without it.
+
+    `events.py` has stamped `from_version` into the `lance` facet since `498b5531` — the same builder,
+    the same event, one key along from the ceiling. Only the ceiling was ever folded onto the run node,
+    so a consumer could ask "how far did this run read TO" and never "did it start where the last one
+    stopped". A cascade's loss lives in exactly that difference: a lost trigger's rows fall outside
+    every later hop's filter, so the ceiling keeps climbing while the gap stays open.
+    """
+    assert _event(operation="embed_features", from_version=3, to_version=7).consumed_from_version == 3
+
+
+def test_a_FIRST_publication_reads_None_not_zero() -> None:
+    """`from_version` is absent on a first publication and means "everything up to `to`". Zero would
+    assert a prior publication at version 0 that did not happen — the distinction `build_stage_trigger`
+    carries on the wire and `consumed_frontier` reads as "covers from the start"."""
+    assert _event(operation="embed_features", to_version=7).consumed_from_version is None
+
+
+def test_the_floor_refuses_the_same_shapes_the_ceiling_does() -> None:
+    """Producer-supplied, so a string that merely parses must not become a version, and `-1` is the
+    Cypher sentinel for "this event did not say" — sendable as data it would mean "keep the old
+    value", which is a producer editing the graph's memory rather than reporting its own run."""
+    assert _event(operation="x", from_version="3", to_version=7).consumed_from_version is None
+    assert _event(operation="x", from_version=-1, to_version=7).consumed_from_version is None
+    assert _event(operation="x", from_version=True, to_version=7).consumed_from_version is None
+
+
+def test_the_floor_is_STICKY_like_every_other_facet_field() -> None:
+    """A reconcile or backfill event for the same graph run carries no lance facet. Clobbering the
+    floor to null would erase the range's lower bound and make a contiguous history read as a gap —
+    turning the loss detector into a permanent false alarm."""
+    from lineage.services.cypher import MERGE_RUN
+
+    assert "r.consumed_from_version=(CASE WHEN $cfv < 0 THEN r.consumed_from_version ELSE $cfv END)" in MERGE_RUN
+
+
+def test_the_floor_comes_back_from_the_run_board() -> None:
+    """Stored and unreadable is the state this whole file exists to end. `LIST_RUNS` is what the lag
+    detector reads, so a column absent there is a field that does not exist as far as it is concerned."""
+    from lineage.services.cypher import LIST_RUNS
+
+    assert "r.consumed_from_version" in LIST_RUNS
+
+
+def test_the_column_COUNT_matches_what_LIST_RUNS_returns() -> None:
+    """AGE demands an explicit column-definition list, and a mismatch is a 500, not a short row.
+
+    `run_cypher(..., columns=N)` builds `AS (col0 agtype, ... colN-1 agtype)`. Postgres answers
+    `DatatypeMismatch: return row and column definition list do not match` when N disagrees with the
+    RETURN — so adding a column to the query without updating the caller takes the whole run board
+    down rather than degrading. Measured live 2026-09-05: every `/runs` read answered 500 and the lag
+    detector counted 14 edges FAILED.
+
+    Counted from the query itself so the two cannot drift again: a future column is added in one place
+    and this gate names the other.
+
+    THE MISMATCH PREDATES THIS FIELD. At `5c11002c` the query returned 15 columns and the caller
+    declared 14, so `/runs` was already unservable — invisible because its only caller was refused by
+    the service door first, and a 401 is returned before a query runs. Two defects stacked in one
+    request path, the outer one hiding the inner.
+    """
+    import inspect
+    import re
+
+    from lineage.services import repository
+    from lineage.services.cypher import LIST_RUNS
+
+    returned = len(re.findall(r"\br\.[a-z_]+", LIST_RUNS))
+    declared = {int(m) for m in re.findall(r"cy\.LIST_RUNS,\s*columns=(\d+)", inspect.getsource(repository))}
+    assert declared == {returned}, f"LIST_RUNS returns {returned} columns and the caller declares {declared or 'none'}"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -715,8 +716,13 @@ def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.Monk
     import lineage.services.repository as repo_mod
 
     async def _fake_fetch(_pool: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int) -> list[list[object]]:
-        # 14 columns since promotion_status joined the projection (the held-vs-failed fix).
-        assert "r.progress_done" in query and columns == 14
+        # COUNTED FROM THE QUERY, never retyped. A literal here pinned 14 while `LIST_RUNS` returned
+        # 15, so the AGE column-definition list was already short of the projection and `/runs`
+        # answered `DatatypeMismatch` to anyone who reached it — which nothing did, because its only
+        # caller was refused by the service door first. A double asserting a constant of its own
+        # cannot notice the query moving underneath it.
+        assert "r.progress_done" in query
+        assert columns == len(re.findall(r"\br\.[a-z_]+", query)), "the AGE column count and the RETURN projection disagree"
         return [
             [
                 "r-prog",

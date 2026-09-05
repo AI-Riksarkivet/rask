@@ -545,6 +545,31 @@ spec:
               {{- $subjects = append $subjects .Values.medallion.producer.serviceIdentity }}
             {{- end }}
             - { name: LINEAGE_SERVICE_SUBJECTS, value: {{ compact $subjects | uniq | sortAlpha | join "," | quote }} }
+            {{- /* THE SAME PRIVILEGED SET THE CATALOG USES, and it has to be the same set rather than a
+                   list of its own. `dapr_auth.service_principal` refuses a privileged subject that
+                   presents the shared token AND an ordinary subject that presents a dedicated one, so
+                   the two branches are mutually exclusive — while `catalog_register.credential`, the
+                   one builder every medallion client uses, resolves the dedicated token once and sends
+                   it to whatever it calls. A subject privileged at one door and ordinary at the other
+                   therefore cannot satisfy both: whichever token it sends, one door refuses it.
+
+                   Measured live 2026-09-05 on the cascade-lag detector, which reads BOTH: the catalog
+                   answered its published-tag read and lineage answered `401 invalid service token` on
+                   every consumed read, so every edge had half its arithmetic and reported UNKNOWN —
+                   publishing nothing, which is indistinguishable from a healthy cascade.
+                   `lineage/core/config.py` has read `LINEAGE_PRIVILEGED_SUBJECTS` all along; nothing
+                   set it, so lineage's privileged branch was unreachable. */}}
+            {{- if .Values.auth.dedicatedServiceCredentials }}
+            {{- /* Re-derived from the same values the catalog's list is built from — `$cascadeWriters`
+                   is scoped to that block, and reaching across would couple two Deployments' render
+                   order. Same inputs, same result, and `test_the_two_doors_agree_on_who_is_privileged`
+                   compares the two rendered strings rather than trusting that. */}}
+            {{- $lineageWriters := list .Values.medallion.producer.serviceIdentity }}
+            {{- range .Values.medallion.movers }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
+            {{- range (.Values.medallion.mediaMovers | default list) }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
+            {{- $lineagePrivileged := append (compact $lineageWriters | uniq) .Values.medallion.train.trainerIdentity }}
+            - { name: LINEAGE_PRIVILEGED_SUBJECTS, value: {{ compact $lineagePrivileged | uniq | sortAlpha | join "," | quote }} }
+            {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}

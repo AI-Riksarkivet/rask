@@ -39,6 +39,23 @@ def list_warehouse_records(control_root: str, storage_options: StorageOptions) -
     return [record for record in list_records(control_root, storage_options, REGISTRY_PREFIX, event=_EVENT) if record.get("id")]
 
 
+def measurable_projects(records: list[dict[str, Any]]) -> list[str]:
+    """Every project with a live warehouse, sorted and de-duplicated — the tenants a cascade detector
+    must measure.
+
+    Beside :func:`maintainable_buckets` because it is the same question asked of the same records: what
+    does this estate actually hold right now? A project is minted by ``POST /v1/projects`` at runtime
+    with an operator-chosen id, so a statically configured tenant list is stale the moment a tenant is
+    onboarded — and a cascade nobody measures is indistinguishable from a cascade with no lag.
+
+    DEACTIVATED warehouses are excluded on the same rule and for a narrower reason: the resolver 403s
+    every operation on a quarantined tenant's namespaces, so its edges cannot advance and would report
+    a lag that grows forever with nothing anyone is permitted to do about it.
+    """
+    projects = {str(r["project"]) for r in records if r.get("project") and str(r.get("status", "active")).lower() != "deactivated"}
+    return sorted(projects)
+
+
 def maintainable_buckets(records: list[dict[str, Any]]) -> list[str]:
     """The buckets whose datasets the sweep should maintain, sorted and de-duplicated.
 

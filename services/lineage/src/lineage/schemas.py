@@ -404,6 +404,7 @@ class RunStatus(BaseModel):
     #: lag predicate the catalog cannot answer. ``None`` for a run that declared no range (a full
     #: rescan, a promotion) and for every run that predates the medallion stamping it.
     consumed_to_version: int | None = None
+    consumed_from_version: int | None = None
 
 
 class Runs(BaseModel):

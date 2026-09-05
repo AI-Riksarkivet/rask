@@ -156,6 +156,7 @@ class LineageRepository:
                     "ps": event.promotion_status or "",
                     # -1 is "this event did not say" — see the sticky SET in cypher.py.
                     "ctv": event.consumed_to_version if event.consumed_to_version is not None else -1,
+                    "cfv": event.consumed_from_version if event.consumed_from_version is not None else -1,
                 },
             )
             progress = event.progress
@@ -622,7 +623,7 @@ class LineageRepository:
         Durable replacement for the in-memory fold: survives a restart and is shared across replicas.
         ``event_type``/``event_time`` are the last-event-wins state/updated_at; ``""`` maps back to None.
         """
-        rows = await fetch(self._pool, self._graph, cy.LIST_RUNS, columns=14)
+        rows = await fetch(self._pool, self._graph, cy.LIST_RUNS, columns=16)
         runs = [
             RunStatus(
                 run_id=r[0],
@@ -640,6 +641,7 @@ class LineageRepository:
                 source_run_id=(r[12] or None),
                 promotion_status=(r[13] or None),
                 consumed_to_version=(r[14] if len(r) > 14 and isinstance(r[14], int) and r[14] >= 0 else None),
+                consumed_from_version=(r[15] if len(r) > 15 and isinstance(r[15], int) and r[15] >= 0 else None),
             )
             for r in rows
         ]

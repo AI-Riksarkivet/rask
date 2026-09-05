@@ -220,9 +220,19 @@ spec:
                    a renamed lane cannot half-move. Without this the lag edge is `<source>->?`, which
                    matches no lineage run: the detector runs cleanly and measures nothing. */}}
             {{- $lanes := dict }}
-            {{- range $.Values.medallion.movers }}{{- $_ := set $lanes .fromNamespace .toNamespace }}{{- end }}
-            {{- range ($.Values.medallion.mediaMovers | default list) }}{{- $_ := set $lanes .fromNamespace .toNamespace }}{{- end }}
+            {{- $laneSources := dict }}
+            {{- $laneOutputs := dict }}
+            {{- range $.Values.medallion.movers }}{{- $_ := set $lanes .fromNamespace .toNamespace }}{{- $_ := set $laneSources .fromNamespace .fromDataset }}{{- $_ := set $laneOutputs .fromNamespace .toDataset }}{{- end }}
+            {{- range ($.Values.medallion.mediaMovers | default list) }}{{- $_ := set $lanes .fromNamespace .toNamespace }}{{- $_ := set $laneSources .fromNamespace .fromDataset }}{{- $_ := set $laneOutputs .fromNamespace .toDataset }}{{- end }}
             - { name: MEDALLION_LANE_DESTINATIONS, value: {{ toJson $lanes | quote }} }
+            {{- /* THE TABLES, from the same declarations and in the same loop. The detector asks the
+                   catalog for a TABLE and matches a lineage run on a full table id; a namespace answers
+                   neither. `<project>-<namespace>` named an id no create door will accept, so every tick
+                   404'd into "never published", and matching a bare namespace hit every tenant's output
+                   as a substring. Derived here rather than listed so a lane added to `movers[]` is
+                   measured with no second edit and a renamed dataset cannot half-move. */}}
+            - { name: MEDALLION_LANE_SOURCES, value: {{ toJson $laneSources | quote }} }
+            - { name: MEDALLION_LANE_DESTINATION_DATASETS, value: {{ toJson $laneOutputs | quote }} }
             # ONE STRING with the Component's `metadata.name` and the path the producer serves at its
             # pod root — Dapr delivers an input binding to `POST /<component name>`, so any two of the
             # three agreeing while the third does not is a cron firing into a 404 forever.
