@@ -1400,7 +1400,7 @@ maintenance:
   # one replica (`replicas: 1` is hardcoded in maintenance.yaml), so the queue's scaling payoff is not
   # available until that pin and the in-process sweep lock are retired together.
   workTopic: ""
-  # DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Cascade repair" (M1)).
+  # DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Maintenance leaves the planner pod").
   #
   # One deployment does the planning AND the compaction today, at `replicas: 1` and 512Mi — so the
   # work is bounded to fit the pod (`compactThreads`, `scanBatchSize`) rather than the pod sized to fit

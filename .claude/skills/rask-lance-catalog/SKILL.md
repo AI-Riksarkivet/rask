@@ -23,11 +23,17 @@ Two contracts stack here, and confusing them is how bugs happen:
   BOTH materialized-view ops (`docs/COVERAGE.md`). Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
   `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
-  **`rename_table` is NOT one of them, and this bullet said it was for months.** #5b backs it
-  in-process (`endpoints/tables.py::rename_table` copies the dataset root, repoints the namespace and
-  deregisters the source, never reaching `native.call`), so it answers 200; `docs/COVERAGE.md:15-17`
-  carries the correction, dated 2026-08-05, and this file kept naming the native stub the endpoint
-  had deliberately stopped using. The spec's *minimum* is 8 metadata ops; we carry the whole list
+  **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:15-17`
+  carries that correction, dated 2026-08-05. It MOVES A POINTER, never bytes (2026-09-04):
+  `dataplane.rename_table` retires the source pointer and re-registers the destination at the source's
+  own location, so version history, row count and the `<hash>_<object_id>` directory all survive
+  untouched — the V2 layout makes the `object_id` suffix a label, not a resolution path
+  (`lance_docs/namespace.md`).
+  THE SOURCE IS RETIRED FIRST, and that ordering is the door's race arbitration rather than a detail:
+  `register_table` accepts a second id at a location another id already holds (measured on the `dir`
+  backend), so writing the destination first let two concurrent renames of one source both succeed —
+  two live ids on one dataset, where `drop_table` on either destroys the other's bytes. Retiring first
+  makes `deregister_table` the contended call; a destination that then fails re-registers the source. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
@@ -178,7 +184,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   binding you cannot read is a namespace you cannot see.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
 - Maintenance (compaction + `optimize_indices` + `cleanup_old_versions` with tags EXEMPT) lives in
-  **`services/maintenance`** (renamed from `compaction` — it does four things, not one) —
+  **`services/maintenance`** (renamed from `compaction` — it does FIVE things, not one: compact, `optimize_indices`, `cleanup_old_versions`, reconcile cross-store drift, and since 2026-09-04 BUILD INDICES off the catalog's request path — `api/index_work.py` + `services/index_build.py`, its own Dapr topic because `ackWait` is per-component and an index build outlasts a sweep unit) —
   `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
   operations are ONE ordered pass per dataset — **compact → optimize_indices → cleanup**
   (`maintenance/services/optimize.py::compact_one`): compaction obsoletes files, the index optimize

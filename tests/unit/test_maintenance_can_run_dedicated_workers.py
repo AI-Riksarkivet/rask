@@ -1,6 +1,6 @@
 """The chart can run maintenance as a planner pod plus dedicated executor pods.
 
-docs/DECISIONS.md "Cascade repair" (M1), which Lakekeeper's docs state as the production practice: "we
+docs/DECISIONS.md "Maintenance leaves the planner pod", which Lakekeeper's docs state as the production practice: "we
 recommend running expire snapshots workers in dedicated pods to avoid impacting REST API performance",
 with the API pod's worker count set to zero.
 

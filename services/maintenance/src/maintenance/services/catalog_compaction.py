@@ -1,6 +1,6 @@
 """The catalog's two metadata halves of a compaction, over HTTP — the planner and the committer.
 
-docs/DECISIONS.md "Cascade repair" (M2). `compaction_executor` deliberately takes these as CALLABLES and
+docs/DECISIONS.md "Maintenance leaves the planner pod". `compaction_executor` deliberately takes these as CALLABLES and
 constructs no client: what it owns is the execute phase and the ordering, and keeping the transport
 out of it is what makes M3 — submitting the same tasks as a `RayJob` — a change of one callable
 rather than a rewrite.

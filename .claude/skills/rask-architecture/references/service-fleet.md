@@ -54,9 +54,13 @@ announces the write and that `/bronze-arrival` filters on. The medallion produce
 that file is the comment explaining why the row's absence is safe (`_pick_route` requires
 `path == prefix` or `prefix + "/"`, and the next character is `-`). This reference previously
 described the row as a surviving deprecation shim, which would have made a call there **502
-rather than 404** — naming a backend as broken instead of the path as absent. The producer's
-remaining doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all
-root-mounted and token-guarded. A workload's stages run as event-triggered movers on the unified
+rather than 404** — naming a backend as broken instead of the path as absent. The producer's INGEST
+doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all root-mounted and
+token-guarded — that rule bounds what may LAND data, and adding a protocol-specific fourth would make
+that protocol privileged. It does not bound the router surface, which is six: those three plus
+`promotions` (the quality gate's third answer), `mover_ops` (`/movers/*`, workflow terminate) and
+`movers/stages/rerun` (the cascade's edge-addressed repair verb, 2026-09-04). Those three are human
+control rather than ingest, which is why they do not weaken the rule. A workload's stages run as event-triggered movers on the unified
 Ray cluster (P7b) — the cascade is modality-blind, so this is the same shape for every runner.
 
 **Both bronze lanes converge on one topic, so movers must discriminate.** The events

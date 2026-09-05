@@ -1,6 +1,6 @@
 """Maintenance can run as a PLANNER pod and separate EXECUTOR pods over the same queue.
 
-docs/DECISIONS.md "Cascade repair" (M1). Compaction, index-optimize and prune run today in one deployment at
+docs/DECISIONS.md "Maintenance leaves the planner pod". Compaction, index-optimize and prune run today in one deployment at
 `replicas: 1`, 1 CPU / 512Mi — the work bounded to fit the pod rather than the pod sized to fit the
 work. Lakekeeper's documentation reaches the same split and states it as the production practice:
 "we recommend running expire snapshots workers in dedicated pods to avoid impacting REST API

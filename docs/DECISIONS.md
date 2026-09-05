@@ -1242,6 +1242,41 @@ them the same plan-elsewhere / commit-here split compaction now uses.
 
 ---
 
+## Maintenance leaves the planner pod (2026-09-04)
+
+Compaction, index-optimize and prune ran in ONE deployment pinned to `replicas: 1` on a 512Mi tier —
+planning and rewriting in the same process, so the rewrite's memory ceiling was the planner's. Two
+changes separate them, and each is independently useful.
+
+**The planner and the executor split over a work queue.** `run_sweep` plans; `api/work.py::handle_unit`
+executes one `DatasetWorkItem`. The planner holds `_sweep_lock` for PLANNING only, so units execute
+concurrently on however many workers are deployed, and `maintenance-worker.yaml` renders those workers
+as a separate Deployment that consumes the queue and never plans. A worker cannot recompute the
+whole-estate protection verdict — the shallow-clone pre-pass must open every dataset in every bucket
+before one is compacted, and the evidence lives only on the referring side — so the reduced
+`protected_by` travels ON the work item rather than being re-derived.
+
+**The rewrite's BYTES leave the pod that plans and commits them.** Lance's own distributed protocol is
+`Compaction.plan` -> `CompactionTask.execute` -> `Compaction.commit`, and the split is by CREDENTIAL:
+metadata moves under the catalog key, bytes under a vended per-table one. Measured on pylance 10.0.0,
+the task JSON BAKES `batch_size`/`num_threads` at plan time and `execute(dataset)` takes no options —
+so the plan door must forward those knobs or an executor can never set them — and a PARTIAL result set
+commits cleanly, which is what makes a failed task a smaller commit rather than a lost tick.
+`CompactionPlaneUnavailable` draws the fallback line at "did a byte move": before that, fall back to
+in-pod compaction; after it, fail, because retrying would rewrite bytes twice.
+
+**Index builds are the fifth thing this service does, and they got their own topic.** A build off the
+catalog's request path needs a longer ack window than a sweep unit, and `ackWait` is PER-COMPONENT in
+Dapr's JetStream pubsub, not per-topic — so sharing the sweep's component would have forced one
+window to serve both. Index segments carry no serialization (`json`/`to_json`/`serialize` are all
+absent on pylance 10.0.0), so compaction's cross-process split cannot transfer one: the whole build
+moves to the worker rather than being planned centrally.
+
+Proven live on k3s: the planner published 21 units and two workers consumed 7 and 8; a distributed
+compaction reported `{"read_version":6,"tasks_planned":1,"tasks_executed":1,"tasks_failed":0,
+"version":8,"fragments_added":1,"fragments_removed":6}` with 300 rows intact, under the vended
+per-table key `536H5FARWTW3GAZV5KOK`.
+
 ## Cascade repair — detection, and the repair verb (2026-09-04)
 
 A missed cascade hop was undetectable and unrepairable: the only remedy was re-publishing the
@@ -1291,7 +1326,7 @@ detector written to catch it. A detector's failure path must be as loud as its f
 
 ---
 
-## The compute plane is decoupled: a port, three adapters, and no engine in the platform (2026-09-04)
+## The compute plane is decoupled: a port, two adapters, and no engine in the platform (2026-09-04)
 
 docs/DECISIONS.md "The compute plane is decoupled" (§7.4), closed. What the platform holds and what an adapter holds are now
 different things, and the boundary is measurable rather than asserted:
@@ -1306,9 +1341,13 @@ outcome, `task_registry` says which engine may be asked, `attestation` says what
 is. All in `service-kit`, none naming an engine. `credential_ref` NAMES a credential and never carries
 one, so an order is safe to log, queue or replay.
 
-**Three adapters, all outside the platform.** `inprocess_executor` (synchronous — proving the port
-does not assume a poll), `ray_submit` (the Jobs API), `rayjob_executor` (a `RayJob` CR + Kueue). A
-fourth needs no platform change: register tasks for it, host something that runs them. The catalog
+**Two adapters conform to the port, and a third path predates it.** `inprocess_executor`
+(synchronous — proving the port does not assume a poll) and `rayjob_executor` (a `RayJob` CR + Kueue)
+each declare `capabilities` and satisfy `Executor`. `ray_submit` is the Jobs-API path and is NOT an
+adapter: it is a module of functions (`submit_stage_job`, `submit_train_job`) that names no
+capabilities and goes around the port entirely, which is why the estate still has an engine-shaped
+call site the port cannot describe. Bringing it behind the port is the remaining decoupling work. A
+further engine needs no platform change: register tasks for it, host something that runs them. The catalog
 validates a declaration against the registry without learning any engine's vocabulary, because
 `command` is a string it forwards and never parses.
 

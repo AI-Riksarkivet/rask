@@ -1,4 +1,4 @@
-"""Build one index, off the request path — docs/DECISIONS.md "A rename moves a POINTER, not bytes", the index half.
+"""Build one index, off the request path — docs/DECISIONS.md "Maintenance leaves the planner pod".
 
 The catalog's `create_index` / `create_scalar_index` doors ran the whole build in their own handler,
 so the cost of a request was a property of the table rather than of the request. **The spec asks for

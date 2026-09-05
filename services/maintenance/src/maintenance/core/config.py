@@ -105,7 +105,7 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
     work_pubsub: str = Field(default="maintenance-work-pubsub", alias="MAINTENANCE_WORK_PUBSUB")
     work_topic: str = Field(default="", alias="MAINTENANCE_WORK_TOPIC")
-    #: Does THIS pod consume the work queue? (M1, docs/DECISIONS.md "Cascade repair".)
+    #: Does THIS pod consume the work queue? (docs/DECISIONS.md "Maintenance leaves the planner pod".)
     #:
     #: `work_topic` cannot express this, and that is the whole reason the switch exists: a PLANNER
     #: needs the topic to PUBLISH onto and must not also subscribe, or splitting the deployment

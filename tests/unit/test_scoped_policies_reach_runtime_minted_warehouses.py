@@ -1,41 +1,29 @@
-"""The scoped RustFS users must reach the buckets their consumers actually open.
+"""The scoped RustFS users reach the buckets their consumers open, and nothing else.
 
-`chart/templates/rustfs-scoped-users.yaml` derives both policies' resource list from three STATIC
-values — `rustfs.bucket`, `medallion.buckets` and `catalog.multibase.dataBases`. None of them names a
-per-warehouse bucket, because `catalog.warehouses.enabled` (on by default) provisions one physically
-separate bucket per warehouse at `POST /v1/warehouses` time, with an operator-chosen name. The
-template's own comment says so — *"PER-WAREHOUSE BUCKETS ARE MINTED AT RUNTIME … outside any static
-render"* — and then writes an allow-list of statically-known buckets anyway.
+THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, which is why neither policy enumerates one.
+`catalog.warehouses.enabled` (on by default) provisions one physically separate bucket per warehouse at
+`POST /v1/warehouses`, with an operator-chosen name, so no value in the chart can name it. Both
+credentials open those buckets: the Ray stage/train jobs read `FROM_URI` and write `TO_URI`, which
+`_resolve_roots` sets to ``<the project's warehouse root>/medallion/<tier>`` for any tenant trigger,
+and `sweep.py::_buckets_to_sweep` extends its configured list from the warehouse registry itself.
 
-Both consumers open those runtime buckets:
+So the policies ALLOW the data planes on every bucket and DENY the control plane precisely — every
+`*_PREFIX` under a control root plus the `__manifest` namespace index — and the control bucket keeps
+its tight listing through `StringNotLike` on `s3:prefix` rather than through its name.
 
-* the Ray stage/train jobs read `FROM_URI` and write `TO_URI`, which `_resolve_roots` sets to
-  ``<the project's warehouse root>/medallion/<tier>`` whenever a trigger carries a project;
-* the sweep enumerates them itself — `sweep.py::_buckets_to_sweep` extends the configured list with
-  `warehouse_records.maintainable_buckets(registry)`, carrying a comment about the exact leak this
-  file gates ("silent: the sweep reported success over the buckets it did know").
+MEASURED on the live estate 2026-09-04/05, which is what these tests encode. A cascade re-run for
+project `acme` submitted a Ray job that died `AccessDenied` on
+``GET /acme-bucket?list-type=2&prefix=medallion/_versions/``, because the policy reached warehouses
+only through a `*-wh` name pattern and `acme-bucket` does not match it. `StringNotLike` was probed
+against this estate's RustFS (1.0.0-beta.8) before the policy was written to depend on it: with a
+`Deny s3:ListBucket` conditioned `StringNotLike s3:prefix medallion*`, listing `lance-catalog/medallion/`
+was ALLOWED while `lance-catalog/` and `lance-catalog/_projects/` were DENIED and other buckets listed
+freely. After the fix, from the Ray credential itself, `PUT` to all nine control prefixes answered
+DENIED and the three warehouse data paths answered ALLOWED.
 
-MEASURED on the live estate 2026-09-04, which is what these tests encode. Project `acme` has an
-active warehouse at `s3://acme-bucket` holding `medallion/bronze` at version 39; a cascade re-run for
-that edge submitted a Ray job that died `AccessDenied` on
-``GET /acme-bucket?list-type=2&prefix=medallion/_versions/``. From the Ray credential itself,
-`acme-bucket/medallion/bronze` was DENIED while `lance-catalog/medallion/bronze` and
-`lakehouse-wh/medallion/bronze` were allowed — the live policy reaches warehouses only through a
-`*-wh` name pattern, and `acme-bucket` does not match it. The chart's rendered policy is narrower
-still: it names `lance-catalog` alone.
-
-The fix inverts the shape the Sids already claim — allow the DATA planes on every bucket, and deny the
-control plane precisely — which needs `StringNotLike` on `s3:prefix` to keep the control bucket's
-listing as tight as it is today. That operator was probed against this estate's RustFS
-(1.0.0-beta.8) before the policy was written to depend on it: with a `Deny s3:ListBucket` on the
-control bucket conditioned `StringNotLike s3:prefix medallion*`, listing `lance-catalog/medallion/`
-was ALLOWED while `lance-catalog/` and `lance-catalog/_projects/` were DENIED and any other bucket
-listed freely — enforced, not ignored.
-
-The evaluator below is deliberately small and IAM-shaped (explicit Deny wins, otherwise an Allow must
-match) so each test states the OUTCOME a credential gets rather than grepping for a bucket name. A
-string grep is what let this hole render green: `test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep`
-checks the CONFIGURED buckets, and a registry-discovered one is by definition not among them.
+The evaluator below is IAM-shaped (explicit Deny wins, otherwise an Allow must match) so each test
+states the OUTCOME a credential gets. A string grep cannot: it can only check the buckets the chart
+names, and a registry-discovered one is by definition not among them.
 """
 
 from __future__ import annotations
