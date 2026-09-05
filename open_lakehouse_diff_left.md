@@ -7,8 +7,24 @@
 > The line references are unchanged.
 
 
-Working backlog, **2026-09-02**, against the working tree at `feec956`. Unsettled work; **delete this
-file when the backlog is drained**. `docs/` is for settled architecture only.
+**Counted 2026-09-05, from the rows below rather than asserted: 103 tracked, 97 open, 6 struck.**
+That splits into 58 lettered rows (52 open) and 45 rows carried here when two registers were drained
+— § Q2 from `open_estate-verification.md`, § Q3 from `open_python-audit.md`. Re-derive the counts when
+you change them; the previous header claimed a freshness date two days older than rows struck beneath
+it, and a header nobody re-counts is how a register stops being evidence.
+
+THIS IS NOW THE ESTATE'S ONLY LAKEHOUSE BACKLOG. Its two siblings were drained and deleted
+(`73b171d7`, `058da189`); what they were and what they found is in `docs/DECISIONS.md` under
+"The Python estate audit" and "A repeating condition is a LEVEL, not an event".
+
+SCOPE, so rows stop accumulating that nobody here will do: this file tracks the LAKEHOUSE — the Lance
+catalog, the medallion cascade, maintenance, lineage, storage governance. Edge rows moved to
+`open_gateway.md` (2026-09-05). A row about the compute plane, the frontend or the annotator belongs
+in its own register, and D5 below is the one knowingly left in place — it is compute-plane work the
+current goal defers rather than a row this file should own.
+
+The body was written against `feec956` (2026-08-25); line references are from there and rows landed
+since carry their own dates. **Delete this file when the backlog is drained.** `docs/` is for settled architecture only.
 
 **No code was changed by this analysis.** It is a read-only pass whose deliverable is this backlog.
 
@@ -118,13 +134,13 @@ explicit.
 
 ---
 
-## A. Spec-verbatim (D3) — the ten blockers
+## A. Spec-verbatim (D3) — the eleven blockers
 
 Measured: 12 of 54 ops verbatim, 34 partial, 3 model-differs, 5 stub. With pylance 10.0.0's bundled
 `RestNamespace`, 5 ops are unusable and 4 answer silently wrong. Vendored spec is v0.9.0; current is
 v0.12.0. Details and evidence: `lance-conformance-and-build-rules.md` §2–§3, §9.
 
-### A1 · Bodyless handlers ignore the required JSON body — **DONE 2026-09-02** (`a6d2032e`)
+### ~~A1 · Bodyless handlers ignore the required JSON body — **DONE 2026-09-02** (`a6d2032e`)~~
 **DONE 2026-09-02** (`a6d2032e`). All nine now declare the spec body; a present body field wins and the
 query aliases stay as a fallback. It also closed a hole it had opened elsewhere: `stats`, `index/list`
 and `index/{n}/stats` had been given a `branch` QUERY parameter to REFUSE a branch-scoped read, and a
@@ -136,7 +152,7 @@ unreachable by any spec client**. **Where.** `services/catalog/src/catalog/api/v
 **Closes it.** Declare the request model as the body on every op, `reconcile_body_id` uniformly, body
 wins over rask's query aliases; a wire-level test posting each spec body.
 
-### A2 · Three response shapes the client cannot parse — **DONE 2026-09-02** (`aa57350c`)
+### ~~A2 · Three response shapes the client cannot parse — **DONE 2026-09-02** (`aa57350c`)~~
 `count_rows` answers a JSON integer, both plan doors a JSON string (encoded AS a string, so a plan that
 looks like JSON is not mistaken for structure), `schema_metadata/update` the direct map. Three tests
 that pinned the deviation were rewritten.
@@ -145,7 +161,7 @@ analyze answer `text/plain` (spec: JSON string); `count_rows` answers `text/plai
 **Where.** `columns.py:229-234`, `data.py:698-720`. **Closes it.** Direct map, `JSONResponse` strings,
 JSON integer; the envelope dialect moves to the management API.
 
-### A3 · GET vs POST on `count_rows` and `tags/list` — **DONE 2026-09-02** (`9e3844b5`; the dual-mount made the OpenAPI non-deterministic and was fixed in `fa4ee8f8`, now gated by `test_the_openapi_contract_is_deterministic.py`)
+### ~~A3 · GET vs POST on `count_rows` and `tags/list` — **DONE 2026-09-02** (`9e3844b5`; the dual-mount made the OpenAPI non-deterministic and was fixed in `fa4ee8f8`, now gated by `test_the_openapi_contract_is_deterministic.py`)~~
 **DONE 2026-09-02** (`e2f0…`). Both dual-mounted `GET` + `POST`. The upstream one-liner in lance is
 still worth filing: its bundled client and reference server disagree with its own spec.
 **What.** The spec and lance-namespace's generated client say POST at every tag since 0.9.0. **pylance's
@@ -198,7 +214,7 @@ lineage keys injected into schema metadata, implicit BTREE on merge_insert, inse
 maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R2; each refusal
 re-expressed with the spec's own code; `branch` honoured (plumbing at `dataplane.py:1085`).
 
-### A8 · Stub status codes — **DONE 2026-09-02** (`9e3844b5`)
+### ~~A8 · Stub status codes — **DONE 2026-09-02** (`9e3844b5`)~~
 **DONE 2026-09-02.** 201 / 202 / 202 declared on the three decorators, asserted through the OpenAPI
 (all three answer 501 today, so no live call can exercise the success status).
 **Where.** `views.py:24,58`, `columns.py:146` lack 201/202. One-line fix each.
@@ -335,7 +351,7 @@ that reads manifest-recorded transactions (the replay marker and `/history` depe
 
 ## D. Edge and service doors (from the gateway/compute/controlplane sweep)
 
-### D1 · Two services fully open through the gateway — **DONE 2026-08-26, verified live 2026-09-02**
+### ~~D1 · Two services fully open through the gateway — **DONE 2026-08-26, verified live 2026-09-02**~~
 **Status.** Stale when written: `1e9acf06` (2026-08-26 19:17, one day after `feec956`) gave both
 services `security.py`, `routes.py`/`proxy.py`/the `projects` router carry `Depends(require_read)`
 (estate `reader` on the root object), both lifespans `attach_auth`, and the chart renders
@@ -350,21 +366,7 @@ policy admits from anywhere. **Where.** `gateway/__init__.py:317-360`, `controlp
 `network-policy.yaml:251-275`. **Closes it.** `make_auth_deps` (OIDC + FGA reader on the root object) on
 both routers and the Serve proxy.
 
-### D2 · Sidecar-only blocklist is a partial hand-list
-**What.** Only `lineage-events` and `lineage-reconcile-cron` are blocked; the root rewrites expose
-`/api/lineage/lineage-dlq`, `/api/catalog/control-events`, both `/dapr/subscribe`, `/ui/*`, `/demo/*`;
-with `APP_API_TOKEN` unset the route guards no-op. **Closes it.** Invert to an allowlist per
-root-rewritten row (catalog `/v1/*`; lineage `/runs`, `/events`, `/v1/*`).
-
-### D3 · No body cap, rate limit, request-id, forwarded-for, access log, or coded errors at the edge
-**Status 2026-09-02.** Half stale: the gateway now mounts `RequestIDMiddleware`
-(`gateway/__init__.py:513`) so one id reaches every hop. It still runs neither `register_middleware`
-nor a body cap, rate limit, access line or coded 404/502 — those stand.
-**Where.** `gateway/__init__.py:280,332,341,347`. **Closes it.** Streaming body-size middleware,
-token bucket per subject/IP, `RequestIDMiddleware`, strip inbound `X-Forwarded-*` and inject at the edge,
-one structured access line per request, problem+json with `code` for 404/413/429/502.
-
-### D4 · Compute's prune route does not fail closed; Serve proxy path unbounded — **DONE 2026-09-02, verified live**
+### ~~D4 · Compute's prune route does not fail closed; Serve proxy path unbounded — **DONE 2026-09-02, verified live**~~
 **Status.** Both halves were worse than written and both are closed (`a95ca7e5`). Measured on the
 deployed pod before the fix: the Dapr SIDECAR held `APP_API_TOKEN` and stamped every delivery while
 the APP container held none — the chart rendered it only for `daprIngest`/`lanceWriter` services —
@@ -413,6 +415,8 @@ catalog registry / warehouse roots; create the Dataset vertex from on-disk `line
 insert). **Closes it.** Feed row inside the ingest transaction; time-based retention.
 
 ### E5 · Unbounded growth, O(history) hot paths, no default pruning
+
+> MERGED into **Q3-10** — the same defect (unbounded list reads with no server-side LIMIT) was tracked here and in the Python-audit ledger under two ids. Q3-10 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
 **Where.** `values.yaml:404` (`runRetentionDays: 0`), `repository.py:352-354,660,711`, no index on
 `Run.event_time`, unbounded `*1..` traversals. **Closes it.** `latest_version` on the Dataset node;
 index on `event_time`; bounded paths; paginated `/runs`, `/producers`.
@@ -569,17 +573,23 @@ the location is a Lance root before `delete_dir`; a maintenance identity scoped 
 
 ### I3 · Both emit kernels swallow; only the medallion has an outbox — **HIGH** (R10)
 
+> MERGED into **Q3-13** — the same defect (two OpenLineage kernels and four RunEvent builders) was tracked here and in the Python-audit ledger under two ids. Q3-13 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
+
 ### I4 · The FGA model cannot express the verdict's rungs — **MEDIUM-HIGH**
 **What.** No `branch`, `column`, `base`, `estate` type; bootstrap is a configured root warehouse plus
 out-of-band tuples (`provision()` writes none). **Closes it.** C2's `branch`; a column-policy relation
 (§J3); an `estate` root with `can_create_project`; `.fga.yaml` cases; `_CHILD_EDGE_PARENT_TYPES`.
 
 ### I5 · Duplicated seams
+
+> MERGED into **Q3-14** — the same defect (three hand-rolled storage_options builders) was tracked here and in the Python-audit ledger under two ids. Q3-14 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
 **What.** Two conflict classifiers; two emit kernels with three producer strings; ingest hand-maps 409;
 `storage/client.py:102` is a verified no-op; three boto3 constructors; two S3FileSystem constructors with
 different scheme logic. **Closes it.** B3, R10, one `s3_client`, delete the dead line.
 
 ### I6 · Untested seams
+
+> MERGED into **Q3-38** — the same defect (`ray_kit.submit` has no test) was tracked here and in the Python-audit ledger under two ids. Q3-38 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
 `objectfs.py`, `lakehouse/blobs.py`, `lancekit/store.py`, `lancekit/reader.py` REST path, `audit.py`,
 `middleware.py`; `submit_or_reattach`'s delete branch.
 
@@ -663,6 +673,8 @@ section above point at it rather than repeat it.
 
 ### O1 · Lakehouse
 
+> MERGED into **Q3-22** — the same defect (the catalog's repeated describes and dataset opens per mutating op) was tracked here and in the Python-audit ledger under two ids. Q3-22 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
+
 | Priority | Item | Note |
 | --- | --- | --- |
 | Medium | **No index is ever built on a governed table**; search tunes `nprobes` for one that is not there, so semantic search is a brute-force scan | J7 is the governed version of the fix |
@@ -727,7 +739,7 @@ Fixed the same day (8): `create_index`, `create_scalar_index`, `explain_plan` (b
 `query`), `describe` (`?branch=` and `?version=9999`), `stats`, `index/list`, `index/{n}/stats`,
 `insert?branch=`.
 
-Not addressed (14), by severity as reported:
+Not addressed — 12 DOORS carrying 14 parameters (a door may drop more than one), by severity as reported:
 
 | Severity | Door | Parameter |
 | --- | --- | --- |

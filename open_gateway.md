@@ -144,3 +144,26 @@ exists; merged-docs decision recorded; `docs/architecture/system-overview.md` +
 
 Delete this file when Phase 2 lands (plan docs are working documents; `docs/` carries
 only settled architecture).
+
+
+## Carried from `open_lakehouse_diff_left.md` (2026-09-05)
+
+Two rows from that register's section D are edge concerns, not lakehouse ones, and they belong to
+whoever owns the edge. Both are unaffected by which proxy serves it — a body cap and a blocklist are
+required of nginx, kgateway and the Python gateway alike — so they are stated here rather than folded
+into either phase above.
+
+### D2 · Sidecar-only blocklist is a partial hand-list
+**What.** Only `lineage-events` and `lineage-reconcile-cron` are blocked; the root rewrites expose
+`/api/lineage/lineage-dlq`, `/api/catalog/control-events`, both `/dapr/subscribe`, `/ui/*`, `/demo/*`;
+with `APP_API_TOKEN` unset the route guards no-op. **Closes it.** Invert to an allowlist per
+root-rewritten row (catalog `/v1/*`; lineage `/runs`, `/events`, `/v1/*`).
+
+### D3 · No body cap, rate limit, request-id, forwarded-for, access log, or coded errors at the edge
+**Status 2026-09-02.** Half stale: the gateway now mounts `RequestIDMiddleware`
+(`gateway/__init__.py:513`) so one id reaches every hop. It still runs neither `register_middleware`
+nor a body cap, rate limit, access line or coded 404/502 — those stand.
+**Where.** `gateway/__init__.py:280,332,341,347`. **Closes it.** Streaming body-size middleware,
+token bucket per subject/IP, `RequestIDMiddleware`, strip inbound `X-Forwarded-*` and inject at the edge,
+one structured access line per request, problem+json with `code` for 404/413/429/502.
+
