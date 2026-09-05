@@ -374,7 +374,7 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
         them — a `gather` over them buys queueing, not parallelism. And each one is a full
         read-modify-write of the whole index, so N of them push O(N²) bytes through the state store
         in N save transactions. The send door admits 1000 replicas in one request; only collapsing
-        them into a single load/mutate/save makes that affordable (open_python-audit ANN-03).
+        them into a single load/mutate/save makes that affordable (docs/DECISIONS.md "The Python estate audit" ANN-03).
 
         **The state gate is evaluated once, up front**, over the whole batch: a project that stops
         accepting items part-way through one request has no meaning, and a partial refusal would be

@@ -1,6 +1,6 @@
 """Every `?dataset=` on every route must be the DECLARED param, not a bare default (VS-21).
 
-open_python-audit VS-21. Eleven route parameters were written `dataset: str | None = None` while
+docs/DECISIONS.md "The Python estate audit" VS-21. Eleven route parameters were written `dataset: str | None = None` while
 the package they import from already defines the alias:
 
     DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB when omitted).")]

@@ -168,7 +168,7 @@ async def dispatch(
             return _mcp(node)
         # The pure-CPU arms run OFF the loop: caller-supplied regex (and the DOTALL scans inside
         # alto_lines/compare_texts) are unbounded CPU work, and inline they froze the whole process —
-        # probes included, since /api/health shares the loop (open_python-audit
+        # probes included, since /api/health shares the loop (docs/DECISIONS.md "The Python estate audit"
         # FLOWS-REDOS-ON-LOOP). A thread does not stop a GIL stall, so the subject-length cap in
         # `_regex` is the load-bearing half; the threadpool keeps well-behaved work from starving
         # concurrent requests.

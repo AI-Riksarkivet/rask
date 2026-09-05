@@ -1,6 +1,6 @@
 """The object browser's 404s must name the BUCKET they are talking about (VS-22).
 
-open_python-audit VS-22. `bucket` on these routes is a STORE NAME — a key into the catalog's
+docs/DECISIONS.md "The Python estate audit" VS-22. `bucket` on these routes is a STORE NAME — a key into the catalog's
 storage registry — and the real bucket only appears at the boto call, via `_registered_bucket`. But
 `s3_errors(bucket=bucket)` was handed the STORE name, so `exc.bucket` carried it too, and
 `_missing_bucket` then told the operator:

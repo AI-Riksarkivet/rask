@@ -156,7 +156,7 @@ async def _resolve_caller(
     # no door". Returning on it alone was a full bypass of the user path as well: an estate with
     # `RASK_OIDC_ENABLED=true`, a live FGA client and a blank or unset `APP_API_TOKEN` accepted every
     # ingest from anyone who could reach the port, while every surface reported authorization as ON.
-    # That is open_python-audit's ING-01, and the blank case is the likely one — a secret that renders
+    # That is docs/DECISIONS.md "The Python estate audit"'s ING-01, and the blank case is the likely one — a secret that renders
     # empty is far more common than one nobody wired, and it fails OPEN rather than loudly.
     #
     # So the open posture is now conditioned on what it always claimed to mean: no service token AND no
@@ -198,7 +198,7 @@ async def _resolve_caller(
         try:
             # Off the loop: verify() does synchronous OIDC discovery + JWKS fetches (up to 15s) on a
             # cold cache or key rotation — inline it stalled every in-flight request in the pod,
-            # probes included (open_python-audit ING-02). Same rule _DaprWorkflowStarter.start
+            # probes included (docs/DECISIONS.md "The Python estate audit" ING-02). Same rule _DaprWorkflowStarter.start
             # already states one module over.
             #
             # The hop itself moved into `service_kit.governed.oidc` rather than living here: this fix

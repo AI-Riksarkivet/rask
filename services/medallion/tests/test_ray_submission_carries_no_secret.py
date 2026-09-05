@@ -1,6 +1,6 @@
 """No secret may ride a Ray Jobs submission body — the Jobs API echoes it to any reader.
 
-open_python-audit (P0, E1) — "The S3 secret key and the estate's APP_API_TOKEN are shipped into the
+docs/DECISIONS.md "The Python estate audit" (P0, E1) — "The S3 secret key and the estate's APP_API_TOKEN are shipped into the
 Ray Jobs `runtime_env`, which the Jobs API echoes back to any reader". Confirmed live at HEAD by the
 independent re-audit: `GET /api/jobs/<id>` returns the submitted `runtime_env` verbatim, the Ray
 dashboard is unauthenticated, `services/compute` proxies it at `/api/ray/*`, and the gateway

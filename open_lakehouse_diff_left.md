@@ -770,3 +770,57 @@ Row 35 (C) is CLOSED and was stale when written: it said `/bronze-arrival` carri
 "(verified — zero grep hits)", and `ingest_trigger.py:303-305` sets it from `_vended_upstream`
 (`d58ffaff`). The operator door does the same as of `bd905e61`, so all three cascade heads now name
 the catalog-vended location.
+
+## Q3. Carried from `open_python-audit.md` when it was drained (2026-09-05)
+
+That ledger held 249 distinct findings (498 row entries across a detail table and an index): 384
+FIXED, 32 DISSOLVED, 4 WRONG, 74 PARTIAL, 4 OPEN by row entry. Thirty-nine were still live and are
+below. What the audit WAS, its final counts and its four structural lessons are in
+`docs/DECISIONS.md` "The Python estate audit"; a FIXED finding's reasoning is in the commit that
+fixed it, which is where this estate keeps history.
+
+`DUP-08` is NOT carried: its remainder was "the OIDC/FGA settings block is re-declared in 4
+services", and eight services now import `GovernedAuthSettings` while none re-declares
+`RASK_OIDC_ISSUER`. Closed by X10's rename, which the ledger never re-checked against.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q3-1 | `CAT-CORE-13` **OPEN** | med | One 340-line `Settings` carries every domain's configuration |
+| Q3-2 | `DUP-15` **OPEN** | med | The Dapr-workflow scheduler is written twice and the copies' timeouts disagree |
+| Q3-3 | `VS-07` | med | Five silent swallows in the search path render real failures as empty results |
+| Q3-4 | `PS-02` | med | `storage`'s error taxonomy is half-applied — `s3_errors` wraps nothing inside the package |
+| Q3-5 | `MAINT-08` | med | `reconcile()`'s `control_root` falls back to the POLICY root, not the control root |
+| Q3-6 | `ingest-flow-06` | med | `park_poison` publishes unguarded — one bad unit fails the whole run when the DLQ is down |
+| Q3-7 | `catalog-api-07` | low | `_collect_descendants` recurses with no depth cap and no cycle guard |
+| Q3-8 | `catalog-api-06` | low | Three tuple write/revoke sites bypass the `seed_ownership` seam |
+| Q3-9 | `ING-14` | med | The A8 provenance check fetches the entire unbounded `/runs` board |
+| Q3-10 | `F-LIN-04` | med | `list_runs`/`list_datasets`/`list_jobs` are fetch-all with no server-side LIMIT |
+| Q3-11 | `ANN-14` | med | Publish transport builds a fresh httpx connection per call, retries one error class |
+| Q3-12 | `DUP-14` | med | The same hand-rolled HTTP backoff loop in `packages/storage` and `services/ingest` |
+| Q3-13 | `DUP-10` | med | Two OpenLineage kernels and four `RunEvent` builders |
+| Q3-14 | `DUP-19` | low | Three hand-rolled `storage_options` builders bypass `lance_storage_options` |
+| Q3-15 | `DUP-21` | low | Seven outbound HTTP sites build a fresh httpx client per call |
+| Q3-16 | `MED-008` | med | Every outbound call builds its own httpx client — one pool per call |
+| Q3-17 | `SK-03` | med | A fresh urllib3 `ApiClient` per catalog read/write, never disposed |
+| Q3-18 | `SKG-07` | med | `make_client` returns an aiohttp-backed `OpenFgaClient` with no disposal contract |
+| Q3-19 | `SKG-11` | med | Module-level mutable cache in `warehouse_registry` with no bound and no eviction |
+| Q3-20 | `MAINT-07` | med | `reconcile()` builds a boto3 client per call inside an `async def` |
+| Q3-21 | `MAINT-12` | med | The multi-base gate issues one sequential S3 HEAD per referenced path |
+| Q3-22 | `CAT-CORE-09` | med | Each mutating table op performs three namespace describes plus three dataset opens |
+| Q3-23 | `VS-16` | med | Voice similarity issues one Lance scan per hit (N+1) and a fresh executor |
+| Q3-24 | `SKG-10` | med | Five direct `os.environ` reads outside any Settings class |
+| Q3-25 | `SK-14` | low | `RASK_*` read directly via `os.environ` outside the settings modules |
+| Q3-26 | `F-LIN-08` | med | Route topology decided at import time by settings-conditional module-level branches |
+| Q3-27 | `X8` | med | The four `make_service_app` services expose liveness only; the chart points readiness at it |
+| Q3-28 | `MED-014` | low | Both app entrypoints read settings and configure logging at import time |
+| Q3-29 | `ING-18` | low | Query-parameter clamping done by hand instead of declared |
+| Q3-30 | `ingest-flow-16` | low | Generator workflows annotated as returning their final value |
+| Q3-31 | `ANN-07` | med | Half the annotator routes return bare `dict[str, Any]` — raw actor documents reach clients |
+| Q3-32 | `VS-18` | med | Ten routes return bare `dict`/`list[dict]`, losing the response contract |
+| Q3-33 | `SKG-09` | med | Every lakehouse control-plane record is an unvalidated `dict[str, Any]` |
+| Q3-34 | `F-LIN-07` | med | Domain values cross models→repository as untyped dicts and positional tuples |
+| Q3-35 | `CAT-CORE-08` | low | Service functions return `dict[str, Any]` that endpoints splat into models |
+| Q3-36 | `MED-013` | low | Two handler seams typed `Any` with an ANN401 suppression |
+| Q3-37 | `SKG-14` | med | The audited scope sits under a blanket 21-rule ruff exemption (5 lines still in `pyproject.toml`) |
+| Q3-38 | `PS-15` | med | `ray_kit.submit` — deterministic ids and the reattach branch — has no test |
+| Q3-39 | `MED-002` | low | `transform.py`'s process-wide `_write_lock` is still acquired BLOCKING |

@@ -1,4 +1,4 @@
-"""Every deployed Python app belongs to one of FOUR declared families — open_python-audit X1.
+"""Every deployed Python app belongs to one of FOUR declared families — docs/DECISIONS.md "The Python estate audit" X1.
 
 X1 was parked as "three entrypoint families, two error taxonomies, three health conventions and two
 OTel wiring paths". Two of those axes have since been answered by the code and are pinned elsewhere:

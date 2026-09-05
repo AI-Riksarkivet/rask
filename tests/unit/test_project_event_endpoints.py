@@ -52,7 +52,7 @@ class _FakeProject:
             raise self.raise_on_fire
         self.fired.append(payload)
         # As the ACTOR answers: `tenant` and `slug` are required on `AnnotationProject`, and the
-        # route publishes that model now (open_python-audit ANN-07), so a document the actor could
+        # route publishes that model now (docs/DECISIONS.md "The Python estate audit" ANN-07), so a document the actor could
         # not have stored no longer passes through the route either.
         return {"state": "publishing", "project_id": "p1", "tenant": "acme", "slug": "charters"}
 

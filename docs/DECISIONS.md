@@ -1242,6 +1242,43 @@ them the same plan-elsewhere / commit-here split compaction now uses.
 
 ---
 
+## The Python estate audit (2026-08-07 → 2026-09-05)
+
+A 304-finding audit of every Python package and service, drained over nine batches. It is cited from
+~98 files by finding id (`X6`, `DUP-16`, `VS-07`), and those citations name a real thing: the ledger
+lived in docs/DECISIONS.md "The Python estate audit" until it was drained, and its full text is in git history at the
+commit that deleted it. What follows is what a reader needs without that file.
+
+**Final counts, re-derived from the ledger's own rows rather than its header:** 498 row entries across
+a detail table and an index (so 249 distinct), of which 384 FIXED, 74 PARTIAL, 32 DISSOLVED, 4 WRONG,
+4 OPEN. Thirty-nine distinct findings were still live at the drain; they moved to
+`open_lakehouse_diff_left.md` § Q3, one row each, with their surviving remainder named.
+
+**Why the ledger could be deleted while the ids stay meaningful.** A FIXED finding's reasoning belongs
+to the commit that fixed it — the estate's own rule, that history lives in the commit message or here
+rather than in the prose. Keeping a 747 KB ledger to hold 384 already-closed rows is the shape that
+made it untrustworthy in the first place: an earlier campaign was faulted for asserting status instead
+of counting it, and a file too large to re-count is a file whose header nobody checks.
+
+**The four structural lessons, which outlive every individual row:**
+
+* **The authz asymmetry.** Services shipped with no authorization at all (`X6`: search) beside
+  siblings that gated every route. A service's door is not optional and not a per-service judgement —
+  `GovernedAuthSettings` is the one declaration, and a service that does not import it has no door.
+* **Durable work loses on the boundaries, not in the middle.** Event loops closed under pooled
+  clients, activities that were not re-execution safe, `park_poison` publishing unguarded. Dapr
+  delivers at least once; every activity is written to survive being run twice.
+* **Config sprawl is a correctness problem.** Direct `os.environ` reads outside any Settings class,
+  and one 340-line `Settings` carrying every domain (`CAT-CORE-13`, still open). A value the render
+  gates cannot see is a value that drifts.
+* **Duplication is where two copies disagree.** Two OpenLineage kernels, four `RunEvent` builders,
+  three `storage_options` builders, a scheduler written twice with different timeouts (`DUP-15`,
+  still open). The estate's rule — one seam, and the second copy is the defect — comes from here.
+
+**One correction the drain owed itself.** Two of its four OPEN rows were corrections to the drain's
+OWN false claims rather than undrained findings, which is why the counts here are stated as
+re-derived: a ledger that reports its own status is a ledger that can be wrong about it.
+
 ## A repeating condition is a LEVEL, not an event (2026-08-30)
 
 Measured, and the measurement is the argument. Between 2026-08-29 22:00 and 08:08 the notifications

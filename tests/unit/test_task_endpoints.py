@@ -92,7 +92,7 @@ def _task(**kw: Any) -> dict[str, Any]:
     `source` and `media` are required on `Task` and were absent here: the double described a
     document the actor cannot store, which is exactly the shape of double that lets a route break
     with the suite green (`test_publish_token_after_credential_removal.py` has the same lesson).
-    The routes now publish the `Task` model (open_python-audit ANN-07), so a document that could
+    The routes now publish the `Task` model (docs/DECISIONS.md "The Python estate audit" ANN-07), so a document that could
     not exist no longer passes through them either.
     """
     base: dict[str, Any] = {

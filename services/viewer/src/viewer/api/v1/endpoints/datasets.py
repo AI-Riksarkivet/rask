@@ -71,10 +71,10 @@ async def list_datasets(state: StateDep, client: FgaClientDep, subject: CurrentS
 
     # Off the loop: `registry.get` opens Lance/S3 under a threading.Lock, and this is the first call
     # every zone makes on page load — inline it serialized the whole process behind one cold dataset
-    # (open_python-audit VS-02). The row table is read HERE, in the same pass, so `_may_see` below
+    # (docs/DECISIONS.md "The Python estate audit" VS-02). The row table is read HERE, in the same pass, so `_may_see` below
     # never re-opens the registry per dataset (the descriptor was being read twice).
     #
-    # `_registry(state)` RUNS INSIDE the threadpool too (open_python-audit E2): building the registry
+    # `_registry(state)` RUNS INSIDE the threadpool too (docs/DECISIONS.md "The Python estate audit" E2): building the registry
     # reads `settings.storage_options()`, a BLOCKING Dapr secret fetch on the cold path, and it used
     # to sit on the event loop above this function. The secret is `_store_secret`-cached, so the boot
     # warm usually makes this free — but a request that arrives before the warm, or after a warm that

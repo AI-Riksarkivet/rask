@@ -179,7 +179,7 @@ _TRANSPORT_MODULES: Final[frozenset[str]] = frozenset(
 )
 
 #: Both spellings of a publish. `publish_json` is `dapr_publish`'s serialize-and-report wrapper over
-#: `publish_event` (open_python-audit DUP-18): the five medallion trigger sites call it now, and a
+#: `publish_event` (docs/DECISIONS.md "The Python estate audit" DUP-18): the five medallion trigger sites call it now, and a
 #: pattern that knew only `publish_event` stopped seeing every one of them — the registry going quiet
 #: about five real publishers, which is this guard's own failure mode arriving through the scan.
 _PUBLISH_CALL = re.compile(r"\bpublish_(event|json)\(")
@@ -5840,7 +5840,7 @@ def test_no_coroutine_verifies_a_bearer_on_the_event_loop() -> None:
     every in-flight request in the pod, and any liveness probe mounted on the same app.
 
     The motivating history is the one this file exists for. The fix was written on the ingest door
-    (`open_python-audit` ING-02) and verified there; the medallion door is a ~120-line COPY of the same
+    (`docs/DECISIONS.md "The Python estate audit"` ING-02) and verified there; the medallion door is a ~120-line COPY of the same
     function (DUP-03) and went on blocking the cascade head, plus a second copy in the promotion door.
     Two of the three call sites were wrong while the claim "the blocking-auth defect is fixed" was
     true of the one that had been looked at. Coroutines must go through

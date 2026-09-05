@@ -1,6 +1,6 @@
 """Settings are declared in `viewer.core.config`, and a module's privates stay private (VS-24).
 
-open_python-audit VS-24, two halves of one habit:
+docs/DECISIONS.md "The Python estate audit" VS-24, two halves of one habit:
 
 * `objects.py` read `os.getenv("RASK_SECRET_STORE", "lance-secrets")` inline — the ONLY
   `os.getenv` in either of these two services, in an endpoint module, for a value every other

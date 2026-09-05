@@ -23,7 +23,7 @@ disclosed, no door opens — so this is a misreported outage, not an exposure. B
 
 The fix follows `ingest/__init__.py`, which already installs both handler sets on a
 `make_service_app` app and says why in a comment: "A DENIAL MUST BE A 403, NOT A 500." Doing it in
-the factory rather than per app also settles the divergence `open_python-audit` X11 files — ingest's
+the factory rather than per app also settles the divergence `docs/DECISIONS.md "The Python estate audit"` X11 files — ingest's
 422 differing from its three fleet siblings — by making all of them the same shape rather than by
 removing the handler that made ingest right.
 """

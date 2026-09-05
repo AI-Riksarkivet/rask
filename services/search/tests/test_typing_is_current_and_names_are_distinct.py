@@ -1,6 +1,6 @@
 """PEP 695 type parameters, and no parameter shadowed by a local (VS-23).
 
-open_python-audit VS-23, two small things in the search service's typing:
+docs/DECISIONS.md "The Python estate audit" VS-23, two small things in the search service's typing:
 
 * `encoders/base.py` declared three module-level `TypeVar`s (`_Resp`, `_In`, `_Out`) used by exactly
   two methods, one each. A module-level TypeVar reads as a shared type variable — something several

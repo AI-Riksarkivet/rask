@@ -193,7 +193,7 @@ def test_the_spec_carries_the_selector_on_the_wire() -> None:
     assert SearchSpec.model_validate({"table": "lines"}).table == "lines"
 
 
-# ── the result cache must SEE the selector (open_python-audit VS-04) ─────────────────────────────
+# ── the result cache must SEE the selector (docs/DECISIONS.md "The Python estate audit" VS-04) ─────────────────────────────
 #
 # `cache_key` omitted `spec.table` and `version_signature` read the DEFAULT `declared.search`, so
 # two searches over different tables of one corpus collided on one entry — and the stale rows carry

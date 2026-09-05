@@ -1,6 +1,6 @@
 """A route whose ENVELOPE is fixed must declare it in the schema (VS-18).
 
-open_python-audit VS-18: ten routes annotated a bare `dict[str, Any]` / `list[dict[str, Any]]`, so
+docs/DECISIONS.md "The Python estate audit" VS-18: ten routes annotated a bare `dict[str, Any]` / `list[dict[str, Any]]`, so
 FastAPI serialized whatever Lance produced and OpenAPI documented "an object". The finding's own
 recommendation draws the line this file draws: define the envelope, and keep an explicit
 `dict[str, Any]` FIELD where the row shape is genuinely dataset-dependent.

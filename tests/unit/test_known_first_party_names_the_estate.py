@@ -4,7 +4,7 @@ The list decides which isort BLOCK an import lands in: a name missing from it ma
 `from catalog.core.config import ...` beside `import httpx`, and a name that outlives its package
 keeps reserving first-party status for a module nobody can import. The first half was measured — the
 list carried nine of nineteen names for months, and correcting it cost a 465-diagnostic repo-wide
-re-sort (`open_python-audit` X3). The second half is the deletion direction, and nothing watched it:
+re-sort (`docs/DECISIONS.md "The Python estate audit"` X3). The second half is the deletion direction, and nothing watched it:
 `packages/tracker` could be removed from the workspace, the lock and the testpaths and still be
 declared first-party here, because no gate compared this list to disk.
 

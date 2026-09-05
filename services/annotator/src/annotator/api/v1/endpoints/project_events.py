@@ -479,7 +479,7 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
     precondition would then read a state for a task that cannot answer for itself.
 
     Both phases are shaped by which actor they address, which is the thing that makes them different
-    (open_python-audit ANN-03). The seeds each address their OWN task actor id, so they fan out under
+    (docs/DECISIONS.md "The Python estate audit" ANN-03). The seeds each address their OWN task actor id, so they fan out under
     `_ACTOR_FANOUT`. The index writes all address the SAME project actor, which serialises them on
     its turn lock regardless — and each one rewrote the entire index — so they are collapsed into one
     `send_many` rather than made concurrent. At the 1000-replica cap this is 1000 bounded-concurrent
@@ -503,7 +503,7 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
     # refusal names the datasets that DO exist, which is what makes it actionable and also what
     # makes it something an unauthorised caller must not be able to enumerate. Off the loop: the
     # body loops dataset_handle (blocking Lance/S3 under a threading.Lock) per named dataset —
-    # inline it froze every in-flight request on a cold miss (open_python-audit ANN-01).
+    # inline it froze every in-flight request on a cold miss (docs/DECISIONS.md "The Python estate audit" ANN-01).
     await run_in_threadpool(_refuse_unknown_datasets, state, payload)
 
     # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling

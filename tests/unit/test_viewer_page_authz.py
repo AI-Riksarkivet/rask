@@ -68,7 +68,7 @@ def _app(
     app.dependency_overrides[pg.CurrentSubject.__metadata__[0].dependency] = lambda: subject
     app.dependency_overrides[pg.RawBearerToken.__metadata__[0].dependency] = lambda: token
 
-    # `storage_options` is a METHOD on the real settings (open_python-audit E2: it performs a
+    # `storage_options` is a METHOD on the real settings (docs/DECISIONS.md "The Python estate audit" E2: it performs a
     # blocking Dapr secret fetch, and a @property disguised that as a free attribute read). The
     # double has to match, or it tests a shape production does not have. `http` carries the pooled
     # catalog stub `_resolve` posts through (VS-12) — the resolve reuses `state.http` rather than

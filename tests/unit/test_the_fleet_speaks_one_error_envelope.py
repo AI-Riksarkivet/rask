@@ -1,4 +1,4 @@
-"""One 422 body across the fleet, installed once (open_python-audit X11).
+"""One 422 body across the fleet, installed once (docs/DECISIONS.md "The Python estate audit" X11).
 
 X11 filed ingest as the odd one out: it called `install_problem_handlers` on top of an app
 `make_service_app` had already built, so its `RequestValidationError` body came from the

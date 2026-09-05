@@ -22,7 +22,7 @@ even while it is off the shared app-factory path.
 
 THE OTHER SEVEN ALSO COME OUT OF A FACTORY NOW, and this paragraph used to say they did not —
 that they "build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`mover.py`". They did, all
-seven, each repeating the same five-step boot in copied comments (open_python-audit DUP-12), until
+seven, each repeating the same five-step boot in copied comments (docs/DECISIONS.md "The Python estate audit" DUP-12), until
 the mover was found to have lost its request-id layer in the copying. Today: `viewer`, `search` and
 `annotator` build through `service_kit.media.app.build_media_app` over one shared
 `service_kit.media.lifespan`; `catalog`, `lineage`, the two `medallion` apps and `maintenance` build

@@ -1,6 +1,6 @@
 """`GET /api/object/download` must stream, not materialise the object (VS-15).
 
-open_python-audit VS-15. The route did `resp["Body"].read()` and handed the bytes to
+docs/DECISIONS.md "The Python estate audit" VS-15. The route did `resp["Body"].read()` and handed the bytes to
 `Response(content=...)`: the whole object lived in the process before a single byte was sent, with
 no cap. The docstring defended it — "the two rask buckets hold page images (~MBs) and ALTO XML
 (small)" — but that premise was deleted when the bucket list became configuration (`LANCE_STORES`,

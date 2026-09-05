@@ -1,6 +1,6 @@
 """`project_facet` derives its per-task origins/datasets in a SINGLE pass over `plan.rows`.
 
-open_python-audit `ANN-09`: the origins/datasets block built the distinct-task-id set with one pass
+docs/DECISIONS.md "The Python estate audit" `ANN-09`: the origins/datasets block built the distinct-task-id set with one pass
 (`{r["task_id"] for r in plan.rows}`) and then, per distinct task, did a fresh `next(r for r in
 plan.rows if r["task_id"] == task_id)` — a full rescan of the rows list per task, i.e.
 O(distinct_tasks x rows) on the publish path. A single pass recording the first-seen row per task_id

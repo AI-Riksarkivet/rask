@@ -1,6 +1,6 @@
 """The media CORS layer advertises the write methods its apps actually serve.
 
-open_python-audit `ANN-04` (cross-service — the fix travels with the shared middleware). The media
+docs/DECISIONS.md "The Python estate audit" `ANN-04` (cross-service — the fix travels with the shared middleware). The media
 factory `service_kit.media.middleware.register_media_middleware` — used by viewer, search and annotator —
 set `allow_methods=["GET", "POST", "OPTIONS"]`, while the annotator alone serves seven PUT/PATCH/DELETE
 routes (member put/delete, draft put, ontology patch, project-event put/delete). With `cors_origins`

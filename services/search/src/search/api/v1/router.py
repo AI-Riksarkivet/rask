@@ -125,7 +125,7 @@ def search_get(
     # filtered, not refused, per `datasets.list_datasets`' rule. `None` means a single-corpus search,
     # which the dependency has already 403'd if the caller is not entitled to it. The gate is a
     # dependency because this handler is a sync `def` with a blocking Lance body and cannot await
-    # the checker itself (open_python-audit X6 / VS-13).
+    # the checker itself (docs/DECISIONS.md "The Python estate audit" X6 / VS-13).
     corpus: AuthorizedCorpora = None,
 ) -> list[dict[str, Any]]:
     spec = _spec_from_query(request)
@@ -344,7 +344,7 @@ async def search_similar(
     whose best answer is the thing you clicked reads as broken.
     """
     # AUTHORIZED BEFORE THE SEED IS READ. This route takes a raw SQL `where` ANDed into the query
-    # (open_python-audit VS-13 names that as the sharp edge of the service having no authz at all);
+    # (docs/DECISIONS.md "The Python estate audit" VS-13 names that as the sharp edge of the service having no authz at all);
     # the predicate stays — `duration > 60` is a real feature — but it can now only ever run against
     # the corpus TABLE this caller may read — `table=`, the same one `_run_similar` resolves rows from.
     await require_search(state, dataset, table=table, subject=subject, checker=checker, settings=settings)

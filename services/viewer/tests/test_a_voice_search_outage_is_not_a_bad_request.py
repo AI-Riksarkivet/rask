@@ -1,6 +1,6 @@
 """A failed voice kNN is an outage, not a malformed request (VS-06).
 
-open_python-audit VS-06's viewer site. ``_search_turns`` caught bare ``Exception`` and raised
+docs/DECISIONS.md "The Python estate audit" VS-06's viewer site. ``_search_turns`` caught bare ``Exception`` and raised
 ``ValidationError("voice search failed")`` — HTTP 400 — so an unreachable object store, an expired
 credential or a corrupt voice-embeddings manifest told the caller their request was wrong and told
 the operator nothing was wrong on the server.

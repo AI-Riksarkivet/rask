@@ -1,6 +1,6 @@
 """The annotator models with Pydantic, never `@dataclass`.
 
-open_python-audit `ANN-15`: `saga.PublishOutcome` was a `@dataclass(frozen=True)` — the only
+docs/DECISIONS.md "The Python estate audit" `ANN-15`: `saga.PublishOutcome` was a `@dataclass(frozen=True)` — the only
 dataclass in the service. The house rule is Pydantic `BaseModel` (MEMORY: 'Pydantic not @dataclass';
 the writing-python skill). This guards the whole `src` tree so a future dataclass cannot slip back in.
 """

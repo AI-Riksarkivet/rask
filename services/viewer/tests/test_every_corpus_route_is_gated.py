@@ -1,6 +1,6 @@
 """Every viewer route that serves corpus-derived content must resolve a verified subject.
 
-open_python-audit (P0, E1) — "25 of the viewer's 32 routes serve corpus content with no authn and no
+docs/DECISIONS.md "The Python estate audit" (P0, E1) — "25 of the viewer's 32 routes serve corpus content with no authn and no
 FGA gate, including every media-byte route". Re-verified at HEAD by the independent re-audit
 (8 gated / 24 not, after the clip route was gated in the fastapi drain): the primary media blob
 route, every atlas/chunks/voice/graph/topics/diarization route, and `POST /graph/cypher` all served

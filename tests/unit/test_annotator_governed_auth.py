@@ -173,7 +173,7 @@ def test_oidc_without_issuer_and_audience_is_refused_at_construction(monkeypatch
 
 # ── the WRITE routes' author stamp ──────────────────────────────────────────────────────────────
 #
-# open_python-audit — "Write authorship comes from an unverified, client-supplied `X-User` header".
+# docs/DECISIONS.md "The Python estate audit" — "Write authorship comes from an unverified, client-supplied `X-User` header".
 #
 # This file already pinned the projects plane ("X-User used to BE the identity; it must now be
 # inert") — but the two Lance WRITE routes kept the old seam: `save_annotations` and `apply_tags`

@@ -1,6 +1,6 @@
 """A persistently-transient fetch failure must back off, and then park — never vanish.
 
-open_python-audit `ingest-flow-05` (E3, med). `_refuse` split PERMANENT (park to the DLQ + ack) from
+docs/DECISIONS.md "The Python estate audit" `ingest-flow-05` (E3, med). `_refuse` split PERMANENT (park to the DLQ + ack) from
 transient (`nak`), which was the right shape but left two holes the module's own docstring promises
 are covered:
 

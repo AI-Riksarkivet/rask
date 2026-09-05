@@ -240,7 +240,7 @@ def make_service_app(
     #
     # `ingest/__init__.py` already did exactly this on top of the factory, with the reason in a
     # comment ("A DENIAL MUST BE A 403, NOT A 500"). Doing it HERE instead of per app also settles the
-    # divergence open_python-audit X11 files — ingest's 422 body differing from its three fleet
+    # divergence docs/DECISIONS.md "The Python estate audit" X11 files — ingest's 422 body differing from its three fleet
     # siblings — by making all of them one shape rather than by removing what made ingest right.
     _install_ns_problem_handlers(app)
     register_middleware(app, settings)

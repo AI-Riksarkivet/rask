@@ -1,7 +1,7 @@
 """THE media-service lifespan — one implementation for viewer, search and annotator.
 
 The three are one shape wearing three names: a Lance media service over ``service_kit.media``. Each
-one hand-wrote the same startup and the same teardown, and open_python-audit DUP-16 is that copy.
+one hand-wrote the same startup and the same teardown, and docs/DECISIONS.md "The Python estate audit" DUP-16 is that copy.
 The copies had already drifted in the way copies do — not in what they did, but in the ORDER they did
 it:
 

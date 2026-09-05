@@ -1,6 +1,6 @@
 """A search plane that has stopped ranking must not answer 200 with an empty list.
 
-open_python-audit (E9's sharpest claim, an E4 fail-open in substance) — "`frames.py`'s
+docs/DECISIONS.md "The Python estate audit" (E9's sharpest claim, an E4 fail-open in substance) — "`frames.py`'s
 `_ranked_or_fallback` is `try: return rank(scoped=True) / except: pass` → fall through, so a search
 plane that has stopped ranking anything returns an empty 200 no test can tell from 'no hits'".
 

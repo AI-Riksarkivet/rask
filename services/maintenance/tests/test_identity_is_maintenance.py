@@ -1,6 +1,6 @@
 """The compaction→maintenance rename is FINISHED — no surface still claims the old identity.
 
-open_python-audit `MAINT-15`: the rename left the old name on wire-visible and reader-visible
+docs/DECISIONS.md "The Python estate audit" `MAINT-15`: the rename left the old name on wire-visible and reader-visible
 surfaces — the OTel meter scope, the OpenLineage job NAMESPACE default (persisted into AGE on every
 emitted event), and three module docstrings introducing the code as "the compaction service". The
 first fix closed one of the four cited sites and was flipped FIXED; this pins all of them.

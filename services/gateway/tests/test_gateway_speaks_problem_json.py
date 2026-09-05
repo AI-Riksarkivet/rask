@@ -1,6 +1,6 @@
 """The gateway's own errors answer RFC 9457, like every other service in the fleet.
 
-open_python-audit `GW-NO-PROBLEM-JSON` (med). The gateway builds its own FastAPI and never installs
+docs/DECISIONS.md "The Python estate audit" `GW-NO-PROBLEM-JSON` (med). The gateway builds its own FastAPI and never installs
 `register_handlers`, so its errors (`404 no upstream`, `502 upstream unreachable`, `400 bad path`)
 render as FastAPI's default `{"detail": ...}` with `application/json`, while every proxied error from
 a real service arrives as `application/problem+json`. One client error path therefore sees two body

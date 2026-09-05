@@ -1,6 +1,6 @@
 """`collect` reads every task's actor concurrently, and still refuses deterministically.
 
-open_python-audit `ANN-03`, the publish-path half the send fix (SendMany) did not cover. `collect`
+docs/DECISIONS.md "The Python estate audit" `ANN-03`, the publish-path half the send fix (SendMany) did not cover. `collect`
 loops the project's task ids and awaits `handle.get()` then `handle.get_draft()` on EACH task's OWN
 actor — one per task id, so they are DIFFERENT actor ids and genuinely parallelise (unlike the send
 path, whose per-task calls all hit ONE project actor and queue on its turn lock, which is why that

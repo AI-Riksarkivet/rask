@@ -4,7 +4,7 @@ The estate's rule (2026-08-07 ruling: NO secret in env anywhere) and the in-file
 (`MEDIA_PUBLISH_*`: coordinates are config, the password is not). Before this, `storage_options`
 silently fell back to the AWS env chain — an env-borne secret with a configured look.
 
-`storage_options` IS A METHOD, NOT A PROPERTY (open_python-audit, 2026-08-28). It performs a blocking
+`storage_options` IS A METHOD, NOT A PROPERTY (docs/DECISIONS.md "The Python estate audit", 2026-08-28). It performs a blocking
 Dapr secret fetch and can raise — work that a `@property` disguised as a free attribute read, which is
 exactly how it reached an event loop (`datasets.py::list_datasets` built its registry inline). A
 method makes the cost visible at every call site, and it aligns this config with every OTHER config in

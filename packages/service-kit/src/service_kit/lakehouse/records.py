@@ -3,7 +3,7 @@
 Every registry write used to be a plain ``open_output_stream`` overwrite, which made each guard in
 front of one check-then-act: two concurrent creates of one warehouse id under different projects
 both read "absent" and the last writer won — on exactly the tenant-isolation guards
-(the same defect class as ``open_python-audit.md`` CAT-CORE-05).
+(the same defect class as `docs/DECISIONS.md "The Python estate audit"` CAT-CORE-05).
 The store demonstrably honors put-if-not-exists (``tests/e2e-py/test_object_store_cas_e2e.py``
 drives ``If-None-Match: *`` against RustFS with contended writers — it is the primitive Lance's own
 manifest commits stand on), so the id-minting doors route through this ONE seam instead of relying

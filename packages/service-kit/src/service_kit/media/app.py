@@ -7,7 +7,7 @@ different plane — root-mounted routers, its own ``MediaSettings``, and a CORS 
 without either lying about its config or bending the fleet's. This is the media plane's equivalent,
 and it exists for the same reason: three ``main.py`` files were hand-assembling the same boot.
 
-It also closes open_python-audit **X12**. ``create_viewer_app`` / ``create_search_app`` are the
+It also closes docs/DECISIONS.md "The Python estate audit" **X12**. ``create_viewer_app`` / ``create_search_app`` are the
 declared test/composition seam, and they built a DIFFERENT app from the deployed one — search's had
 no ``install_problem_handlers`` at all, neither had the probes, neither had the body cap. The exact
 regression both mains' comments describe (an ``UnauthenticatedError`` from the OIDC verifier escaping

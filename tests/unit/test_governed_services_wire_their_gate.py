@@ -47,7 +47,7 @@ SERVICES = REPO / "services"
 #: media plane's ONE lifespan, which calls `attach_auth` itself.
 #:
 #: The third was added when viewer/search/annotator collapsed their three copied lifespans onto that
-#: one (open_python-audit DUP-16) and two of them stopped containing the string `attach_auth` — a
+#: one (docs/DECISIONS.md "The Python estate audit" DUP-16) and two of them stopped containing the string `attach_auth` — a
 #: source-level guard reporting an unwired door on services that had just become MORE certain to be
 #: wired. `test_the_shared_media_lifespan_is_what_it_claims` below keeps it from being a magic word.
 _WIRES = ("attach_auth", "build_fga_client", "make_media_lifespan")

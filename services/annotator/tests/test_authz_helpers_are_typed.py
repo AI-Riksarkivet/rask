@@ -1,6 +1,6 @@
 """Collaborators with a declared Protocol are typed as it, not `Any`.
 
-open_python-audit `ANN-16`: nine seams typed a collaborator as `Any` while a declared type for it
+docs/DECISIONS.md "The Python estate audit" `ANN-16`: nine seams typed a collaborator as `Any` while a declared type for it
 already existed — `FgaChecker` (`api/security.py`, re-exported from `service_kit.governed.deps`) for
 the checker params, `AnnotationTaskActorInterface` for `_task_proxy`, the saga's own `TaskHandle`
 Protocol for its task-actor factory, `AppState` for the dataset-registry state, and the proxy seam's

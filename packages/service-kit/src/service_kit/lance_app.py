@@ -12,7 +12,7 @@ Three factories, three planes, and the split is deliberate rather than accidenta
   is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
   the others do not.
 
-open_python-audit DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints hand-assembling
+docs/DECISIONS.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints hand-assembling
 the same boot and asked for a ``make_lance_service_app``. The media three are gone (they build through
 ``build_media_app`` now); this is the other five, and what it owns is the part that was genuinely
 identical in all of them:

@@ -5,7 +5,7 @@ not the Python attribute. Every endpoint test in this estate patches `_project_p
 implements the PYTHON names, so a handler calling a method the interface never declared — or one
 whose wire name disagrees — stays green in every suite and raises `AttributeError` against the real
 sidecar. That is not hypothetical: it is what the first live drive of this plane found, and it is
-exactly the shape `send_many`/`SendMany` reintroduces (open_python-audit ANN-03).
+exactly the shape `send_many`/`SendMany` reintroduces (docs/DECISIONS.md "The Python estate audit" ANN-03).
 
 `tests/unit/test_actor_proxy_names.py` pins the translation for a hand-written list of methods. This
 file pins it for the SEND PATH end to end (the handler, through the real `TypedActorProxy`, onto a

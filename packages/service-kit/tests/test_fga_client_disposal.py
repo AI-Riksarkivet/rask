@@ -30,7 +30,7 @@ REPO = pathlib.Path(__file__).resolve().parents[3]
 #: Every lifespan that builds an FGA client. All of them call one factory; only notifications closed it.
 #:
 #: The media trio (viewer, search, annotator) is ONE entry, not three: their three copied lifespans
-#: collapsed onto `service_kit.media.lifespan` (open_python-audit DUP-16), so that module is now the
+#: collapsed onto `service_kit.media.lifespan` (docs/DECISIONS.md "The Python estate audit" DUP-16), so that module is now the
 #: single place their `attach_auth` client is opened and disposed. Listing the three mains here after
 #: the collapse would assert the word "dispose" appears in three files that no longer build a client —
 #: which a passing prose mention would satisfy, and a real regression would not fail.

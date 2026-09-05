@@ -1,6 +1,6 @@
 """A down secret store must not be reported as "the secret exists but is empty" (VS-11).
 
-open_python-audit VS-11 — `_creds` wrapped `fetch_dapr_secret` in try/except and raised a
+docs/DECISIONS.md "The Python estate audit" VS-11 — `_creds` wrapped `fetch_dapr_secret` in try/except and raised a
 "could not be read" 503 from the handler. But `fetch_dapr_secret` NEVER raises: it swallows
 every failure internally and returns `{}` (service_kit/governed/secrets.py), so the handler
 was unreachable dead code and every outage fell through to the other branch, whose message

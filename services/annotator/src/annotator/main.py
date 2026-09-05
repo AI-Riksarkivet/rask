@@ -3,7 +3,7 @@
 Module-level ``app``; ALL construction in the lifespan onto ``app.state`` (importing this module does
 zero I/O). The lifespan and the assembly are both SHARED — ``service_kit.media.lifespan`` and
 ``service_kit.media.app`` — because viewer, search and annotator are three deployments of one shape
-and used to hand-write it three times (open_python-audit DUP-16 / X12 / DUP-20). What is genuinely
+and used to hand-write it three times (docs/DECISIONS.md "The Python estate audit" DUP-16 / X12 / DUP-20). What is genuinely
 this service's own — the control emitter and the actor plane — arrives through the shared lifespan's
 ``setup``/``teardown`` hooks, which run before readiness is announced and before anything shared is
 disposed.

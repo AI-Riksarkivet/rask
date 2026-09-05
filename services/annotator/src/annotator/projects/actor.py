@@ -143,7 +143,7 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         # BOUND THE HISTORY HERE, at the one seam every write goes through, rather than at each
         # `append`: the whole document is re-serialised on every write, so an unbounded trail makes
         # the cost of an event track how many events preceded it. `trim_history` counts what it
-        # sheds, so the document never claims a trail it does not carry (open_python-audit ANN-11).
+        # sheds, so the document never claims a trail it does not carry (docs/DECISIONS.md "The Python estate audit" ANN-11).
         task.trim_history()
         await self._state_manager.set_state(TASK_KEY, task.model_dump_json())
         await self._state_manager.save_state()

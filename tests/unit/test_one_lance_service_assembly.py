@@ -1,4 +1,4 @@
-"""The lance-plane entrypoints are assembled once (open_python-audit DUP-12).
+"""The lance-plane entrypoints are assembled once (docs/DECISIONS.md "The Python estate audit" DUP-12).
 
 DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
 `make_lance_service_app`." The eight were catalog, lineage, the medallion producer, the medallion

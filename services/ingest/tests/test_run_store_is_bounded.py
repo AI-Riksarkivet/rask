@@ -1,6 +1,6 @@
 """The read-side run cache must be a cache — bounded — not a per-pod leak.
 
-open_python-audit `ingest-flow-15` (E8, med, effort S): `InMemoryRunStore._runs` was a plain dict
+docs/DECISIONS.md "The Python estate audit" `ingest-flow-15` (E8, med, effort S): `InMemoryRunStore._runs` was a plain dict
 that nothing ever deleted from, so the store grew one `RunRecord` per accepted run for the pod's
 lifetime, and `recent()` re-sorted the whole of it on every list call.
 

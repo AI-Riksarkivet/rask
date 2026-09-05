@@ -68,7 +68,7 @@ def consume_dapr_secrets(settings: Settings) -> None:
 
     The SPLICE itself is `service_kit.governed.secrets.apply_dapr_secrets`, the estate's one
     implementation: this block used to inline its own copy of the fetch-and-splice, which is the fourth
-    copy open_python-audit DUP-09 names.
+    copy docs/DECISIONS.md "The Python estate audit" DUP-09 names.
 
     What stays HERE is the half that is genuinely the catalog's own posture: with the store OFF, an empty
     plaintext key is a boot failure rather than a service that comes up and signs every S3 request wrong.
@@ -265,7 +265,7 @@ async def _namespace_ready(request: Request) -> Readiness:
 
 
 _settings = get_settings()
-# THE SHARED LANCE-PLANE ASSEMBLY (open_python-audit DUP-12). Logging before the app exists, the docs
+# THE SHARED LANCE-PLANE ASSEMBLY (docs/DECISIONS.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
 # `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
 #

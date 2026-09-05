@@ -1,4 +1,4 @@
-"""A send makes ONE index write, and every seed lands before it (open_python-audit ANN-03).
+"""A send makes ONE index write, and every seed lands before it (docs/DECISIONS.md "The Python estate audit" ANN-03).
 
 `POST /projects/{id}/items` admits `len(items) × consensus_n` up to 1000 replicas, and it used to
 make TWO sequential sidecar round-trips per replica — seed the task actor, then `Send` the project

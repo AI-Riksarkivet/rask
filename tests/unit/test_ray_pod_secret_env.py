@@ -1,6 +1,6 @@
 """The Ray pods hold the job secrets; the submission body holds none.
 
-The render half of open_python-audit's Jobs-API-echo P0 (the code half:
+The render half of docs/DECISIONS.md "The Python estate audit"'s Jobs-API-echo P0 (the code half:
 `services/medallion/tests/test_ray_submission_carries_no_secret.py`). Ray merges
 `runtime_env.env_vars` OVER the pod's process env, so moving `S3_SECRET` and
 `LINEAGE_SERVICE_TOKEN` to the pod keeps the job's `os.environ` contract byte-identical — but only

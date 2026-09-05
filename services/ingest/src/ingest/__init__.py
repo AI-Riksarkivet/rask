@@ -77,7 +77,7 @@ def create_app() -> FastAPI:
     # handlers and not the `lance_namespace` typed errors the auth door raises, so an unauthorized
     # ingest answered "Internal Server Error". The factory installs the Lance translator for EVERY app
     # it builds (`service_kit/app.py::_install_ns_problem_handlers`, whose comment records that doing
-    # it there rather than here is also what settles open_python-audit X11 — ingest's 422 differing
+    # it there rather than here is also what settles docs/DECISIONS.md "The Python estate audit" X11 — ingest's 422 differing
     # from its fleet siblings — by making all of them one shape). A second registration of the same
     # three handlers is dead, so it is gone; only the HTTPException envelope below is ingest's own.
     _install_http_exception_handler(app)

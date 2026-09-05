@@ -1,6 +1,6 @@
 """ffmpeg's source URL must come from CONFIGURATION, never from the request's Host header (VS-09).
 
-open_python-audit VS-09. `media_clip` built ffmpeg's input as
+docs/DECISIONS.md "The Python estate audit" VS-09. `media_clip` built ffmpeg's input as
 ``f"{request.base_url}/api/explorer/{doc_id}"``, and ``base_url`` is derived from the ``Host`` /
 ``X-Forwarded-Host`` headers. So ``Host: internal-metadata.local`` made the viewer's own ffmpeg
 fetch that host over the pod network and transcode whatever came back into an MP4 the caller then

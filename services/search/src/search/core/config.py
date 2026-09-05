@@ -18,7 +18,7 @@ class SearchSettings(Settings, GovernedAuthSettings):
 
     It shipped with NO authorization of any kind — the only explorer service without one — while the
     chart set `RASK_OIDC_*`/`RASK_FGA_*` on all three. That env reached this service and bound to
-    nothing, so authorization here was configured-looking and inert (open_python-audit X6), and the
+    nothing, so authorization here was configured-looking and inert (docs/DECISIONS.md "The Python estate audit" X6), and the
     route that takes a raw SQL `where` predicate was the one with no subject behind it (VS-13).
 
     Mixed in rather than declared as SEARCH_* twins, for the reason ViewerSettings gives: one set of

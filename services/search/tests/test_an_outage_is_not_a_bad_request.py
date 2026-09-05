@@ -1,6 +1,6 @@
 """A store outage must not be reported to the caller as "you sent a bad request" (VS-06).
 
-open_python-audit VS-06. Six retrieval sites caught bare ``Exception`` and re-raised
+docs/DECISIONS.md "The Python estate audit" VS-06. Six retrieval sites caught bare ``Exception`` and re-raised
 :class:`ValidationError`, which ``service_kit.exceptions`` maps to HTTP 400. An unreachable S3
 endpoint, an expired credential, a corrupt Lance manifest and a genuinely malformed ``where`` all
 came out as the same 400 — which tells the caller to fix their input, tells the operator nothing is

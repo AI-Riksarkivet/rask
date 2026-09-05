@@ -1,6 +1,6 @@
 """The public 502 must not name the internal upstream address.
 
-open_python-audit `GW-502-LEAKS-INTERNAL-ADDRESS` (med). When an upstream is unreachable the gateway
+docs/DECISIONS.md "The Python estate audit" `GW-502-LEAKS-INTERNAL-ADDRESS` (med). When an upstream is unreachable the gateway
 raised `HTTPException(502, f"upstream {base} unreachable: {exc}")` — and `base` is the INTERNAL
 target (`http://127.0.0.1:8804`, or a Dapr `/v1.0/invoke/<app>/…` URL), while `exc` (httpx's own
 error) typically repeats it. That body is returned to the public caller, at the edge the chart

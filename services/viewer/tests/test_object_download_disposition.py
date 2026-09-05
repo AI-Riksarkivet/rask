@@ -1,6 +1,6 @@
 """The download disposition must survive a hostile object key (VS-10).
 
-open_python-audit VS-10 — the S3 object key is caller-supplied (`key` query param) and
+docs/DECISIONS.md "The Python estate audit" VS-10 — the S3 object key is caller-supplied (`key` query param) and
 `download_object` interpolated its basename RAW into `Content-Disposition:
 attachment; filename="{filename}"`. A key whose basename contains a `"` breaks out of
 the quoted-string, so the client parses trailing junk as extra disposition parameters —

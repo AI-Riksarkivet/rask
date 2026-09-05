@@ -2,7 +2,7 @@
 
 Thirteen handlers were annotated `-> dict[str, Any]` with no `response_model` between them, so
 `/openapi.json` described their answers as "an object" and whatever the actor document happened to
-hold is what shipped (open_python-audit ANN-07). Two things follow from that, and the second is the
+hold is what shipped (docs/DECISIONS.md "The Python estate audit" ANN-07). Two things follow from that, and the second is the
 one that bites: the frontend's valibot schemas became the only statement of these shapes, on the far
 side of the wire and maintained by hand; and a field added to `Task` or `AnnotationProject` for the
 actor's own bookkeeping is published to every client the moment it is stored.

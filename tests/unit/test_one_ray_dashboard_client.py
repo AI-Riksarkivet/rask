@@ -1,4 +1,4 @@
-"""One Ray-dashboard HTTP client per worker (open_python-audit DUP-21).
+"""One Ray-dashboard HTTP client per worker (docs/DECISIONS.md "The Python estate audit" DUP-21).
 
 DUP-21 filed twelve outbound call sites that built a fresh `httpx` client per call. Most have since
 been pooled — `ray_submit` grew `ray_client()`, `viewer/api/v1/endpoints/pages.py` grew a

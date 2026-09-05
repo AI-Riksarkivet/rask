@@ -1,6 +1,6 @@
 """A reranker's scores must line up with the candidates it was given, one per candidate.
 
-open_python-audit `VS-14` (E4, med). `rerank` promised "one relevance score per candidate, in input
+docs/DECISIONS.md "The Python estate audit" `VS-14` (E4, med). `rerank` promised "one relevance score per candidate, in input
 order" and delivered it only when the server returned a DENSE, full-length result list. It built the
 answer with `sorted((item.index, score) for item in results)` and returned the scores stripped of
 their indices — so a SHORT list (the server scored fewer than it was asked) or a SPARSE one (it

@@ -1,6 +1,6 @@
 """The search plane must know who is asking, and which corpora they may search.
 
-open_python-audit `X6` (E1, HIGH) — "`search` is the only explorer service with no authn/authz code
+docs/DECISIONS.md "The Python estate audit" `X6` (E1, HIGH) — "`search` is the only explorer service with no authn/authz code
 path at all — the chart's estate-wide OIDC/FGA env has nothing to bind to" — and `VS-13` (med) —
 "The search service has no authn/authz at all yet accepts a raw SQL `where` expression ANDed into
 every query". One service, one root cause, so one change.

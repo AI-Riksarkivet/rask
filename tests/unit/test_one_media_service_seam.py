@@ -1,4 +1,4 @@
-"""The media trio is assembled ONCE (open_python-audit DUP-16 + X12 + DUP-20).
+"""The media trio is assembled ONCE (docs/DECISIONS.md "The Python estate audit" DUP-16 + X12 + DUP-20).
 
 `viewer`, `search` and `annotator` are three deployments of one shape — a Lance media service over
 `service_kit.media` — and each hand-assembled that shape in its own `main.py`. Three findings live on

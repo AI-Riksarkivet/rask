@@ -153,7 +153,7 @@ def test_the_manifest_records_which_unit_produced_the_fragment(dataset: str) -> 
 
 def test_a_fresh_manifest_carries_no_legacy_unit_field(dataset: str) -> None:
     """`unit` is the pre-batching spelling, kept only as a READ fallback for manifests already on a
-    store (open_python-audit `ingest-flow-18`). Writing it on every new manifest kept the vestigial
+    store (docs/DECISIONS.md "The Python estate audit" `ingest-flow-18`). Writing it on every new manifest kept the vestigial
     field alive forever — the fallback can only ever retire if new writes stop producing it."""
     stage_fragments(dataset, "run-1", ["file:///pages/0001.tif", "file:///pages/0002.tif"], ['{"id":1}'])
     written = json.loads((Path(staging_root(dataset, "run-1")) / manifest_name(["file:///pages/0001.tif", "file:///pages/0002.tif"])).read_text())

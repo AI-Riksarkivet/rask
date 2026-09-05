@@ -3,7 +3,7 @@
 The registry's id-minting writes (`_projects/<id>.json`, `_warehouses/<id>.json`, bindings) were
 plain overwrites, so every guard in front of them was check-then-act: two concurrent creates of one
 warehouse id under different projects both read "absent" and the last writer won — on exactly the
-tenant-isolation guards (`open_python-audit.md` CAT-CORE-05, same defect class). The store
+tenant-isolation guards (docs/DECISIONS.md "The Python estate audit" CAT-CORE-05, same defect class). The store
 demonstrably honors put-if-not-exists (`tests/e2e-py/test_object_store_cas_e2e.py` proves
 ``If-None-Match: *`` against RustFS), so the fix is to USE it: ``service_kit.lakehouse.records``
 is the one conditional-create seam, and the id-minting doors go through it.

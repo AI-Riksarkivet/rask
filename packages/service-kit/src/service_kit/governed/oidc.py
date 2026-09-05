@@ -302,7 +302,7 @@ async def verify_off_loop(verifier: OIDCVerifier, token: str) -> IDToken:
     genuinely async path.
 
     Why it is centralised at all: the fix kept not travelling. It was written once on the ingest door
-    (``open_python-audit`` ING-02) and the medallion door — a copy of the same ~120-line function —
+    (``docs/DECISIONS.md "The Python estate audit"`` ING-02) and the medallion door — a copy of the same ~120-line function —
     went on blocking, gating the cascade head. A fourth door should not be able to get this wrong.
     """
     return await asyncio.to_thread(verifier.verify, token)

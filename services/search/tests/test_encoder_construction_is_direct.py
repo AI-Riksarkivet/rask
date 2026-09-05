@@ -1,6 +1,6 @@
 """Encoder construction must be direct, not shaped by test doubles (VS-19).
 
-open_python-audit VS-19 — `clients._construct` picked the kwargs to pass by
+docs/DECISIONS.md "The Python estate audit" VS-19 — `clients._construct` picked the kwargs to pass by
 `inspect.signature(factory)`, so that a param-less fake monkeypatched over the client
 class would "work" by silently receiving NOTHING. That put the production construction
 path in service of test doubles: a fake with the wrong signature proved nothing (it

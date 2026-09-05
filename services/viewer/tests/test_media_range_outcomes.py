@@ -1,6 +1,6 @@
 """`parse_range` answers with three TYPED outcomes, not a tuple/str-sentinel/None triple (VS-20).
 
-open_python-audit VS-20 — the classifier returned `tuple[int, int] | str | None`: a tuple when
+docs/DECISIONS.md "The Python estate audit" VS-20 — the classifier returned `tuple[int, int] | str | None`: a tuple when
 satisfiable, the module-level string sentinel `IGNORE_RANGE` when the header should be ignored,
 and `None` when well-formed-but-unsatisfiable. The caller then decoded that by REBINDING the
 header variable (`range_hdr = None  # fall through`) and testing `isinstance(rng, tuple)` — the
