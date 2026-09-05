@@ -25,8 +25,9 @@ from fastapi import Depends, FastAPI
 from fastapi.concurrency import run_in_threadpool
 from pydantic import ValidationError
 
-from maintenance.api.dependencies import SettingsDep
+from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
+from maintenance.core.lineage_emit import CREATE_INDEX, MaintenanceEmitter
 from maintenance.services import credentials
 from maintenance.services.index_build import UnknownIndexKindError, build_index
 from maintenance.services.work_queue import SUCCESS
@@ -42,7 +43,7 @@ log = logging.getLogger(__name__)
 RETRY = "RETRY"
 
 
-async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings) -> dict[str, str]:
+async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings, emitter: MaintenanceEmitter) -> dict[str, str]:
     """Build one index and decide whether the unit is done — the testable half of the route.
 
     THREE ANSWERS, and the middle one is the one worth stating. A malformed unit is ACKED: it will not
@@ -72,6 +73,17 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
         log.exception("index_build_failed", extra={"uri": item.uri, "column": item.column, "index_type": item.index_type})
         return {"status": RETRY}
     log.info("index_unit_done", extra={"uri": item.uri, "index": outcome.name, "version": outcome.version})
+    # THE RUN REACHES THE GRAPH HERE, because this is where the build happened. The catalog door
+    # emits when it builds in-process and deliberately does not when it queues — "a queued unit has
+    # produced no version to measure" — so moving builds off the request path made them invisible
+    # until this half existed. An index build over a large table can run for an hour.
+    #
+    # Keyed on the CATALOG ID: a unit carrying none is still built (the index is what the caller
+    # asked for) and emits nothing, because there is no dataset node to hang the run on and a run
+    # keyed on a URI the graph does not know is noise rather than provenance.
+    if item.table_id:
+        namespace = item.table_id.split(settings.delimiter, 1)[0]
+        await emitter.emit_maintenance(table_id=item.table_id, namespace=namespace, operation=CREATE_INDEX)
     return {"status": SUCCESS}
 
 
@@ -95,6 +107,7 @@ def register_index_route(app: FastAPI, settings: MaintenanceSettings, dapr_app: 
         event: dict[str, Any],
         *,
         config: SettingsDep,
+        emitter: LineageEmitterDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
@@ -107,6 +120,6 @@ def register_index_route(app: FastAPI, settings: MaintenanceSettings, dapr_app: 
         """
         if drain is not None:
             return drain
-        return await handle_index_unit(event, config)
+        return await handle_index_unit(event, config, emitter)
 
     return wrapper

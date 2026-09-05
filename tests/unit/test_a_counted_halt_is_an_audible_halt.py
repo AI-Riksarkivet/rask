@@ -64,7 +64,19 @@ def _emitted() -> set[str]:
 
 
 def _promql() -> str:
-    return yaml.safe_dump(yaml.safe_load(_RULES.read_text()))
+    """Every rule's `expr`, and nothing else.
+
+    This dumped the WHOLE rules document, annotations included — so a counter name appearing in some
+    other rule's `summary` or `description` satisfied the search. A rule could be deleted and this
+    gate stay green on the prose that described it, which is the one failure an alert-coverage gate
+    must not have.
+    """
+    document = yaml.safe_load(_RULES.read_text()) or {}
+    return "\n".join(
+        str(rule.get("expr", ""))
+        for group in document.get("groups", [])
+        for rule in group.get("rules", [])
+    )
 
 
 def _series(counter: str) -> str:
@@ -136,12 +148,23 @@ def test_every_promtool_expectation_matches_the_rule_it_asserts() -> None:
             name = assertion.get("alertname")
             for expected in assertion.get("exp_alerts") or []:
                 for key, value in (expected.get("exp_annotations") or {}).items():
-                    actual = declared.get(name, {}).get(key)
+                    if name not in declared:
+                        # An expectation naming a rule that does not exist can never match anything,
+                        # so promtool passes it vacuously and so did this gate. A typo in an
+                        # alertname is exactly how a suite keeps reporting coverage it lost.
+                        mismatched.append(f"{name}.<no such alert rule>")
+                        continue
+                    if key not in declared[name]:
+                        # Same shape one level down: an expectation on an annotation the rule does not
+                        # declare asserts nothing, and reads as though it asserts something.
+                        mismatched.append(f"{name}.{key} <not declared on the rule>")
+                        continue
+                    actual = declared[name][key]
                     # TEMPLATED annotations are skipped, not compared. promtool RENDERS
                     # `{{ $labels.x }}` against the firing series, so the rule's text and the test's
                     # expectation legitimately differ. The class this catches is a wrong CHARACTER in
                     # literal text, which is what silently broke six of these.
-                    if actual is None or "{{" in actual:
+                    if "{{" in actual:
                         continue
                     if _flat(str(value)) != actual:
                         mismatched.append(f"{name}.{key}")

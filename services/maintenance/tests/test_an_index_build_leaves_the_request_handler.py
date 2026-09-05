@@ -27,6 +27,7 @@ import pytest
 
 from maintenance.api import index_work
 from maintenance.core.config import MaintenanceSettings
+from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services.index_build import UnknownIndexKindError, build_index
 from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
 
@@ -76,7 +77,7 @@ def test_an_unknown_KIND_is_refused_rather_than_guessed(tmp_path: Path) -> None:
 async def test_a_malformed_unit_is_ACKED_not_retried(tmp_path: Path) -> None:
     """It will not parse on the tenth attempt either. Retrying only delays the DLQ while occupying a
     worker — the rule the compaction lane's own handler already states."""
-    assert await index_work.handle_index_unit({"data": {"nope": 1}}, _settings()) == {"status": "SUCCESS"}
+    assert await index_work.handle_index_unit({"data": {"nope": 1}}, _settings(), NoopEmitter()) == {"status": "SUCCESS"}
 
 
 @pytest.mark.asyncio
@@ -89,10 +90,10 @@ async def test_a_producer_DEFECT_is_acked_and_a_STORE_failure_retries(tmp_path: 
     """
     uri = _table(tmp_path)
     unbuildable = {"data": IndexWorkItem(uri=uri, column="id", kind="guess", index_type="BTREE").model_dump()}
-    assert await index_work.handle_index_unit(unbuildable, _settings()) == {"status": "SUCCESS"}
+    assert await index_work.handle_index_unit(unbuildable, _settings(), NoopEmitter()) == {"status": "SUCCESS"}
 
     missing = {"data": IndexWorkItem(uri=str(tmp_path / "gone.lance"), column="id", kind=SCALAR_INDEX, index_type="BTREE").model_dump()}
-    assert await index_work.handle_index_unit(missing, _settings()) == {"status": index_work.RETRY}
+    assert await index_work.handle_index_unit(missing, _settings(), NoopEmitter()) == {"status": index_work.RETRY}
 
 
 @pytest.mark.asyncio
@@ -116,7 +117,7 @@ async def test_the_build_is_signed_by_the_TABLE_scoped_credential(tmp_path: Path
     monkeypatch.setattr(index_work, "build_index", _built)
 
     item = IndexWorkItem(uri=uri, table_id="acme-bronze$events", column="id", kind=SCALAR_INDEX, index_type="BTREE")
-    assert await index_work.handle_index_unit({"data": item.model_dump()}, _settings()) == {"status": "SUCCESS"}
+    assert await index_work.handle_index_unit({"data": item.model_dump()}, _settings(), NoopEmitter()) == {"status": "SUCCESS"}
 
     assert seen["table_id"] == "acme-bronze$events", "the declared id must reach the vending door or it signs with the root key"
     assert seen["write_options"] == {"aws_access_key_id": "vended"}

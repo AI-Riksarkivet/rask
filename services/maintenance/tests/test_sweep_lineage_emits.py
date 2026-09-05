@@ -14,6 +14,7 @@ import asyncio
 
 import pytest
 
+from maintenance.core.lineage_emit import COMPACTION
 from maintenance.services.optimize import DatasetResult
 from maintenance.services.sweep import emit_sweep_lineage
 
@@ -39,10 +40,10 @@ class _RecordingEmitter:
         finally:
             self.in_flight -= 1
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
         await self._publish(table_id, self.completed)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
         await self._publish(table_id, self.failed)
 
 

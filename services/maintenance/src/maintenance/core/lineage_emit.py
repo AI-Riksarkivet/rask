@@ -50,6 +50,13 @@ log = logging.getLogger(__name__)
 #: it is not ``create_table``, no ``CREATED`` edge).
 COMPACTION = "compaction"
 
+#: The same marker for an INDEX BUILD, which is a maintenance run of a different kind. Its own value
+#: rather than `COMPACTION`, because the repository reads this to decide what the run means and
+#: recording a build as a compaction is a wrong fact on the graph rather than a missing one. It
+#: matches the catalog door's own operation, so an in-process build and a queued one land as the
+#: same thing — which is the only way the two paths are comparable.
+CREATE_INDEX = "create_index"
+
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required).
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/maintenance/src/maintenance/core/lineage_emit.py"
 
@@ -166,7 +173,7 @@ def table_id_from_uri(uri: str) -> str | None:
     return table_id_from_location(uri)
 
 
-def build_maintenance_event(*, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str) -> dict[str, Any]:
+def build_maintenance_event(*, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, operation: str = COMPACTION) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's compaction/GC pass.
 
     Versionless and input-less: a maintenance pass produces no new logical data and derives from nothing,
@@ -179,7 +186,7 @@ def build_maintenance_event(*, table_id: str, namespace: str, job_namespace: str
         "eventTime": event_time,
         "producer": _PRODUCER,
         "schemaURL": RUN_EVENT_SCHEMA_URL,
-        "run": {"runId": run_id, "facets": {"lance": custom_facet(_PRODUCER, operation=COMPACTION)}},
+        "run": {"runId": run_id, "facets": {"lance": custom_facet(_PRODUCER, operation=operation)}},
         # Per-table job identity (like the catalog write emitter) — else every dataset's compaction lumps
         # into one ``compaction`` Job node whose output set spans the whole lakehouse.
         "job": {"namespace": job_namespace, "name": f"{COMPACTION}.{table_id}"},
@@ -192,18 +199,18 @@ def build_maintenance_event(*, table_id: str, namespace: str, job_namespace: str
 class MaintenanceEmitter(Protocol):
     """Emits compaction maintenance events (success + failure) to the lineage service (best-effort)."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None: ...
+    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None: ...
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None: ...
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None: ...
 
 
 class NoopEmitter:
     """The emitter used when lineage emission is disabled (or unwired) — does nothing."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
         return None
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
         return None
 
 
@@ -235,19 +242,20 @@ class DaprMaintenanceEmitter:
         self._outbox_uri = outbox_uri
         self._storage_options = storage_options or {}
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
         # uuid4 ON PURPOSE: each materially-compacting tick is a distinct successful run (§4 decided —
         # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard).
         event = build_maintenance_event(
             table_id=table_id,
             namespace=namespace,
             job_namespace=self._job_namespace,
+            operation=operation,
             run_id=str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
         )
         await self._publish(event, table_id)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
         # DETERMINISTIC run id — the flood guard: the cron re-sweeps every ~2 min, so a persistently
         # failing dataset would otherwise mint a fresh never-pruned (:Run) node per tick. One id per
         # dataset → every tick MERGEs onto ONE node in AGE, and the /events partial-unique
