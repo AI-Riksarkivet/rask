@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-05, from the rows below rather than asserted: 124 tracked, 115 open, 9 struck.**
+**Counted 2026-09-05, from the rows below rather than asserted: 124 tracked, 113 open, 11 struck.**
 That splits into 58 lettered rows (52 open) and 54 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -904,8 +904,8 @@ subject is granted on a tenant that did not exist at bootstrap.
 | # | Finding | Sev | What remains |
 | --- | --- | --- | --- |
 | Q6-1 | The compute credential can enumerate every bucket | med | Measured: `mc ls ray/` returns 104 buckets with the deployed key. Withholding `s3:ListAllMyBuckets` does not withhold the list — RustFS falls back to per-bucket `ListBucket`, which `arn:aws:s3:::*` grants. The widening is the deliberate trade (the allow-list it replaced broke every tenant's cascade); the narrowing that closes it is PER-TABLE VENDED credentials on the Ray lane, a service change. Same root as Q5-2 |
-| Q6-2 | `RayJobExecutor` reports a CR whose cluster never came up as PENDING forever | med | `status()` maps only `status.jobStatus`; KubeRay records a failed cluster in `jobDeploymentStatus`. COMPUTE PLANE — deferred by the current goal |
-| Q6-3 | `RayJobExecutor` treats any 409 as REATTACHED without reading the CR, and the CR name omits `code_version` | med | COMPUTE PLANE — deferred |
+| ~~Q6-2~~ | `RayJobExecutor` reports a CR whose cluster never came up as PENDING forever | med | **DISSOLVED HERE, CARRIED TO THE COMPUTE GOAL.** Real and unfixed: `status()` maps only `status.jobStatus`, while KubeRay records a cluster that never came up, an `activeDeadlineSeconds` expiry or a Kueue eviction in `jobDeploymentStatus` and leaves `jobStatus` empty — which `_JOB_STATUS` maps to PENDING, so such a run is never reported FAILED and `DURABLE_RECORD` forbids resubmitting it. Not fixed under this goal because the goal's own scope line says COMPUTE IS UNTOUCHED UNTIL IT CLOSES; fixing it here would be the scope creep the line exists to prevent. It belongs to the compute goal, stated so it is picked up rather than lost |
+| ~~Q6-3~~ | `RayJobExecutor` treats any 409 as REATTACHED without reading the CR, and the CR name omits `code_version` | med | **DISSOLVED HERE, CARRIED TO THE COMPUTE GOAL.** Real and unfixed: a 409 may mean a DIFFERENT job holds that name, and the name omitting `code_version` makes that reachable — a same-token re-run after a deploy reattaches to the previous build's job. Same scope reason as Q6-2 |
 | Q6-4 | A queued index build emits no lineage anywhere | med | The door skips the emit and the worker never makes one, so an index that took an hour is invisible to the run board |
 | Q6-5 | `plan_compaction` answers 400 where every sibling door answers 404 | med | "registered but never written" is mapped to `InvalidInputError` off a bare `ValueError`; siblings raise `TableNotFoundError`. A client dispatching on the code sees a different class for the same condition |
 | Q6-6 | The halt-counter alert gate is a substring search over the whole rules dump | med | It matches annotation prose, so a rule could be deleted and the gate stay green on its own description |
