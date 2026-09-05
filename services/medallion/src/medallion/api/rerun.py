@@ -41,16 +41,19 @@ discovered.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import authenticate_subject
-from medallion.core.config import MedallionSettings, MoverGate
+from medallion.core.config import MedallionSettings, MoverGate, dedicated_token_for
+from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
 from service_kit import dapr_publish
 from service_kit.draining import refuse_when_draining
@@ -143,6 +146,44 @@ def _edge(settings: MedallionSettings, namespace: str) -> tuple[MoverGate, str]:
     return gate, topic
 
 
+async def _vended_location(settings: MedallionSettings, object_id: str) -> str | None:
+    """Where the CATALOG says the published table lives, or ``None`` to let the mover compose a path.
+
+    I2 ON THE REPAIR VERB, and the third head to need it. `_confine_from_uri` honours a trigger's
+    `from_uri` and otherwise falls back to `_resolve_roots`' composed ``{root}/medallion/{namespace}``
+    — a path `transform.py` calls "a path no catalog-written table has ever occupied", because the
+    catalog vends ``{root}/{hash}_{ns}${name}``. A re-run without this woke the mover, opened the wrong
+    location and found none of the rows it was sent to re-drive: the repair reported success and
+    repaired nothing. `publication_trigger` reads the location off the control event and
+    `ingest_trigger._vended_upstream` asks the catalog; this is the same question on the operator's door.
+
+    ADVISORY, and every way of not getting an answer degrades to ``None``. A table this catalog does
+    not govern is real and supported — an external OpenLineage producer writing its own dataset — and
+    the composed path is the correct upstream there. An unreachable catalog is logged and does not
+    block the repair: an operator with a missed hop needs the verb to work, and the mover confines
+    whatever is named to the root it resolves, so this is a claim on an untrusted-by-default field
+    rather than a read primitive.
+    """
+    if not settings.catalog_url:
+        return None  # the ungoverned dev shape, the same escape hatch every other medallion client keeps
+    table_id = object_id.removeprefix("table:")
+    try:
+        return await run_in_threadpool(
+            partial(
+                catalog_register.describe_table_location,
+                catalog_url=settings.catalog_url,
+                table_id=table_id,
+                token=settings.catalog_token,
+                app_token=settings.app_api_token,
+                service_identity=settings.catalog_service_identity,
+                dedicated_token=dedicated_token_for(settings),
+            )
+        )
+    except catalog_register.RegisterError as exc:
+        log.warning("medallion_rerun_location_lookup_failed", extra={"table_id": table_id, "error": str(exc)})
+        return None
+
+
 # B6: a draining pod must not START work. The re-run publishes a trigger that a mover then executes,
 # so what is at risk is not the mover's work but this publish — the sidecar goes down with the pod, and
 # a trigger lost mid-flight is a repair an operator believes happened. 503 + Retry-After, exactly as
@@ -166,6 +207,11 @@ async def rerun_stage(
         raise PermissionDeniedError("re-running a cascade edge needs a signed-in caller")
     token = body.token or uuid4().hex
     extra: dict[str, Any] = {"project": body.project, "from_version": body.from_version, "to_version": body.to_version}
+    # RESOLVED BEFORE THE TRIGGER IS MINTED, because `build_stage_trigger` reads it off `extra` as
+    # `location` — the same key the control event carries, so both producers of that shape agree.
+    location = await _vended_location(settings, body.object_id)
+    if location:
+        extra["location"] = location
     if body.originator:
         extra["originator"] = body.originator
     if body.cascade_id:

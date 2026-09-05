@@ -32,6 +32,7 @@ from fastapi.testclient import TestClient
 from medallion.api import rerun
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.core.config import MedallionSettings
+from medallion.services.catalog_register import RegisterError
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -58,13 +59,34 @@ def checks() -> list[dict[str, str]]:
     return []
 
 
-def _app(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch, *, subject: str | None = "alice", allow: bool = True) -> FastAPI:
+_VENDED = "s3://acme-bucket/e41135a5_acme-silver$features"
+
+
+@pytest.fixture
+def located() -> list[str]:
+    return []
+
+
+def _app(
+    bus: _Bus,
+    checks: list[dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    subject: str | None = "alice",
+    allow: bool = True,
+    location: str | Exception | None = _VENDED,
+    located: list[str] | None = None,
+) -> FastAPI:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(rerun.router)
     application.state.dapr = object()
 
-    settings = MedallionSettings.model_validate({"mover_gates": _GATES, "transform_routes": _ROUTES, "pubsub": "pubsub"})
+    # `catalog_url` is what makes the location lookup happen at all — the chart renders it
+    # unconditionally on the producer, so a double omitting it tests the ungoverned dev shape only.
+    settings = MedallionSettings.model_validate(
+        {"mover_gates": _GATES, "transform_routes": _ROUTES, "pubsub": "pubsub", "catalog_url": "http://catalog:2333"}
+    )
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: object()
     application.dependency_overrides[rerun.authenticate_subject] = lambda: subject
@@ -77,14 +99,22 @@ def _app(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatc
         bus.published.append(kwargs)
         return bus.lands
 
+    def _describe(*, table_id: str, **_: Any) -> str | None:
+        if located is not None:
+            located.append(table_id)
+        if isinstance(location, Exception):
+            raise location
+        return location
+
     monkeypatch.setattr(rerun.fga, "check", _check)
     monkeypatch.setattr(rerun.dapr_publish, "publish_json", _publish)
+    monkeypatch.setattr(rerun.catalog_register, "describe_table_location", _describe)
     return application
 
 
 @pytest.fixture
-def client(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    with TestClient(_app(bus, checks, monkeypatch)) as c:
+def client(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch, located: list[str]) -> Iterator[TestClient]:
+    with TestClient(_app(bus, checks, monkeypatch, located=located)) as c:
         yield c
 
 
@@ -197,3 +227,40 @@ def test_the_TRIGGER_is_the_shape_the_subscription_mints(client: TestClient, bus
     assert set(payload) >= {"token", "dataset", "namespace", "from_version", "to_version", "project"}
     assert payload["dataset"] == "silver$features" and payload["namespace"] == "silver"
     assert json.loads(json.dumps(payload)) == payload, "the trigger must be JSON-serializable to cross the bus"
+
+
+def test_the_trigger_carries_the_CATALOG_VENDED_location(client: TestClient, bus: _Bus, located: list[str]) -> None:
+    """I2 on the third head, and without it the repair reads a path nothing has ever written.
+
+    `_confine_from_uri` honours a trigger's `from_uri` and otherwise falls back to `_resolve_roots`'
+    composed `{root}/medallion/{namespace}` — which `transform.py` calls "a path no catalog-written
+    table has ever occupied", because the catalog vends `{root}/{hash}_{ns}${name}`. So a re-run of a
+    catalog-written table woke the mover, opened the wrong location, and found none of the rows it was
+    sent to re-drive. Both other heads already resolve it: `publication_trigger` reads it off the
+    control event, `ingest_trigger._vended_upstream` asks the catalog. This is the third.
+    """
+    client.post("/movers/stages/rerun", json=_BODY)
+
+    assert located == ["acme-silver$features"], "the verb did not ask the catalog where the table lives"
+    assert bus.published[0]["payload"]["from_uri"] == "s3://acme-bucket/e41135a5_acme-silver$features"
+
+
+def test_an_UNGOVERNED_table_still_re_runs_off_the_composed_path(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The answer is ADVISORY, exactly as it is on the other head. A table this catalog does not govern
+    is a real and supported case — an external OpenLineage producer writing its own dataset — and the
+    composed path is the correct upstream for it. Refusing would make the repair verb narrower than the
+    cascade it repairs."""
+    with TestClient(_app(bus, checks, monkeypatch, location=None)) as client:
+        assert client.post("/movers/stages/rerun", json=_BODY).status_code == 202
+
+    assert "from_uri" not in bus.published[0]["payload"] or bus.published[0]["payload"]["from_uri"] is None
+
+
+def test_a_CATALOG_OUTAGE_does_not_block_the_repair(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """"We could not ask" is not "there is nothing there", and the two must not collapse — but neither
+    may an unreachable catalog stop an operator repairing a hop. Logged, published, and the mover falls
+    back to the composed path exactly as it did before this field existed."""
+    with TestClient(_app(bus, checks, monkeypatch, location=RegisterError("catalog unreachable"))) as client:
+        assert client.post("/movers/stages/rerun", json=_BODY).status_code == 202
+
+    assert bus.published[0]["payload"]["dataset"] == "silver$features"
