@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-05, from the rows below rather than asserted: 112 tracked, 104 open, 8 struck.**
+**Counted 2026-09-05, from the rows below rather than asserted: 116 tracked, 107 open, 9 struck.**
 That splits into 58 lettered rows (52 open) and 54 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -864,3 +864,37 @@ The 40 skips are suites whose target this estate does not run (the Ray-path pair
 isolation attack). They are skips rather than failures because the targets require their inputs and
 say so, which is the behaviour `e2e-auth`'s comment argues for: *"a live drive with no live target is
 a failed invocation, not a pass"*.
+
+## Q5. What driving the FULL TENANT PATH live proved, and what it did not (2026-09-05)
+
+Project `c6t115034` was minted for this: a fresh tenant on a runtime-minted warehouse bucket, so the
+proof could not lean on anything seeded at bootstrap. Every step below is a pasted live result.
+
+**PROVEN.** `POST /v1/projects` → `POST /v1/warehouses` (bucket `c6t115034-wh`, minted at runtime and
+nameable by no chart value) → three warehouse-scoped namespaces → `POST /produce?project=c6t115034` → 202.
+The cascade ran and the catalog governs ALL THREE TIERS on the tenant's own bucket:
+
+    c6t115034-bronze$events    -> s3://c6t115034-wh/medallion/bronze
+    c6t115034-silver$features  -> s3://c6t115034-wh/b19ee6fa_c6t115034-silver$features
+    c6t115034-gold$catalog     -> s3://c6t115034-wh/8b477cb7_c6t115034-gold$catalog
+
+**THE GATE HELD THE HOP, AND THE RUNG RELEASED IT** — better evidence than a straight-through run.
+Silver's promotion was held (`reasons: ['first_promotion']`), so gold did not fire. Approving it
+through `POST /api/promotions/{id}/decision` as a signed-in validator (`can_promote`, granted as
+`validator` because a `can_*` relation is never directly assignable) released it, and gold landed.
+Lineage is queryable in AGE for the tenant — 10 runs, including `aggregate_gold` carrying
+`consumed=(None,3]`, the range field exposed earlier today.
+
+**NOT PROVEN, and these are the rows.**
+
+| # | What | Evidence |
+| --- | --- | --- |
+| ~~Q5-1~~ | The maintenance credential reached ONE bucket while the sweep discovered 91 | ~~FIXED. The live `rask-maintenance` policy granted `lance-catalog` alone — the same defect fixed for the Ray user in `5c11002c`, which the chart already corrected and which had never been applied here. Applying the chart's own rendered policy took the sweep from `planned:21, skipped:4` to `planned:250, skipped:0`. **229 datasets across 90 tenant warehouses had never been maintained**, silently~~ |
+| Q5-2 | Maintenance cannot compact a runtime-minted tenant's tables | The catalog refuses the maintenance subject: `POST /v1/table/c6t115034-gold$catalog/credentials?tier=write` → **403**, `.../compaction_plan` → **403**. Storage now reaches the bucket; GOVERNANCE does not admit the subject. The vending falls back to the ambient credential and the compaction door declines outright, so a tenant's tiers are discovered, planned and then refused |
+| Q5-3 | The ambient-credential log line names the wrong key | `write credential AMBIENT … this rewrite is signed by the root key` — it is signed by `rask-maintenance`, which is not the root key on this estate. False prose in an operational log, which is where it is hardest to catch |
+| Q5-4 | `bronze-media` is measured for every tenant that has no media lane | `GET /v1/table/c6t115034-bronze-media$objects/tags/list` → 403 on the lag tick. The lane map is estate-wide, so a tenant using only the tabular lanes still has its media edge probed. Harmless (it counts UNMEASURABLE) but it is 1/3 of the tick's work for nothing |
+
+So C6 is **two-thirds proven**: the data path, the governance gate and lineage are demonstrated end to
+end on a runtime-minted tenant; maintenance reaches the bytes and is refused at the catalog door.
+Q5-2 is the remaining work, and it is the same question as Q2-5/Q2-6 — what a cascade or maintenance
+subject is granted on a tenant that did not exist at bootstrap.
