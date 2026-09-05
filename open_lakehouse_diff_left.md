@@ -7,9 +7,10 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-05, from the rows below rather than asserted: 103 tracked, 97 open, 6 struck.**
-That splits into 58 lettered rows (52 open) and 45 rows carried here when two registers were drained
-— § Q2 from `open_estate-verification.md`, § Q3 from `open_python-audit.md`. Re-derive the counts when
+**Counted 2026-09-05, from the rows below rather than asserted: 112 tracked, 104 open, 8 struck.**
+That splits into 58 lettered rows (52 open) and 54 rows in the Q sections — § Q2 carried from
+`open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
+against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
 it, and a header nobody re-counts is how a register stops being evidence.
 
@@ -836,3 +837,30 @@ services", and eight services now import `GovernedAuthSettings` while none re-de
 | Q3-37 | `SKG-14` | med | The audited scope sits under a blanket 21-rule ruff exemption (5 lines still in `pyproject.toml`) |
 | Q3-38 | `PS-15` | med | `ray_kit.submit` — deterministic ids and the reattach branch — has no test |
 | Q3-39 | `MED-002` | low | `transform.py`'s process-wide `_write_lock` is still acquired BLOCKING |
+
+## Q4. What the FIRST run against the live estate found (2026-09-05)
+
+`make e2e-live` runs the e2e suites against the DEPLOYED k3s release, discovering every address and
+credential from the cluster. Nothing had ever done this — `make test` excludes the marker and
+`scripts/e2e_stack.sh` builds its own reduced kind cluster — so these rows are the cost of that
+silence, found in 88 seconds on the first run.
+
+**First result: 63 passed, 10 failed, 40 skipped, 4 errors.** Two failures were repaired in the same
+commit and are struck; the rest are rows.
+
+| # | Suite | What the live estate says | Verdict |
+| --- | --- | --- | --- |
+| ~~Q4-1~~ | `test_dummy_lane_e2e` declaration | 422 `body.entrypoint: Extra inputs are not permitted` | ~~FIXED — the suite still sent `entrypoint` after the `task` rename. Nothing caught it because nothing ran it: exactly what this target exists for~~ |
+| ~~Q4-2~~ | `test_dummy_lane_e2e` command refusal | asserted the word "baked" | ~~FIXED — the door's refusal now NAMES THE REGISTRY (`no task is registered as '…'; … under the control root's _tasks/ prefix`), which is a better message than the one the test was written against~~ |
+| Q4-3 | `test_dummy_lane_e2e` terminal event | `namespace:acme-silver -> table:acme-silver$dummy` link absent | The suite names it: `seed_estate.py` seeds `$features` (the HTR lane's output) and not `$dummy`. A seed gap, not a code defect |
+| Q4-4 | `test_observability_e2e` (4 errors) | 400 — a top-level namespace must belong to a warehouse | The suite creates an unbound namespace, which `require_warehouse_scoped` refuses when `catalog.warehouses.enabled` is on. It is OFF in the kind stack and ON here, so the suite has only ever run against half the estate's shapes |
+| Q4-5 | `test_multibase_e2e` (3) | 403 `can_create_table required` | alice holds no grant on the throwaway namespaces these mint. The kind stack seeds them; a live estate does not, and the suite cannot assume its own fixtures exist |
+| Q4-6 | `test_warehouses_e2e::test_per_warehouse_physical_isolation` | `AssertionError: []` — no objects where isolation was expected | Unclassified. Needs driving by hand before it is called a defect or a fixture gap |
+| Q4-7 | `test_maintenance_e2e::test_sweep_compacts_real_datasets_and_meters` | `KeyError: 'datasets'` | The sweep's response shape and the suite's expectation disagree. One of them is stale and it is not yet established which |
+| Q4-8 | `test_outbox_e2e::test_reconcile_sweep_drains_a_staged_outbox_event` | expects a bare run id, the store holds `<id>@COMPLETE` | A key-format change the suite never saw |
+| Q4-9 | `test_warehouses_e2e::test_create_warehouse_denied_for_non_admin` | bob CREATED the warehouse | NOT a governance hole, and this nearly went in as one. `team:eng` is bound to `project:acme` and `project.admin` is "… or member from team"; bob is a member, so he IS an admin here. The RUNNER was wrong to assume the identity — it now verifies `can_administer` is false before offering the token, and the leg SKIPS otherwise. An honest skip beats a red test alleging something untrue |
+
+The 40 skips are suites whose target this estate does not run (the Ray-path pair, the two-tenant
+isolation attack). They are skips rather than failures because the targets require their inputs and
+say so, which is the behaviour `e2e-auth`'s comment argues for: *"a live drive with no live target is
+a failed invocation, not a pass"*.

@@ -22,10 +22,16 @@ from pathlib import Path
 
 BACKLOG = Path(__file__).resolve().parents[2] / "open_lakehouse_diff_left.md"
 
-#: A lettered work row — `### A1 · …`, struck when landed. The Q sections use a table instead, because
-#: they were carried in bulk from drained registers and each is one line rather than a discussion.
+#: A lettered work row — `### A1 · …`, struck when landed. The Q sections use a table instead: those
+#: rows were carried in bulk from drained registers, or recorded in bulk from one live run, and each
+#: is a line rather than a discussion. Q-numbered sections are matched by shape (`Q<n>-<n>`) rather
+#: than by a list, so a new one is counted the day it is added — this gate shipped counting Q2 and Q3
+#: only, and Q4 landed a day later.
 _ROW = re.compile(r"^### (~~)?([A-Z]+\d*)[ ·]", re.MULTILINE)
-_CARRIED = re.compile(r"^\| (Q[23]-\d+) \|", re.MULTILINE)
+#: Matched by SHAPE (`Q<n>-<n>`) rather than by a list of sections, so a new one is counted the day it
+#: is added — this gate shipped counting Q2 and Q3 only, and Q4 landed a day later. A carried row can
+#: be struck too: Q4 repaired two of its own findings in the commit that recorded them.
+_CARRIED = re.compile(r"^\| (~~)?(Q\d+-\d+)~{0,2} \|", re.MULTILINE)
 _HEADER = re.compile(r"\*\*Counted [0-9-]+, from the rows below rather than asserted: (\d+) tracked, (\d+) open, (\d+) struck\.\*\*")
 
 
@@ -41,9 +47,12 @@ def test_the_header_totals_match_the_rows() -> None:
 
     rows = _ROW.findall(text)
     carried = _CARRIED.findall(text)
-    real_struck = sum(1 for mark, _ in rows if mark)
-    real_open = len(rows) - real_struck + len(carried)
+    # A carried row can be struck too — Q4 repaired two of its own findings in the commit that
+    # recorded them, and a register that could only mark a LETTERED row done would have to lie about
+    # those or leave them out.
+    real_struck = sum(1 for mark, _ in rows if mark) + sum(1 for mark, _ in carried if mark)
     real_tracked = len(rows) + len(carried)
+    real_open = real_tracked - real_struck
 
     assert (tracked, open_, struck) == (real_tracked, real_open, real_struck), (
         f"header says {tracked} tracked / {open_} open / {struck} struck; "

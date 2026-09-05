@@ -67,10 +67,16 @@ RAY_HEAD_DEPLOY = os.environ.get("LANCE_E2E_RAY_HEAD_DEPLOY", "ray-lance-head")
 LINEAGE_IN_CLUSTER = os.environ.get("LANCE_E2E_LINEAGE_IN_CLUSTER", "http://rask-lineage:8000")
 LINEAGE_URL = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 
-#: The baked entrypoint. A literal on purpose: the whole claim is that this path exists IN THE IMAGE,
-#: so deriving it from the same config the image is built against would make the test agree with
-#: itself rather than with the cluster.
-BAKED_ENTRYPOINT = "python /home/ray/jobs/ray_dummy_job.py"
+#: The baked COMMAND. A literal on purpose: the whole claim is that this path exists IN THE IMAGE, so
+#: deriving it from the same config the image is built against would make the test agree with itself
+#: rather than with the cluster.
+BAKED_COMMAND = "python /home/ray/jobs/ray_dummy_job.py"
+
+#: The registered TASK KEY that resolves to that command. A declaration names a task; the task's
+#: registration under `<control_root>/_tasks/` names the engine and the command. That indirection is
+#: the compute-plane decoupling: the catalog validates the key against the registry and never learns
+#: an engine's vocabulary, so a command string is no longer declarable at all.
+BAKED_TASK = os.environ.get("LANCE_E2E_TASK", "dummy-lane")
 
 LANE = "dummy"
 
@@ -208,7 +214,7 @@ def _submit_on_head(submission_id: str, env_vars: dict[str, str], *, timeout: in
             "--runtime-env-json",
             runtime_env,
             "--",
-            *BAKED_ENTRYPOINT.split(),
+            *BAKED_COMMAND.split(),
         ],
         capture_output=True,
         text=True,
@@ -241,7 +247,7 @@ def test_the_lane_is_DECLARED_through_the_admin_gated_catalog_door(catalog: str)
             "name": LANE,
             "from_id": f"{PROJECT}-bronze$events",
             "to_id": f"{PROJECT}-silver${LANE}",
-            "entrypoint": BAKED_ENTRYPOINT,
+            "task": BAKED_TASK,
             "params": {"embed_dim": "8"},
             "code_version": os.environ.get("LANCE_E2E_CODE_VERSION", "e2e"),
         },
@@ -256,7 +262,7 @@ def test_the_lane_is_DECLARED_through_the_admin_gated_catalog_door(catalog: str)
     # backward compatibility with stored records. See the 422 assertion below for the same rename.
     assert body["name"] == LANE
     assert body["project"] == PROJECT, "the project must come from the gated path"
-    assert body["entrypoint"] == BAKED_ENTRYPOINT
+    assert body["task"] == BAKED_TASK
 
 
 def test_an_UNDECLARED_lane_is_422_naming_the_key(catalog: str) -> None:
@@ -283,15 +289,21 @@ def test_an_UNDECLARED_lane_is_422_naming_the_key(catalog: str) -> None:
     assert "body.name" in fields, f"the 422 must name the transform field; got {fields}"
 
 
-def test_a_runtime_env_style_entrypoint_CANNOT_be_declared(catalog: str) -> None:
-    """B3 enforced at the door: a lane that cannot be declared can never be submitted."""
+def test_a_COMMAND_STRING_CANNOT_be_declared(catalog: str) -> None:
+    """B3 enforced at the door: a lane that cannot be declared can never be submitted.
+
+    The door takes a TASK KEY, resolved against the registry the plane that can run it wrote. A
+    command string is not merely unregistered — it is not a field the request model has, so it is
+    refused as an extra input before any registry lookup. That is stronger than the old refusal,
+    which inspected an `entrypoint` string and judged it: a shape that cannot be sent needs no judge.
+    """
     response = requests.post(
         f"{catalog}/v1/project/{PROJECT}/transform/set",
         json={
             "name": "would-be-devmode",
             "from_id": f"{PROJECT}-bronze$events",
             "to_id": f"{PROJECT}-silver$devmode",
-            "entrypoint": "python ./my_local_transform.py",
+            "task": "python ./my_local_transform.py",
         },
         headers=_headers(),
         timeout=30,
@@ -299,7 +311,13 @@ def test_a_runtime_env_style_entrypoint_CANNOT_be_declared(catalog: str) -> None
     if response.status_code in (401, 403):
         pytest.skip(f"LANCE_E2E_ADMIN_TOKEN is not a {PROJECT} admin ({response.status_code})")
     assert response.status_code == 422, response.text
-    assert "baked" in response.text
+    # The refusal NAMES THE REGISTRY rather than a list of blessed strings: "no task is registered
+    # as '…'; a task is registered by the plane that can run it, under the control root's _tasks/
+    # prefix". That is the decoupling's whole point reaching the operator — the catalog cannot recite
+    # an engine's commands, so it says where the answer lives instead of guessing at one.
+    body = response.json()
+    assert [e["field"] for e in body["errors"]] == ["body.task"], body
+    assert "_tasks/" in response.text, response.text
 
 
 # --- 3 ON RAY, 6 NO COPY, 4 COMMITTED ONCE ----------------------------------------------------------
@@ -395,7 +413,7 @@ def driven() -> Iterator[dict[str, Any]]:
     _exec_on_head(_CLEANUP.format(base=base), timeout=120)
 
 
-def test_the_BAKED_entrypoint_exists_in_the_deployed_image_and_runs(driven: dict[str, Any]) -> None:
+def test_the_BAKED_command_exists_in_the_deployed_image_and_runs(driven: dict[str, Any]) -> None:
     """The exit-2 class, caught by exercising it rather than by reading a dockerfile.
 
     `scripts/ray_dummy_job.py` was baked into NO image until 2026-08-17 — it existed, it was

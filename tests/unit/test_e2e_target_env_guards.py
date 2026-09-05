@@ -33,6 +33,13 @@ MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
 #: target stem -> the env vars its suite's own skip guards are keyed on.
 REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     "auth": ("LANCE_E2E_AUTH_SERVER",),
+    # `live` guards NOTHING, and that is the entry rather than an omission. Every other target takes
+    # its addresses from the environment, so a missing variable is what tells it there is no target;
+    # `e2e-live` DISCOVERS them from the cluster instead and fails on the cluster's own answers —
+    # `scripts/e2e_live.sh` exits when kubectl cannot reach a cluster, when the release has no catalog
+    # service, and when Dex issues no token. A required-env guard here would demand the operator
+    # supply what the script exists to derive.
+    "live": (),
     "cas": ("LANCE_E2E_S3_ENDPOINT",),
     "compaction": ("LANCE_E2E_MAINTENANCE_URL", "LANCE_E2E_GREPTIME_URL"),
     "duckdb": ("LANCE_E2E_S3_ENDPOINT",),

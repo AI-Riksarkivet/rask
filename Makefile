@@ -838,6 +838,9 @@ kind-down: ## Delete the rask kind cluster
 # to the same scripts, so "green in CI" and "green on my machine" cannot diverge). The
 # scripts bring up their own governed kind stack, seed grants/buckets, run the suites, and
 # (in CI) tear the cluster down.
+e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addresses + credentials from the cluster)
+	@bash scripts/e2e_live.sh $(ARGS)
+
 e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
 
