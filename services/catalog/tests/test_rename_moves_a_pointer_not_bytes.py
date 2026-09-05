@@ -227,3 +227,71 @@ def test_the_SOURCE_is_claimed_before_the_destination_exists(tmp_path: Path) -> 
         ns.register_table, ns.deregister_table = real_register, real_deregister
 
     assert calls[:2] == ["deregister", "register"], f"the destination was written before the source was claimed: {calls}"
+
+
+def test_the_relative_location_is_derived_from_a_ROOT_that_is_actually_known(tmp_path: Path) -> None:
+    """The root-subtraction path must be reachable, or the "safe" derivation is decoration.
+
+    `_relative_location`'s docstring claimed it subtracts the namespace's configured root "rather than
+    taking the last path segment", because the two agree under V2's flat `<hash>_<object_id>` layout
+    and diverge the moment a backend nests. MEASURED: `DirectoryNamespace` exposes NO root attribute at
+    all — `hasattr(ns, "root")` is False and nothing root-shaped is on the object — so
+    `getattr(ns, "root", "")` was always empty, the loop never matched, and every rename in this estate
+    has taken the last-segment fallback the docstring warns about.
+
+    The root is knowable: the catalog connects the namespace and holds `settings.root`. Passing it in
+    makes the claimed derivation the one that runs, and a caller that cannot supply one still gets the
+    fallback — stated, rather than reached by accident.
+    """
+    ns = _namespace(tmp_path)
+    source = _written(ns, ["ns1", "nested"])
+
+    relative = dataplane._relative_location(source, root=str(tmp_path))
+
+    assert not relative.startswith("/"), relative
+    assert relative == source.removeprefix("file://").removeprefix(str(tmp_path)).lstrip("/")
+
+
+def test_a_NESTED_layout_keeps_its_path_instead_of_collapsing_to_the_leaf(tmp_path: Path) -> None:
+    """The whole reason the derivation exists. Under a backend that nests, the last segment is not the
+    relative path — registering it would point at nothing — and this is the case the dead code was
+    written for and never covered."""
+    nested = f"file://{tmp_path}/warehouse/tier/ab12_ns1$t"
+
+    assert dataplane._relative_location(nested, root=str(tmp_path)) == "warehouse/tier/ab12_ns1$t"
+
+
+def test_no_root_falls_back_to_the_leaf_and_says_so(tmp_path: Path) -> None:
+    """A caller with no root still gets an answer, because `undrop`'s flat V2 case is served correctly
+    by the leaf. What changes is that the fallback is now the stated behaviour of an absent root rather
+    than the only reachable branch."""
+    assert dataplane._relative_location(f"file://{tmp_path}/ab12_ns1$t", root="") == "ab12_ns1$t"
+
+
+def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
+    """The refusal this door used to make, and why it is gone.
+
+    A branch is a shallow clone that references its source root by ABSOLUTE path, so the BYTE-COPY
+    rename genuinely orphaned every branch: it copied the root, deleted the source, and left the
+    branch manifests pointing at bytes that no longer existed — while answering 200. Refusing was
+    right for that implementation.
+
+    The pointer move does not copy and does not delete. MEASURED on the `dir` backend: after
+    deregistering the source and registering the destination at the SAME location, `branches.list()`
+    returns the identical entry (`parent_version`, `branch_identifier`, `manifest_size` all unchanged)
+    and the data reads back. There is nothing left to orphan, so the guard refused a safe operation
+    for a hazard the implementation no longer has.
+    """
+    ns = _namespace(tmp_path)
+    source = _written(ns, ["ns1", "branched"])
+    dataset = lance.dataset(source)
+    if not hasattr(dataset, "create_branch"):
+        pytest.skip("pylance has no branch API here")
+    dataset.create_branch("b1")
+    before = lance.dataset(source).branches.list()
+
+    new_segments, location = dataplane.rename_table(ns, {}, ["ns1", "branched"], "renamed", None, root=str(tmp_path))
+
+    assert location == source, "the rename relocated a branched dataset"
+    assert lance.dataset(location).branches.list() == before, "the branch listing changed under a pointer move"
+    assert ns.describe_table(DescribeTableRequest(id=new_segments)).location == source

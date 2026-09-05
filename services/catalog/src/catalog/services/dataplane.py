@@ -377,43 +377,14 @@ def _existing_location(ns: LanceNamespace, segments: list[str]) -> tuple[str | N
     return location, bool(getattr(resp, "is_only_declared", False))
 
 
-def _refuse_rename_with_branches(source_uri: str, so: StorageOptions, segments: list[str]) -> None:
-    """Refuse to rename a table that has BRANCHES (audit 2026-07-14 — Lance format conformance).
-
-    Rename is a byte-copy of the dataset root + a namespace repoint, which is safe precisely because a Lance
-    dataset's INTERNAL refs are relative. A branch is not internal: it is a shallow clone that references its
-    source root by ABSOLUTE path. Copying the root and deleting the source therefore leaves every branch
-    pointing at bytes that no longer exist — the branches are silently orphaned and their data is
-    unreadable, while the rename returns 200.
-
-    There is no cheap correct fix (the branch manifests would each have to be rewritten to the new root), so
-    the honest behavior is to refuse: a 400 the caller can act on beats a 200 that quietly destroys their
-    branches. Drop the branches first, or copy the table instead.
-
-    A dataset we cannot open (or whose branch listing the backend does not support) is NOT treated as
-    branch-free — that would fail OPEN into the exact silent-orphan case. It raises, so the rename stops.
-    """
-    try:
-        # `.branches` is a Branches HANDLE, not an iterable — `list(ds.branches)` raises TypeError. Probed
-        # against the installed pylance rather than assumed: the accessor is `.list()`.
-        branches = lance.dataset(source_uri, storage_options=so).branches.list()
-    except (ValueError, OSError) as exc:
-        raise ServiceUnavailableError(f"cannot verify whether {'.'.join(segments)} has branches; refusing to rename: {exc}") from exc
-    if branches:
-        names = sorted(branches) if isinstance(branches, dict) else [str(b) for b in branches]
-        raise InvalidInputError(
-            f"cannot rename {'.'.join(segments)}: it has branches {names}. A branch is a shallow clone that "
-            "references this table's root by ABSOLUTE path, so a rename (copy + delete source) would leave "
-            "them pointing at deleted bytes — silently orphaning them. Drop the branches first."
-        )
-
-
 def rename_table(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
     new_table_name: str,
     new_namespace_id: list[str] | None,
+    *,
+    root: str = "",
 ) -> tuple[list[str], str]:
     """Rename a table by moving its POINTER. No data byte is read, written or deleted.
 
@@ -461,7 +432,6 @@ def rename_table(
         # Missing OR declared-but-unwritten → nothing to repoint (404, symmetric with every op that
         # requires a written table).
         raise TableNotFoundError(f"table not found: {'.'.join(segments)}")
-    _refuse_rename_with_branches(source_uri, so, segments)
     if len(segments) == 1:
         raise InvalidInputError(
             f"cannot rename {'.'.join(segments)}: it is a root-namespace table, which the directory catalog stores "
@@ -480,7 +450,13 @@ def rename_table(
     # for register_table") — the same conversion `undrop` already makes. `_relative_to_root` derives
     # it from the namespace's own root rather than assuming the final path segment: under V2 naming a
     # location is `<hash>_<object_id>` at the root, but a backend that nests would break the guess.
-    location = _relative_location(ns, source_uri)
+    # NO BRANCH GUARD, and its absence is a decision. A branch is a shallow clone referencing its
+    # source root by ABSOLUTE path, so the byte-copy rename this door used to perform orphaned every
+    # branch — it copied the root, deleted the source, and answered 200 over unreadable branch data.
+    # The pointer move copies and deletes nothing: measured on the `dir` backend, `branches.list()`
+    # after a rename returns the identical entry and the data reads back, because the bytes never
+    # moved. Re-adding a refusal would decline a safe operation.
+    location = _relative_location(source_uri, root=root)
     # THE SOURCE IS RETIRED FIRST, and that ordering is the whole of this door's race arbitration.
     # `register_table` accepts a second id at a location another id already holds — measured on the
     # `dir` backend — so a destination written first refuses nothing: two renames of one source both
@@ -509,16 +485,24 @@ def rename_table(
     return new_segments, source_uri
 
 
-def _relative_location(ns: LanceNamespace, uri: str) -> str:
-    """``uri`` expressed relative to the namespace root, which is what ``register_table`` accepts.
+def _relative_location(uri: str, *, root: str) -> str:
+    """``uri`` expressed relative to the namespace ROOT, which is what ``register_table`` accepts.
 
-    The dir backend refuses an absolute URI outright, and the value `describe_table` reports IS
-    absolute — so every re-registration in this estate makes this conversion (`undrop` included).
-    Derived by subtracting the namespace's configured root rather than taking the last path segment:
-    the two agree under V2's flat `<hash>_<object_id>` layout and diverge the moment a backend nests,
-    and a wrong relative path registers a pointer to nothing.
+    The dir backend refuses an absolute URI outright and the value `describe_table` reports IS
+    absolute, so every re-registration in this estate makes this conversion (`undrop` included).
+
+    THE ROOT IS PASSED IN because the namespace object does not carry one. Measured on the installed
+    client: `DirectoryNamespace` exposes no `root` attribute and nothing root-shaped at all, so a
+    `getattr(ns, "root", "")` was always empty — the subtraction never ran and every rename took the
+    leaf fallback below. The caller connects the namespace and holds `settings.root`, so it is the
+    one place that can answer.
+
+    Subtracting the root matters only where a backend NESTS: under V2's flat `<hash>_<object_id>`
+    layout the leaf and the relative path are the same string, and they diverge the moment they are
+    not — where registering the leaf would point at nothing. An absent root falls back to the leaf,
+    which is correct for that flat case and is now the stated behaviour of having no root rather than
+    the only branch that could execute.
     """
-    root = str(getattr(ns, "root", "") or "")
     for candidate in (root, root.removeprefix("file://")):
         if candidate and (stripped := uri.removeprefix("file://")).startswith(candidate.rstrip("/") + "/"):
             return stripped[len(candidate.rstrip("/")) + 1 :]

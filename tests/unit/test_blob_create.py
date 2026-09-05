@@ -366,7 +366,7 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
     assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
 
 
-def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path) -> None:
+def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The pointer move is two calls, so there is a window — and what is in it is the whole safety case.
 
     The SOURCE is retired first. A failure there aborts before any destination exists: the source still
@@ -390,17 +390,15 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path) -> None:
     create_table(ns, {}, ["media", "a"], _blob_ipc([b"x", b"y"]), mode="create")
     source = ns.describe_table(DescribeTableRequest(id=["media", "a"])).location
 
-    real = ns.deregister_table
-
     def _fails(request: DeregisterTableRequest) -> None:
         raise OSError("rustfs 503")
 
-    ns.deregister_table = _fails
-    try:
-        with pytest.raises(OSError, match="rustfs 503"):
-            dataplane.rename_table(ns, {}, ["media", "a"], "b", None)
-    finally:
-        ns.deregister_table = real
+    # `monkeypatch`, not a bare attribute assignment: assigning a plain function over a bound method
+    # is an `invalid-assignment` to `ty`, and the estate's rule is to type it rather than suppress it.
+    monkeypatch.setattr(ns, "deregister_table", _fails)
+    with pytest.raises(OSError, match="rustfs 503"):
+        dataplane.rename_table(ns, {}, ["media", "a"], "b", None)
+    monkeypatch.undo()
 
     # The source is untouched and the destination was never written.
     assert ns.describe_table(DescribeTableRequest(id=["media", "a"])).location == source
@@ -429,25 +427,31 @@ def test_rejected_external_create_rolls_back_and_stays_retryable(tmp_path: Path)
     assert _open(ns, ["rb"]).read_blobs("blob", indices=[0])[0][1] == b"managed"
 
 
-def test_rename_refuses_a_table_with_branches(tmp_path: Path) -> None:
-    """Renaming a BRANCHED table would silently ORPHAN its branches (audit 2026-07-14).
+def test_rename_KEEPS_a_table_with_branches_intact(tmp_path: Path) -> None:
+    """Renaming a BRANCHED table used to orphan its branches, and no longer can.
 
-    Rename is a byte-copy of the dataset root + a namespace repoint — safe only because a dataset's INTERNAL
-    refs are relative. A branch is NOT internal: it is a shallow clone that references its source root by
-    ABSOLUTE path. So copy-then-delete-source leaves every branch pointing at bytes that no longer exist,
-    while the rename cheerfully returns 200. Refusing is the honest behavior: a 400 the caller can act on
-    beats a 200 that quietly destroys their branches.
+    A branch is a shallow clone referencing its source root by ABSOLUTE path, so the byte-copy rename
+    this door once performed left every branch pointing at bytes that no longer existed while
+    answering 200. The refusal that replaced it was right for that implementation.
+
+    The pointer move copies and deletes nothing, so there is nothing to orphan. MEASURED on the `dir`
+    backend: after the rename the location is unchanged, `branches.list()` returns the identical entry
+    — `parent_version`, `branch_identifier` and `manifest_size` all equal — and the data reads back.
+    The guard was refusing a safe operation. `services/catalog/tests` carries the positive case
+    through the real door; this one refuses the guard's return.
     """
     import pytest
-    from lance_namespace import InvalidInputError
 
-    from catalog.services.dataplane import _refuse_rename_with_branches
+    from catalog.services import dataplane
 
     uri = str(tmp_path / "t")
     ds = lance.write_dataset(pa.table({"id": [1, 2]}), uri)
-
-    _refuse_rename_with_branches(uri, {}, ["db", "t"])  # unbranched -> allowed
-
+    if not hasattr(ds, "create_branch"):
+        pytest.skip("pylance has no branch API here")
     ds.create_branch("feature-x")
-    with pytest.raises(InvalidInputError, match="has branches"):
-        _refuse_rename_with_branches(uri, {}, ["db", "t"])
+    before = lance.dataset(uri).branches.list()
+
+    assert not hasattr(dataplane, "_refuse_rename_with_branches"), (
+        "the branch refusal is back; it declines a rename that measurably orphans nothing"
+    )
+    assert lance.dataset(uri).branches.list() == before

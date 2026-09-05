@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Request
@@ -865,7 +866,7 @@ async def rename_table(
     # parent BEFORE the (destructive, relocating) rename — else a source-table owner could plant their table
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)
     await fga_deps.require_create_on_parent(client, settings, token, resource="table", segments=new_segments)
-    new_segments, location = await run_in_threadpool(dataplane.rename_table, ns, so, segments, body.new_table_name, body.new_namespace_id)
+    new_segments, location = await run_in_threadpool(partial(dataplane.rename_table, ns, so, segments, body.new_table_name, body.new_namespace_id, root=settings.root))
     # Emit the SOURCE's terminal marker BEFORE revoking its tuples. The default ``http`` lineage transport
     # runs ``enforce_output_authz`` (``can_write_data`` on the source); revoking first deletes the
     # parent→writer edge, so even an admin would 403 and this best-effort emit would be silently swallowed —
