@@ -749,3 +749,24 @@ The same session also re-learned two things worth keeping: `version/list` takes 
 "defect" and a fix that was reverted; and upstream honours `branch` **per operation**
 (`describe_table_version` and `batch_delete_table_versions` do, `count_table_rows` did not), so no
 static rule can stand in for driving each door.
+
+## Q2. Carried from `open_estate-verification.md` when it was drained (2026-09-05)
+
+That register was 35 rows: 29 CLOSED, 1 OPEN, 5 partial. The closed rows and their evidence live in
+the commits they name; what survives is below, one row each, so the file could be deleted without
+anything being dropped silently. Its own header said *"Delete when every row is CLOSED. Status is
+counted from this file, never asserted elsewhere"* — these counts were re-derived from its table.
+
+| # | Row | Was | What actually remains |
+| --- | --- | --- | --- |
+| Q2-1 | Lineage e2e: 2 of 9 failing | 11, MOSTLY CLOSED | Two `test_lineage_e2e.py` cases fail against current code. Subsumed by the wider gap: 111 e2e functions across 30 files exist, `make test` excludes them (`-m "not e2e"`), and NOTHING points them at k3s — every "verified live" claim in this repo rests on a manual terminal run. Fixing the two without wiring the suites leaves the class open |
+| Q2-2 | Six owner decisions ruled but NOT implemented | 16, PARTLY CLOSED | `CAT-CORE-04`, `ingest-flow-11` (the only one rated *should-decide-soon*), `PS-07`, `catalog-api-17`, `MED-011`, `X1`. Each has a stated default the owner did not object to; none is built. They are `open_python-audit.md` rows and belong with that drain |
+| Q2-3 | Three deletion paths never driven live | 19, CLOSED (mostly) | Warehouse and project delete; cascade DETACH + the plural undrop (#96); bucket-purge sole-ownership (`projects_claiming_bucket`). Table-level drop/protect/force/undrop ARE proven — the row's own evidence — so this is the container tier only, which is where `force` and cascade interact |
+| Q2-4 | Two non-rask log sources | 25, OPEN | `rask-kueue-controller-manager` TLS handshake errors ~450/min (a third-party operator's webhook cert) and 2× otel-collector scrape failures. Neither is rask code and neither touches the cascade, but the first is loud enough to hide something that does |
+| Q2-5 | The movers still write as the RustFS tenant root | 30, CLOSED (partial by design) | The cascade's writes are AUTHORIZED (the mover asks `POST /v1/table/{id}/credentials?tier=write`, `can_write_data` audited) and not SCOPED: the credential vended is the tenant root's. `rask-maintenance` and `rask-ray-compute` are provisioned and scoped (rows 31/32 and `5c11002c`); the movers are the remaining holder. **Needs an owner ruling** — a scoped mover credential must still reach the outbox and `HeadBucket`, which is what row 32 measured as the blocker for the Ray key |
+| Q2-6 | `LANCE_FGA_CASCADE_WRITERS` grants every mover `owner` on every warehouse | 35 (B) | The bounding control (`LANCE_PRIVILEGED_SUBJECTS`) now renders on catalog AND lineage (`79512bb0` closed the door asymmetry), but the grant itself is still estate-wide: a mover holds `can_drop`, `can_deregister`, `can_restore` and `manage_grants` on every tenant's warehouse. **Needs an owner ruling** on whether the cascade writer's grant narrows to the warehouses it actually writes |
+
+Row 35 (C) is CLOSED and was stale when written: it said `/bronze-arrival` carries no `from_uri`
+"(verified — zero grep hits)", and `ingest_trigger.py:303-305` sets it from `_vended_upstream`
+(`d58ffaff`). The operator door does the same as of `bd905e61`, so all three cascade heads now name
+the catalog-vended location.

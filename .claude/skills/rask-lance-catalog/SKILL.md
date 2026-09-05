@@ -492,7 +492,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   asks, per verb** — `require_compactable` (the evidence gate) in front of `POST
   /v1/table/{id}/maintenance/compact`, `require_reclaimable` (the root-scoped gate) in front of
   `…/maintenance/run`, plus the `base_refs` guard in front of both. They kept the flags-only mask
-  until row 13 of `open_estate-verification.md`, which made the BUTTON stricter than the CRON — it
+  until the maintenance-door audit (2026-09-02), which made the BUTTON stricter than the CRON — it
   refused every `initial_bases` table (i.e. every ingest bronze table and every medallion tier) while
   telling the operator "the sweep refuses it for the same reason", and the sweep was compacting them
   on the next tick. Strictness there protected nothing: the cron performs these same operations

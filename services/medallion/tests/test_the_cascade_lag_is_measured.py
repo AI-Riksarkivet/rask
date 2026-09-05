@@ -22,7 +22,7 @@ hop, a source that has never published, a destination that has consumed a versio
 passed.
 
 NEVER A COUNTER, NEVER A LOG LINE. A lag is a level, not an event: it is true continuously and is read
-by asking, so it is a GAUGE evaluated with `for:`. Row 23 of `open_estate-verification.md` is the
+by asking, so it is a GAUGE evaluated with `for:`. docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" is the
 lesson — a repeating condition emitted per tick counted one gap 1210 times and buried every other
 service's errors.
 """

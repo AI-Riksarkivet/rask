@@ -28,7 +28,7 @@ belongs in a lag calculation — separating them is what makes a first-ever hop,
 and a backwards tag drivable in a unit test.
 
 A LAG IS A LEVEL, NOT AN EVENT: true continuously, read by asking. So it is a GAUGE evaluated with a
-`for:` clause, never a per-tick counter or log line — row 23 of `open_estate-verification.md` is what
+`for:` clause, never a per-tick counter or log line — docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" is what
 that mistake costs, one gap counted 1210 times and every other service's errors buried.
 """
 
@@ -54,7 +54,7 @@ class EdgeNotMeasurable(Exception):
 
     Neither of the two existing outcomes fits. Counted FAILED, an estate holding abandoned projects
     reports hundreds of permanent failures per tick and buries a real outage in them — the repeating-
-    condition noise row 23 of `open_estate-verification.md` cost. Read as "never published" it becomes
+    condition noise docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" cost. Read as "never published" it becomes
     lag 0, a fabricated healthy series for a cascade that does not exist. So it is its own count, and
     publishes nothing.
     """

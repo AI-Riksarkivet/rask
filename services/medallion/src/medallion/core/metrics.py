@@ -60,7 +60,7 @@ _stage_other_lane = _meter.create_counter(
 
 #: HOW FAR BEHIND its source a destination tier is, in source versions. A LEVEL, not an event: true
 #: continuously and read by asking, so a gauge evaluated with `for:` rather than a per-tick counter —
-#: row 23 of `open_estate-verification.md` records what the other choice costs, one gap counted 1210
+#: docs/DECISIONS.md "A repeating condition is a LEVEL, not an event" records what the other choice costs, one gap counted 1210
 #: times with every other service's errors buried under it.
 #:
 #: SYNCHRONOUS, not observable. The value comes from a catalog read and a lineage query; an observable
