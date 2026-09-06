@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 148 tracked, 130 open, 18 struck.**
-That splits into 58 lettered rows (52 open) and 90 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-06, from the rows below rather than asserted: 153 tracked, 135 open, 18 struck.**
+That splits into 58 lettered rows (52 open) and 95 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -982,3 +982,22 @@ single dissenting pointer in the estate.
 | ~~Q9-3~~ | A repoint would have orphaned `service-ingest`'s real ingest data | high | **CLOSED, and it is why the ruling was re-put.** I had described the drift as "nothing is lost", which was wrong — the 4 rows are real blob data with a `published` tag. Registering them under their own id keeps them governed; `service-ingest` was re-granted `owner`, which `register` had re-seeded to the calling operator |
 | Q9-4 | The cascade head still TELLS the catalog a composed location | high | The split fixes the DATA; the rule violation stands. `produce.py` composes `{root}/medallion/{ns}` and registers it, while every mover asks (`ensure_stage_output`, rule I2). `_require_same_location` correctly refuses a disagreement and the head has NO convergence path — it answers `503 Retry-After: 5`, promising a convergence no retry can produce. The next tenant whose catalog and head disagree is 503 again |
 | Q9-5 | `/ingest-media` is the same defect at a second door | high | `bronze-media$objects` is registered at `s3://lakehouse-wh/medallion/bronze-media` while `MEDALLION_MEDIA_BRONZE_URI` is `s3://lance-catalog/medallion/bronze-media`. Projectless, so not fixed by the acme split — registration/deployment-contract drift, same root cause as Q9-4 |
+
+## Q10. Is this an idiomatic Lance lakehouse? (2026-09-06, fable 5.1 audit)
+
+Ten dimensions audited against `lance_docs/` (171 files) and `lancemultibasebranchingblobv2.md`.
+**111 findings: 28 IDIOMATIC, 29 DIVERGENT-ON-PURPOSE, 54 WRONG.**
+
+READ THE STATUS OF THESE ROWS BEFORE ACTING ON THEM. The audit hit the session limit with 29 of 49
+agents unrun — every adversarial refuter and both synthesis agents. The workflow's own "survived
+refutation" filter is vacuous when no refuter ran, so **the 54 WRONG findings are UNVERIFIED except
+the four below, which I probed against the installed library and the live estate myself.** A false
+WRONG is more expensive than a missed one; the rest are leads, not findings.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q10-1 | **The cascade enables stable row ids at every create and destroys them at every write** | high | **VERIFIED.** pylance 10.0.0 probe: `mode="overwrite"` re-mints `_rowid` `[0,1,2]`→`[3,4,5]`; `merge_insert("id")` preserves `[0,1,2]`. The cascade writes `mode="overwrite"` (`compute.py:232`, `ingest.py:184`, `ray_stage_job.py:236`). Live: `s3://lance-catalog/medallion/bronze` is **8 rows in 20 versions**, `has_stable_row_ids=True`. So `source_rowid` names a `_rowid` that no longer exists after any re-ingest, and `_row_created_at_version > from AND <= to` — how `publication_trigger`, `cascade_lag` and the runners resolve a delta — always spans the whole table because every row's created version is the newest. The estate already has the idiom twice (`annotator/lancekit/writer.py:95`, `ray_stage_job.py::_merge_into`) |
+| Q10-2 | Two modules hand-roll manifest protobuf parsing to read base paths the library exposes | med | **VERIFIED.** `ds._ds.base_paths()` exists on pylance 10.0.0 (returns `{}` on a base-less dataset). `blobs.py:61` states "THIS EXISTS BECAUSE PYLANCE EXPOSES NO WAY TO READ A DATASET'S REGISTERED BASES" and `lander.py:338` repeats it; `features.py:160-260` walks varints at manifest fields 18/4/3. Two second sources of truth, one of which travels with any schema copy |
+| Q10-3 | `defer_index_remap=True` is requested on every dataset and refused on every governed one | med | Lance: stable row ids need no index remap. `optimize.py:237` asks anyway, catches the refusal by substring, retries plain — 211 `compact_defer_index_remap_unsupported` warnings in 48h. The pinning test builds its fixture WITHOUT stable row ids, so it pins the path no governed dataset takes |
+| Q10-4 | `id` is the merge key the tier contract requires but is never declared as Lance's unenforced primary key | med | `lance-schema:unenforced-primary-key` field metadata is what `merge_insert(on=None)` reads. Declaring it makes the key the FORMAT's, not a convention each writer re-states |
+| Q10-5 | The other 50 WRONG findings are UNVERIFIED | — | Headlines by dimension are in the workflow transcript. Governance: Lance specifies no authz model but DOES specify credential vending (`vend_credentials` → `storage_options` + `expires_at_millis`) — rask's rung model is a parallel invention, recorded. Lineage: the AGE graph holds what the manifest cannot (WHO, DERIVED_FROM, failures) but the two stores join on a bare version int because nothing stamps Lance's native `transaction_properties`. Blob: media DOES enter as `lance.blob.v2` at every door — format-level multimodality is real — but every live tier holds a MANAGED COPY and the external-pointer path is unreachable. Branching: routed in spec shape, driven by nothing. **Re-run the refuters before acting on any of these** |
