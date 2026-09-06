@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 143 tracked, 128 open, 15 struck.**
-That splits into 58 lettered rows (52 open) and 85 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-06, from the rows below rather than asserted: 148 tracked, 130 open, 18 struck.**
+That splits into 58 lettered rows (52 open) and 90 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -962,3 +962,23 @@ after it fail for a reason that is not its own):
 | Q8-12 | Five legs still need a SECOND tenant (`LANCE_E2E_PROJECT_B` + its token) | med | Cross-tenant credential isolation is unproven live. Provisioning a second project on the estate is the work |
 | Q8-13 | Three legs skip on a 5s `/livez` timeout while the producer serves the cascade | low | The producer is up (1 restart, 20h ago; `/livez` answers 200 by hand). A suite-robustness row — the probe is too tight for an estate under load, and a timeout that reads as "not reachable" is a skip that hides a pass |
 | Q8-14 | The new locator gate misses ~21 further dangling pointers | low | Its regex sees a row-id form only; the `§7.11` / `§2` / `Phase 1` forms escape it, across 16 files including `docs/DECISIONS.md`. Found while scouting Q7-4 |
+
+## Q9. The acme drift, split and closed (2026-09-06)
+
+Owner ruling: SPLIT THE ID. The two datasets were never one table — they were two tables that had
+collided on one name, and the estate had been telling itself otherwise since 2026-08-24.
+
+Measured before touching anything: the row sets are DISJOINT, not superset/subset. The vended
+location held 4 rows of a blob/media schema written by `service-ingest`, with two indices and a
+`published` tag; the composed path held 5,370 rows of `{id, payload, stage}` whose ids do not
+intersect them at all. Silver and gold (5,370 each) derive from the composed path, and the AGE
+lineage node already recorded it as this table's location — the catalog's `__manifest` row was the
+single dissenting pointer in the estate.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| ~~Q9-1~~ | `POST /produce?project=<tenant>` had been 503 for TEN DAYS | high | **CLOSED.** Last successful tenant produce 2026-08-27 07:16:46; `register_written_dataset` landed 2026-08-29 (`531864e2`) and every produce since answered `503 medallion catalog registration failed; retry`. Nothing reported it because the suite that would have caught it was skipping. After the split: `202 {"status":"produced","dataset":"acme-bronze$events"}` |
+| ~~Q9-2~~ | The catalog governed a 4-row table while 5,370 rows sat ungoverned | high | **CLOSED.** `acme-bronze$events` → `medallion/bronze` (5,370); `acme-bronze$objects` → `4750a5b9_acme-bronze$events` (4). Both verified by `count_rows` through the catalog |
+| ~~Q9-3~~ | A repoint would have orphaned `service-ingest`'s real ingest data | high | **CLOSED, and it is why the ruling was re-put.** I had described the drift as "nothing is lost", which was wrong — the 4 rows are real blob data with a `published` tag. Registering them under their own id keeps them governed; `service-ingest` was re-granted `owner`, which `register` had re-seeded to the calling operator |
+| Q9-4 | The cascade head still TELLS the catalog a composed location | high | The split fixes the DATA; the rule violation stands. `produce.py` composes `{root}/medallion/{ns}` and registers it, while every mover asks (`ensure_stage_output`, rule I2). `_require_same_location` correctly refuses a disagreement and the head has NO convergence path — it answers `503 Retry-After: 5`, promising a convergence no retry can produce. The next tenant whose catalog and head disagree is 503 again |
+| Q9-5 | `/ingest-media` is the same defect at a second door | high | `bronze-media$objects` is registered at `s3://lakehouse-wh/medallion/bronze-media` while `MEDALLION_MEDIA_BRONZE_URI` is `s3://lance-catalog/medallion/bronze-media`. Projectless, so not fixed by the acme split — registration/deployment-contract drift, same root cause as Q9-4 |
