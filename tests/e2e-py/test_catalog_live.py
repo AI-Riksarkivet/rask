@@ -81,6 +81,12 @@ def _row(id_: str, *, source: str, status: str, confidence: float, label: str = 
         "t_start": 0.0,
         "t_end": 0.0,
         "text": "",
+        # The TEXTUAL facet's non-span sentinels — the values `NewAnnotation` itself declares
+        # (`annotator/annotations/schema.py`): an empty parent and -1 offsets, so a default never
+        # fakes a zero-length span at offset 0.
+        "parent_id": "",
+        "char_start": -1,
+        "char_end": -1,
         "label": label,
         "status": status,
         "source": source,
@@ -143,11 +149,16 @@ def writer(table_id: list[str]) -> CatalogTableWriter:
     return CatalogTableWriter(RestCatalogWriteTransport(CATALOG_URL, table_id, token=CATALOG_TOKEN or None), table_id)
 
 
-def test_schema_round_trips_all_31_columns(reader: CatalogTableReader) -> None:
+def test_schema_round_trips_all_34_columns(reader: CatalogTableReader) -> None:
     table = reader.to_table()
     assert table.num_rows == 0
     assert table.schema.names == SCHEMA.names
-    assert len(table.schema) == 31
+    # 4 identity columns + EMPTY_SCHEMA's 30. A LITERAL on purpose: the line above already compares
+    # NAMES against SCHEMA, so deriving this from `len(SCHEMA)` would restate that and could never
+    # fail again. The number is the estate's one tripwire for a column landing in EMPTY_SCHEMA with
+    # nobody noticing — which is exactly how the textual facet (parent_id, char_start, char_end)
+    # arrived and left this suite red for a month.
+    assert len(table.schema) == 34
     # .schema is a limit-0 scan under the hood — must round-trip over REST too.
     assert reader.schema.names == SCHEMA.names
     assert reader.to_table(limit=0).num_rows == 0

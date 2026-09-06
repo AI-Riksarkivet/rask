@@ -89,6 +89,23 @@ def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
     )
 
 
+def _reachable(so: dict[str, str]) -> dict[str, str]:
+    """The vended storage options, with the ENDPOINT rewritten to one this process can reach.
+
+    The catalog vends the IN-CLUSTER endpoint (`http://rask-rustfs-io:9000`) and is right to: that is
+    the address its in-cluster clients need. This suite runs on the HOST, where that name does not
+    resolve — measured: `getent hosts rask-rustfs-io` finds nothing, while the ClusterIP answers. Left
+    alone, `write_fragments` dies in object_store's own retry loop ("Error performing list request …
+    after 3 retries") before a byte is written, and the failure reads as a broken store.
+
+    ONLY THE ADDRESS IS REPLACED. The CREDENTIALS stay exactly as vended, which is the property this
+    suite exists to prove — that a client can write with what the catalog handed it. Swapping the whole
+    dict for a static admin pair would make every assertion below vacuous.
+    """
+    endpoint = os.environ.get("LANCE_E2E_S3_ENDPOINT") or S3
+    return {**so, "endpoint": endpoint} if endpoint else so
+
+
 def _schema() -> pa.Schema:
     return pa.schema([pa.field("id", pa.int64()), pa.field("v", pa.string())])
 
@@ -121,14 +138,14 @@ def test_client_direct_commit_lands_with_zero_byte_ingress(catalog: str) -> None
     assert r.status_code == 200, r.text
     cred = r.json()
     location, read_version = cred["location"], cred["read_version"]
-    so = (cred.get("credentials") or {}).get("storage_options") or {
+    so = _reachable((cred.get("credentials") or {}).get("storage_options") or {
         "endpoint": S3,
         "access_key_id": "rustfsadmin",
         "secret_access_key": "rustfsadmin",
         "allow_http": "true",
         "virtual_hosted_style_request": "false",
         "region": "us-east-1",
-    }
+    })
 
     # CLIENT-DIRECT: the row data goes straight to RustFS from here — never through the catalog.
     new_rows = pa.table({"id": [3, 4, 5], "v": ["c", "d", "e"]}, schema=_schema())
@@ -185,10 +202,10 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
 
     def _vend() -> tuple[str, int, dict]:
         c = requests.post(f"{catalog}/v1/table/{_TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30).json()
-        so = (c.get("credentials") or {}).get("storage_options") or {
+        so = _reachable((c.get("credentials") or {}).get("storage_options") or {
             "endpoint": S3, "access_key_id": "rustfsadmin", "secret_access_key": "rustfsadmin",
             "allow_http": "true", "virtual_hosted_style_request": "false", "region": "us-east-1",
-        }  # fmt: skip
+        })  # fmt: skip
         return c["location"], c["read_version"], so
 
     n = 6

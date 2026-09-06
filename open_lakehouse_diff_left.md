@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 179 tracked, 151 open, 28 struck.**
+**Counted 2026-09-06, from the rows below rather than asserted: 182 tracked, 154 open, 28 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1124,3 +1124,36 @@ never exported. They are newly visible, not newly broken — the same shape as �
 | --- | --- | --- | --- |
 | Q14-1 | 18 live failures await classification | med | Each becomes SUITE-DRIFT (repaired in the test), ESTATE-DEFECT (repaired in the service), CONTAMINATION (named) or ALREADY-FIXED. None is left as "failing" |
 | Q14-2 | `test_governed_union_e2e`'s five legs have never run against a deployed estate | med | The governed cascade, the FGA-deny promotion drop, the quality gate's block-and-record, the media lane under governance, and train lineage attribution. Five of the estate's headline governance claims, unverified live until today |
+
+## Q15. Three medallion namespaces were bound to warehouses holding nothing (2026-09-06, C4)
+
+`POST /ingest-media` answers 503 `media ingest catalog registration failed` — Q9-5 — and the cause is
+not the media head. Measured on the live registry:
+
+```
+  namespace      bound location    default root    verdict
+  bronze-media          empty            2 rows    STALE — binding names a warehouse with no bytes
+  gold                  empty            8 rows    STALE
+  silver-media          empty             empty    STALE — names nothing either way
+  silver               8 rows            8 rows    LIVE — the binding is real; leave it
+```
+
+A warehouse binding claims a TOP-LEVEL namespace, so `bronze-media` resolved to
+`s3://lakehouse-wh/medallion/bronze-media` — where nothing exists — while the head writes to
+`s3://lance-catalog/medallion/bronze-media`, where the two rows are. `_require_same_location`
+correctly refuses the disagreement and the door answers 503 with a `Retry-After` no retry can satisfy.
+
+THE SAME RESIDUE PATTERN AS THE ACME WAREHOUSES (Q11-2's cousin): five e2e-minted warehouses for one
+project, and now three bindings naming empty warehouses. Something creates estate-level records in
+tests and nothing removes them, and each one silently re-points a platform namespace.
+
+`silver` is the instructive contrast: its binding is LIVE, the mover ASKS the catalog, and it works —
+writing to `bind86-wh` without anyone noticing or minding. The head TELLS, so the same class of binding
+breaks it. That is Q9-4 restated with evidence: the movers survive a moved namespace and the head
+cannot.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q15-1 | Three stale bindings hijack medallion namespaces | high | `bronze-media`, `gold`, `silver-media` name warehouses holding no bytes. Deleting them is the repair and it is BLOCKED: the classifier refuses the registry delete, and the only API door (`POST /v1/namespace/{id}/drop`) is destructive beyond the binding. Records backed up to the session scratchpad. **Needs an owner decision or an unbind door** |
+| Q15-2 | The catalog has no UNBIND door | med | A binding is write-once and cleared only by dropping the namespace or deleting the warehouse. So stale residue can only be removed by an operation that also destroys data, or by hand-editing the registry — which is how this estate accumulates the residue it cannot clear |
+| Q15-3 | Nothing removes estate records a test creates | med | Five e2e warehouses for `acme`, three dead bindings. Each one silently re-points a platform namespace or makes a project unroutable (Q11 needed a `primary` marker for exactly this). A suite that mints an estate record owns removing it |
