@@ -182,6 +182,49 @@ export LANCE_E2E_S3_REGION="${LANCE_E2E_S3_REGION:-us-east-1}"
 export LANCE_E2E_AUTH_SERVER="http://$CATALOG"
 export MEDIA_CATALOG_URL="http://$CATALOG"
 export LANCE_REST_E2E_URL="http://$CATALOG"
+# THE CREDENTIAL TRAVELS WITH THE ADDRESS. Bridging `MEDIA_CATALOG_URL` alone pointed that suite at a
+# GOVERNED catalog anonymously — an empty token is its documented "auth-off" mode, so it took the
+# ungoverned branch and every leg 401'd on "Missing bearer token". The catalog was right; the runner
+# handed it half an identity.
+export MEDIA_CATALOG_TOKEN="$ALICE"
+
+# THE WAREHOUSE IS DISCOVERED, not assumed, because `warehouses.enabled` decides which door a suite
+# must use. With warehouses on, a top-level `POST /v1/namespace/{ns}/create` is refused 400 by
+# `require_warehouse_scoped` — deliberately — and the suites that read `LANCE_E2E_WAREHOUSE` switch to
+# the warehouse-scoped door only when it is set. Unset, they took the root door and read a correct
+# refusal as an authorization defect. Left empty when the catalog serves no warehouses, which is what
+# an estate with the feature off looks like.
+# `GET /v1/warehouses` answers a BARE LIST (92 records on this estate), not an envelope — measured
+# 2026-09-06. Handle the envelope shapes too rather than pinning the bare one: this is discovery, and
+# a runner that dies on a response shape is the failure it exists to prevent.
+WAREHOUSE="$(curl -s -m 15 "http://$CATALOG/v1/warehouses" -H "authorization: Bearer $ALICE" | uv run python -c "
+import json, os, sys
+try:
+    body = json.load(sys.stdin)
+except Exception:
+    sys.exit()
+if isinstance(body, list):
+    records = body
+elif isinstance(body, dict):
+    records = body.get('warehouses') or body.get('items') or []
+else:
+    records = []
+project = os.environ.get('LANCE_E2E_PROJECT', 'acme')
+# ACTIVE only, and the oldest first: a suite that adopts an existing namespace wants the estate's
+# settled warehouse, not one a previous e2e run minted and may yet remove.
+matches = sorted(
+    (r for r in records if isinstance(r, dict) and r.get('project') == project and r.get('status', 'active') == 'active'),
+    key=lambda r: str(r.get('created_at', '')),
+)
+if matches:
+    print(matches[0].get('id') or matches[0].get('name') or '')
+" 2>/dev/null || true)"
+if [ -n "$WAREHOUSE" ]; then
+  export LANCE_E2E_WAREHOUSE="$WAREHOUSE"
+  printf '   warehouse: %s (project %s)\n' "$WAREHOUSE" "${LANCE_E2E_PROJECT:-acme}"
+else
+  printf '   note: no warehouse found for project %s — the suites that need one use the root door and may be refused\n' "${LANCE_E2E_PROJECT:-acme}"
+fi
 if [ -n "$AGE" ] && [ -n "$PG_PASSWORD" ]; then
   export LINEAGE_DATABASE_URL="postgresql://lance:$PG_PASSWORD@$AGE/lineage"
 else
