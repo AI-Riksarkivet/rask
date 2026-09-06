@@ -29,6 +29,14 @@ PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
+#: The top-level namespace this suite binds into warehouse A — OWNED BY THIS FILE ALONE.
+#:
+#: A warehouse binding is WRITE-ONCE and permanent; only dropping the namespace releases it. So a name
+#: another suite also creates is captured by whichever ran first and can never be bound here again.
+#: Measured live 2026-09-06: `e2ens` was bound to `warehouse:lakehouse-wh` by another suite through
+#: `topology.create_top_level`, so every table this file created landed in `s3://lakehouse-wh` while its
+#: own bind 409'd and bucket-a read empty — the isolation assertion was void before it ran.
+NS = os.environ.get("LANCE_E2E_WAREHOUSE_NS", "e2ewhiso")
 
 pytestmark = pytest.mark.e2e
 
@@ -75,21 +83,33 @@ def test_per_warehouse_physical_isolation(catalog: str) -> None:
 
     # A namespace bound to warehouse A, then a table under it — both must land in bucket-a.
     # REPEATABLE (writing-python testing.md F.I.R.S.T.): re-running against a stack that already holds
-    # this namespace must NOT fail. A 409 means it exists and is ALREADY bound to this same warehouse
-    # (the binding is write-once — a bind to a DIFFERENT warehouse is what 409s in the hijack guard),
-    # so the isolation assertions below still hold. Without this the suite passes only on a fresh cluster,
-    # which is precisely the "green once, never again" trap this whole CI job exists to close.
+    # this namespace must not fail.
+    #
+    # A 409 IS NOT ONE ANSWER. `create_warehouse_namespace` raises `NamespaceAlreadyExistsError` from
+    # three distinct places — the write-once hijack guard ("already bound to another warehouse"), the
+    # default-root collision guard, and the native create — and only the last is benign here. This
+    # tolerated all three on the stated premise that a 409 "means it exists and is ALREADY bound to this
+    # same warehouse". Measured live 2026-09-06, that premise was false: `e2ens` was bound to
+    # `lakehouse-wh` by another suite, every table below landed there, bucket-a read empty, and the
+    # isolation assertion this test exists for was void while the test reported a bind it never made.
+    #
+    # So the 409 is READ rather than swallowed. A hijack fails loudly and names the holder.
     r = requests.post(
         f"{catalog}/v1/warehouses/{wh_a}/namespaces",
-        json={"namespace": "e2ens"},
+        json={"namespace": NS},
         headers=_auth(),
         timeout=30,
     )
     assert r.status_code in (200, 409), r.text
+    if r.status_code == 409:
+        assert "another warehouse" not in r.text, (
+            f"{NS!r} is bound to a warehouse this suite does not own, so every table it creates lands "
+            f"elsewhere and the isolation assertion below proves nothing: {r.text}"
+        )
 
     # mode=overwrite so a re-run replaces the prior version instead of colliding on an existing table.
     r = requests.post(
-        f"{catalog}/v1/table/e2ens{DELIM}e2etbl/create?mode=overwrite",
+        f"{catalog}/v1/table/{NS}{DELIM}e2etbl/create?mode=overwrite",
         data=_arrow_ipc(),
         headers={**_auth(), "content-type": ARROW_STREAM},
         timeout=60,
@@ -99,7 +119,7 @@ def test_per_warehouse_physical_isolation(catalog: str) -> None:
     a_objs = _list_bucket(wh_a)
     b_objs = _list_bucket(wh_b)
     # The table's Lance data is physically in bucket-a...
-    assert any("e2ens" in o or "e2etbl" in o for o in a_objs), a_objs
+    assert any(NS in o or "e2etbl" in o for o in a_objs), a_objs
     # ...and NOT in bucket-b (physical tenant isolation).
     assert not any("e2etbl" in o for o in b_objs), b_objs
 
@@ -167,7 +187,7 @@ def test_data_plane_unauthenticated_write_is_401(catalog: str) -> None:
     if not NONADMIN:
         pytest.skip("auth-on stack only (set LANCE_E2E_NONADMIN_TOKEN)")
     r = requests.post(
-        f"{catalog}/v1/table/e2ens{DELIM}e2e_anon/create?mode=overwrite",
+        f"{catalog}/v1/table/{NS}{DELIM}e2e_anon/create?mode=overwrite",
         data=_arrow_ipc(),
         headers={"content-type": ARROW_STREAM},  # deliberately no authorization header
         timeout=30,
