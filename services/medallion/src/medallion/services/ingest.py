@@ -42,9 +42,18 @@ _BRONZE_STAGE = "bronze"
 #: for free: a gold transcription can be traced to the exact page bytes it was read from.
 _SHA256_COLUMN = "sha256"
 
+#: The tier's merge key, declared as LANCE's own unenforced primary key rather than as a convention
+#: each writer restates (`lance_docs/file_format.md:2887-2910`). Both cascade lanes merge on `id`
+#: since 2026-09-06, so it is load-bearing at every write; the metadata is what makes the SCHEMA say
+#: so. Lance requires a primary-key field to be non-nullable (:2896), which `id` always was in
+#: practice. ADDITIVE: the key is "fixed after initial setting", so a dataset written before this
+#: cannot gain one — measured, such a dataset still accepts `merge_insert("id")` and refuses only
+#: `merge_insert(None)`, which is why every caller keeps naming the key explicitly.
+_ID_FIELD = pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"})
+
 _INGEST_SCHEMA = pa.schema(
     [
-        pa.field("id", pa.int64()),
+        _ID_FIELD,
         blob_field("payload"),
         pa.field("source_uri", pa.string()),
         pa.field(_SHA256_COLUMN, pa.string()),

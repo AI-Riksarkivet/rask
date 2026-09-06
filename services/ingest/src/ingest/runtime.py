@@ -154,9 +154,18 @@ if TYPE_CHECKING:
 # WITHOUT it raises `OSError: Append with different schema` (measured). Bronze is reproducible from
 # source by design, but an existing dataset needs an `add_columns` alter before this plane can write
 # to it again.
+#: The tier's merge key, declared as LANCE's own unenforced primary key rather than as a convention
+#: each writer restates (`lance_docs/file_format.md:2887-2910`). Both cascade lanes merge on `id`
+#: since 2026-09-06, so it is load-bearing at every write; the metadata is what makes the SCHEMA say
+#: so. Lance requires a primary-key field to be non-nullable (:2896), which `id` always was in
+#: practice. ADDITIVE: the key is "fixed after initial setting", so a dataset written before this
+#: cannot gain one — measured, such a dataset still accepts `merge_insert("id")` and refuses only
+#: `merge_insert(None)`, which is why every caller keeps naming the key explicitly.
+_ID_FIELD = pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"})
+
 BRONZE_SCHEMA = pa.schema(
     [
-        pa.field("id", pa.int64()),
+        _ID_FIELD,
         pa.field("source_uri", pa.string()),
         blob_field(
             "payload",
