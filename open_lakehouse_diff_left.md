@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 153 tracked, 135 open, 18 struck.**
-That splits into 58 lettered rows (52 open) and 95 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-06, from the rows below rather than asserted: 156 tracked, 137 open, 19 struck.**
+That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1001,3 +1001,32 @@ WRONG is more expensive than a missed one; the rest are leads, not findings.
 | Q10-3 | `defer_index_remap=True` is requested on every dataset and refused on every governed one | med | Lance: stable row ids need no index remap. `optimize.py:237` asks anyway, catches the refusal by substring, retries plain — 211 `compact_defer_index_remap_unsupported` warnings in 48h. The pinning test builds its fixture WITHOUT stable row ids, so it pins the path no governed dataset takes |
 | Q10-4 | `id` is the merge key the tier contract requires but is never declared as Lance's unenforced primary key | med | `lance-schema:unenforced-primary-key` field metadata is what `merge_insert(on=None)` reads. Declaring it makes the key the FORMAT's, not a convention each writer re-states |
 | Q10-5 | The other 50 WRONG findings are UNVERIFIED | — | Headlines by dimension are in the workflow transcript. Governance: Lance specifies no authz model but DOES specify credential vending (`vend_credentials` → `storage_options` + `expires_at_millis`) — rask's rung model is a parallel invention, recorded. Lineage: the AGE graph holds what the manifest cannot (WHO, DERIVED_FROM, failures) but the two stores join on a bare version int because nothing stamps Lance's native `transaction_properties`. Blob: media DOES enter as `lance.blob.v2` at every door — format-level multimodality is real — but every live tier holds a MANAGED COPY and the external-pointer path is unreachable. Branching: routed in spec shape, driven by nothing. **Re-run the refuters before acting on any of these.** All 111 findings are now in `open_lance-idiomaticity.findings.md` with their `lance_says` / `we_do` / file:line evidence — they were in a 26 MB session transcript outside the repo, which is the shape this estate has already been bitten by twice |
+
+## Q11. The two engine seams, measured (2026-09-06)
+
+The estate has TWO stacked seams and I described them as one, then reported the upper one as absent.
+Correcting that here rather than leaving the wrong claim standing.
+
+```
+WORKFLOW ENGINE   Dapr Workflow — durable steps, timers, external events
+                  swappable in principle for Argo / Flyte
+       | activities
+COMPUTE ENGINE    the Executor port — WorkOrder, task_registry, attestation
+                  adapters: InProcessExecutor, RayJobExecutor
+```
+
+Ingest, batch processing and the quality gate are not separate planes — they are that same pair
+instantiated three times.
+
+MEASURED: 68 orchestration constructs (`yield ctx.*`, `DaprWorkflowContext`) live in FOUR files, two
+of which carry 65 — `medallion/workflow.py` (36) and `ingest/workflow.py` (29). The other ten files
+that import `dapr.ext.workflow` carry ZERO: they are runtime registration and client calls (start an
+instance, poll status, terminate). So a workflow-engine swap rewrites two files, not twenty-four,
+and the activities below it — `submit_stage`, `poll_stage`, `report_stage_outcome` — build a
+`WorkOrder` and go through the compute port, surviving the swap untouched.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q11-1 | The activity layer reaches UP to the orchestrator | med | `transform.py:132` and `train.py:329` do `import dapr.ext.workflow as wf` INSIDE a function body to start/inspect an instance. That is the seam leaking upward: a service that should only know "a work order was submitted" knows how to talk to the engine. The fix mirrors what the compute plane already has — a `WorkflowClient` protocol in `service-kit`, so a service starts a saga without naming Dapr. THIS, not an import count, is the BYO-workflow gap |
+| Q11-2 | `ray_submit.py` goes around the compute port | med | Recorded in `docs/DECISIONS.md` "The compute plane is decoupled" as the remaining decoupling work: it is a module of functions naming no `capabilities`, so the port cannot describe it. The estate's one ray import outside a runner |
+| ~~Q11-3~~ | I reported BYO-workflow as "no seam at all" | low | **CORRECTED HERE.** The count I quoted (24 imports) was registration plumbing plus orchestration added together, and the conclusion drawn from it was wrong. The seam is structurally present and concentrated; what is missing is Q11-1 |
