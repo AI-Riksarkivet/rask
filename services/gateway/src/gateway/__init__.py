@@ -211,7 +211,7 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
     # validation, and run execution. Bare app-id, like `ingest` and for the same reason.
     flows = ("flows", settings.flows_url)
-    # The notification plane (open_notifications.md D2): the per-subject inbox behind the bell. Bare
+    # The notification plane: the per-subject inbox behind the bell. Bare
     # app-id, like `ingest` and `flows`, and 8850 continues the 8830/8840 fleet run.
     notifications = ("notifications", settings.notifications_url)
     # longest / most-specific prefixes first; the prefix itself is the catch-all.

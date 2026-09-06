@@ -640,8 +640,8 @@
 		// The default of 2 is shared, and that is a coincidence of taste, not of unit.
 		//
 		// Matching the unit is not simply a counting change: theirs bounds what the SERVER FETCHES,
-		// while this bounds a filter over an already-fetched, capped window. See P1 item 7 in
-		// `open_lineage_graph.md` — the two belong in one change or neither.
+		// while this bounds a filter over an already-fetched, capped window. The server-side depth control
+		// is `services/lineage/tests/test_rooted_subgraph_depth.py` — the two belong in one change or neither.
 		//
 		// Filtering happens BEFORE layout on purpose: laying out the full graph and then hiding
 		// nodes would leave the survivors on their estate-wide coordinates, scattered across a

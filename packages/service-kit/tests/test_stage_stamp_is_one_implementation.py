@@ -1,6 +1,6 @@
 """B14: two implementations of the bronze→silver stamp, and nothing compared them.
 
-`open_batch_process.md` B14 — "One `transform_batch`, two drivers, one drift pin." The medallion ships
+B14 — "One `transform_batch`, two drivers, one drift pin" (closed 2026-08-23, `f523cd48`). The medallion ships
 the stage transform twice: `medallion/services/compute.py` runs it in-process, and
 `scripts/ray_stage_job.py` runs it on the cluster. The Ray copy's own docstring admits the arrangement
 — "Mirrors compute._carry_source_rowid + _stamp_stage" — and a mirror maintained by hand is a mirror

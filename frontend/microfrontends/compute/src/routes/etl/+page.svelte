@@ -12,7 +12,7 @@
 
 	const ID_RE = /^[A-Za-z0-9._-]+$/;
 
-	// The ingest form — the plane's head (`POST /api/ingest/ingests`, open_ingest.md P1).
+	// The ingest form — the plane's head (`POST /api/ingest/ingests`).
 	//
 	// The door takes {kind, project, dataset, options} and resolves the adapter from a registry, and
 	// this page now takes the same shape. It used to call `ingestIIIFVolume()` with kind 'iiif',

@@ -1,7 +1,7 @@
 """External object-storage harvest — the SECOND external-raw source family (R23).
 
 External raw spans several source families, and each is now ONE registry entry in the ingest
-plane rather than a head route here (open_ingest.md I1). This module is the S3 half of that:
+plane rather than a head route here. This module is the S3 half of that:
 ``S3PrefixSource`` plus the ``s3_input()`` lineage twin, which sat here unit-tested against moto
 with NO ROUTE WIRED for months — precisely because reaching it meant adding another head.
 

@@ -4,7 +4,7 @@ WHY. `dataset_column_graph` asks for "every column edge touching THIS dataset" a
 one hop by construction: a field two derivations upstream — the actual answer to "where did this
 column come from" whenever a table is built from a table that was built from something — is not in
 the payload, and no client setting could ask for it. The table-level graph grew a depth control
-(`open_lineage_graph.md` P1 #7); the column graph had none to grow, which is P3's column-depth item.
+(`test_rooted_subgraph_depth.py`); the column graph had none to grow, and this closes that gap.
 
 WHAT DEPTH COUNTS, and it is a deliberate choice rather than the only one available: DATASET hops.
 The underlying query is dataset-scoped, the view draws one container per table, and "one more table

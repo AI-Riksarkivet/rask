@@ -1,6 +1,6 @@
 // @rask/api/ingest — the ingest plane's door: POST /api/ingest, GET /api/ingest/{run_id}.
 //
-// Rewritten 2026-08-03 for the plane that replaces the medallion's IIIF head (open_ingest.md P1).
+// Rewritten 2026-08-03 for the plane that replaces the medallion's IIIF head.
 // Two things changed shape, and both were WRONG here in a way that would have failed at runtime:
 //
 //   * The response is a run HANDLE, not a result. This module pinned `status: v.literal('ingested')`

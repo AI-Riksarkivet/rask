@@ -38,9 +38,8 @@ const EVENTS_WINDOW = 200;
  * ROOTED read, `/datasets/{name}/graph?depth=N`, bounded SERVER-side. The distinction is not a
  * refinement of the same answer: the estate window is a global cap, so a table five hops upstream of
  * the focus can sit outside it and be unreachable at ANY depth, which is exactly what made the depth
- * control a filter over an already-fetched window rather than a control over what is fetched
- * (`open_lineage_graph.md` P1 #7) and what stopped search from reaching anything not already drawn
- * (P1 #8). Rooted, both work, because focusing a name is what FETCHES its neighbourhood. */
+ * control a filter over an already-fetched window rather than a control over what is fetched, and
+ * what stopped search from reaching anything not already drawn. Rooted, both work, because focusing a name is what FETCHES its neighbourhood. */
 export class LineageState {
 	nodes = $state<GraphNode[]>([]);
 	edges = $state<GraphEdge[]>([]);
@@ -88,8 +87,7 @@ export class LineageState {
 	 * The graph's own search matched only nodes currently drawn, which is a closed loop: you can find
 	 * what you can already see. That is not a nitpick at estate scale — the estate read is capped and
 	 * a focused read is bounded, so most of the estate is off-canvas by construction, and the one
-	 * gesture that could get you there was the one that refused to look (`open_lineage_graph.md`
-	 * P1 #8). Governance is the service's: `/search` filters to the caller's visible set BEFORE the
+	 * gesture that could get you there was the one that refused to look. Governance is the service's: `/search` filters to the caller's visible set BEFORE the
 	 * limit, so this cannot surface — or count — a table the caller may not see.
 	 */
 	async searchEstate(q: string, limit = 8): Promise<{ name: string; matches: string[] }[]> {

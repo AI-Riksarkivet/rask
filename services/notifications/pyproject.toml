@@ -21,7 +21,8 @@ dependencies = [
     "dapr-ext-fastapi>=1.18.1",
 ]
 # Deliberately NOT `dapr-ext-workflow`: nothing in this plane mints an id mid-saga, so there is no
-# command sequence to replay and the engine is not earned (open_notifications D6). Delivery is made
+# command sequence to replay and the engine is not earned (the reopen
+# criterion, `docs/OPERATORS.md` § 4: a step that cannot be made idempotent by any caller-chosen key). Delivery is made
 # safe by natural keys instead — the id a run already has, checked before the write.
 
 [build-system]

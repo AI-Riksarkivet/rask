@@ -47,32 +47,12 @@ def _register_exists(stem: str) -> bool:
     return any((REPO / f"{stem}{ext}").exists() for ext in ("", ".md", ".json", ".findings.json"))
 
 
-#: PRE-EXISTING, enumerated 2026-09-06 when this gate was written. Four registers retired between
-#: 2026-08-04 and 2026-08-26 (`93b11b75`, `7192c6f6`, `e315cb93`, `60651a93`) left these pointers
-#: behind. They are listed rather than tolerated by pattern: a new dangle in any of the same four
-#: registers still fails, and the list can only ever shrink. Repointing them is a row in
-#: `open_lakehouse_diff_left.md`, deliberately NOT done in the commit that found them — a hasty
-#: repoint of 20 sites is exactly the defect `test_every_decisions_citation_resolves` exists to
-#: catch, and each of these needs a destination chosen by reading, not by sed.
-_CARRIED = frozenset(
-    {
-        "open_batch_process B9",
-        "open_batch_process B14",
-        "open_ingest A20",
-        "open_ingest D2",
-        "open_ingest D8",
-        "open_ingest I1",
-        "open_ingest P1",
-        "open_ingest R1",
-        "open_lineage_graph P1",
-        "open_notifications D2",
-        "open_notifications D6",
-        "open_notifications D8",
-        "open_notifications S1",
-        "open_notifications S4",
-        "open_notifications S5",
-    }
-)
+#: EMPTY, and kept as the shape rather than deleted. The fifteen locators it held were repointed
+#: 2026-09-06 — at eighteen of the twenty-one sites the reasoning was already stated inline, so the
+#: honest fix was dropping a dead id rather than inventing a destination for it. An entry belongs
+#: here only while a repoint is genuinely deferred, and `test_the_carried_list_only_shrinks` refuses
+#: one that is not still dangling.
+_CARRIED: frozenset[str] = frozenset()
 
 
 def test_no_locator_points_into_a_register_that_is_gone() -> None:

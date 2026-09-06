@@ -6,7 +6,7 @@
 	import { page } from '$app/state';
 	import { readWatches, unwatchProject, watchProject } from '$lib/live/inbox.remote';
 
-	// PROJECT WATCHES — v2 targeting's own surface (open_notifications.md S4).
+	// PROJECT WATCHES — v2 targeting's own surface.
 	//
 	// NOT under `/settings`, and that is the load-bearing decision on this page. `/settings/**` is
 	// estate-admin only and its layout gate 404s everyone else, because it configures the PLATFORM. A

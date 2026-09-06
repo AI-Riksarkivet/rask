@@ -1,6 +1,6 @@
 """Publication — a committed version becomes CONSUMABLE only when the gate passes it.
 
-`open_ingest.md` § D2, ruled 2026-08-04.
+Ruled by the owner 2026-08-04 (`c6c23407`).
 
 **A commit is not a publication (D-R1).** Before this, a writer's commit was instantly visible to
 every reader: whatever landed was consumable, a quality gate that ran afterwards could not un-publish

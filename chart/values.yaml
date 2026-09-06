@@ -301,7 +301,7 @@ services:
     # stack it checks the estate writer tier — FlowsSettings extends GovernedAuthSettings (LANCE_*).
     governedAuth: true
     waitFor: []
-  # The notification plane (open_notifications.md D2/S1): one InboxActor per subject, holding
+  # The notification plane: one InboxActor per subject, holding
   # claim-check pointers with durable read state, so the bell counts YOUR work instead of the whole
   # estate's. Its own app-id because an inbox aggregates lineage runs and catalog governance and
   # belongs to neither producer.

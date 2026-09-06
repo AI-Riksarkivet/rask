@@ -16,7 +16,8 @@ import {
 	type SourceDescriptor,
 } from '@rask/api';
 
-// The ingest plane's READ surface for the compute zone (open_ingest.md A20).
+// The ingest plane's READ surface for the compute zone — the surface the deployed-estate gate
+// drives (`tests/e2e/tests/ingest-lane.spec.ts`).
 //
 // A remote `query()`, not a `+server.ts` route: the payload is a typed app VALUE — a run's
 // status, its committed version, its errors — which is exactly the half of the transport rule that

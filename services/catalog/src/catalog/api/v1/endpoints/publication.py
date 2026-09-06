@@ -1,6 +1,6 @@
 """`POST /v1/table/{id}/publish` — the one door through which data becomes consumable.
 
-`open_ingest.md` § D2 (D-R1/D-R2/D-R3). A commit makes a version READABLE; publishing makes it
+The publication contract, ruled by the owner 2026-08-04 (`c6c23407`) as D-R1/D-R2/D-R3. A commit makes a version READABLE; publishing makes it
 READY. The gate runs against the committed version and only a pass advances the `published` tag, so
 a consumer reading through the pointer never sees a batch that failed.
 

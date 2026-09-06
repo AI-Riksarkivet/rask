@@ -21,7 +21,7 @@
 		Square,
 	} from '@lucide/svelte';
 
-	// One ingest run's status (open_ingest.md A20). The run is genuinely asynchronous, so this page
+	// One ingest run's status (`tests/e2e/tests/ingest-lane.spec.ts`). The run is genuinely asynchronous, so this page
 	// is the only honest place to learn what happened to it — the POST returns a handle, not a result.
 	//
 	// Everything shown here comes from the ENGINE, not from a cache written at accept time. The

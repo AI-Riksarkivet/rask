@@ -4,7 +4,7 @@
  * it renders, never the client that fetched it, so it stays testable with a literal and free of any
  * transport coupling. `@rask/api`'s `InboxNotification` is assignable to this by construction.
  *
- * WHY THIS EXISTS AT ALL — the two planes the bell was conflating (open_notifications.md D8, S3).
+ * WHY THIS EXISTS AT ALL — the two planes the bell was conflating.
  * Until now the panel rendered `GET /runs`, governed by DATASET visibility: every run whose outputs
  * you may read, whoever started it. The badge therefore counted OTHER PEOPLE'S WORK, and the read
  * state the zone persisted spoke for rows the inbox had never heard of — mark one read and it came

@@ -1,6 +1,6 @@
 """B9, measured: the dispatch payload is O(chunks), not O(units) — and the plan's figure was 275x off.
 
-`open_batch_process.md` B9 asked for an oversized activity result to become a HANDLE, and required the
+B9 asked for an oversized activity result to become a HANDLE, and required the
 threshold to be MEASURED rather than guessed — its own precondition, because the 120 MB figure in the
 text was admitted arithmetic rather than an observation.
 

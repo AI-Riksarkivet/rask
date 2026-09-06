@@ -9,8 +9,7 @@
 	import type { ChannelPreferences } from '@rask/api/inbox';
 	import { readPrefs, readWatches, savePrefs, unwatchProject } from '$lib/live/inbox.remote';
 
-	// NOTIFICATIONS — the per-subject half of the notification plane (open_notifications.md S5's
-	// `GET|PUT /prefs` and S4's `/watches`). The bell tells you what happened; this decides whether
+	// NOTIFICATIONS — the per-subject half of the notification plane (`GET|PUT /prefs` and `/watches`). The bell tells you what happened; this decides whether
 	// anything ALSO reaches you when the tab is shut.
 	//
 	// WHY `/preferences` AND NOT `/settings`. It shipped under `/settings/notifications` for one

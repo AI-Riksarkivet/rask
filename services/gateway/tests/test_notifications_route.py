@@ -1,4 +1,4 @@
-"""The `/api/notifications` gateway row (open_notifications.md S1).
+"""The `/api/notifications` gateway row (landed 2026-08-10, `3e4463a0`).
 
 The three shapes `test_lance_routes.py` established, applied to the notification plane: the row is
 present and reachable, it rewrites to the right upstream, and the upstream is env-overridable. The

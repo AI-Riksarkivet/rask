@@ -531,9 +531,10 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
   concurrent `merge_insert`s were the exposed surface. Run against the live `svc/rask-rustfs-io`
   (`scripts/verify_lance_storage.py` row 5): a second `If-None-Match: *` PUT on the same key is
   **rejected with `PreconditionFailed`**. Put-if-not-exists holds on this store, so Lance commit
-  atomicity needs no external manifest store — which also demotes `open_ingest.md` D8's
-  managed-versioning narrowing from a necessity to an optimisation here. Full table: `open_ingest.md`
-  §7.11 (6 verified, 0 failed, 0 blocked).
+  atomicity needs no external manifest store — which also demotes the managed-versioning narrowing
+  from a necessity to an optimisation here: with `table_version_management=true` the catalog IS the
+  external manifest store, and this measurement says the object store does not need it to be.
+  Measured 6 verified, 0 failed, 0 blocked.
 
 **Eighth wave (2026-08-03): the store registry became multi-endpoint and attachable — the
 `open_ingest.md` shipped ledger, folded here as that file's first generation retires.**
@@ -694,7 +695,8 @@ directly — there is no raw tier.)*
 ### ~~D2f · The `/ingest-s3` head route for the second external-raw source family~~ *(new, 2026-07-28 — R23; **SUPERSEDED 2026-08-03 by `open_ingest.md`**)*
 
 > **Superseded — do not build this shape.** The plan below adds a second per-source head route to the
-> medallion, which is exactly the coupling `open_ingest.md` R1 removes: acquisition leaves the
+> medallion, which is exactly the coupling the medallion-is-tiers-only ruling removes (owner,
+> 2026-07-29, `d25297d1`): acquisition leaves the
 > medallion entirely for the `ingest` service plane, and a new source becomes one `SourceAdapter`
 > registry entry + one lineage-input twin — **zero** new endpoints (invariant I1). The
 > `/bronze-arrival` self-subscription this plan reuses is itself deleted by that move (lineage stops

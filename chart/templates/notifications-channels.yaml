@@ -1,4 +1,4 @@
-{{- /* The notification plane's CHANNELS (open_notifications.md S5) — Dapr OUTPUT bindings, so the
+{{- /* The notification plane's CHANNELS — Dapr OUTPUT bindings, so the
      SMTP host, the Slack webhook and their credentials live here and never in the service's env or
      its code. Swapping SMTP for a provider API is a Component change, not a code change.
 
