@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 160 tracked, 140 open, 20 struck.**
+**Counted 2026-09-06, from the rows below rather than asserted: 162 tracked, 138 open, 24 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -800,11 +800,11 @@ services", and eight services now import `GovernedAuthSettings` while none re-de
 | --- | --- | --- | --- |
 | Q3-1 | `CAT-CORE-13` **OPEN** | med | One 340-line `Settings` carries every domain's configuration |
 | Q3-2 | `DUP-15` **OPEN** | med | The Dapr-workflow scheduler is written twice and the copies' timeouts disagree |
-| Q3-3 | `VS-07` | med | Five silent swallows in the search path render real failures as empty results |
+| ~~Q3-3~~ | `VS-07` | med | Five silent swallows in the search path render real failures as empty results — **CLOSED — verified at HEAD 2026-09-06 (C3).** `1f770a5d` (2026-08-31) closed the last of the five swallows. No `except Exception: pass` and no `except Exception: return []` remains anywhere in `services/search/src/`; every cited site now logs or re-raises |
 | Q3-4 | `PS-02` | med | `storage`'s error taxonomy is half-applied — `s3_errors` wraps nothing inside the package |
-| Q3-5 | `MAINT-08` | med | `reconcile()`'s `control_root` falls back to the POLICY root, not the control root |
+| ~~Q3-5~~ | `MAINT-08` | med | `reconcile()`'s `control_root` falls back to the POLICY root, not the control root — **CLOSED — verified at HEAD 2026-09-06 (C3).** `e4e73b68` (2026-08-16) replaced `control_root or settings.resolved_policy_root`, the exact expression audited at `reconcile.py:701`. Two doc-only residues survive and are worth a separate low row, neither of which is the defect |
 | Q3-6 | `ingest-flow-06` | med | `park_poison` publishes unguarded — one bad unit fails the whole run when the DLQ is down |
-| Q3-7 | `catalog-api-07` | low | `_collect_descendants` recurses with no depth cap and no cycle guard |
+| ~~Q3-7~~ | `catalog-api-07` | low | `_collect_descendants` recurses with no depth cap and no cycle guard — **CLOSED — verified at HEAD 2026-09-06 (C3).** `3357f7dd` (2026-08-15). `_collect_descendants` now carries the depth cap its sibling enumerator always had |
 | Q3-8 | `catalog-api-06` | low | Three tuple write/revoke sites bypass the `seed_ownership` seam |
 | Q3-9 | `ING-14` | med | The A8 provenance check fetches the entire unbounded `/runs` board |
 | Q3-10 | `F-LIN-04` | med | `list_runs`/`list_datasets`/`list_jobs` are fetch-all with no server-side LIMIT |
@@ -824,7 +824,7 @@ services", and eight services now import `GovernedAuthSettings` while none re-de
 | Q3-24 | `SKG-10` | med | Five direct `os.environ` reads outside any Settings class |
 | Q3-25 | `SK-14` | low | `RASK_*` read directly via `os.environ` outside the settings modules |
 | Q3-26 | `F-LIN-08` | med | Route topology decided at import time by settings-conditional module-level branches |
-| Q3-27 | `X8` | med | The four `make_service_app` services expose liveness only; the chart points readiness at it |
+| ~~Q3-27~~ | `X8` | med | The four `make_service_app` services expose liveness only; the chart points readiness at it — **CLOSED — verified at HEAD 2026-09-06 (C3).** `b0d984f6` (2026-08-27). Both halves of the claim are false now: `make_service_app` root-mounts the drain-aware `/livez`+`/readyz` pair for every app, and the chart points the readiness probe at `/readyz` |
 | Q3-28 | `MED-014` | low | Both app entrypoints read settings and configure logging at import time |
 | Q3-29 | `ING-18` | low | Query-parameter clamping done by hand instead of declared |
 | Q3-30 | `ingest-flow-16` | low | Generator workflows annotated as returning their final value |
@@ -1036,3 +1036,27 @@ and the activities below it — `submit_stage`, `poll_stage`, `report_stage_outc
 | Q10-8 | THE DEPLOYED CASCADE RUNS THE RAY LANE, and that is how a half-fix nearly read as a whole one | high | Measured: after deploying the in-process fix, a `POST /produce` preserved bronze's `_rowid` (`[2012..2019]` twice running) — but the mover's own log said `stage-ray-silver-c1proof0002`, so silver was written by the Ray lane, not the lane the unit tests exercise. Silver's `source_rowid` stayed `[88..95]`, 8 of 8 still dangling. **Any claim about the cascade that rests on `services/medallion/tests` is a claim about a lane this estate does not run.** The Ray head now merges too; the media and distributed branches are Q10-6/Q10-7 |
 
 | Q10-9 | A cascade fix reaches the estate through THREE images, and the obvious one is wrong | high | Measured while deploying C1. `services/medallion/*` ships in `lance-rest-catalog` (producer + the three movers). `scripts/ray_stage_job.py` — the code that actually writes silver on this estate — is baked into **`ray-lance`**, not `ray-cluster` (`.docker/ray-lance.dockerfile:81` copies it to `/home/ray/jobs/`), and the head running it is `ray-lance-head`, which is HAND-APPLIED from `deploy/ray-lance-demo.yaml` and outside the chart. The live head was on `ray-lance:main-0dd7a95f` from 2026-08-30 with `grep -c when_not_matched_by_source_delete` = **0**. So a cascade change verified by unit tests, deployed to the fleet image, and confirmed by a live produce can still be entirely absent from the code that does the work. **Any cascade deploy must name which of the three images carries the change and prove it in the running one** |
+
+## Q12. The Q3 rows RE-MEASURED against HEAD (2026-09-06, C3)
+
+39 rows were carried into § Q3 when `open_python-audit.md` was drained, ON THAT LEDGER'S WORD, and
+never re-measured. This pass measured 38 of them against the code at HEAD — reading files, running
+tests, and recovering each original finding verbatim from `git show 058da189^:open_python-audit.md`.
+
+**34 STILL-OPEN · 4 ALREADY-CLOSED · 0 NEVER-TRUE.**
+
+THE RESULT CORRECTS MY EXPECTATION, and that is the point of measuring rather than assuming. C3 was
+written on the premise that "several are certainly already closed" and that re-verification would
+SHRINK the register. It did not: the drained ledger was substantially accurate a month on, and only
+four rows had been fixed since. The register loses four rows, not forty.
+
+What the pass DID buy is precision. Every surviving row now carries a HEAD file:line instead of a
+month-old summary — `CAT-CORE-13` names `catalog/core/config.py:26`, `DUP-15` turns out to be FIVE
+implementations rather than two, `ingest-flow-06` names `queue.py:452-457`, `SKG-10` counts four bare
+env reads rather than five. A backlog row a reader can act on today is worth more than one they must
+first re-derive.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q12-1 | One Q3 row could not be measured | low | 38 of 39 returned; the 39th agent did not complete. Re-run before § Q3 is called fully verified |
+| Q12-2 | `DUP-15` is worse than recorded | med | Carried as "the Dapr-workflow scheduler is written twice and the copies' timeouts disagree". Measured at HEAD: the bounded schedule is implemented FIVE times with no shared seam. The row's severity was set against the smaller number |
