@@ -136,6 +136,18 @@ OPERATIONS = ("lance_ray_ingest", "embed_features")
 pytestmark = [pytest.mark.e2e, pytest.mark.governed_union]
 
 
+def _idem(prefix: str) -> str:
+    """A fresh `Idempotency-Key`, REQUIRED by every medallion write door since 2026-08-27 (`2da0164c`).
+
+    The header is declared with no default, so FastAPI answers 422 at header validation — before auth,
+    before the lane, before anything a governance suite means to exercise. `f0b97870` fixed the identical
+    omission in test_medallion_e2e and test_media_e2e; this suite was skipping then (the runner withheld
+    `LANCE_E2E_LANCERAY_URL`), so it kept the miss and all five legs below died on a validation error
+    rather than on the governance they assert.
+    """
+    return f"{prefix}-{uuid.uuid4().hex[:16]}"
+
+
 # --------------------------------------------------------------------------- #
 # stack plumbing
 # --------------------------------------------------------------------------- #
@@ -382,7 +394,7 @@ def _poll(
 
 
 def _produce(lance_ray: str) -> str:
-    headers = {"dapr-api-token": DAPR_TOKEN}
+    headers = {"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": _idem("gu-produce")}
     params: dict[str, str] = {}
     if PROJECT:
         # Bearer INSTEAD of the service token — see ADMIN_TOKEN.
@@ -649,7 +661,11 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
 
 def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict[str, str]) -> None:
     lance_ray, lineage = stack
-    resp = requests.post(f"{lance_ray}/ingest-media", headers={"dapr-api-token": DAPR_TOKEN}, timeout=60)
+    resp = requests.post(
+        f"{lance_ray}/ingest-media",
+        headers={"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": _idem("gu-media")},
+        timeout=60,
+    )
     if resp.status_code == 409:
         pytest.skip("media head not configured (medallion.compute off on this stack)")
     assert resp.status_code == 202, resp.text
@@ -715,7 +731,7 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     lance_ray, lineage = stack
     resp = requests.post(
         f"{lance_ray}/train",
-        headers={"dapr-api-token": DAPR_TOKEN, "content-type": "application/json"},
+        headers={"dapr-api-token": DAPR_TOKEN, "content-type": "application/json", "Idempotency-Key": _idem("gu-train")},
         # UNQUALIFIED on purpose. The train door resolves a feature dataset by CONVENTION, not through
         # the catalog: `stage_uri_for` maps `silver$features` -> `<base>/medallion/silver` and its own
         # docstring calls that demo-tier, noting "a catalog-registered feature table would resolve
