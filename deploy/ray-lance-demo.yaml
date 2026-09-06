@@ -77,9 +77,22 @@ spec:
                 secretKeyRef: { name: rask-ray-compute-s3, key: secretkey }
             - { name: S3_REGION, value: "us-east-1" }
             - { name: RAY_DEDUP_LOGS, value: "0" }
+            # THE TRAINER'S DEDICATED CREDENTIAL, not the shared app token. With
+            # `auth.dedicatedServiceCredentials` on — which this estate runs — lineage's
+            # `LINEAGE_PRIVILEGED_SUBJECTS` carries `service-trainer`, and `dapr_auth.service_principal`
+            # refuses a privileged subject that presents the SHARED token. The head runs no daprd and
+            # cannot read `service-token-<identity>` from the secret store the way the first-party
+            # services do, so it mounts it off infra-credentials — the route `ray-compute-*` already
+            # takes and the object external-secrets syncs from OpenBao.
+            #
+            # Handed the shared token, every train job logged `lineage emit attempt 1 rejected: HTTP
+            # 401`, published its model and exited SUCCEEDED — all training provenance lost with
+            # nothing red (measured 2026-09-06). `optional` stays: this manifest is applied on estates
+            # with the flag off too, where the key is absent and an omitted header is the correct
+            # auth-off behaviour.
             - name: LINEAGE_SERVICE_TOKEN
               valueFrom:
-                secretKeyRef: { name: rask-dapr-app-token, key: token, optional: true }
+                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-trainer, optional: true }
           ports:
             - { name: gcs, containerPort: 6379 }
             - { name: dashboard, containerPort: 8265 }

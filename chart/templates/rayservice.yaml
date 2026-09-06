@@ -209,6 +209,24 @@ spec:
                 - name: LINEAGE_SERVICE_TOKEN
                   valueFrom:
                     secretKeyRef:
+{{- if .Values.auth.dedicatedServiceCredentials }}
+                      {{- /* THE TRAINER'S OWN CREDENTIAL, because that is what the door demands. The
+                           same flag renders `LINEAGE_PRIVILEGED_SUBJECTS` with `trainerIdentity` on it
+                           (`services.yaml`), and `dapr_auth.service_principal` refuses a privileged
+                           subject that presents the SHARED token — deliberately, since one token
+                           across an allowlist lets any holder claim the most privileged name on it.
+                           The head runs no daprd, so it cannot read `service-token-<identity>` out of
+                           the secret store the way every first-party service does; it mounts it off
+                           infra-credentials, the same route `ray-compute-*` above takes.
+
+                           Handed the shared token instead, the train job logged `lineage emit attempt
+                           1 rejected: HTTP 401` on every event and published its model anyway, so a
+                           governed training run lost ALL of its provenance with nothing red (measured
+                           2026-09-06). NOT optional here: with the flag on, a head that cannot mount
+                           this can only emit refusals, and that belongs at schedule time. */}}
+                      name: {{ include "lance.fullname" . }}-infra-credentials
+                      key: service-token-{{ .Values.medallion.train.trainerIdentity }}
+{{- else }}
                       name: {{ .Release.Name }}-dapr-app-token
                       key: token
                       {{- /* optional: the token Secret renders only with dapr.sidecars, and the jobs
@@ -217,6 +235,7 @@ spec:
                            optional: a job hard-requires it, and a pod that cannot mount it should
                            fail at schedule time, not at job time. */}}
                       optional: true
+{{- end }}
                 {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
                      that already works. This image is built solely from runners/htr's own lock
                      (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency

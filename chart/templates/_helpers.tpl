@@ -1231,3 +1231,23 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
   emptyDir: {}
 {{- end }}
 {{- end -}}
+
+{{/*
+A privileged service identity's DEDICATED credential — `service-token-<identity>`.
+
+`dapr_auth.service_principal` compares what a caller presents against this value with
+`secrets.compare_digest`, so two derivations that merely look alike are a 401 nothing renders as an
+error. It is a helper rather than two inline expressions because it has TWO writers that must agree
+byte-for-byte: `openbao.yaml` seeds the store the DOOR reads, and `infra-credentials.yaml` holds the
+copy a daprd-less consumer MOUNTS.
+
+Deterministic from the shared app token on purpose — the dev/demo seed needs no out-of-band material,
+and on the prod path external-secrets syncs whatever an operator actually put in OpenBao, so this
+derivation is never what a real deployment presents.
+
+Usage: {{ include "lance.dedicatedServiceToken" (list . "service-trainer") }}
+*/}}
+{{- define "lance.dedicatedServiceToken" -}}
+{{- $root := index . 0 -}}{{- $identity := index . 1 -}}
+{{- printf "%s-%s" $identity $root.Values.dapr.appApiToken | sha256sum | trunc 40 -}}
+{{- end -}}

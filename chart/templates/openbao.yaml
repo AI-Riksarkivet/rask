@@ -181,7 +181,7 @@ spec:
                 {{- range .Values.medallion.movers }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (.Values.medallion.mediaMovers | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
-                service-token-{{ . }}={{ printf "%s-%s" . $.Values.dapr.appApiToken | sha256sum | trunc 40 }} \
+                service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) }} \
                 {{- end }}
                 {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
                        rather than a second value on `rustfs-secret-key`: that field IS the tenant root's
