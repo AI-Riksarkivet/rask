@@ -53,8 +53,9 @@ _RESTAMPED_COLUMNS = frozenset({_STAGE_COLUMN, _LINEAGE_COLUMN})
 #: root of the governed cascade, R23 — raw is the external world and owns no rows). Minted at the first
 #: derive from the bronze row's reserved ``_rowid`` metacolumn (durable because every stage writes
 #: ``enable_stable_row_ids=True``) and carried forward unchanged thereafter — so a gold row names the exact
-#: bronze row it came from in ONE join, not a hop-by-hop walk. ``_rowid`` advances on overwrite, so this is a
-#: snapshot taken at cascade-run time; a fresh cascade run over a re-ingested bronze table re-captures it.
+#: bronze row it came from in ONE join, not a hop-by-hop walk. DURABLE ACROSS RE-DERIVATION since the tiers
+#: became full-sync merges: a re-seeded or re-derived upstream keeps the ids its downstream references, which
+#: is the whole point of paying for stable row ids at every create.
 _SOURCE_ROWID_COLUMN = "source_rowid"
 
 
@@ -63,9 +64,9 @@ class WriteResult(BaseModel):
 
     ``row_count`` / ``size_bytes`` are read straight off the just-written dataset (exact, not estimated),
     so the emitted OpenLineage ``outputStatistics`` facet carries what the job *actually* produced — the
-    runtime-measured numbers that move our lineage from producer-declared toward Marquez-grade. Because the
-    cascade writes with ``mode="overwrite"``, the whole dataset IS this run's output, so its on-disk size
-    is the size this run wrote.
+    runtime-measured numbers that move our lineage from producer-declared toward Marquez-grade. A stage is a
+    FULL SYNC — rows the run no longer produces are deleted — so the whole dataset IS this run's output and
+    its on-disk size is the size this run wrote.
     """
 
     version: int
@@ -76,7 +77,7 @@ class WriteResult(BaseModel):
     #:
     #: It is recorded here rather than reconstructed from ``version - 1`` because that reconstruction
     #: is wrong for this writer and was silently wrong in production: the data lands in one commit and
-    #: the lineage index in a SECOND (indices do not survive an overwrite), so the version reported is
+    #: the lineage index in a SECOND (an overwrite dropped every index; measured on pylance 10.0.0), so the version reported is
     #: N+1 and ``version - 1`` is N — the commit that already holds the new rows. The delta computed
     #: from it is structurally zero, which is why an 8 -> 1000 row jump published without ever asking
     #: anyone (measured 2026-08-23). Version arithmetic cannot be made safe here; the count can only be
@@ -116,7 +117,7 @@ class UpstreamFacts(BaseModel):
     chain: list[LineageEdge] = Field(default_factory=list)
     #: The upstream's Arrow schema, carried so the stage can ask the catalog to mint its output table
     #: without a second open. Only used on a lane's FIRST run — after that the table exists and the
-    #: catalog just states where — and the stage's own `overwrite` replaces it either way.
+    #: catalog just states where — and the stage's own full-sync merge converges on it either way.
     schema: Any = None
 
 
@@ -163,8 +164,10 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
 
     The Ray job writes the ``lineage`` JSONB column itself (the mover hands it the document as
     ``LINEAGE_JSON``), so provenance lands in the job's own commit exactly as in-process; what does NOT
-    survive its ``mode="overwrite"`` is the JSON scalar index, which is (re)built here — the one step that
-    must happen after the distributed write and can only be done by whoever measures it.
+    survive the DISTRIBUTED write is the JSON scalar index, which is (re)built here — the one step that
+    must happen after that write and can only be done by whoever measures it. The in-process stages became
+    full-sync merges 2026-09-06 and KEEP their indices (measured: an overwrite leaves `list_indices()` empty,
+    a merge leaves `id_idx` standing); the Ray lane still overwrites, which is why this rebuild remains.
     """
     upstream_schema = lance.dataset(from_uri, storage_options=storage_options).schema
     if _LINEAGE_COLUMN in lance.dataset(to_uri, storage_options=storage_options).schema.names:
@@ -221,19 +224,39 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
         }
     )
     # data_storage_version="2.2" — the current Lance format (blob v2 + Map need it; pylance 8 still
-    # defaults to 2.1). Overwrite-mode upgrades a pre-existing 2.1 dataset forward on the next run.
-    # enable_stable_row_ids — row _rowid stays constant across compaction (which rewrites fragments and
-    # invalidates row ADDRESSES). This is a CREATE-TIME-ONLY flag: it cannot be turned on later, so we set it
-    # at the cascade head to keep durable row identity available (e.g. to key blob carry-forward by _rowid if
-    # a stage ever gains append/upsert). Free on top of overwrite; the positional read path is unaffected.
-    lance.write_dataset(
-        _with_declared_id(table, dataset_id),
-        uri,
-        mode="overwrite",
-        storage_options=storage_options,
-        data_storage_version="2.2",
-        enable_stable_row_ids=True,
-    )
+    # defaults to 2.1). enable_stable_row_ids — `_rowid` stays constant across compaction, which rewrites
+    # fragments and invalidates row ADDRESSES. Both are CREATE-TIME-ONLY: neither can be turned on later
+    # (`lance_docs/file_format.md:4011-4013`), which is why `ingest/catalog.py::A14` REFUSES a governed
+    # dataset that lacks them rather than repairing it.
+    #
+    # THE RE-SEED MERGES ON `id` AND DOES NOT OVERWRITE, because overwrite re-mints every `_rowid` and
+    # the estate's provenance rests on them. Measured on pylance 10.0.0: an overwrite of a stable-row-id
+    # dataset moves `_rowid` [0,1,2] -> [3,4,5]; `merge_insert("id")` leaves it [0,1,2]. Measured on the
+    # deployed estate 2026-09-06: bronze held 8 rows across 20 versions with live `_rowid` [2004..2011]
+    # while silver's `source_rowid` still read [88..95] — 8 of 8 references dangling, the whole chain
+    # D1 makes mandatory for impact analysis resolving to nothing, reported by nothing.
+    #
+    # Idempotence is unchanged: a re-seed of the same rows updates rows that are already there and
+    # inserts none, so it stays the no-op it was. What it stops doing is re-minting identity to do it.
+    if _dataset_exists(uri, storage_options):
+        # `when_not_matched_by_source_delete` is what makes this a FULL SYNC rather than an upsert, so
+        # the tier still means "this run's output IS the whole dataset" — a row the seed no longer
+        # produces is removed, exactly as overwrite removed it. Measured on pylance 10.0.0: source
+        # dropping id=3 deletes it while id=1 keeps `_rowid` 0. Same semantics, surviving identity.
+        lance.dataset(uri, storage_options=storage_options).merge_insert(
+            "id"
+        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(
+            _with_declared_id(table, dataset_id)
+        )
+    else:
+        lance.write_dataset(
+            _with_declared_id(table, dataset_id),
+            uri,
+            mode="create",
+            storage_options=storage_options,
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
+        )
     return measure(uri, storage_options)
 
 
@@ -252,7 +275,8 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
 
     A Lance JSON index is a scalar index on ONE JSONB path: ``IndexConfig(index_type="json")`` with
     ``target_index_type`` naming the underlying index and ``path`` the key. It must be (re)built after
-    every stage write because the cascade writes ``mode="overwrite"``, which drops the dataset's indices.
+    the DISTRIBUTED stage write, which overwrites and so drops the dataset's indices. The in-process stages
+    merge and keep theirs, so this is a no-op re-create there rather than a repair.
     """
     ds = lance.dataset(uri, storage_options=storage_options)
     ds.create_scalar_index(
@@ -297,14 +321,14 @@ def transform_stage(
 
     ``lineage`` (R26) stamps the consume-layer ``lineage`` JSONB column and builds its JSON scalar index.
     It is a column of the table this call writes, so the provenance lands in the SAME Lance commit as the
-    data it describes; the index is a second commit (indices do not survive an ``overwrite``), which is why
-    the version this returns — the one the emit records — is read AFTER both.
+    data it describes; the index is a second commit on the lane that overwrites, which is why the version this
+    returns — the one the emit records — is read AFTER both.
 
     SINGLE-BASE BY DESIGN (P2.1, docs/DECISIONS.md #p21--single-base-cascade-write): the cascade writes
-    ``mode="overwrite"`` to ONE root per stage — it does NOT distribute a stage table across #3-B multi-base
+    to ONE root per stage — it does NOT distribute a stage table across #3-B multi-base
     ``data_bases``. That is a
     deliberate boundary, not an omission: multi-base registers its bases at CREATE time only
-    (``initial_bases``), the cascade is overwrite-only, and the medallion already distributes physically at
+    (``initial_bases``), a tier is created once and merged into thereafter, and the medallion already distributes physically at
     the per-ZONE bucket level. #3-B stays REST-create-only (an explicit client signal) until a gold/training
     table demonstrably needs per-table fan-out AND the real Ray distributed-write path lands — see
     docs/DECISIONS.md #p21--single-base-cascade-write.
@@ -345,20 +369,34 @@ def transform_stage(
 
     # THE TARGET MUST REGISTER THE SAME BASE, or every carried pointer is refused at write.
     #
-    # `initial_bases` is create-mode only and this is an overwrite, so it is supplied on the FIRST
-    # write of a tier and ignored afterwards — which is correct: a tier that already exists already
-    # registered it, and pylance rejects re-registering on overwrite. `mode="overwrite"` on a
-    # non-existent dataset creates it, which is the path that matters here.
+    # `initial_bases` is create-mode only, so it is supplied on the FIRST write of a tier and never
+    # afterwards — correct, because a tier that already exists already registered it.
+    #
+    # THE RE-DERIVATION IS A FULL-SYNC MERGE, NOT AN OVERWRITE. The semantics are the ones this stage
+    # always had — the run's output IS the whole tier, and a row it no longer produces is removed
+    # (`when_not_matched_by_source_delete`) — but overwrite re-minted every `_rowid` on the way, and
+    # the tier above resolves its `source_rowid` against exactly those. Measured on the deployed
+    # estate 2026-09-06: silver's 8 `source_rowid` values named bronze rows that no longer existed,
+    # 8 of 8, because bronze had been overwritten 20 times. The `add_columns` fast path above already
+    # preserves identity when the rows line up; this makes the fallback preserve it too, so identity
+    # no longer depends on which branch a run happens to take.
     carried_base = blobs.external_base_of(ds)
-    lance.write_dataset(
-        _with_declared_id(out, dataset_id),
-        to_uri,
-        mode="overwrite",
-        storage_options=storage_options,
-        data_storage_version="2.2",
-        enable_stable_row_ids=True,
-        initial_bases=[lance.DatasetBasePath(carried_base, _EXTERNAL_BASE_NAME)] if carried_base and not _dataset_exists(to_uri, storage_options) else None,
-    )
+    if _dataset_exists(to_uri, storage_options):
+        lance.dataset(to_uri, storage_options=storage_options).merge_insert(
+            "id"
+        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(
+            _with_declared_id(out, dataset_id)
+        )
+    else:
+        lance.write_dataset(
+            _with_declared_id(out, dataset_id),
+            to_uri,
+            mode="create",
+            storage_options=storage_options,
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
+            initial_bases=[lance.DatasetBasePath(carried_base, _EXTERNAL_BASE_NAME)] if carried_base else None,
+        )
     if lineage is not None:
         _index_lineage(to_uri, storage_options)
     result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
