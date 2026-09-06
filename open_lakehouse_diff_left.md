@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 143 tracked, 129 open, 14 struck.**
+**Counted 2026-09-06, from the rows below rather than asserted: 143 tracked, 128 open, 15 struck.**
 That splits into 58 lettered rows (52 open) and 85 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -929,7 +929,7 @@ walked seven source roots and those three are outside all of them); fifteen are 
 | ~~Q7-1~~ | `open_python-audit.findings.json` outlived the ledger it indexed | med | **CLOSED HERE.** `git rm`'d; the `1 + N` projects-list finding it uniquely held is now stated in `open_projects.md` § 3.6 in its own words |
 | ~~Q7-2~~ | Three citations of the drained ledger dangled | med | **CLOSED HERE.** `pyproject.toml` X3, `Makefile` P0, `deploy/ray-lance-demo.yaml` P0 repointed at `docs/DECISIONS.md` "The Python estate audit". The row ids are dropped, not carried: that section defines no `X3`, and a pointer to a label nothing defines is the defect `test_every_decisions_citation_resolves` was written for |
 | ~~Q7-3~~ | `DECISIONS.md` claimed the ledger lived inside `DECISIONS.md` | low | **CLOSED HERE.** The mechanical repoint rewrote the filename inside the one sentence that was *about* the filename. Restored, with the deleting commit named |
-| Q7-4 | 15 pointers into four registers retired 2026-08-04…08-26 still dangle | med | `open_ingest` (6), `open_notifications` (6), `open_batch_process` (2), `open_lineage_graph` (1), across 20 files in Python, TS, Svelte, YAML and TOML. Enumerated as `_CARRIED` in the new gate so a NEW dangle fails today and the list can only shrink. **Deliberately not repointed in the commit that found them** — each needs a destination chosen by reading, and a 20-site sed is precisely how the dangling-`(M1)` defect was created the first time |
+| ~~Q7-4~~ | 15 pointers into four registers retired 2026-08-04…08-26 still dangle | med | **CLOSED 2026-09-06.** All 15 repointed across 21 sites (`OPEN-WORK.md` carries two). At 18 the reasoning was already inline, so the fix was dropping a dead id; three took the retiring commit (`c6c23407`, `d25297d1`) and one took `docs/OPERATORS.md` § 4 — NOT DECISIONS.md, which has no such section. Four orphaned fragments (`(P1 #8)`, `#7`, `§ D`, `S4's`) went with them. `_CARRIED` is empty. Two corrections came out of reading the deleted registers: `open_ingest.md` had two generations, and `P1` was never a row id — it abbreviates "Phase 1" |
 | Q7-5 | Nothing gates the SIDECAR of a register, only the register | low | The new gate checks pointers INTO a file. It would not have caught a `.findings.json` that nobody cited — that one was found by a reader asking why a file was still there |
 
 ## Q8. What the live e2e suite was skipping (2026-09-06)
