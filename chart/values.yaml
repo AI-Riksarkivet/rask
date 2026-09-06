@@ -543,11 +543,19 @@ resources:
   # OOMKilled 33 times on a dev estate while sitting at 370Mi IDLE (~72% of its ceiling doing
   # nothing): any real listing, blob-tier scan or ingest burst tipped it. An OOM mid-write is
   # exactly the partially-failed write the orphan scan exists to report, so this is a data-integrity
-  # setting, not a comfort one. 2Gi gives real headroom over the measured idle floor; raise it with
-  # the estate (values-prod should size it against actual object count, not this dev figure).
+  # setting, not a comfort one.
+  #
+  # RAISED TO 6Gi 2026-09-06, which is the "raise it with the estate" this note used to defer. The
+  # estate grew to 104 buckets and ~8 000 datasets, and at 2Gi the store stopped being able to START:
+  # `exitCode 137, reason OOMKilled`, dying seconds after `Starting: /usr/bin/rustfs` with the liveness
+  # probe timing out on /health, then CrashLoopBackOff on a 5m backoff. The host had 419 GB free, so
+  # the ceiling was this limit and nothing else. What tipped it was running the live e2e suites in full
+  # for the first time — and those suites are ordinary listings and writes, which is the point: a store
+  # that cannot survive its own estate's test suite cannot survive its estate. Every service's storage
+  # is this one pod, so the blast radius is the whole lakehouse.
   rustfs:
-    requests: { cpu: 100m, memory: 512Mi }
-    limits: { cpu: "2", memory: 2Gi }
+    requests: { cpu: 100m, memory: 1Gi }
+    limits: { cpu: "2", memory: 6Gi }
   # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
   # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
   assist:
