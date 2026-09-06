@@ -196,9 +196,18 @@ def emit(event: dict[str, Any]) -> None:
     if not url:
         return
     headers = {"content-type": "application/json"}
-    if service_token := os.environ.get("LINEAGE_SERVICE_TOKEN", ""):
+    # BOTH HALVES OR NEITHER. The receiving door forks on the identity header's PRESENCE
+    # (`lineage/api/security.py`: `dapr_api_token is not None and x_lance_service_identity is not None`),
+    # and `""` is not None — so defaulting the id to empty ASKS FOR the service door with no subject,
+    # is refused 403, and that branch is final by design: it never re-asks OIDC. The `elif` then meant
+    # a perfectly good `LINEAGE_TOKEN` bearer was never tried. A job that lands its rows and loses its
+    # provenance, invisibly from both ends. Pinned by
+    # `tests/unit/test_lineage_emitters_share_one_wire_contract.py` across both copies.
+    service_token = os.environ.get("LINEAGE_SERVICE_TOKEN", "")
+    service_id = os.environ.get("LINEAGE_SERVICE_ID", "")
+    if service_token and service_id:
         headers["dapr-api-token"] = service_token
-        headers["x-lance-service-identity"] = os.environ.get("LINEAGE_SERVICE_ID", "")
+        headers["x-lance-service-identity"] = service_id
     elif token := os.environ.get("LINEAGE_TOKEN", ""):
         headers["authorization"] = f"Bearer {token}"
     body = json.dumps(event).encode()

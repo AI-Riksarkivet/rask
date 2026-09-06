@@ -112,3 +112,72 @@ def test_a_role_literal_never_becomes_an_originator() -> None:
         originator="ray",
     )
     assert "originator" not in event["run"]["facets"]["lance"], "a role literal rode the originator key — an inbox actor named `ray` is about to exist"
+
+
+def _emit_headers(module: ModuleType, env: dict[str, str], monkeypatch: Any) -> dict[str, str]:
+    """The headers one emit would put on the wire, without sending anything.
+
+    Both modules build `headers` and then hand it to `urllib.request.Request`, so intercepting the
+    Request constructor is the only seam that does not require the emitter to be refactored for the
+    test — and refactoring a SEALED runner to make it testable is the change this pin exists to avoid.
+    """
+    captured: dict[str, str] = {}
+
+    class _Request:
+        def __init__(self, url: str, data: bytes | None = None, headers: dict[str, str] | None = None) -> None:
+            captured.update(headers or {})
+
+    def _urlopen(*args: object, **kwargs: object) -> None:
+        raise OSError("not sent — this pin inspects the headers, it does not reach the network")
+
+    for key in ("LINEAGE_URL", "LINEAGE_SERVICE_TOKEN", "LINEAGE_SERVICE_ID", "LINEAGE_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(module.urllib.request, "Request", _Request)
+    monkeypatch.setattr(module.urllib.request, "urlopen", _urlopen)
+
+    emit = getattr(module, "emit", None) or module.emit_event
+    emit({"eventType": "COMPLETE"})
+    return captured
+
+
+def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> None:
+    """A present-but-empty `x-lance-service-identity` is worse than an absent one, because the
+    receiving door forks on PRESENCE.
+
+    `services/lineage/src/lineage/api/security.py:164` reads
+    `if dapr_api_token is not None and x_lance_service_identity is not None`, and `""` is not None —
+    so an empty identity ASKS FOR the service door, and that branch is final: its own comment says
+    "a refusal inside this branch is final and never re-asks OIDC". The emitters set the header
+    unconditionally whenever `LINEAGE_SERVICE_TOKEN` is present, defaulting the id to `""`, and the
+    `elif` then means a perfectly good `LINEAGE_TOKEN` bearer is never tried.
+
+    The result is a job that does its work and loses its provenance: the run's rows land and its
+    terminal event 403s, which is invisible from the job and from the graph alike.
+    """
+    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+        headers = _emit_headers(
+            module,
+            {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_TOKEN": "a.valid.bearer"},
+            monkeypatch,
+        )
+        assert headers.get("x-lance-service-identity") != "", (
+            f"{name} sends an EMPTY service identity, which takes the service door with no subject and 403s"
+        )
+        assert "authorization" in headers, (
+            f"{name} discarded a valid LINEAGE_TOKEN bearer while presenting no usable service identity"
+        )
+
+
+def test_a_named_service_id_still_takes_the_service_door(monkeypatch: Any) -> None:
+    """The fix must not close the door it exists to open: with BOTH halves present the service
+    identity is what goes on the wire, and no bearer is needed."""
+    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+        headers = _emit_headers(
+            module,
+            {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
+            monkeypatch,
+        )
+        assert headers.get("dapr-api-token") == "app-token", name
+        assert headers.get("x-lance-service-identity") == "service-trainer", name
