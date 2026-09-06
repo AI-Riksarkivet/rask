@@ -17,7 +17,14 @@ from typing import Any
 import pytest
 
 from service_kit.lakehouse import warehouse_registry
-from service_kit.lakehouse.warehouse_registry import clear_cache, is_safe_project, project_gold_root, project_root
+from service_kit.lakehouse.warehouse_registry import (
+    AmbiguousProjectWarehouseError,
+    UnresolvableProjectError,
+    clear_cache,
+    is_safe_project,
+    project_gold_root,
+    project_root,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -62,11 +69,55 @@ def test_deactivated_warehouse_is_invisible(tmp_path: Path) -> None:
     assert project_root(str(tmp_path), {}, "acme") is None
 
 
-def test_multiple_active_warehouses_resolve_deterministically(tmp_path: Path) -> None:
-    # Routing must never flap between roots: the lowest warehouse id wins, every call.
+def test_multiple_active_warehouses_REFUSE_rather_than_pick_one(tmp_path: Path) -> None:
+    """Deterministic is not the same as correct, and this test used to assert the wrong property.
+
+    It pinned `min()` on the id and called that "routing must never flap". It does not flap — it
+    silently ROUTES A TENANT'S WRITES BY ALPHABET. Measured on the deployed estate 2026-09-06: project
+    `acme` had SIX active work warehouses, five of them e2e residue (`e2e-wh-a`, `e2e-wh-b`,
+    `e2e-wh-life`, `e2e-wh-x`, `tracka-wh`), and the cascade head resolved `acme-bucket` purely because
+    that string sorts first. A suite minting `aaa-wh` would have relocated a tenant's bronze with no
+    error anywhere — the only signal was a `warehouse_project_ambiguous` warning nobody reads.
+
+    A resolver that cannot answer must refuse and NAME the candidates, so an operator can fix it.
+    """
     _write_record(tmp_path, _record("wh2", "acme", "s3://acme-wh2", status="active"))
     _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active"))
+    with pytest.raises(AmbiguousProjectWarehouseError) as excinfo:
+        project_root(str(tmp_path), {}, "acme", ttl_seconds=0)
+    message = str(excinfo.value)
+    assert "wh1" in message and "wh2" in message, f"the refusal must name the candidates: {message}"
+    assert "primary" in message, f"the refusal must name the fix: {message}"
+
+
+def test_an_explicit_primary_resolves_an_ambiguous_set(tmp_path: Path) -> None:
+    """The marker is the operator's answer to the refusal, and one is enough."""
+    _write_record(tmp_path, _record("wh2", "acme", "s3://acme-wh2", status="active"))
+    _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active", primary=True))
+    assert project_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://acme-wh2".replace("wh2", "wh1")
     assert project_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://acme-wh1"
+
+
+def test_two_primaries_are_still_ambiguous(tmp_path: Path) -> None:
+    """A marker that can be set twice resolves nothing — and silently picking between two DECLARED
+    primaries would be the original defect wearing a better name."""
+    _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active", primary=True))
+    _write_record(tmp_path, _record("wh2", "acme", "s3://acme-wh2", status="active", primary=True))
+    with pytest.raises(AmbiguousProjectWarehouseError):
+        project_root(str(tmp_path), {}, "acme", ttl_seconds=0)
+
+
+def test_one_active_warehouse_needs_no_marker(tmp_path: Path) -> None:
+    """The overwhelmingly common shape stays untouched — a project with one warehouse resolves it."""
+    _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active"))
+    assert project_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://acme-wh1"
+
+
+def test_an_inactive_sibling_does_not_create_ambiguity(tmp_path: Path) -> None:
+    """Only ACTIVE records compete. Deactivation is the estate's offboarding step, and a quarantined
+    warehouse must not start blocking the tenant it was removed from."""
+    _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active"))
+    _write_record(tmp_path, _record("wh0", "acme", "s3://acme-wh0", status="inactive"))
     assert project_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://acme-wh1"
 
 
@@ -168,9 +219,15 @@ def test_gold_root_none_when_project_has_no_serving_warehouse(tmp_path: Path) ->
     assert project_gold_root(str(tmp_path), {}, "acme") is None  # caller falls back to the work root
 
 
-def test_multiple_gold_warehouses_resolve_deterministically(tmp_path: Path) -> None:
+def test_multiple_gold_warehouses_REFUSE_too(tmp_path: Path) -> None:
+    """The gold serving class gets the same rule. A tenant's SERVING root chosen by alphabet is the
+    same defect as its work root chosen by alphabet, and a fix applied to one class only is the
+    partial application this estate treats as sloppy."""
     _write_record(tmp_path, _record("g2", "acme", "s3://acme-gold-2", status="active", serving="gold"))
     _write_record(tmp_path, _record("g1", "acme", "s3://acme-gold-1", status="active", serving="gold"))
+    with pytest.raises(AmbiguousProjectWarehouseError):
+        project_gold_root(str(tmp_path), {}, "acme", ttl_seconds=0)
+    _write_record(tmp_path, _record("g1", "acme", "s3://acme-gold-1", status="active", serving="gold", primary=True))
     assert project_gold_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://acme-gold-1"
 
 
@@ -196,3 +253,35 @@ def test_gold_and_work_caches_are_independent(tmp_path: Path) -> None:
     _write_record(tmp_path, _record("g1", "acme", "s3://acme-gold", status="active", serving="gold"))
     # The gold miss was not cached, so the freshly provisioned serving warehouse resolves immediately.
     assert project_gold_root(str(tmp_path), {}, "acme", ttl_seconds=3600) == "s3://acme-gold"
+
+
+def test_an_ambiguous_project_is_an_unresolvable_one() -> None:
+    """The subclass IS the mechanism, not a convenience.
+
+    Two live handlers already fail closed on `UnresolvableProjectError` — `medallion/api/produce.py`
+    and `medallion/services/transform.py`. Adding a sibling exception would have sailed past both and
+    surfaced as a 500 on the cascade head, which is the shape this whole change exists to stop: a
+    routing decision the estate cannot make, reported as a server fault.
+    """
+    assert issubclass(AmbiguousProjectWarehouseError, UnresolvableProjectError)
+
+
+@pytest.mark.parametrize("marker", [True, "true", "True", " TRUE "])
+def test_the_primary_marker_is_read_in_every_shape_the_registry_writes(tmp_path: Path, marker: object) -> None:
+    """The catalog stores the STRING "true" (matching `protected`, because the record is a str->str
+    map). A resolver reading only the boolean would ignore every marker the API can actually write —
+    the project would keep refusing while its operator believed they had fixed it, which is a worse
+    failure than the ambiguity, because the fix looks applied."""
+    _write_record(tmp_path, _record("wh2", "acme", "s3://acme-wh2", status="active"))
+    _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active", primary=marker))
+    assert project_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://acme-wh1"
+
+
+@pytest.mark.parametrize("marker", [False, "false", "", None, 0])
+def test_a_falsy_marker_does_not_resolve_the_ambiguity(tmp_path: Path, marker: object) -> None:
+    """`"primary": false` is not a vote for itself. Treating any PRESENT key as the marker is how a
+    record that explicitly declines to be primary would become one."""
+    _write_record(tmp_path, _record("wh2", "acme", "s3://acme-wh2", status="active"))
+    _write_record(tmp_path, _record("wh1", "acme", "s3://acme-wh1", status="active", primary=marker))
+    with pytest.raises(AmbiguousProjectWarehouseError):
+        project_root(str(tmp_path), {}, "acme", ttl_seconds=0)

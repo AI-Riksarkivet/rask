@@ -656,6 +656,16 @@ class CreateWarehouseRequest(BaseModel):
     # deletion protection" checkbox for a 409 production could not produce. Absent (default) keeps
     # pre-protection records byte-identical; a re-POST still carries an existing flag forward.
     protected: bool = False
+    # THE PROJECT'S PRIMARY WAREHOUSE IN ITS SERVING CLASS — the operator's answer to
+    # `AmbiguousProjectWarehouseError`. A project may legitimately hold several active warehouses, and
+    # until 2026-09-06 the resolver silently picked `min()` by id: measured, `acme` held SIX and its
+    # cascade routed to `acme-bucket` purely because that string sorts first. The resolver now REFUSES
+    # an ambiguous set and names this flag as the fix — so the flag has to be settable at the door that
+    # writes the record, or the refusal names a repair only a hand-edited JSON file can perform (the
+    # `rayComputeAccessKey` shape: hardening an operator cannot actually apply).
+    # Absent (default) keeps every existing record byte-identical; a re-POST carries an existing flag
+    # forward, exactly as `serving` and `protected` do.
+    primary: bool = False
 
 
 class WarehouseResponse(BaseModel):
@@ -668,6 +678,10 @@ class WarehouseResponse(BaseModel):
     # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
     # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
     protected: bool | None = None
+    # Which warehouse a project's writes actually route to, made OBSERVABLE. An operator resolving an
+    # ambiguity has to be able to read back which record they marked; None on unmarked records
+    # (exclude_none keeps them byte-identical on the wire).
+    primary: bool | None = None
     created_at: str | None = None
 
 

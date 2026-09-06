@@ -125,6 +125,21 @@ class UnresolvableProjectError(RuntimeError):
     """
 
 
+class AmbiguousProjectWarehouseError(UnresolvableProjectError):
+    """A project has more than one ACTIVE warehouse in one serving class and none is marked primary.
+
+    A SUBCLASS, deliberately: an ambiguous project is an unresolvable one — the resolver does not know
+    the answer — so every path already written to fail closed on :class:`UnresolvableProjectError`
+    covers this the day it is added, rather than depending on someone finding all of them. Both live
+    handlers (`medallion/api/produce.py`, `medallion/services/transform.py`) catch it unchanged, and a
+    caller that wants to tell the two apart still can.
+
+    The refusal NAMES the candidates and the fix (``"primary": true`` on exactly one record, or
+    deactivate the rest): an operator who is told only "ambiguous" has to go and read the registry to
+    learn what to do about it.
+    """
+
+
 def is_safe_project(value: object) -> bool:
     """True iff ``value`` is a path-safe project id (safe as an S3-key/URI/lineage-name segment)."""
     return isinstance(value, str) and _PROJECT_RE.fullmatch(value) is not None
@@ -257,7 +272,7 @@ def _resolve_root(
     cached = _cache.get(key, now=now)
     if cached is not None:
         return cached
-    matches: list[tuple[str, str]] = []
+    matches: list[tuple[str, str, bool]] = []
     # `list_records` is the shared registry primitive: non-recursive (so `bindings/` and any state
     # prefixes are skipped), one unreadable record warned and skipped rather than voiding the answer.
     for record in list_records(control_root, storage_options, _REGISTRY_PREFIX, event="warehouse_record"):
@@ -269,17 +284,62 @@ def _resolve_root(
             continue
         root_uri = record.get("root_uri")
         if isinstance(root_uri, str) and root_uri:
-            matches.append((str(record.get("id", "")), root_uri.rstrip("/")))
+            matches.append((str(record.get("id", "")), root_uri.rstrip("/"), _is_primary(record)))
     if not matches:
         return None
-    if len(matches) > 1:
-        log.warning(
-            "warehouse_project_ambiguous",
-            extra={"project": project, "serving": serving, "count": len(matches)},
-        )
-    root = min(matches)[1]
+    root = _sole_root(matches, project=project, serving=serving)
     _cache.set(key, root, now=now, ttl_seconds=ttl_seconds)
     return root
+
+
+def _is_primary(record: dict[str, object]) -> bool:
+    """The record's primary marker, in the shape the registry actually stores.
+
+    The catalog writes `"true"` (a string), matching `protected` — the record is a str->str map, and
+    one boolean in it would be the only value the store round-trips differently from its siblings. A
+    real `True` is accepted too, so a hand-written record or a test fixture that reaches for the
+    obvious spelling is not silently ignored: a marker that is present and unread would leave the
+    project refusing while its operator believes they have already fixed it.
+    """
+    value = record.get("primary")
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def _sole_root(matches: list[tuple[str, str, bool]], *, project: str, serving: str) -> str:
+    """The one root this project routes to, or a refusal that names the candidates and the fix.
+
+    THIS USED TO BE `min(matches)`, warn, and carry on. That is deterministic, which is what the old
+    test asserted — and deterministic is not correct. It routes a tenant's writes BY ALPHABET.
+    Measured on the deployed estate 2026-09-06: project `acme` carried SIX active work warehouses,
+    five of them e2e residue, and the cascade head resolved `acme-bucket` only because that string
+    sorts first. A suite minting `aaa-wh` would have relocated a tenant's bronze silently; the sole
+    signal was a warning line.
+
+    The estate's own rule for this shape is fail-closed — `UnresolvableProjectError` exists precisely
+    so an unroutable project refuses rather than falling back to a shared default and "silently
+    read/write the wrong tenant's data while emitting real-looking lineage for it". An ambiguous
+    project is unroutable in exactly that sense: the resolver does not know the answer, and picking
+    one is indistinguishable from knowing.
+
+    `primary` is the operator's answer. Exactly one wins; two is still ambiguous, because choosing
+    between two DECLARED primaries would be the original defect wearing a better name.
+    """
+    if len(matches) == 1:
+        return matches[0][1]
+    primaries = [match for match in matches if match[2]]
+    if len(primaries) == 1:
+        return primaries[0][1]
+    candidates = ", ".join(sorted(warehouse_id for warehouse_id, _, _ in matches))
+    detail = "two records are marked primary" if primaries else "none is marked primary"
+    log.error(
+        "warehouse_project_ambiguous",
+        extra={"project": project, "serving": serving, "count": len(matches), "primaries": len(primaries)},
+    )
+    raise AmbiguousProjectWarehouseError(
+        f"project {project!r} has {len(matches)} active {serving or 'work'} warehouses and {detail}: {candidates}. "
+        f"Mark exactly one with \"primary\": true, or deactivate the rest — routing a tenant's data by "
+        f"alphabetical accident is not a decision this resolver may make."
+    )
 
 
 def project_root(

@@ -209,6 +209,19 @@ async def create_warehouse(
         protected = "true"
     if protected:
         record["protected"] = protected
+    # `primary` carries forward for the same reason as serving/protected, and its loss has the sharpest
+    # consequence of the three: dropping it does not disable a safety catch, it makes the project
+    # UNROUTABLE — `_resolve_root` refuses an ambiguous set outright, so a re-POST that silently
+    # demoted the marked record would stop the tenant's cascade rather than misroute it. Stored as the
+    # boolean the resolver reads (`record.get("primary") is True`), and ABSENT on unmarked records so
+    # every pre-2026-09-06 record stays byte-identical.
+    primary = existing.get("primary") if existing is not None else None
+    if body.primary:
+        # String "true", the shape `protected` already uses — the record is a str->str map, and one
+        # boolean in it would be the only value the store round-trips differently from its siblings.
+        primary = "true"
+    if primary:
+        record["primary"] = primary
 
     # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4). They used to end in an
     # unconditional `put_warehouse` of a record assembled from a read taken at the top of this handler —
