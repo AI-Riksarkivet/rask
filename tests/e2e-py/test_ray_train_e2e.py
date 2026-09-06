@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import time
+import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -156,7 +157,15 @@ def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> Non
 
     if _silver_written():
         return
-    resp = requests.post(f"{lance_ray}/produce", headers={"dapr-api-token": DAPR_TOKEN}, timeout=30)
+    # `Idempotency-Key` is REQUIRED by both write doors and has no default, so FastAPI 422s at header
+    # validation before auth, before the lane, before anything this suite means to exercise. The same
+    # omission was fixed in test_medallion_e2e and test_media_e2e by `f0b97870`; this suite was skipping
+    # then, so it kept the miss.
+    resp = requests.post(
+        f"{lance_ray}/produce",
+        headers={"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
+        timeout=30,
+    )
     assert resp.status_code == 202, f"/produce to seed silver$features failed: {resp.status_code} {resp.text}"
     # Generous window: on a FRESH kind cluster the cascade is bronze→silver via sequential Ray jobs,
     # and the first Ray job cold-starts its runtime env (~2 min) before any stage completes.
@@ -172,7 +181,7 @@ def test_train_to_blessed_with_full_reproducibility_capture(stack: tuple[str, st
     # 1. Request a governed training run against the standing silver features.
     r = requests.post(
         f"{lance_ray}/train",
-        headers={"dapr-api-token": DAPR_TOKEN, "content-type": "application/json"},
+        headers={"dapr-api-token": DAPR_TOKEN, "content-type": "application/json", "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},
         json={"model": model, "features": [{"dataset": "silver$features"}]},
         timeout=30,
     )

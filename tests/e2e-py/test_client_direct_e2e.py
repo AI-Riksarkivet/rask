@@ -21,6 +21,7 @@ import lance
 import pyarrow as pa
 import pytest
 import requests
+from topology import OUTSIDER, assert_parent_exists, create_top_level
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -99,7 +100,10 @@ def test_client_direct_commit_lands_with_zero_byte_ingress(catalog: str) -> None
     h = {"Authorization": f"Bearer {tok}"}
 
     # Server-side create seeds the table (create centralizes the 2.2 invariant; bulk append goes direct).
-    requests.post(f"{catalog}/v1/namespace/{_NS}/create", headers=h, json={}, timeout=20)
+    # The PARENT comes first, through whichever door this estate admits, and its answer is read: firing
+    # the root door and discarding the 400 left `_NS` uncreated, and the table create below then 403'd
+    # `can_create_table required` on a namespace that was never there.
+    assert_parent_exists(create_top_level(catalog, _NS, h), _NS)
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _schema()) as w:
         w.write_table(pa.table({"id": [1, 2], "v": ["a", "b"]}, schema=_schema()))
@@ -166,7 +170,7 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
     h = {"Authorization": f"Bearer {tok}"}
 
     # Fresh table with 2 deterministic seed rows so the final-count assertion is exact + repeatable.
-    requests.post(f"{catalog}/v1/namespace/{_NS}/create", headers=h, json={}, timeout=20)
+    assert_parent_exists(create_top_level(catalog, _NS, h), _NS)
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _schema()) as w:
         w.write_table(pa.table({"id": [1, 2], "v": ["seed1", "seed2"]}, schema=_schema()))
@@ -263,5 +267,8 @@ def test_commit_is_governed(catalog: str) -> None:
     body = json.dumps({"fragments": [{"id": 0}], "read_version": 1})
     h = {"content-type": "application/json"}
     assert requests.post(f"{catalog}/v1/table/{_TABLE}/commit", headers=h, data=body, timeout=10).status_code == 401
-    bob = {**h, "Authorization": f"Bearer {_token('bob@example.com')}"}
-    assert requests.post(f"{catalog}/v1/table/{_TABLE}/commit", headers=bob, data=body, timeout=10).status_code == 403
+    # A REAL outsider, not bob — he is a project admin on this estate. This leg used to pass only
+    # because `_NS` had never been created, so the commit 403'd on a missing parent rather than on a
+    # missing grant; creating the parent (as this suite now does) exposed the wrong oracle.
+    outsider = {**h, "Authorization": f"Bearer {_token(OUTSIDER)}"}
+    assert requests.post(f"{catalog}/v1/table/{_TABLE}/commit", headers=outsider, data=body, timeout=10).status_code == 403

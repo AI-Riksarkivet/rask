@@ -8,7 +8,7 @@ catalog (OIDC + OpenFGA) **+** lineage-api (OpenLineage → Apache AGE), with th
 Asserts the dataops/governance story end to end:
   1. anon create → 401 (OIDC enforced);
   2. alice creates namespace + bronze table → 200 (app seeds owner);
-  3. bob (no grant) describe → 403; alice (owner) describe → 200 (authz cascade);
+  3. an outsider (no grant) describe → 403; alice (owner) describe → 200 (authz cascade);
   4. the catalog recorded alice as the **verified** creator of bronze in the lineage graph;
   5. a promote run (bronze → silver, as a medallion-producer job emits) makes silver's upstream = bronze.
 
@@ -27,6 +27,7 @@ from collections.abc import Callable
 import pyarrow as pa
 import pytest
 import requests
+from topology import OUTSIDER, assert_parent_exists, create_top_level
 
 from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
@@ -118,9 +119,9 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     server, lineage = stack
     alice = _token("alice@example.com")
     alice_sub = _sub(alice)
-    bob = _token("bob@example.com")
+    outsider = _token(OUTSIDER)
     ah = {"Authorization": f"Bearer {alice}"}
-    bh = {"Authorization": f"Bearer {bob}"}
+    bh = {"Authorization": f"Bearer {outsider}"}
     ns = f"gov{os.getpid()}"
     # 2-level ids (namespace$table) — the real medallion pattern; the table's parent is the created
     # namespace `ns`, so create-on-parent is authorized (a 3-level id would need the intermediate namespace
@@ -130,8 +131,11 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     # 1. anon -> 401 (OIDC enforced)
     assert requests.post(f"{server}/v1/namespace/{ns}/create", json={}, timeout=10).status_code == 401
 
-    # 2. alice creates namespace + bronze table -> 200 (app seeds owner; catalog emits create-lineage)
-    assert requests.post(f"{server}/v1/namespace/{ns}/create", headers=ah, json={}, timeout=10).status_code == 200
+    # 2. alice creates namespace + bronze table -> 200 (app seeds owner; catalog emits create-lineage).
+    # Through whichever door this estate admits: with warehouses on, the root door answers 400
+    # `must belong to a warehouse` — a TOPOLOGY refusal — and this suite read that as a governance
+    # failure. `test_auth_e2e` was migrated 2026-08-25 and this one was not.
+    assert_parent_exists(create_top_level(server, ns, ah), ns)
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     create = requests.post(f"{server}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)
     assert create.status_code == 200, create.text
@@ -141,7 +145,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     sc = requests.post(f"{server}/v1/table/{silver}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)
     assert sc.status_code == 200, sc.text
 
-    # 3. bob (no grant) cannot describe -> 403 ; alice (owner) can -> 200 (cascade)
+    # 3. the outsider (no grant) cannot describe -> 403 ; alice (owner) can -> 200 (cascade)
     assert requests.post(f"{server}/v1/table/{bronze}/describe", headers=bh, timeout=10).status_code == 403
     assert requests.post(f"{server}/v1/table/{bronze}/describe", headers=ah, timeout=10).status_code == 200
 
@@ -194,18 +198,18 @@ def test_non_owner_cannot_rename_or_overwrite_anothers_table(stack: tuple[str, s
     """Security (the fixes committed 9d4de0a / 185c333): a non-owner is denied the destructive
     rename + Overwrite of another user's table — 403, so the true owner can't be evicted/seized."""
     server, _ = stack
-    alice, bob = _token("alice@example.com"), _token("bob@example.com")
-    ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {bob}"}
+    alice, outsider = _token("alice@example.com"), _token(OUTSIDER)
+    ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {outsider}"}
     ns = f"sec{os.getpid()}"
     tbl = f"{ns}$owned"
-    requests.post(f"{server}/v1/namespace/{ns}/create", headers=ah, json={}, timeout=10)
+    assert_parent_exists(create_top_level(server, ns, ah), ns)
     rows = _ipc(pa.table({"id": pa.array([1], pa.int64())}))
     assert (requests.post(f"{server}/v1/table/{tbl}/create", headers={**ah, **ARROW}, data=rows, timeout=30)).status_code == 200
 
-    # bob has no grant on alice's table → both destructive paths are denied (owner-tier gates).
+    # The outsider has no grant on alice's table → both destructive paths are denied (owner-tier gates).
     rn = requests.post(f"{server}/v1/table/{tbl}/rename", headers=bh, json={"new_table_name": "stolen"}, timeout=10)
     ov = requests.post(f"{server}/v1/table/{tbl}/create?mode=overwrite", headers={**bh, **ARROW}, data=rows, timeout=30)
-    assert rn.status_code == 403, f"bob rename → {rn.status_code} (expected 403)"
-    assert ov.status_code == 403, f"bob overwrite → {ov.status_code} (expected 403)"
+    assert rn.status_code == 403, f"{OUTSIDER} rename → {rn.status_code} (expected 403)"
+    assert ov.status_code == 403, f"{OUTSIDER} overwrite → {ov.status_code} (expected 403)"
     # and alice still owns it (not evicted)
     assert (requests.post(f"{server}/v1/table/{tbl}/describe", headers=ah, timeout=10)).status_code == 200

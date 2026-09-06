@@ -20,6 +20,7 @@ import pyarrow.fs as pafs
 import pyarrow.ipc as ipc
 import pytest
 import requests
+from topology import assert_parent_exists, create_top_level
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -73,9 +74,15 @@ def catalog() -> str:
 def catalog_ns(catalog: str) -> str:
     """Ensure the caller OWNS the parent namespace ``mbns``. With FGA on, a nested table's create gates on
     ``can_create_table`` on its parent namespace — so without this the create 403s at the router before the
-    allowlist check is even reached. lockRootCreate is off → this top-level namespace-create is self-serve
-    and seeds the caller owner (idempotent: an already-existing namespace is fine)."""
-    requests.post(f"{catalog}/v1/namespace/mbns/create", headers=_auth(), timeout=15)
+    allowlist check is even reached (idempotent: an already-existing namespace is fine).
+
+    The door is chosen by `topology.create_top_level`, and the RESPONSE IS READ. This fixture used to
+    fire the root door and discard the answer on the premise "lockRootCreate is off → this top-level
+    namespace-create is self-serve": true once, false since the warehouses guard landed 2026-08-04. The
+    400 went unseen, `mbns` was never created, and all three legs then 403'd `can_create_table required
+    on namespace:mbns` — a refusal about a namespace that did not exist, which reads as a grant defect.
+    """
+    assert_parent_exists(create_top_level(catalog, "mbns", _auth()), "mbns")
     return catalog
 
 
