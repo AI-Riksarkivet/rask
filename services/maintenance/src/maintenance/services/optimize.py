@@ -234,7 +234,21 @@ def _compact_files(
         metrics: Any = None
     else:
         try:
-            metrics = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
+            # ASK ONLY WHAT LANCE CAN ANSWER. `defer_index_remap` needs a fragment-reuse layout, and a
+            # stable-row-id dataset does not have one — nor need one: stable ids ARE the remap, so
+            # Lance refuses with "there is nothing to defer". The dataset carries the answer
+            # (`has_stable_row_ids`, the same public accessor `ingest/catalog.py::A14` reads), so the
+            # refusal is predictable rather than discoverable. Measured on the deployed estate: 211
+            # `compact_defer_index_remap_unsupported` warnings in 48 hours — one guaranteed-failed call
+            # per governed dataset per tick, since the cascade writes every tier with stable ids.
+            #
+            # The except stays, and is not belt-and-braces: Lance refuses in the OTHER direction too
+            # ("requires row_addrs but none were provided") for a dataset that is neither, and a third
+            # reason should degrade to a plain compaction rather than fail a tick.
+            if getattr(ds, "has_stable_row_ids", False):
+                metrics = ds.optimize.compact_files(**size_kw)
+            else:
+                metrics = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
         except Exception as exc:
             # defer_index_remap needs row_addrs (a stable-row-id, fragment-reuse-able layout). A dataset
             # WITHOUT them — e.g. a small model-REGISTRY dataset (models$<model>) — raises
