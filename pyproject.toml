@@ -175,7 +175,7 @@ lines-after-imports = 2
 # the missing ten turns one I001 into hundreds, because a name changes which block ruff sorts it into
 # and every importer of it re-sorts. That was true — the pass measured 465 I001s across 391 files —
 # and it is why the fix was always "do it as a PASS": add every name, then
-# `uvx ruff check --select I --fix` once. Done 2026-08-30 (open_python-audit X3).
+# `uvx ruff check --select I --fix` once. Done 2026-08-30 (docs/DECISIONS.md "The Python estate audit").
 #
 # ADD A NEW MEMBER'S IMPORT NAME HERE IN THE SAME CHANGE that creates it (adding-a-package.md step 4).
 # One name at a time is cheap; ten at once is a repo-wide re-sort.

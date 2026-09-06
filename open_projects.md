@@ -217,10 +217,12 @@ wider than the call. Moot if the service is deleted.
 
 ### 3.6 — the pre-existing performance finding, for completeness
 
-`open_python-audit.findings.json:3061` already records that `GET /api/projects/` costs `1 + N`
-serialized blocking k8s calls (one `ingress_host` per namespace with an identical selector), so
-latency grows linearly with project count and one slow namespace stalls the whole list. Also moot if
-the service is deleted; noted so nobody re-files it.
+`GET /api/projects/` costs `1 + N` serialized blocking k8s calls — one `ingress_host` per namespace
+with an identical selector — so latency grows linearly with project count and one slow namespace
+stalls the whole list. Found by the 2026-08-07 Python audit and carried here verbatim when that
+audit's machine-readable view was deleted with the ledger it indexed
+(docs/DECISIONS.md "The Python estate audit"). Also moot if the service is deleted; recorded here so
+nobody re-files it.
 
 ### 3.7 · Recommendation
 

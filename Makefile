@@ -407,7 +407,8 @@ RAY_HEAD_PORT       ?= 6379
 RAY_DASHBOARD_PORT  ?= 8265
 
 # ray-up exports S3_SECRET (+ the lineage token) to the LOCAL head because the submission body no
-# longer carries them (the Ray Jobs API echoes runtime_env to any reader — open_python-audit P0).
+# longer carries them (the Ray Jobs API echoes runtime_env to any reader — docs/DECISIONS.md
+# "The Python estate audit").
 # In-cluster the pods hold them via secretKeyRef; locally the head process env is the pod. The
 # rustfsadmin default is the same dev constant deploy/ray-lance-demo.yaml already commits.
 ray-up:

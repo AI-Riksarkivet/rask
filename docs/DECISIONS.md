@@ -1246,8 +1246,8 @@ them the same plan-elsewhere / commit-here split compaction now uses.
 
 A 304-finding audit of every Python package and service, drained over nine batches. It is cited from
 ~98 files by finding id (`X6`, `DUP-16`, `VS-07`), and those citations name a real thing: the ledger
-lived in docs/DECISIONS.md "The Python estate audit" until it was drained, and its full text is in git history at the
-commit that deleted it. What follows is what a reader needs without that file.
+lived in `open_python-audit.md` until it was drained, and its full text is in git history at
+`058da189`, the commit that deleted it. What follows is what a reader needs without that file.
 
 **Final counts, re-derived from the ledger's own rows rather than its header:** 498 row entries across
 a detail table and an index (so 249 distinct), of which 384 FIXED, 74 PARTIAL, 32 DISSOLVED, 4 WRONG,

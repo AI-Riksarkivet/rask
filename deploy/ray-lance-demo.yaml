@@ -63,7 +63,7 @@ spec:
             # is AccessDenied against the control plane.
             - { name: S3_KEY, value: "rask-ray-compute" }
             # BY REFERENCE, not a literal — and these two exist because the submission body no
-            # longer carries them (open_python-audit P0: the Ray Jobs API echoes runtime_env back to
+            # longer carries them (docs/DECISIONS.md "The Python estate audit": the Ray Jobs API echoes runtime_env back to
             # any reader, so the S3 secret and the estate's service token were readable off
             # GET /api/jobs/<id>). Jobs read both from the pod env now; the chart's RayService gets
             # the same pair via chart/templates/rayservice.yaml. The token is optional: absent (dapr

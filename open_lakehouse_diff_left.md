@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-05, from the rows below rather than asserted: 124 tracked, 113 open, 11 struck.**
-That splits into 58 lettered rows (52 open) and 54 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-06, from the rows below rather than asserted: 129 tracked, 115 open, 14 struck.**
+That splits into 58 lettered rows (52 open) and 71 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -911,3 +911,23 @@ subject is granted on a tenant that did not exist at bootstrap.
 | Q6-6 | The halt-counter alert gate is a substring search over the whole rules dump | med | It matches annotation prose, so a rule could be deleted and the gate stay green on its own description |
 | Q6-7 | The promtool-expectation gate silently skips unknown alertnames and missing annotation keys | med | A typo in an alertname makes the expectation vacuous rather than failing |
 | Q6-8 | The RayJob Role grants `list` and `watch` the executor never issues | low | Narrow to `create,get,delete` |
+
+## Q7. What deleting a register leaves behind (2026-09-06)
+
+Found while answering "why is `open_python-audit.findings.json` still here". It was: the drain of
+2026-09-05 deleted `open_python-audit.md` and repointed 98 citations, and left its 400 KB
+machine-readable sidecar — the same audit, generated 2026-08-07, a month stale — sitting beside the
+ledger it indexed. Deleted here, its one live finding carried into `open_projects.md`.
+
+Checking for siblings turned up that this is a PATTERN, not an oversight: `tests/unit/test_no_locator_names_a_deleted_register.py`
+now gates it, and shipped RED against 18 pointers into five registers already gone. Three were the
+drain's own (`pyproject.toml`, `Makefile`, `deploy/ray-lance-demo.yaml` — missed because the repoint
+walked seven source roots and those three are outside all of them); fifteen are older.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| ~~Q7-1~~ | `open_python-audit.findings.json` outlived the ledger it indexed | med | **CLOSED HERE.** `git rm`'d; the `1 + N` projects-list finding it uniquely held is now stated in `open_projects.md` § 3.6 in its own words |
+| ~~Q7-2~~ | Three citations of the drained ledger dangled | med | **CLOSED HERE.** `pyproject.toml` X3, `Makefile` P0, `deploy/ray-lance-demo.yaml` P0 repointed at `docs/DECISIONS.md` "The Python estate audit". The row ids are dropped, not carried: that section defines no `X3`, and a pointer to a label nothing defines is the defect `test_every_decisions_citation_resolves` was written for |
+| ~~Q7-3~~ | `DECISIONS.md` claimed the ledger lived inside `DECISIONS.md` | low | **CLOSED HERE.** The mechanical repoint rewrote the filename inside the one sentence that was *about* the filename. Restored, with the deleting commit named |
+| Q7-4 | 15 pointers into four registers retired 2026-08-04…08-26 still dangle | med | `open_ingest` (6), `open_notifications` (6), `open_batch_process` (2), `open_lineage_graph` (1), across 20 files in Python, TS, Svelte, YAML and TOML. Enumerated as `_CARRIED` in the new gate so a NEW dangle fails today and the list can only shrink. **Deliberately not repointed in the commit that found them** — each needs a destination chosen by reading, and a 20-site sed is precisely how the dangling-`(M1)` defect was created the first time |
+| Q7-5 | Nothing gates the SIDECAR of a register, only the register | low | The new gate checks pointers INTO a file. It would not have caught a `.findings.json` that nobody cited — that one was found by a reader asking why a file was still there |
