@@ -45,6 +45,7 @@ from typing import Any
 import pytest
 import requests
 from promotion_review import approve_if_held
+from topology import OUTSIDER
 
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
@@ -70,7 +71,19 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 #: The warehouse alice is granted reader on. A TENANT drive cascades under its project's own zone
 #: warehouse, not the estate root — `seed_medallion_fga.sh` links `warehouse:<zone-wh> -> namespace:
 #: <project>-<tier>` — so a reader grant on the root reaches none of the tenant's stages.
-WAREHOUSE = os.environ.get("LANCE_E2E_FGA_WAREHOUSE", "") or ("warehouse:lakehouse-wh" if os.environ.get("LANCE_E2E_PROJECT") else "warehouse:lance_catalog")
+#: DISCOVERED, NOT NAMED — the same rule `topology.OUTSIDER` follows and for the same reason. This
+#: read `warehouse:lakehouse-wh` for ANY project estate; the runner discovers the project's real
+#: warehouse (`acme-bucket` here) and exports it as `LANCE_E2E_WAREHOUSE`. Naming the wrong one is not
+#: a near-miss: `_owner_tuples` revokes `owner` on it, and OpenFGA fails the whole delete BATCH when a
+#: listed tuple does not exist — so test 2 revoked NOTHING, the mover kept `owner` on the warehouse it
+#: really holds, owner outranked the writer rung, and the "denied" drive completed. The +12s negative
+#: passed anyway because the Ray stage had not finished yet; only the post-redelivery re-check saw it.
+#: `LANCE_E2E_FGA_WAREHOUSE` stays the explicit override for an estate whose FGA warehouse differs.
+WAREHOUSE = (
+    os.environ.get("LANCE_E2E_FGA_WAREHOUSE", "")
+    or (f"warehouse:{os.environ['LANCE_E2E_WAREHOUSE']}" if os.environ.get("LANCE_E2E_WAREHOUSE") else "")
+    or ("warehouse:lakehouse-wh" if os.environ.get("LANCE_E2E_PROJECT") else "warehouse:lance_catalog")
+)
 #: the silver→gold mover's validator rung, on the tier the drive actually targets (can_promote).
 GOLD_VALIDATOR = {
     "user": "user:service-silver-to-gold",
@@ -477,8 +490,13 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
 
     # Governance is live in the SAME stack: anonymous read 401s; an ungranted user 403s on the route gate.
     assert requests.get(f"{lineage}/runs", timeout=8).status_code == 401
-    bob = {"Authorization": f"Bearer {_token('bob@example.com')}"}
-    denied = requests.get(f"{lineage}/datasets/{_ds('gold$catalog')}/upstream", headers=bob, timeout=8)
+    # THE OUTSIDER IS ASKED FOR, NOT NAMED. `bob@example.com` is not one on this estate: `team:eng` is
+    # bound to `project:acme` and `project.admin` is "[user, role#assignee] or member from team", so a
+    # team member IS a project admin and `can_get_metadata` on every `acme-*` object is genuinely
+    # True. `topology.OUTSIDER` already carries this — it fixed three suites on 2026-09-06 and this was
+    # the fourth, asserting a 403 that the model correctly refuses to give.
+    outsider = {"Authorization": f"Bearer {_token(OUTSIDER)}"}
+    denied = requests.get(f"{lineage}/datasets/{_ds('gold$catalog')}/upstream", headers=outsider, timeout=8)
     assert denied.status_code == 403, denied.text
 
 
@@ -642,11 +660,28 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
         # separate field. Sent qualified and project-less, the mover answered `medallion_stage_other_lane`
         # — a ROUTING drop, which `_DROP` renders identically to a governance block, so the assertion
         # below passed on a trigger that never reached the quality gate at all.
-        json={"data": {"token": token, "dataset": "bronze$events", "namespace": "bronze", "project": PROJECT}},
+        # `from_uri` NAMES THE UPSTREAM, which is rule I2 and what `publication_trigger` really sends.
+        # Without it the mover COMPOSES `{project root}/medallion/bronze`, while the catalog vends the
+        # flat `{project root}/<hash>_<ns>$<name>` this leg just corrupted — two different datasets, so
+        # the gate read clean rows and answered SUCCESS on a batch the suite believed it had poisoned.
+        # `_confine_from_uri` accepts it because the vended location sits inside the project's own
+        # warehouse root, which is exactly the containment that makes I2 safe.
+        json={
+            "data": {
+                "token": token,
+                "dataset": "bronze$events",
+                "namespace": "bronze",
+                "project": PROJECT,
+                "from_uri": bronze_uri,
+            }
+        },
         headers={"dapr-api-token": MOVER_TOKEN},
         timeout=180,
     )
-    assert resp.status_code == 200 and resp.json()["status"] == "DROP", resp.text  # blocked, not cascaded
+    # DROP is the ack a HELD promotion gets (`_QUALITY_BLOCKED`), and `_DROP` renders every other
+    # refusal reason identically — a routing drop included. So this status alone proves nothing; the
+    # verdict poll below is the real assertion, and this only catches the hop never running at all.
+    assert resp.status_code == 200 and resp.json()["status"] == "DROP", resp.text
 
     # The blocked batch is fully auditable in lineage: the run COMPLETEd (the write happened), the gate
     # verdict rides the WROTE edge — quality_passed false with the failed not_null(id) assertion.
@@ -728,8 +763,8 @@ def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict
     assert not any(d["name"].startswith("s3://") for d in sources.json().get("related", []))
 
     # An ungranted user cannot see any of it — the media estate is governed like the rest.
-    bob = {"Authorization": f"Bearer {_token('bob@example.com')}"}
-    assert requests.get(f"{lineage}/datasets/silver-media$features/schema", headers=bob, timeout=8).status_code == 403
+    outsider = {"Authorization": f"Bearer {_token(OUTSIDER)}"}
+    assert requests.get(f"{lineage}/datasets/silver-media$features/schema", headers=outsider, timeout=8).status_code == 403
 
 
 # --------------------------------------------------------------------------- #
@@ -798,5 +833,5 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     up.raise_for_status()
     # Unqualified for the same reason the request above is — the train door names what it resolved.
     assert "silver$features" in {d["name"] for d in up.json().get("related", [])}, up.json()
-    bob = {"Authorization": f"Bearer {_token('bob@example.com')}"}
-    assert requests.get(f"{lineage}/datasets/models$churn/upstream", headers=bob, timeout=8).status_code == 403
+    outsider = {"Authorization": f"Bearer {_token(OUTSIDER)}"}
+    assert requests.get(f"{lineage}/datasets/models$churn/upstream", headers=outsider, timeout=8).status_code == 403
