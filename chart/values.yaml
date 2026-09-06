@@ -2394,9 +2394,21 @@ openfga:
   # in its own logs or events. That failure mode presents exactly as "a service crashed randomly for
   # no reason". Requests are set too: without them the scheduler cannot reason about the node's real
   # commitment, which is a second route to surprise evictions.
+  #
+  # RAISED TO 2Gi 2026-09-06. 512Mi was set against a much smaller store and OOMKilled the estate's
+  # authorization backend NINETY-ONE times (`exitCode 137`, measured on the live pod). The blast radius
+  # is everything: `service_kit.governed` fails CLOSED, so the medallion producer would not start at all
+  # — `ClientConnectorError: Cannot connect to host rask-openfga:8080`, CrashLoopBackOff, 11 restarts —
+  # and the cascade head was down for as long as OpenFGA was.
+  #
+  # WHAT DRIVES THE MEMORY is visible in its own request log: the cascade-lag tick issues ONE `Check`
+  # per table (`can_get_metadata` on `<project>-silver$features`) across every warehouse the registry
+  # knows, and this estate holds ~90. That is a normal governed read pattern, not an abuse — the store
+  # simply outgrew the ceiling. Requests go 128Mi -> 512Mi so the scheduler reserves something near the
+  # real working set rather than a floor the process leaves on its first Check storm.
   resources:
-    requests: { cpu: 50m, memory: 128Mi }
-    limits: { memory: 512Mi }
+    requests: { cpu: 50m, memory: 512Mi }
+    limits: { memory: 2Gi }
   # v1.18.3 (2026-08-05), moved off the long-standing v1.8.0 pin. Server + our migrate Job use the
   # SAME tag (templates/openfga-migrate.yaml) so the migrated schema always matches the binary.
   #
