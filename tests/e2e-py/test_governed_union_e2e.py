@@ -115,21 +115,29 @@ SILVER_WRITER = (
 #: id that could never exist (see OPERATIONS). Revoking these alongside the rung is what makes the deny
 #: a deny — a strengthening of the assertion, not a relaxation of it.
 def _owner_tuples(user: str, namespace: str, table: str) -> list[dict[str, str]]:
-    """The two owner tuples `seed_ownership` actually writes — warehouse and table, NOT the namespace.
+    """EVERY owner tuple that outranks the rung being revoked — warehouse, namespace and table.
 
-    Listing a tuple that does not exist is not harmless: OpenFGA fails the whole delete BATCH, so
-    including a speculative `owner namespace:<ns>` revoked NOTHING and the "denied" drive sailed
-    through with no deny logged anywhere. Measured 2026-08-25 against the live store:
+    `owner` outranks the writer/validator rung a deny aims at, so a revoke that misses one grants the
+    stage everything it needed anyway. Measured against the live store:
 
-        before revoke             can_create_table -> True
-        after revoking the rung   can_create_table -> True    (owner still outranks it)
-        after revoking owners too can_create_table -> False
+        before revoke              can_create_table -> True
+        after revoking the rung    can_create_table -> True    (owner still outranks it)
+        after revoking owners too  can_create_table -> False
 
-    `namespace` is kept in the signature because the caller reads better naming the tier it is denying.
+    THE NAMESPACE OWNER IS LISTED, and until 2026-09-06 it was not. It exists — read straight off the
+    deployed store:
+
+        user:service-bronze-to-silver -- owner --> namespace:acme-silver
+
+    so the revoke left the mover fully privileged and the leg reported "gate NOT enforcing" about a
+    cascade nothing had denied. It was omitted because OpenFGA fails a whole delete BATCH when any
+    listed tuple is absent, which made a speculative entry cost every other revoke in the call. That
+    hazard is gone: `_tuples` now sends one tuple per request, so a tuple this estate happens not to
+    have costs exactly its own no-op. Over-listing is the safe direction; under-listing is not.
     """
-    del namespace  # named by the caller for readability; seed_ownership writes no namespace owner
     return [
         {"user": user, "relation": "owner", "object": WAREHOUSE},
+        {"user": user, "relation": "owner", "object": f"namespace:{namespace}"},
         {"user": user, "relation": "owner", "object": f"table:{table}"},
     ]
 
@@ -221,16 +229,40 @@ def _tuples(fga_store: tuple[str, str], *, writes: list[dict] | None = None, del
     real error, not 90 seconds later as a misleading poll timeout (audit: a blanket 400-pass masked
     real seed errors)."""
     store, model = fga_store
-    body: dict = {"authorization_model_id": model}
-    if writes:
-        body["writes"] = {"tuple_keys": writes}
-    if deletes:
-        body["deletes"] = {"tuple_keys": deletes}
-    resp = requests.post(f"{FGA}/stores/{store}/write", json=body, timeout=10)
-    if resp.status_code == 200:
-        return
-    message = resp.json().get("message", "") if resp.status_code == 400 else ""
-    assert "already exists" in message or "did not exist" in message or "does not exist" in message, f"OpenFGA write failed ({resp.status_code}): {resp.text}"
+
+    def _one(key: str, tuple_key: dict) -> None:
+        resp = requests.post(f"{FGA}/stores/{store}/write", json={"authorization_model_id": model, key: {"tuple_keys": [tuple_key]}}, timeout=10)
+        if resp.status_code == 200:
+            return
+        message = resp.json().get("message", "") if resp.status_code == 400 else ""
+        assert "already exists" in message or "did not exist" in message or "does not exist" in message, f"OpenFGA write failed ({resp.status_code}): {resp.text}"
+
+    # ONE TUPLE PER CALL, and that is the whole point. OpenFGA fails the WHOLE batch when any listed
+    # tuple is absent, and the idempotency tolerance above cannot tell that apart from "the one tuple I
+    # asked for was already gone" — so a single stale entry in a three-tuple revoke silently revoked
+    # NOTHING while this reported success. `_owner_tuples`'s own docstring records the same trap from
+    # the other side; tolerating it here reinstated it. Sent one at a time, an absent tuple costs
+    # exactly its own no-op and every other revoke still lands.
+    for tuple_key in deletes or []:
+        _one("deletes", tuple_key)
+    for tuple_key in writes or []:
+        _one("writes", tuple_key)
+
+
+def _check(fga_store: tuple[str, str], user: str, relation: str, obj: str) -> bool:
+    """Whether OpenFGA allows `relation` for `user` on `obj` — the store's own answer, not an inference.
+
+    A revoke is a PRECONDITION of a deny test, and an unverified precondition is how test 2 spent
+    weeks asserting an enforcement gap that was really a revoke that never happened.
+    """
+    store, model = fga_store
+    resp = requests.post(
+        f"{FGA}/stores/{store}/check",
+        json={"authorization_model_id": model, "tuple_key": {"user": user, "relation": relation, "object": obj}},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return bool(resp.json().get("allowed"))
 
 
 def _token(username: str) -> str:
@@ -515,6 +547,12 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # ever proven.
     silver_owner = _owner_tuples("user:service-bronze-to-silver", _ds("silver"), _ds("silver$features"))
     _tuples(fga_store, deletes=[SILVER_WRITER, *silver_owner])
+    # THE REVOKE IS A PRECONDITION, so it is verified rather than assumed. An unverified one is how
+    # this leg reported "gate NOT enforcing" about a revoke that never happened — see `_tuples`.
+    assert not _check(fga_store, "user:service-bronze-to-silver", "can_create_table", f"namespace:{_ds('silver')}"), (
+        "the writer revoke did not take: service-bronze-to-silver still holds can_create_table on "
+        f"namespace:{_ds('silver')}, so anything below would be measuring an ungated cascade"
+    )
     try:
         w_token = _produce(lance_ray)
         bronze_rid = _run_id_for("lance_ray_ingest", w_token)
@@ -542,6 +580,10 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # -- sub-phase B: VALIDATOR deny — revoke the gold validator, the cascade stops at silver.
     gold_owner = _owner_tuples("user:service-silver-to-gold", _ds("gold"), _ds("gold$catalog"))
     _tuples(fga_store, deletes=[GOLD_VALIDATOR, *gold_owner])
+    assert not _check(fga_store, "user:service-silver-to-gold", "can_promote", f"namespace:{_ds('gold')}"), (
+        "the validator revoke did not take: service-silver-to-gold still holds can_promote on "
+        f"namespace:{_ds('gold')}"
+    )
     try:
         gold_before = _quiesced_gold(lineage, alice)
         token = _produce(lance_ray)
@@ -678,10 +720,17 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
         headers={"dapr-api-token": MOVER_TOKEN},
         timeout=180,
     )
-    # DROP is the ack a HELD promotion gets (`_QUALITY_BLOCKED`), and `_DROP` renders every other
-    # refusal reason identically — a routing drop included. So this status alone proves nothing; the
-    # verdict poll below is the real assertion, and this only catches the hop never running at all.
-    assert resp.status_code == 200 and resp.json()["status"] == "DROP", resp.text
+    # THIS ACK CANNOT CARRY THE VERDICT ON THE RAY LANE, which is the lane the estate runs. Pass 1
+    # only DISPATCHES to the stage workflow and answers SUCCESS; the gate runs at pass 2, when the
+    # workflow wakes the mover after the Ray job goes terminal, and that pass answers the SIDECAR.
+    # Measured 2026-09-06: the direct drive returned SUCCESS while the mover logged
+    # `medallion_quality_blocked` twenty seconds later, for this very token.
+    #
+    # DROP is still the right answer on the in-process lane, where the gate runs inside this call. So
+    # both acks are accepted and NEITHER is the assertion: `_QUALITY_BLOCKED` and `_DROP` are the same
+    # payload anyway, so a DROP could equally be a routing drop. The verdict poll below is what
+    # actually proves the gate blocked this batch; this only catches the hop never running at all.
+    assert resp.status_code == 200 and resp.json()["status"] in {"DROP", "SUCCESS"}, resp.text
 
     # The blocked batch is fully auditable in lineage: the run COMPLETEd (the write happened), the gate
     # verdict rides the WROTE edge — quality_passed false with the failed not_null(id) assertion.
@@ -699,7 +748,11 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     time.sleep(12)
     assert _run_states(lineage, alice).get(_run_id_for("aggregate_gold", token)) is None
 
-    # Restore: a fresh /produce overwrites the corrupted bronze and cascades clean data through to gold.
+    # RESTORE WHAT THIS LEG CORRUPTED, at the URI it corrupted, from the rows it read before nulling
+    # them. `/produce` writes the location the HEAD owns, which is not necessarily the one the catalog
+    # vends and this leg overwrote — so leaning on a fresh produce to repair it left the governed
+    # bronze permanently poisoned and every later drive blocked by the gate, correctly.
+    lance.write_dataset(table, bronze_uri, mode="overwrite", storage_options=opts)
     token2 = _produce(lance_ray)
     gold2 = _run_id_for("aggregate_gold", token2)
     _poll(
