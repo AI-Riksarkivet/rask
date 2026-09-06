@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 129 tracked, 115 open, 14 struck.**
-That splits into 58 lettered rows (52 open) and 71 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-06, from the rows below rather than asserted: 143 tracked, 129 open, 14 struck.**
+That splits into 58 lettered rows (52 open) and 85 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -931,3 +931,34 @@ walked seven source roots and those three are outside all of them); fifteen are 
 | ~~Q7-3~~ | `DECISIONS.md` claimed the ledger lived inside `DECISIONS.md` | low | **CLOSED HERE.** The mechanical repoint rewrote the filename inside the one sentence that was *about* the filename. Restored, with the deleting commit named |
 | Q7-4 | 15 pointers into four registers retired 2026-08-04…08-26 still dangle | med | `open_ingest` (6), `open_notifications` (6), `open_batch_process` (2), `open_lineage_graph` (1), across 20 files in Python, TS, Svelte, YAML and TOML. Enumerated as `_CARRIED` in the new gate so a NEW dangle fails today and the list can only shrink. **Deliberately not repointed in the commit that found them** — each needs a destination chosen by reading, and a 20-site sed is precisely how the dangling-`(M1)` defect was created the first time |
 | Q7-5 | Nothing gates the SIDECAR of a register, only the register | low | The new gate checks pointers INTO a file. It would not have caught a `.findings.json` that nobody cited — that one was found by a reader asking why a file was still there |
+
+## Q8. What the live e2e suite was skipping (2026-09-06)
+
+C5 was closed on 63 passed / 10 failed / 40 skipped. The failures became § Q4. The skips became
+nothing — and a skip verifies nothing, so a third of the suite was uncounted while "C5 green" rested
+on it. `b2d0933a` closed the runner's half: 43 skips become 10, and 14 legs that had never run now
+pass. These are the legs that had never run and DO NOT pass.
+
+Not one of them is a new regression. They are newly VISIBLE, and every one of them was invisible for
+as long as the runner withheld the variable its suite asked for.
+
+MEASURED, without `test_user_state_e2e` (which deletes the catalog pod mid-run and makes everything
+after it fail for a reason that is not its own):
+`19 failed, 70 passed, 15 skipped, 1 xfailed, 6 errors in 98s`.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q8-1 | `test_medallion_e2e::test_produce_cascades_bronze_to_gold` fails | high | The core cascade proof — `POST /produce` through bronze→silver→gold. Had never run against the deployed estate |
+| Q8-2 | `POST /ingest-media` answers 503 `media ingest catalog registration failed; retry` | high | Confirmed reproducing ALONE, so not contamination. The media chain's head door |
+| Q8-3 | `test_auth_e2e::test_oidc_and_openfga_authorization_chain` fails | high | The OIDC→FGA chain end to end. Skipped until today because `LANCE_E2E_AUTH_SERVER` was never exported |
+| Q8-4 | `test_governance_e2e` — the flow, and `non_owner_cannot_rename_or_overwrite_anothers_table` | high | A governance leg asserting that a non-owner is refused. Unverified live until today |
+| Q8-5 | `test_client_direct_e2e` — zero-byte ingress commit, and ACID concurrent commits | high | Both skipped as "stack not reachable" purely because `svc()` handed them OpenFGA's gRPC port |
+| Q8-6 | `test_catalog_live` — domain-error translation fails; schema round-trip and milestone loop error | med | The catalog's own error contract |
+| Q8-7 | `test_e2e::test_unsupported_is_406` gets 401 | med | The auth door fires before content negotiation. May be correct fail-closed behaviour with a stale assertion — classify before fixing |
+| Q8-8 | `test_e2e::test_full_lifecycle` fails | med | |
+| Q8-9 | `test_outbox_crash_e2e::test_sigkilled_producer_loses_nothing` fails | high | Durability under SIGKILL. The estate's claim that the outbox loses nothing |
+| Q8-10 | `test_ray_train_e2e::test_train_to_blessed_with_full_reproducibility_capture` fails | med | Compute-plane adjacent; check the scope line before acting |
+| Q8-11 | `test_user_state_e2e` deletes the catalog pod mid-suite | med | `test_user_state_e2e.py:235` runs `kubectl delete pod -l app.kubernetes.io/component=catalog`. Legitimate for what IT asserts (state survives a restart) and destructive for every suite that runs after it. Needs ordering, isolation, or its own invocation — not removal |
+| Q8-12 | Five legs still need a SECOND tenant (`LANCE_E2E_PROJECT_B` + its token) | med | Cross-tenant credential isolation is unproven live. Provisioning a second project on the estate is the work |
+| Q8-13 | Three legs skip on a 5s `/livez` timeout while the producer serves the cascade | low | The producer is up (1 restart, 20h ago; `/livez` answers 200 by hand). A suite-robustness row — the probe is too tight for an estate under load, and a timeout that reads as "not reachable" is a skip that hides a pass |
+| Q8-14 | The new locator gate misses ~21 further dangling pointers | low | Its regex sees a row-id form only; the `§7.11` / `§2` / `Phase 1` forms escape it, across 16 files including `docs/DECISIONS.md`. Found while scouting Q7-4 |
