@@ -256,3 +256,31 @@ def test_no_production_path_writes_the_project_registry_unconditionally() -> Non
         "from an earlier read will silently discard a concurrent change — on `protected` that disarms "
         "deletion protection (diff2 F1c). Use `upsert_project`, conditional on the record's ETag:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_root: str) -> None:
+    """`primary` is a third field with the arm-never-disarm rule, and it has the sharpest loss.
+
+    `serving` and `protected` are honoured as explicit REQUESTS inside the merge; every other field
+    comes from `live` or from `_CALLER_OWNED`. A field that is neither is silently dropped — which is
+    what happened on 2026-09-06: the endpoint set `record["primary"]`, the write returned 200, and the
+    flag was not there. Measured against the deployed catalog, `POST /v1/warehouses {primary: true}`
+    answered 200 with `primary=None` on the read-back.
+
+    Losing this one does not disable a safety catch, it makes the project UNROUTABLE: `_resolve_root`
+    refuses an ambiguous set outright, so an operator applying the fix the refusal NAMES gets a 200 and
+    a still-broken tenant. The repair looks applied, which is worse than no repair.
+    """
+    _seed(control_root)
+
+    armed = warehouses.upsert_warehouse(
+        control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True
+    )
+    assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
+
+    # A later re-POST naming neither must carry it forward — same rule as serving/protected. A GitOps
+    # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
+    plain = warehouses.upsert_warehouse(
+        control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
+    )
+    assert plain.get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"

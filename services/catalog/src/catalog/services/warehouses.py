@@ -131,6 +131,7 @@ def upsert_warehouse(
     *,
     serving: str | None = None,
     protect: bool = False,
+    primary: bool = False,
 ) -> dict[str, str]:
     """Idempotent re-create of an EXISTING warehouse, CONDITIONAL on the record's ETag (diff2 F4).
 
@@ -170,6 +171,13 @@ def upsert_warehouse(
             merged["serving"] = serving
         if protect:
             merged["protected"] = "true"
+        # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from
+        # the caller's record, so a field that is neither caller-owned nor an explicit request is
+        # silently dropped. Setting `record["primary"]` at the endpoint returned 200 and wrote nothing
+        # (measured against the deployed catalog 2026-09-06). Same arm-never-disarm rule as the other
+        # two: a re-POST naming nothing carries the live value forward.
+        if primary:
+            merged["primary"] = "true"
         return merged
 
     return mutate_json(control_root, storage_options, _warehouse_key(record["id"]), merge)

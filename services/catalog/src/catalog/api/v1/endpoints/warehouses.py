@@ -215,13 +215,6 @@ async def create_warehouse(
     # demoted the marked record would stop the tenant's cascade rather than misroute it. Stored as the
     # boolean the resolver reads (`record.get("primary") is True`), and ABSENT on unmarked records so
     # every pre-2026-09-06 record stays byte-identical.
-    primary = existing.get("primary") if existing is not None else None
-    if body.primary:
-        # String "true", the shape `protected` already uses — the record is a str->str map, and one
-        # boolean in it would be the only value the store round-trips differently from its siblings.
-        primary = "true"
-    if primary:
-        record["primary"] = primary
 
     # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4). They used to end in an
     # unconditional `put_warehouse` of a record assembled from a read taken at the top of this handler —
@@ -238,6 +231,7 @@ async def create_warehouse(
                 record,
                 serving=body.serving,
                 protect=bool(body.protected),
+                primary=bool(body.primary),
             )
         except warehouses.WarehouseProjectConflict:
             # The pre-flight guard above already refuses this for the ordinary case; reaching it here
