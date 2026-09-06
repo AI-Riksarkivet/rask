@@ -744,9 +744,19 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     not_null = next(a for a in entry["quality_assertions"] if a["assertion"] == "not_null")
     assert not_null["success"] is False and not_null["column"] == "id"
 
-    # And the bad batch never promoted: no gold run for this token (grace period for the negative).
+    # And the bad batch never promoted — asserted the way `_gold_runs` exists to be asserted, by
+    # whether a NEW run produced gold. Both halves here used to name `run_id_for("aggregate_gold-<produce
+    # token>")`, which OPERATIONS above already records as an id that CANNOT EXIST under
+    # `cascadeViaPublish`: gold's trigger token is the publication `event_id`, minted inside the catalog
+    # and never returned to a caller. So this negative passed vacuously — always None, whatever the
+    # cascade did — and the recovery poll below waited out its whole budget for an id nothing would ever
+    # mint, reporting a healthy cascade as one that never recovered.
+    gold_before_recovery = _gold_runs(lineage, alice)
     time.sleep(12)
-    assert _run_states(lineage, alice).get(_run_id_for("aggregate_gold", token)) is None
+    assert _gold_runs(lineage, alice) == gold_before_recovery, (
+        f"a gold run appeared for the BLOCKED batch (token {token}) — the gate held the promotion, so nothing should have "
+        f"reached gold (new: {_gold_runs(lineage, alice) - gold_before_recovery})"
+    )
 
     # RESTORE WHAT THIS LEG CORRUPTED, at the URI it corrupted, from the rows it read before nulling
     # them. `/produce` writes the location the HEAD owns, which is not necessarily the one the catalog
@@ -754,10 +764,10 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     # bronze permanently poisoned and every later drive blocked by the gate, correctly.
     lance.write_dataset(table, bronze_uri, mode="overwrite", storage_options=opts)
     token2 = _produce(lance_ray)
-    gold2 = _run_id_for("aggregate_gold", token2)
     _poll(
-        lambda: _run_states(lineage, alice).get(gold2) == "COMPLETE",
+        lambda: _gold_runs(lineage, alice) - gold_before_recovery != set(),
         message=f"cascade did not recover after the quality-block drive (token {token2})",
+        on_tick=lambda: approve_if_held(lance_ray, token2, _bearer(alice)),
     )
 
 
