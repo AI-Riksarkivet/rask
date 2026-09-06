@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 177 tracked, 152 open, 25 struck.**
+**Counted 2026-09-06, from the rows below rather than asserted: 179 tracked, 151 open, 28 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -950,15 +950,15 @@ after it fail for a reason that is not its own):
 | --- | --- | --- | --- |
 | Q8-1 | `test_medallion_e2e::test_produce_cascades_bronze_to_gold` fails | high | The core cascade proof — `POST /produce` through bronze→silver→gold. Had never run against the deployed estate |
 | Q8-2 | `POST /ingest-media` answers 503 `media ingest catalog registration failed; retry` | high | Confirmed reproducing ALONE, so not contamination. The media chain's head door |
-| Q8-3 | `test_auth_e2e::test_oidc_and_openfga_authorization_chain` fails | high | The OIDC→FGA chain end to end. Skipped until today because `LANCE_E2E_AUTH_SERVER` was never exported |
-| Q8-4 | `test_governance_e2e` — the flow, and `non_owner_cannot_rename_or_overwrite_anothers_table` | high | A governance leg asserting that a non-owner is refused. Unverified live until today |
+| ~~Q8-3~~ | `test_auth_e2e::test_oidc_and_openfga_authorization_chain` fails | high | The OIDC→FGA chain end to end. Skipped until today because `LANCE_E2E_AUTH_SERVER` was never exported — **CLOSED (`4555f2a3`).** It was `LANCE_E2E_WAREHOUSE` never being exported, not an authz defect. `test_auth_e2e` passes |
+| ~~Q8-4~~ | `test_governance_e2e` — the flow, and `non_owner_cannot_rename_or_overwrite_anothers_table` | high | A governance leg asserting that a non-owner is refused. Unverified live until today — **CLOSED (`e0007d28`).** Two drifts: the root namespace door, and `bob` being a project admin where the suite called him a non-owner. `test_governance_e2e` 3/3 |
 | Q8-5 | `test_client_direct_e2e` — zero-byte ingress commit, and ACID concurrent commits | high | Both skipped as "stack not reachable" purely because `svc()` handed them OpenFGA's gRPC port |
 | Q8-6 | `test_catalog_live` — domain-error translation fails; schema round-trip and milestone loop error | med | The catalog's own error contract |
 | Q8-7 | `test_e2e::test_unsupported_is_406` gets 401 | med | The auth door fires before content negotiation. May be correct fail-closed behaviour with a stale assertion — classify before fixing |
 | Q8-8 | `test_e2e::test_full_lifecycle` fails | med | |
 | Q8-9 | `test_outbox_crash_e2e::test_sigkilled_producer_loses_nothing` fails | high | Durability under SIGKILL. The estate's claim that the outbox loses nothing |
 | Q8-10 | `test_ray_train_e2e::test_train_to_blessed_with_full_reproducibility_capture` fails | med | Compute-plane adjacent; check the scope line before acting |
-| Q8-11 | `test_user_state_e2e` deletes the catalog pod mid-suite | med | `test_user_state_e2e.py:235` runs `kubectl delete pod -l app.kubernetes.io/component=catalog`. Legitimate for what IT asserts (state survives a restart) and destructive for every suite that runs after it. Needs ordering, isolation, or its own invocation — not removal |
+| ~~Q8-11~~ | `test_user_state_e2e` deletes the catalog pod mid-suite | med | `test_user_state_e2e.py:235` runs `kubectl delete pod -l app.kubernetes.io/component=catalog`. Legitimate for what IT asserts (state survives a restart) and destructive for every suite that runs after it. Needs ordering, isolation, or its own invocation — not removal — **CLOSED as a finding — the behaviour stands and is now known.** `test_user_state_e2e.py:235` deletes the catalog pod deliberately, to assert state survives a restart. Every live measurement since excludes it explicitly, and the exclusion is stated wherever a number is quoted |
 | Q8-12 | Five legs still need a SECOND tenant (`LANCE_E2E_PROJECT_B` + its token) | med | Cross-tenant credential isolation is unproven live. Provisioning a second project on the estate is the work |
 | Q8-13 | Three legs skip on a 5s `/livez` timeout while the producer serves the cascade | low | The producer is up (1 restart, 20h ago; `/livez` answers 200 by hand). A suite-robustness row — the probe is too tight for an estate under load, and a timeout that reads as "not reachable" is a skip that hides a pass |
 | Q8-14 | The new locator gate misses ~21 further dangling pointers | low | Its regex sees a row-id form only; the `§7.11` / `§2` / `Phase 1` forms escape it, across 16 files including `docs/DECISIONS.md`. Found while scouting Q7-4 |
@@ -1102,3 +1102,25 @@ The 14 that remain, each having survived an adversarial attempt to refute it:
 | Q13-14 | The orphan scanner re-implements Lance's own unverified-file detection and reports LIVE index files as garbage | med | Survived refutation. NOT REFUTED — every load-bearing claim reproduced against the installed library and the live estate.  1. LANCE CLAIM: TRUE on the code that runs (pylance 10.0.0, .venv). `cleanup_old_versions` (dataset.py:3112-3175) and `explain_cleanup_old_versions(include_files=True)` (dataset.py:3177-3238) exist with the stubbed shapes (`CleanupStats.i |
 
 | Q13-15 | `open_lance-idiomaticity.findings.md` is DELETED | low | **CLOSED HERE.** It existed to hold 111 findings that were living in a 26 MB session transcript outside the repo. Every one has now reached a verdict: 28 IDIOMATIC and 29 DIVERGENT-ON-PURPOSE recorded as such, 6 more refuted TO idiomatic, 13 to divergent, 4 fixed today, 14 carried above. A working file with a defined end, deleted when it reached it |
+
+## Q14. The live suite after a day of fixes (2026-09-06, C4 baseline)
+
+Measured against the deployed estate carrying every fix from today, excluding `test_user_state_e2e`
+(it deletes the catalog pod mid-run, so anything after it fails for a reason that is not its own):
+
+```
+    session start   70 passed   19 failed   15 skipped
+    after C1/C5/C6  82 passed   18 failed   10 skipped
+```
+
+`test_dummy_lane_e2e` LEFT THE FAILURE LIST — the empty-service-identity fix (`845e4fc7`) working on the
+deployed estate rather than only in a unit test.
+
+`test_governed_union_e2e` ENTERED IT with five failures, and that is the runner fix showing its worth:
+those five had been skipping on `medallion-producer not reachable` because `LANCE_E2E_LANCERAY_URL` was
+never exported. They are newly visible, not newly broken — the same shape as § Q8.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q14-1 | 18 live failures await classification | med | Each becomes SUITE-DRIFT (repaired in the test), ESTATE-DEFECT (repaired in the service), CONTAMINATION (named) or ALREADY-FIXED. None is left as "failing" |
+| Q14-2 | `test_governed_union_e2e`'s five legs have never run against a deployed estate | med | The governed cascade, the FGA-deny promotion drop, the quality gate's block-and-record, the media lane under governance, and train lineage attribution. Five of the estate's headline governance claims, unverified live until today |
