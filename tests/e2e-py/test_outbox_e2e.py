@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from typing import Any
 
 import pytest
 import requests
@@ -66,15 +68,36 @@ def test_reconcile_sweep_drains_a_staged_outbox_event(lineage: str) -> None:
         token="e2e-outbox-probe",
     )
     run_id = event["run"]["runId"]
-    outbox.stage_event(OUTBOX_URI, _so(), run_id, json.dumps(event))
-    assert run_id in dict(outbox.list_events(OUTBOX_URI, _so()))  # staged
+    event_json = json.dumps(event)
+    # The staged object is keyed per EVENT, not per run — `<run_id>@<EVENT_TYPE>` (`outbox._object_key`),
+    # because a run id deliberately excludes the event type and one run has a START and then a COMPLETE
+    # or a FAIL. `list_events` derives its key from the FILENAME, so that is what the outbox answers with.
+    key = f"{run_id}@{event['eventType']}"
+    outbox.stage_event(OUTBOX_URI, _so(), run_id, event_json)
+    assert key in dict(outbox.list_events(OUTBOX_URI, _so()))  # staged
 
-    # Trigger the reconcile sweep (the Dapr cron's manual equivalent — token-gated).
-    resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=60)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    # Trigger the reconcile sweep (the Dapr cron's manual equivalent — token-gated), RETRYING while the
+    # cron's own tick holds the single-flight advisory lock. `_on_cron` then answers 200
+    # `{"skipped": true}` and does no work — the documented contract ("the next tick retries"), not a
+    # failure. Measured 2026-09-06 on the live estate: one sweep checks 347 datasets in 158 s against an
+    # `@every 300s` cron, so a single blind trigger lands on a busy lock about half the time.
+    # Re-stage before each attempt: a cron tick winning the lock while we wait would drain OUR event and
+    # our own tick would then honestly report 0. Re-staging keeps the assertion below at full strength.
+    body: dict[str, Any] = {}
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        if key not in dict(outbox.list_events(OUTBOX_URI, _so())):
+            outbox.stage_event(OUTBOX_URI, _so(), run_id, event_json)
+        # The client timeout must cover a whole SWEEP, not a request: this route runs it inline.
+        resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=600)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        if not body.get("skipped"):
+            break
+        time.sleep(10)
+    assert not body.get("skipped"), f"no free reconcile tick inside the budget: {body}"
 
     # The counter increments only after a successful graph ingest, so >=1 proves the event REACHED AGE...
     assert body.get("outbox_drained", 0) >= 1, body
     # ...and the drained object is deleted (not left to grow unbounded / re-ingest forever).
-    assert run_id not in dict(outbox.list_events(OUTBOX_URI, _so()))
+    assert key not in dict(outbox.list_events(OUTBOX_URI, _so()))

@@ -4,10 +4,12 @@ Proves the completion condition end to end: a table created with 2 approved data
 distributed across BOTH buckets (the manifest + _versions stay in the primary root — relative-path
 portable), a read returns ALL rows (fan-out), and an off-allowlist base is rejected 400.
 
-Skipped unless ``LANCE_E2E_CATALOG_URL`` + ``LANCE_E2E_TOKEN`` are set (deployed stack with
-``LANCE_MULTIBASE_DATA_BASES`` naming the two data buckets, and the token's user able to create the table).
-The two data buckets (``LANCE_E2E_BASE_A`` / ``LANCE_E2E_BASE_B``) must be pre-provisioned (e.g. via the
-#3-A admin API or `mc mb`). Run via ``make e2e-multibase``.
+Needs ``LANCE_E2E_CATALOG_URL`` + ``LANCE_E2E_TOKEN`` (a reachable deployed catalog whose token owns the
+parent namespace). The FAN-OUT leg additionally needs ``LANCE_E2E_BASE_A`` + ``LANCE_E2E_BASE_B`` naming
+two buckets that are BOTH on that catalog's ``LANCE_MULTIBASE_DATA_BASES`` allowlist and physically
+provisioned — the allowlist is a governance gate, not a provisioner. Multi-base is an operator opt-in
+(chart ``catalog.multibase.dataBases``), so an estate that has not opted in SKIPS that leg rather than
+failing it: a red test there would say the estate is broken when it is merely not configured.
 """
 
 from __future__ import annotations
@@ -27,8 +29,17 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-BASE_A = os.environ.get("LANCE_E2E_BASE_A", "s3://mb-a")
-BASE_B = os.environ.get("LANCE_E2E_BASE_B", "s3://mb-b")
+#: NO DEFAULTS. `s3://mb-a` / `s3://mb-b` are `scripts/e2e_stack.sh`'s install-time constants, and that
+#: script is the only thing that provisions them — so on any OTHER deployed estate the defaults named
+#: two buckets that do not exist, and the fan-out leg failed as though multi-base were broken.
+#:
+#: Multi-base is an OPERATOR OPT-IN (chart `catalog.multibase.dataBases`), and the allowlist is a
+#: GOVERNANCE gate, not a provisioner: a bucket must be both on it and physically present. Measured on
+#: this estate 2026-09-06: `LANCE_MULTIBASE_DATA_BASES` is empty, so the feature is off and the leg
+#: cannot pass. Unset means SKIP with a reason, which is the honest answer for a capability this
+#: deployment does not have — a red test would say the estate is broken when it is merely not opted in.
+BASE_A = os.environ.get("LANCE_E2E_BASE_A", "")
+BASE_B = os.environ.get("LANCE_E2E_BASE_B", "")
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
 pytestmark = pytest.mark.e2e
@@ -87,6 +98,12 @@ def catalog_ns(catalog: str) -> str:
 
 
 def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
+    if not (BASE_A and BASE_B):
+        pytest.skip(
+            "set LANCE_E2E_BASE_A + LANCE_E2E_BASE_B to two buckets that are BOTH on the deployed "
+            "catalog's LANCE_MULTIBASE_DATA_BASES allowlist and physically provisioned "
+            "(multi-base is an operator opt-in and is off on this estate)"
+        )
     import lance
 
     catalog = catalog_ns

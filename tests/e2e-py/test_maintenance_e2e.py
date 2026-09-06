@@ -64,14 +64,32 @@ def test_sweep_compacts_real_datasets_and_meters(urls: tuple[str, str]) -> None:
 
     # Trigger one sweep (the same route the Dapr cron binding POSTs on schedule),
     # authenticating exactly like the sidecar does (dapr-api-token header).
-    resp = requests.post(f"{compaction}/{BINDING}", headers=_TOKEN_HEADER, timeout=30)
+    # `plan_sweep` opens one manifest per dataset, so a tick costs what the estate is worth:
+    # measured 288 datasets at ~12 s, and 30 s left no headroom on a busier one.
+    resp = requests.post(f"{compaction}/{BINDING}", headers=_TOKEN_HEADER, timeout=120)
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
-    # It discovered the real Lance datasets the catalog wrote on RustFS, and none errored.
-    assert body["datasets"] >= 1, f"no datasets discovered in the bucket: {body}"
-    assert body["errors"] == {} or body["errors"] == [], f"a dataset failed to compact: {body['errors']}"
-    assert "fragments_removed" in body and "versions_removed" in body
+    # TWO LANES answer this route and they report different things, because on one of them the tick
+    # maintains nothing itself. `on_cron` chooses on `MAINTENANCE_WORK_TOPIC`: SET — as the deployed
+    # release sets it — the tick PLANS and publishes one unit per dataset and a subscription compacts
+    # each later, so this leg covers discovery and enqueue and the reclamation counts are not its to
+    # report. UNSET (the chart default, and every local run) it compacts serially and reports what it
+    # reclaimed. Asserting the serial shape against the queue lane is how this leg read as "the sweep
+    # is broken" while the sweep was fine.
+    assert body.get("status") != "skipped", f"an overlapping sweep was still running: {body}"
+    if body.get("status") == "enqueued":
+        # `planned` is the units, `skipped` the trash exclusions decided WITHOUT work — together they
+        # are everything discovered.
+        assert body["planned"] + body["skipped"] >= 1, f"no datasets discovered in the bucket: {body}"
+        # `not_queued` is this lane's `errors`: a unit that never reached the broker is a dataset that
+        # goes unmaintained this tick.
+        assert body["not_queued"] == 0, f"units never reached the broker: {body}"
+        assert body["published"] == body["planned"], f"published does not account for every unit: {body}"
+    else:
+        assert body["datasets"] >= 1, f"no datasets discovered in the bucket: {body}"
+        assert body["errors"] == {} or body["errors"] == [], f"a dataset failed to compact: {body['errors']}"
+        assert "fragments_removed" in body and "versions_removed" in body
 
     # The OTel sweep counter incremented in GreptimeDB (the maintenance path is observable).
     deadline = time.monotonic() + 30.0
