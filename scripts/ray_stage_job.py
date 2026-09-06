@@ -229,10 +229,14 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
     written = 0
     for batch in scanner.to_batches():
         out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage)
-        # Same overwrite contract as the in-process compute.transform_stage: enable_stable_row_ids is
-        # create-time-only, so a first write creates the target with stable ids and later runs overwrite in
-        # place keeping them. A legacy no-stable-id target is migrated once (the tabular path's reset); the
-        # media lane's silver dataset is always created BY this contract, so no reset is needed here.
+        # STILL OVERWRITE-THEN-APPEND, and deliberately so for now. `enable_stable_row_ids` is
+        # create-time-only, so the first batch creates the target and later batches append into it.
+        # The tabular head became a full-sync merge 2026-09-06 because overwrite re-mints every `_rowid`
+        # and the tier above resolves `source_rowid` against them; this lane cannot take that change
+        # batch-by-batch, because a per-batch `when_not_matched_by_source_delete` would delete the rows
+        # earlier batches just wrote. Converting it needs one merge over the whole scan (or an
+        # accumulate-then-sync), which is a streaming-shape change rather than a call swap — recorded as
+        # open work in `open_lakehouse_diff_left.md` rather than half-applied here.
         lance.write_dataset(
             out,
             to_uri,
@@ -451,6 +455,20 @@ def _mergeable(to_uri: str, so: dict[str, str]) -> bool:
     return False
 
 
+def _dataset_exists(to_uri: str, so: dict[str, str]) -> bool:
+    """Whether `to_uri` already holds a dataset — the create-vs-merge question.
+
+    A read, not a stat: an object store has no directories. Mirrors `compute._dataset_exists`, which is
+    the in-process half of the same decision; the two lanes must answer it identically or a tier gets
+    created by one and merged by the other with different guarantees.
+    """
+    try:
+        lance.dataset(to_uri, storage_options=so)
+    except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "create"
+        return False
+    return True
+
+
 def _merge_into(to_uri: str, table: pa.Table, so: dict[str, str]) -> None:
     """Converge this run's rows into the destination on the tier's key.
 
@@ -520,14 +538,25 @@ def _run_stage(
         # production cascade head and this audit could not run Ray (worker startup fails in the dev
         # sandbox), so it is recorded as a follow-up to prove on kind, not flipped on a signature read.
         _reset_if_legacy(to_uri, so)
-        lance.write_dataset(
-            _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage),
-            to_uri,
-            storage_options=so,
-            mode="overwrite",
-            data_storage_version="2.2",
-            enable_stable_row_ids=True,
-        )
+        stamped = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage)
+        # A FULL-SYNC MERGE, NOT AN OVERWRITE — the same change the in-process head took 2026-09-06.
+        # Overwrite re-mints every `_rowid`, and the tier above resolves its `source_rowid` against
+        # exactly those, so a re-derivation silently detached the whole chain (measured live: 8 of 8
+        # silver references naming bronze rows that no longer existed). `when_not_matched_by_source_delete`
+        # keeps the semantics — the run's output IS the whole tier — while identity survives.
+        if _dataset_exists(to_uri, so):
+            lance.dataset(to_uri, storage_options=so).merge_insert(
+                "id"
+            ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(stamped)
+        else:
+            lance.write_dataset(
+                stamped,
+                to_uri,
+                storage_options=so,
+                mode="create",
+                data_storage_version="2.2",
+                enable_stable_row_ids=True,
+            )
     else:
         # The destination is created with the schema the transform EMITS (see _target_schema): every
         # block lance_ray appends is cast to it positionally, so the two must be one construction.
