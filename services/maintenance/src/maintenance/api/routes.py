@@ -28,6 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.dependencies import ControlEmitterDep, DaprClientDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
+from maintenance.core.metrics import record_run
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import reconcile
 from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
@@ -94,6 +95,20 @@ async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprC
             # enqueued, and their lineage is emitted here because no subscription will ever see them.
             await emit_sweep_lineage(emitter, decided, delimiter=settings.delimiter)
             summary = {"status": "enqueued", "planned": len(items), "published": published, "not_queued": len(not_queued), "skipped": len(decided)}
+            # THE COMPLETION HALF OF THE PAIR `plan_sweep` OPENED. `record_run_started` fires inside
+            # `plan_sweep`, which both lanes call; `record_run` used to fire only inside `run_sweep`,
+            # which only the serial lane calls — so on the lane every deployment actually runs, the pair
+            # opened and never closed and `compaction_runs_total` never existed. Measured on the deployed
+            # estate 2026-09-06: started 54, datasets swept 7937, `absent(compaction_runs_total)` = 1, so
+            # the critical MaintenanceSweepMetricsMissing was paging while nothing was wrong and
+            # MaintenanceSweepNotCompleting could not fire at all.
+            #
+            # A QUEUE TICK COMPLETES WHEN THE ESTATE IS PLANNED AND THE UNITS ARE DURABLY PUBLISHED, not
+            # when they finish: the units are executed later by subscriptions that ack for themselves.
+            # Both alerts ask "is the sweep running at all", and on this lane the planner IS the sweep.
+            # Counting unit execution would emit hundreds of completions per tick and break the pairing
+            # with `started` that the rules' lost-pass arithmetic depends on.
+            record_run()
             log.info("maintenance_tick_enqueued", extra=summary)
             return summary
         results = await run_in_threadpool(run_sweep, settings)
