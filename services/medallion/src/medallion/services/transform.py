@@ -129,10 +129,10 @@ def _dispatch_stage_workflow(
     the trigger the workflow round-trips has never carried either. Defaulted empty so the seam stays
     callable without them, which is also the runner's documented unwired case.
     """
-    import dapr.ext.workflow as wf
-
+    from medallion.services.dapr_saga import DaprSagaClient
     from medallion.services.ray_submit import stage_submission_id
     from medallion.workflow import StageJobSpec, stage_run
+    from service_kit.lakehouse.saga import SagaStart
 
     stage = settings.to_namespace
     instance_id = f"stage-{stage_submission_id(stage, token, from_uri, to_uri)}"
@@ -157,37 +157,15 @@ def _dispatch_stage_workflow(
         to_id=to_id,
         run_id=run_id,
     )
-    client = wf.DaprWorkflowClient()
-    try:
-        client.schedule_new_workflow(workflow=stage_run, input=spec.model_dump(), instance_id=instance_id)
-    except Exception:
-        # A schedule failure is TWO different events wearing one exception, and they need opposite
-        # answers. "This instance already exists" means a watcher is already on this exact job and the
-        # trigger is fully handled — acking is right. Anything else (no sidecar, state store not
-        # scoped, engine down) means NOTHING is watching, and swallowing it would ack a trigger whose
-        # work never starts: the job is submitted by the workflow, so no workflow means no job at all.
-        #
-        # So the existence of the instance is CHECKED rather than assumed. An unscoped state store is
-        # the likeliest form of the second case (values.yaml scopes `medallion` for exactly this, and
-        # daprd cannot hot-reload an actor state store), and it is precisely the one a blanket swallow
-        # would render as a silent success on every delivery.
-        if not _stage_workflow_exists(client, instance_id):
-            raise
+    # THROUGH THE PORT (`service_kit.lakehouse.saga`), so this layer names no workflow engine. The
+    # reattach reasoning moved WITH the call into `DaprSagaClient.start`, which is why the port answers
+    # ALREADY_RUNNING rather than a bare success: a schedule failure is two events wearing one
+    # exception — "already watched" (handled) and "nothing is watching" (must raise) — and telling them
+    # apart is the engine adapter's job, not something every caller re-derives.
+    handle = DaprSagaClient().start(saga=stage_run, payload=spec.model_dump(), instance_id=instance_id)
+    if handle.outcome is SagaStart.ALREADY_RUNNING:
         log.info("medallion_stage_workflow_reattach", extra={"instance_id": instance_id})
     return instance_id
-
-
-def _stage_workflow_exists(client: Any, instance_id: str) -> bool:
-    """Whether `instance_id` names a workflow the engine knows about.
-
-    Read through a helper so the failure to ANSWER is not read as "absent": if the state lookup itself
-    raises, the engine is unreachable, which is the case that must RETRY — returning False there sends
-    the caller down the re-raise path, which is the answer we want for an unreachable engine too.
-    """
-    try:
-        return client.get_workflow_state(instance_id) is not None
-    except Exception:
-        return False
 
 
 class StageIdentity(NamedTuple):

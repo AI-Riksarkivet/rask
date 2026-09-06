@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 162 tracked, 138 open, 24 struck.**
+**Counted 2026-09-06, from the rows below rather than asserted: 162 tracked, 137 open, 25 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1027,7 +1027,7 @@ and the activities below it — `submit_stage`, `poll_stage`, `report_stage_outc
 
 | # | Finding | Sev | What remains |
 | --- | --- | --- | --- |
-| Q11-1 | The activity layer reaches UP to the orchestrator | med | `transform.py:132` and `train.py:329` do `import dapr.ext.workflow as wf` INSIDE a function body to start/inspect an instance. That is the seam leaking upward: a service that should only know "a work order was submitted" knows how to talk to the engine. The fix mirrors what the compute plane already has — a `WorkflowClient` protocol in `service-kit`, so a service starts a saga without naming Dapr. THIS, not an import count, is the BYO-workflow gap |
+| ~~Q11-1~~ | The activity layer reaches UP to the orchestrator | med | **CLOSED 2026-09-06 (C5).** `service_kit.lakehouse.saga` is the `SagaClient` port — two operations (`start`, `exists`), no engine named, no engine dependency, mirroring `executor.py` one layer down. `medallion/services/dapr_saga.py` is the Dapr adapter and the ONE place the engine is named on the starting path. `transform.py` and `train.py` no longer import `dapr.ext.workflow` at all. `SagaStart.ALREADY_RUNNING` moved a distinction into the port that every caller used to re-derive: a schedule failure is two events wearing one exception — "already watched" (handled) and "nothing is watching" (must raise) — and the stage lane cannot swallow the second because the saga is what submits the job at all, while the train lane correctly can because its job was already submitted. `_stage_workflow_exists` was deleted rather than left orphaned; the adapter owns it now |
 | Q11-2 | `ray_submit.py` goes around the compute port | med | Recorded in `docs/DECISIONS.md` "The compute plane is decoupled" as the remaining decoupling work: it is a module of functions naming no `capabilities`, so the port cannot describe it. The estate's one ray import outside a runner |
 | ~~Q11-3~~ | I reported BYO-workflow as "no seam at all" | low | **CORRECTED HERE.** The count I quoted (24 imports) was registration plumbing plus orchestration added together, and the conclusion drawn from it was wrong. The seam is structurally present and concentrated; what is missing is Q11-1 |
 

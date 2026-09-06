@@ -326,18 +326,23 @@ def schedule_train_watch(settings: MedallionSettings, *, token: str, model: str,
     submit, and `submit_train_job` deliberately refuses to resubmit a terminally-failed job — so a
     watcher outage would turn into a DROPPED training request. Logged loudly and acked.
     """
-    import dapr.ext.workflow as wf
-
+    from medallion.services.dapr_saga import DaprSagaClient
     from medallion.workflow import TrainJobSpec, train_run
 
     submission_id = ray_submit.train_submission_id(token)
     instance_id = f"train-{submission_id}"
     spec = TrainJobSpec(token=token, model=model, submission_id=submission_id, originator=originator, project=project)
+    # THROUGH THE PORT (`service_kit.lakehouse.saga`), so this layer names no workflow engine.
+    #
+    # THE SWALLOW STAYS, and unlike the stage lane's it is correct: a train WATCH that fails to start
+    # loses the polling, not the work — the Ray job was already submitted — so the caller returns None
+    # and the run is still recoverable from the job record. The stage lane cannot swallow, because
+    # there the saga is what submits the job at all.
     try:
-        client = wf.DaprWorkflowClient()
-        client.schedule_new_workflow(workflow=train_run, input=spec.model_dump(), instance_id=instance_id)
+        handle = DaprSagaClient().start(saga=train_run, payload=spec.model_dump(), instance_id=instance_id)
     except Exception:
         log.warning("medallion_train_watch_not_scheduled", extra={"token": token, "model": model, "instance_id": instance_id})
         return None
+    instance_id = handle.instance_id
     log.info("medallion_train_watch_scheduled", extra={"token": token, "model": model, "instance_id": instance_id})
     return instance_id
