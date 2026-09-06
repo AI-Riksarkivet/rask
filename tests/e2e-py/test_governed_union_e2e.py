@@ -61,6 +61,11 @@ S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
 S3_BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "")
 S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "")
+#: The governed catalog — the only thing that knows where a tier physically lives (rule I2). The
+#: quality-block leg used to COMPOSE `s3://<bucket>/medallion/bronze`, which is the SINGLE-TENANT
+#: path; on a project estate the mover reads the project's own warehouse root, so the leg corrupted a
+#: dataset nothing in the cascade opens and then waited for a verdict on a batch nobody processed.
+CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 
 #: The warehouse alice is granted reader on. A TENANT drive cascades under its project's own zone
 #: warehouse, not the estate root — `seed_medallion_fga.sh` links `warehouse:<zone-wh> -> namespace:
@@ -394,7 +399,7 @@ def _poll(
 
 
 def _produce(lance_ray: str) -> str:
-    headers = {"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": _idem("gu-produce")}
+    headers: dict[str, str] = {"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": _idem("gu-produce")}
     params: dict[str, str] = {}
     if PROJECT:
         # Bearer INSTEAD of the service token — see ADMIN_TOKEN.
@@ -405,7 +410,7 @@ def _produce(lance_ray: str) -> str:
             # (which this one is: the runner discovers `acme`) every produce answered 422 at header
             # validation. Only the credential differs between the two shapes; nothing else about the
             # request does.
-            headers.pop("dapr-api-token", None)
+            del headers["dapr-api-token"]
             headers["Authorization"] = f"Bearer {ADMIN_TOKEN}"
     resp = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=30)
     assert resp.status_code == 202, resp.text
@@ -598,7 +603,9 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
         "allow_http": "true",
         "virtual_hosted_style_request": "false",
     }
-    bronze_uri = f"s3://{S3_BUCKET}/medallion/bronze"
+    described = requests.post(f"{CATALOG}/v1/table/{_ds('bronze$events')}/describe", json={}, headers=alice, timeout=20)
+    assert described.status_code == 200, f"the catalog would not say where {_ds('bronze$events')} lives: {described.text}"
+    bronze_uri = described.json()["location"]
 
     # Order-independence: this test corrupts bronze IN PLACE, so bronze must exist first. Earlier tests
     # usually leave one behind, but don't depend on execution order (or on -k selections) — drive a
@@ -629,7 +636,13 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     token = uuid.uuid4().hex[:12]
     resp = requests.post(
         f"{MOVER_URL.rstrip('/')}/medallion-event",
-        json={"data": {"token": token, "dataset": _ds("bronze$events"), "namespace": _ds("bronze")}},
+        # BARE ids PLUS `project`, which is the shape `publication_trigger` actually publishes:
+        # `accepted_input_names` compares `dataset` against the mover's own `MEDALLION_FROM_DATASET`
+        # (`bronze$events`, unqualified), and `_qualified` re-applies the project at RUNTIME from the
+        # separate field. Sent qualified and project-less, the mover answered `medallion_stage_other_lane`
+        # — a ROUTING drop, which `_DROP` renders identically to a governance block, so the assertion
+        # below passed on a trigger that never reached the quality gate at all.
+        json={"data": {"token": token, "dataset": "bronze$events", "namespace": "bronze", "project": PROJECT}},
         headers={"dapr-api-token": MOVER_TOKEN},
         timeout=180,
     )
