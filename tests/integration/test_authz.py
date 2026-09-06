@@ -516,7 +516,13 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     # without a real dataset move (returns the resolved new segments + destination location).
     monkeypatch.setattr(
         "catalog.services.dataplane.rename_table",
-        lambda ns, so, segments, name, nsid: (
+        # `root` MIRRORS THE SEAM rather than being swallowed by a `**kwargs`. `4f73560b` gave
+        # `dataplane.rename_table` a keyword-only `root` and the door passes `root=settings.root`, so a
+        # double that did not name it raised `TypeError: unexpected keyword argument 'root'` INSIDE the
+        # threadpool — the door then answered 500 and this test read it as the FGA choreography failing.
+        # A `**_` would have absorbed it and absorbed the next signature change too; naming the argument
+        # is what keeps the double a faithful stand-in for the thing it replaces.
+        lambda ns, so, segments, name, nsid, *, root="": (
             [*(list(nsid) if nsid else segments[:-1]), name],
             "s3://b/db1$u2",
         ),
