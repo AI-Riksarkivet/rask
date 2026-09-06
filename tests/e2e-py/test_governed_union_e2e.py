@@ -400,7 +400,13 @@ def _produce(lance_ray: str) -> str:
         # Bearer INSTEAD of the service token — see ADMIN_TOKEN.
         params["project"] = PROJECT
         if ADMIN_TOKEN:
-            headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+            # SWAP THE CREDENTIAL, KEEP THE KEY. This replaced the whole dict, which silently dropped
+            # `Idempotency-Key` — required with no default since `2da0164c` — so on a project estate
+            # (which this one is: the runner discovers `acme`) every produce answered 422 at header
+            # validation. Only the credential differs between the two shapes; nothing else about the
+            # request does.
+            headers.pop("dapr-api-token", None)
+            headers["Authorization"] = f"Bearer {ADMIN_TOKEN}"
     resp = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=30)
     assert resp.status_code == 202, resp.text
     return resp.json()["token"]
