@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-06, from the rows below rather than asserted: 182 tracked, 154 open, 28 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 191 tracked, 158 open, 33 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1157,3 +1157,34 @@ cannot.
 | Q15-1 | Three stale bindings hijack medallion namespaces | high | `bronze-media`, `gold`, `silver-media` name warehouses holding no bytes. Deleting them is the repair and it is BLOCKED: the classifier refuses the registry delete, and the only API door (`POST /v1/namespace/{id}/drop`) is destructive beyond the binding. Records backed up to the session scratchpad. **Needs an owner decision or an unbind door** |
 | Q15-2 | The catalog has no UNBIND door | med | A binding is write-once and cleared only by dropping the namespace or deleting the warehouse. So stale residue can only be removed by an operation that also destroys data, or by hand-editing the registry — which is how this estate accumulates the residue it cannot clear |
 | Q15-3 | Nothing removes estate records a test creates | med | Five e2e warehouses for `acme`, three dead bindings. Each one silently re-points a platform namespace or makes a project unroutable (Q11 needed a `primary` marker for exactly this). A suite that mints an estate record owns removing it |
+
+## Q16. The governed-union suite, driven to a verdict (2026-09-07, C4)
+
+`test_governed_union_e2e` was the largest remaining C4 block: five failures, one estate, five
+different causes. It had been SKIPPING for long enough to accumulate them — the runner withheld
+`RASK_E2E_LANCERAY_URL`, so every repair pass that fixed what it found red passed this file by, and
+`f0b97870`'s idempotency-header fix reached its two siblings and not this one.
+
+Driven to green one cause at a time, the five split three ways, and the split is the useful part: two
+were ESTATE defects, one of them serious and silent; two were suite drift that ALLEGED a governance
+hole; one is estate residue that needs a door the catalog does not have.
+
+**Live, against the deployed estate: 5 failed → 3 passed, 2 failed.**
+
+THE PATTERN ACROSS ALL FIVE is a check that could not fail. A `DROP` that meant four different
+things; a revoke whose own helper swallowed the batch failure that voided it; a poll for a run id the
+catalog can never mint; an "outsider" who is a project admin. Each one passed, or failed, for a reason
+unrelated to what it claimed to measure — the same shape as the tolerated 409 that hid a namespace
+hijack, and the reason a green suite is not evidence until each leg is shown able to go red.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| ~~Q16-1~~ | ~~The cascade-lag tick held the event loop and the producer's own probes timed out~~ | ~~high~~ | ~~`_on_cron` awaited nothing: both readers are synchronous per-edge `httpx.get`, one tick measured fifteen seconds. 21 readiness and 7 liveness timeouts in 22 minutes against `timeoutSeconds: 1`; NotReady drops the pod from its Service, which is what made this suite skip on one run and execute on the next. `run_in_threadpool`, `bec74183`~~ |
+| Q16-2 | The Ray head presents the SHARED app token as a PRIVILEGED subject | high | `auth.dedicatedServiceCredentials` is ON here, so lineage requires `service-trainer`'s own credential and refuses the shared one by design. Every training run logged `lineage emit attempt 1 rejected: HTTP 401`, published its model and exited SUCCEEDED — all provenance lost, nothing red. Proven from the head: shared → 401, dedicated → 201. FIXED IN CODE (`96e6885f`: one helper for seed and mount, the head off infra-credentials, the ESO entry, and `deploy/ray-lance-demo.yaml` for the hand-applied head). **BLOCKED LIVE** — the key must reach `rask-infra-credentials`, which needs a `helm upgrade` or an operator's hand; the classifier refuses a Secret write and that is the right guardrail |
+| ~~Q16-3~~ | ~~Every write door 422'd: the suite sent no `Idempotency-Key`~~ | ~~high~~ | ~~Required with no default since `2da0164c`, so FastAPI refused at header validation before auth, before the lane, before any governance. Compounded by `_produce` REPLACING its whole header dict on a project estate, which dropped the key again. `d6cecc03`, `eea08ae4`~~ |
+| ~~Q16-4~~ | ~~The deny test revoked nothing, and `_tuples` hid it~~ | ~~high~~ | ~~OpenFGA fails a whole write BATCH on an absent tuple; `_tuples` tolerated that as idempotency, so one stale entry voided every revoke and reported success. `_owner_tuples` then omitted the NAMESPACE owner on the stated grounds that `seed_ownership` writes none — false here — and owner outranks the writer rung. One tuple per request, every owner listed, and the revoke VERIFIED with a `check` before anything is concluded from it. `7bc19af7`~~ |
+| ~~Q16-5~~ | ~~Two governance legs named an identity instead of asking for one~~ | ~~med~~ | ~~`bob@example.com` is not an outsider here (`team:eng` → `project:acme`, and a team member is a project admin), and `WAREHOUSE` was hardcoded to `lakehouse-wh` on an estate whose project warehouse is `acme-bucket`. `topology.OUTSIDER` already carried the first; this was the fourth suite to miss it. `c8309297`~~ |
+| ~~Q16-6~~ | ~~The quality leg corrupted a bronze nobody reads and asserted gold by an id that cannot exist~~ | ~~med~~ | ~~It composed the single-tenant path (rule I2, from the consuming end), sent a project-qualified id with no `project` so the mover answered `medallion_stage_other_lane`, and polled `run_id_for("aggregate_gold-<token>")` — which OPERATIONS already records as unmintable under `cascadeViaPublish`, so its negative passed vacuously. `db44c7f0`, `acef01a7`~~ |
+| Q16-7 | `_DROP` renders every refusal reason identically | med | `{"status": "DROP"}` is the ack for a routing drop, an unresolvable lane, an FGA denial and a held promotion. The counters and logs distinguish them; the wire does not, so a caller cannot tell governance from misrouting — which is exactly how Q16-6's assertion passed on a trigger that never reached the gate. The ack contract is deliberate (Dapr neither redelivers nor dead-letters a DROP); the opacity of the REASON is not obviously load-bearing |
+| Q16-8 | The Ray lane's pass-1 ack cannot carry a stage verdict | low | A direct drive answers SUCCESS at dispatch; the gate runs at pass 2 and answers the sidecar. Any suite asserting an outcome on the pass-1 response is asserting the in-process lane while the estate runs the Ray one. Recorded rather than fixed — the asymmetry is real and the suite now accepts both acks and asserts the verdict from lineage |
+| Q16-9 | The media 503's mechanism, with the binding evidence | high | Q15-1 and Q9-4 restated with the measurement that settles which half is wrong. `bronze$events` → `s3://lance-catalog/medallion/bronze` (no binding; the head's TELL door works). `bronze-media$objects` → `s3://lakehouse-wh/medallion/bronze-media` (bound; the head writes to `lance-catalog` and `_require_same_location` correctly refuses). The catalog resolves a registered RELATIVE location against the namespace's WAREHOUSE binding, and `register_table` refuses an absolute one — so a caller cannot dictate its own location, and no re-registration can repair this while the binding stands. `lance-catalog` is a RESERVED bucket no warehouse may claim, so a bound top-level namespace can NEVER resolve into the platform root. **The head must ASK** (`ensure_stage_output` + `from_uri` on the `medallion.media` trigger, which `/bronze-arrival` already does for the tabular lane), or the binding must be removed — and Q15-2 is the missing door |
