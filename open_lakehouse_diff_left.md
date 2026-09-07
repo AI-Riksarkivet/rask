@@ -556,7 +556,35 @@ params, headers (`X-Lance-Run-Facets`, `x-lance-originator`) and dialects. Full 
 
 ## C. Format-aware governance — what makes DIY worth it (R3–R9)
 
-### C1 · Per-base credential vending
+### C1 · Per-base credential vending — **A FALSY-ZERO BUG IN ITS GUARD, FIXED 2026-09-07**
+**`has_external_bases` could not detect the shape it exists for.** It decides whether a table may be
+DIRECT-vended, and its own docstring gives the stake: *"the STS session policy is scoped to the primary
+root bucket only, so a data-base fragment would be denied at the object store."* It asked
+`any(getattr(df, "base_id", None) …)` — a TRUTHY test. Measured on pylance 10.0.0:
+
+    plain dataset, its own files      base_id = None    falsy
+    SHALLOW CLONE, files in the base  base_id = 0       falsy   <- the case the check exists for
+    branch, files in the parent root  base_id = 0       falsy
+
+`base_id` INDEXES `base_paths`, so the first registered base is **0**, while a file under the dataset's
+own root carries `None`. The truthy test calls those identical and answered False for the canonical
+multi-base shape, so such a table would be direct-vended with a session policy that cannot reach where
+its bytes are. **Nothing goes red**: the vend SUCCEEDS and the denial lands later, at the object store,
+on whoever used the credential — the estate's recurring "the control's name is present, its enforcement
+is not", with an off-by-falsy twist.
+
+Fixed to `is not None`, pinned by `services/catalog/tests/test_base_id_zero_is_a_real_base.py` — which
+drives real datasets rather than a stub, because the subject is what pylance puts in `base_id`, and
+which pins the other direction too: a plain dataset must stay direct-vendable, since reporting every
+ordinary table as multi-base would be worse than the bug.
+
+**LATENT, NOT LIVE, and stated as such.** Both call sites are gated on
+`settings.multibase_data_base_list`, and the deployed catalog carries
+`LANCE_MULTIBASE_DATA_BASES=""` — so the guard is not reached today. It would have failed on the first
+estate that enabled the feature, which is precisely when it was needed.
+
+**The rest of the row stands**: vending per base rather than refusing, and the `session_token` seam.
+
 **What.** The vendor refuses any table whose fragments carry a `base_id` (feature-flagged) instead of
 vending per base; no package seam can carry a `session_token`, so vended STS creds cannot even travel
 through `lance_storage_options`, `s3_filesystem`, `records._s3_client` or `storage.s3_client`.

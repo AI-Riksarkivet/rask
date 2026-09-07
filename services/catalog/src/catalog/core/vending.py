@@ -353,6 +353,14 @@ def has_external_bases(location: str, storage_options: dict[str, str]) -> bool:
 
     try:
         ds = lance.dataset(location, storage_options=storage_options)
-        return any(getattr(df, "base_id", None) for frag in ds.get_fragments() for df in frag.data_files())
+        # `is not None`, NOT a truthy test, and the difference is the whole check. `base_id` INDEXES
+        # `base_paths`, so the first registered base is **0** — while a file living under the dataset's
+        # own root carries `None`. Measured on pylance 10.0.0: a plain dataset reads `None`, and a
+        # shallow clone and a branch — the canonical multi-base shapes this function exists to catch —
+        # both read `0`. A truthy test calls those two identical and answers False for the very case it
+        # was written for, so the table is direct-vended with a session policy that cannot reach where
+        # its bytes are. Nothing goes red: the VEND succeeds, and the denial lands later at the object
+        # store, on whoever used the credential.
+        return any(getattr(df, "base_id", None) is not None for frag in ds.get_fragments() for df in frag.data_files())
     except (ValueError, OSError):
         return False
