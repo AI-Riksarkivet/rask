@@ -77,20 +77,55 @@ SET_RUN_OUTPUTS: Final = "MATCH (r:Run {run_id:$rid}) SET r.outputs=$outs RETURN
 # of that run against. Empty (or no row) means the run does not exist yet, which is what keeps a
 # START event able to open a run it cannot authorize.
 RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
-LIST_RUNS: Final = (
+_LIST_RUNS_BODY: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
     "r.promotion_status, r.consumed_to_version, r.consumed_from_version"
 )
+LIST_RUNS: Final = _LIST_RUNS_BODY
+#: The widest page `list_runs_page` will build. A ceiling on the interpolated value is what lets the
+#: `LiteralString` cast below be a statement about the value rather than a way past the checker.
+MAX_RUNS_FETCH: Final = 5000
+
+
+def list_runs_page(limit: int) -> LiteralString:
+    """`LIST_RUNS` ordered newest-first and bounded — the board asks for a PAGE, not for the estate.
+
+    Ordered on `event_time`, the last-event-wins timestamp the board already sorts by, so the bound
+    keeps the rows a live board is for. Unbounded, this query returned 5,122 rows / 2.65 MB on the live
+    estate (measured 2026-09-07) against a graph with no run retention, on an endpoint polled every two
+    seconds.
+
+    THE BOUND IS AN INT LITERAL, not a bound parameter. AGE does not bind `$param` reliably outside a
+    MATCH — this module records the same hazard for a SET after an edge MERGE — and every other bounded
+    query here (`SOURCE_URI`, `DATASET_LAST_SUCCESS_OP`) writes its LIMIT as a literal for that reason.
+
+    So it is VALIDATED BEFORE INTERPOLATION, exactly as `walk_query` validates its depth: every constant
+    in this module is a `LiteralString` by construction because `core.age._sql` embeds it as raw SQL
+    inside AGE's `$$ … $$` quoting, and that type is the only thing standing between a caller's value and
+    that quoting. An int that has been range-checked carries nothing a caller chose, which is what makes
+    the cast honest rather than a way around the checker.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise TypeError(f"runs limit must be an int, got {type(limit).__name__}")
+    if limit < 1 or limit > MAX_RUNS_FETCH:
+        raise ValueError(f"runs limit must be between 1 and {MAX_RUNS_FETCH}, got {limit}")
+    return cast("LiteralString", f"{_LIST_RUNS_BODY} ORDER BY r.event_time DESC LIMIT {limit}")
+
+
 # Discovery / browse — the "what exists?" lists. Like LIST_RUNS these fetch every node and are governed in
 # Python, so a caller can browse the estate without already knowing an exact name.
 #
-# PAGINATION IS NOT UNIFORM, and this comment used to claim it was. Only `/datasets` takes offset/limit
-# (`discovery.list_datasets`, capped at _MAX_LIMIT); `/runs`, `/jobs` and `/namespaces` take neither and
-# return every row the FGA filter leaves. That is currently fine — the graph's node count is modest, and
-# `/runs` measured 272 rows on the live estate 2026-08-23 — but it is a property of the data, not of the
-# code, and nothing bounds it if the estate grows. Adding a bound to the other three is a wire-contract
-# change and a decision; saying which of them have one is not. Tags ride the Dataset node as a comma-joined string (_tags_from splits them back).
+# PAGINATION IS NOT UNIFORM. `/datasets` takes offset/limit (`discovery.list_datasets`, capped at
+# _MAX_LIMIT) and `/runs` takes a limit (`list_runs_page`); `/jobs` and `/namespaces` take neither and
+# return every row the FGA filter leaves.
+#
+# `/runs` IS THE REASON THE REMAINING TWO ARE A RISK RATHER THAN A STYLE NOTE. It carried the same
+# unbounded shape and grew out of it in fifteen days: 272 rows on 2026-08-23, 5,122 rows / 2.65 MB on
+# 2026-09-07, on an endpoint polled every two seconds against a graph with no run retention. Whether an
+# unbounded list is safe is a property of the DATA, not of the code, so it is true until it is not and
+# nothing reports the crossing. `/jobs` measures 2,429 nodes and `/namespaces` is small — both are on
+# that shape today, and both are one growth curve from where `/runs` was. Tags ride the Dataset node as a comma-joined string (_tags_from splits them back).
 LIST_DATASETS: Final = "MATCH (d:Dataset) RETURN d.name, d.namespace, d.tags"
 # The full linked column inventory for /search (P1 Search tier 1, 2026-07-11) — HAS_COLUMN-scoped so
 # only CURRENT inventory matches (pruned/overwritten columns don't resurrect via search).

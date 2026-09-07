@@ -617,13 +617,18 @@ class LineageRepository:
         fields = [SchemaField.model_validate(f) for f in json.loads(raw)] if isinstance(raw, str) else []
         return DatasetSchema(dataset=name, version=int(ver) if ver is not None else None, fields=fields)
 
-    async def list_runs(self) -> Runs:
-        """Every run's current lifecycle state, folded onto its ``(:Run)`` node in AGE.
+    async def list_runs(self, *, limit: int | None = None) -> Runs:
+        """Run lifecycle state folded onto each ``(:Run)`` node in AGE, newest first, at most ``limit``.
 
         Durable replacement for the in-memory fold: survives a restart and is shared across replicas.
         ``event_type``/``event_time`` are the last-event-wins state/updated_at; ``""`` maps back to None.
+
+        ``limit`` BOUNDS THE READ, which is the only place it can help — the caller's own slice arrives
+        after 5,122 rows have already crossed the wire (measured live 2026-09-07). ``None`` keeps the
+        unbounded shape for callers that genuinely need the whole board.
         """
-        rows = await fetch(self._pool, self._graph, cy.LIST_RUNS, columns=16)
+        query = cy.list_runs_page(limit) if limit is not None else cy.LIST_RUNS
+        rows = await fetch(self._pool, self._graph, query, columns=16)
         runs = [
             RunStatus(
                 run_id=r[0],

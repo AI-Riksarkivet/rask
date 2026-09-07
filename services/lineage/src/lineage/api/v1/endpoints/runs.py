@@ -25,6 +25,10 @@ router = APIRouter(tags=["query"])
 # audit.) The wide window is only needed when FGA can actually drop rows — auth off is pass-through,
 # so the fetch window collapses to `limit` there (§2 perf, 2026-07-11: the 2s poll was reading 2000
 # full-JSONB rows to return 500).
+#: The runs board's page and its governance headroom — the `/events` shape, for the same reason: the
+#: visibility filter runs after the read, so a page cut to size first comes back short.
+_RUNS_RETURN = 200
+_RUNS_FETCH = 2000
 _EVENTS_FETCH = 2000
 _EVENTS_RETURN = 500
 
@@ -52,15 +56,32 @@ def _column_lineage_datasets(event: dict) -> set[str]:
 
 
 @router.get("/runs")
-async def get_runs(repository: RepositoryDep, datasets: FilterDep, settings: SettingsDep) -> Runs:
+async def get_runs(
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    settings: SettingsDep,
+    limit: Annotated[int, Query(ge=1, le=_RUNS_RETURN)] = _RUNS_RETURN,
+) -> Runs:
     """Live run-status board — each run's current state folded onto its ``(:Run)`` node in Apache AGE.
 
     **Durable** (survives restart / replica-shared) and **governed** like ``/events`` and the per-dataset
     reads: a run is shown only if the caller ``can_get_metadata`` on every dataset it wrote, so the board
     can't enumerate dataset names / creators / errors outside the caller's reach. Auth off → pass-through.
+
+    **BOUNDED AT THE QUERY, newest first.** The board is polled every two seconds and the graph has no run
+    retention, so an unbounded read grows without limit: measured live 2026-09-07 it answered 5,122 runs /
+    2.65 MB, against 272 rows fifteen days earlier. A limit applied here rather than in the Cypher would
+    change nothing — the cost is the READ, and asking for one run took 2.5 s while asking for a hundred
+    took 1.4 s.
+
+    The over-fetch window is ``/events``' answer, for the same reason: governance drops rows AFTER the
+    read, so a page cut to size first comes back short — or empty — while visible runs sit below it. With
+    auth off the filter is pass-through and the headroom is pure waste, so the fetch is exactly ``limit``.
     """
-    result = await repository.list_runs()
-    result.runs = await governed(datasets, settings.fga_enabled, result.runs, lambda r: set(r.outputs))
+    fetch = _RUNS_FETCH if settings.fga_enabled else limit
+    result = await repository.list_runs(limit=fetch)
+    visible = await governed(datasets, settings.fga_enabled, result.runs, lambda r: set(r.outputs))
+    result.runs = visible[:limit]
     return result
 
 

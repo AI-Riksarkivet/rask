@@ -372,6 +372,7 @@ class _FakeRepo:
         # methods grew a depth, and the mismatch was invisible until the endpoint called them.
         self.seen_depths: dict[str, object] = {}
         self.runs: list[RunStatus] = []
+        self.runs_limit: int | None = None
         self.inputs: list[RunInput] = []
         self.write_version: int | None = None
         self.uri: str | None = None
@@ -394,8 +395,9 @@ class _FakeRepo:
     async def oldest_event_seq(self) -> int | None:
         return self.oldest
 
-    async def list_runs(self) -> Runs:
-        return Runs(runs=self.runs)
+    async def list_runs(self, *, limit: int | None = None) -> Runs:
+        self.runs_limit = limit
+        return Runs(runs=self.runs[:limit] if limit else self.runs)
 
     async def run_inputs(self, run_id: str) -> RunInputs:
         return RunInputs(run_id=run_id, inputs=self.inputs)
@@ -778,6 +780,64 @@ def test_get_runs_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
     result = asyncio.run(get_runs(cast(LineageRepository, repo), flt, settings))
     assert [r.run_id for r in result.runs] == ["r-a"]  # the run that wrote unseen "b" is dropped
+
+
+def test_the_runs_board_is_BOUNDED_at_the_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ Q3-10 / `F-LIN-04`. The board must ask the graph for a page, not for the estate.
+
+    MEASURED ON THE LIVE ESTATE 2026-09-07 and the code had already predicted it. `cypher.py` recorded
+    that `/runs` returns every row the FGA filter leaves, called that "currently fine — the graph's node
+    count is modest, and `/runs` measured 272 rows on the live estate 2026-08-23", and warned in the same
+    breath that this "is a property of the data, not of the code, and nothing bounds it if the estate
+    grows". Fifteen days later the same endpoint answered **5,122 runs / 2.65 MB**, on a board its own
+    docstring says is polled every two seconds, against a graph with no run retention
+    (`LINEAGE_RUN_RETENTION_DAYS=0`). The caveat was right and the date is what proves it.
+
+    A LIMIT THE HANDLER APPLIES IN PYTHON WOULD NOT FIX IT — the cost is the read. Asking for one run
+    cost 2.5 s and asking for a hundred cost 1.4 s, because the parameter was not a parameter: `/runs`
+    accepted `?limit=1` and returned all 5,122 rows, since FastAPI drops a query arg the signature does
+    not declare. So the bound has to reach the repository.
+    """
+    from lineage.api.v1.endpoints.runs import get_runs
+
+    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
+    settings = _settings(**_FULL_AUTH)
+    repo = _FakeRepo()
+    repo.runs = [RunStatus(run_id=f"r-{i}", outputs=["a"]) for i in range(50)]
+    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
+
+    result = asyncio.run(get_runs(cast(LineageRepository, repo), flt, settings, limit=5))
+
+    assert repo.runs_limit is not None, "the endpoint read the whole board and sliced afterwards — the cost is the READ"
+    assert len(result.runs) == 5, f"asked for 5 runs and got {len(result.runs)}"
+
+
+def test_the_runs_bound_OVER_FETCHES_so_governance_cannot_starve_a_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The half that makes the bound safe, and it is the estate's own answer one endpoint down.
+
+    `/events` reads a WIDE window when FGA is on and slices to `limit` only after governing, because a
+    page cut to size before the visibility filter comes back short — or empty — while visible rows sit
+    just below it. `/runs` is governed the same way (a run is shown only if every dataset it wrote is
+    visible), so it needs the same headroom. With auth OFF the filter is pass-through and the headroom
+    is waste, so the fetch is exactly `limit`.
+    """
+    from lineage.api.v1.endpoints.runs import get_runs
+
+    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
+    repo = _FakeRepo()
+    repo.runs = [RunStatus(run_id=f"r-{i}", outputs=["a"]) for i in range(50)]
+    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), _settings(**_FULL_AUTH), _token())
+
+    asyncio.run(get_runs(cast(LineageRepository, repo), flt, _settings(**_FULL_AUTH), limit=5))
+    governed_fetch = repo.runs_limit
+    assert governed_fetch is not None and governed_fetch > 5, (
+        f"with FGA on the board fetched exactly {governed_fetch} rows — a page cut before the visibility "
+        "filter comes back short while visible runs sit below the window"
+    )
+
+    repo.runs_limit = None
+    asyncio.run(get_runs(cast(LineageRepository, repo), flt, _settings(), limit=5))
+    assert repo.runs_limit == 5, f"with auth off the filter is pass-through, so the over-fetch is pure waste — fetched {repo.runs_limit}"
 
 
 def test_ingest_handler_binds_verified_author() -> None:

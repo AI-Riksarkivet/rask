@@ -142,9 +142,32 @@ def test_the_column_COUNT_matches_what_LIST_RUNS_returns() -> None:
     import inspect
     import re
 
-    from lineage.services import repository
-    from lineage.services.cypher import LIST_RUNS
+    from lineage.services.cypher import LIST_RUNS, list_runs_page
+    from lineage.services.repository import LineageRepository
 
-    returned = len(re.findall(r"\br\.[a-z_]+", LIST_RUNS))
-    declared = {int(m) for m in re.findall(r"cy\.LIST_RUNS,\s*columns=(\d+)", inspect.getsource(repository))}
-    assert declared == {returned}, f"LIST_RUNS returns {returned} columns and the caller declares {declared or 'none'}"
+    def _returned_columns(query: str) -> int:
+        """How many columns the query's RETURN clause actually yields.
+
+        SCOPED TO THE RETURN, because AGE's column-definition list must match that clause and nothing
+        else. Counting `r.<prop>` across the whole query conflates a projected column with an ORDER BY
+        key — the bounded page orders on `r.event_time` and was reported as returning a seventeenth
+        column it does not return.
+        """
+        body = query.split("RETURN", 1)[1]
+        for tail in (" ORDER BY ", " LIMIT ", " SKIP "):
+            body = body.split(tail, 1)[0]
+        return len(re.findall(r"\br\.[a-z_]+", body))
+
+    returned = _returned_columns(LIST_RUNS)
+    # READ FROM THE METHOD, not from the module. The board now picks between the unbounded query and a
+    # bounded page, so the `fetch(...)` call names a LOCAL rather than `cy.LIST_RUNS` — a pattern keyed
+    # on the constant's name stopped matching anything and this gate reported "the caller declares none",
+    # which is the shape of a gate that has gone blind rather than one that has found something.
+    declared = {int(m) for m in re.findall(r"columns=(\d+)", inspect.getsource(LineageRepository.list_runs))}
+    assert declared == {returned}, f"LIST_RUNS returns {returned} columns and list_runs declares {declared or 'none'}"
+
+    # AND THE BOUNDED FORM RETURNS THE SAME COLUMNS. It is built from the same body, so a column added to
+    # one arrives in both — but only while that stays true, and a page whose shape drifts from the board's
+    # is the identical 500 with a limit in front of it.
+    paged = _returned_columns(list_runs_page(10))
+    assert paged == returned, f"the bounded page returns {paged} columns and the unbounded board {returned}"
