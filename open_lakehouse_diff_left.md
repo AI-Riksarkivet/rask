@@ -339,15 +339,28 @@ the estate is on 10.0.0). That is a major-version bump of the core columnar form
 every service that reads a dataset, not a pin edit, and it deserves its own change with its own
 verification. A9 rides on it.
 
-**THE RE-VENDOR HALF, SIZED 2026-09-07** by diffing `lance_docs/ns_catalog/spec.yaml` against upstream
-`main` rather than trusting it. **The error contract is INTACT** — the 24 codes are byte-identical and
-all 54 operations are present on both sides — which is what makes §A5's coded-error work safe to have
-landed against the vendored copy. What has moved is 101 lines, ours 79 short. Besides `on` (A9),
-upstream adds `num_partitions` / `num_sub_vectors` / `num_bits` / `sample_rate` to create_index (IVF/PQ
-tuning), `num_inserted_rows` + `version` to a response, and extends `backfill_column` from UDF-backed
-columns to computed columns with an expression binding. Note Q3 above cited "lance-namespace v0.12.0
-`spec.yaml`" for its 406 decision while the vendored copy is pre-0.12.0 — the two have been out of step
-unmeasured, which is why the re-vendor is part of this row rather than a separate one.
+**THE RE-VENDOR HALF, SIZED 2026-09-07 — AND IT IS A DOC LAG, NOT A CAPABILITY LAG.** Diffing
+`lance_docs/ns_catalog/spec.yaml` against upstream `main`: the file is 79 lines short (101 changed),
+but **the error contract is byte-identical** — 24 codes, all 54 operations — which is what makes §A5's
+coded-error work safe to have landed against the vendored copy.
+
+**The first reading of that diff was WRONG and is corrected here rather than left standing.** It listed
+the index tuning params (`num_partitions` / `num_sub_vectors` / `num_bits` / `sample_rate`, and also
+`ef_construction` / `m` / `max_iterations` / `target_partition_size`), the response's
+`num_inserted_rows` + `version`, and `backfill_column`'s computed columns as things upstream had and
+rask lacked. **Every one of them is PRESENT in the vendored 0.11.1 client** — checked against
+`model_fields` rather than against the YAML. Two documents were compared where the question was what
+the CODE carries: the same "verify where the value LANDS" failure this file records six other members
+of. `dataplane.py`'s own comment already said `computed` arrived with 0.11.0.
+
+So the ONE genuine gap is `on` as an array — A9's subject, and blocked exactly as this row's head
+already measured. What the diff actually surfaced is smaller and was real: **`docs/catalog-openapi.json`
+was stale**, missing the index params the deployed app already serves, and `docs/lineage-openapi.json`
+was missing `/runs/{run_id}`. Both regenerated with `make openapi`.
+
+Note Q3 above cited "lance-namespace v0.12.0 `spec.yaml`" for its 406 decision while the vendored copy
+is pre-0.12.0. The decision stands — the `Unsupported` status is unchanged between them — but the
+citation names a file this repo does not hold.
 
 **THE RE-VENDOR HALF IS SEPARATE AND STILL OPEN, and measuring it found a second defect: `lance_docs/`
 records no source version at all.** Six files, hand-vendored, no manifest, no pinned commit, no

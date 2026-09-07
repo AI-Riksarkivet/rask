@@ -5168,6 +5168,11 @@ export interface components {
              * @description Distance metric type for vector indexes (e.g., l2, cosine, dot)
              */
             distance_type?: string | null;
+            /**
+             * Ef Construction
+             * @description Optional vector index parameter for the number of candidates evaluated during HNSW graph construction. Applies to HNSW index types.
+             */
+            ef_construction?: number | null;
             /** Id */
             id?: string[] | null;
             identity?: components["schemas"]["Identity"] | null;
@@ -5187,6 +5192,16 @@ export interface components {
              */
             lower_case?: boolean | null;
             /**
+             * M
+             * @description Optional vector index parameter for the number of edges per node in the HNSW graph. Applies to HNSW index types.
+             */
+            m?: number | null;
+            /**
+             * Max Iterations
+             * @description Optional vector index parameter for the maximum number of IVF k-means training iterations.
+             */
+            max_iterations?: number | null;
+            /**
              * Max Token Length
              * @description Optional FTS parameter for maximum token length
              */
@@ -5197,15 +5212,40 @@ export interface components {
              */
             name?: string | null;
             /**
+             * Num Bits
+             * @description Optional vector index parameter for the number of bits used by the quantizer.
+             */
+            num_bits?: number | null;
+            /**
+             * Num Partitions
+             * @description Optional vector index parameter for the number of IVF partitions. Applies to all IVF index types.
+             */
+            num_partitions?: number | null;
+            /**
+             * Num Sub Vectors
+             * @description Optional vector index parameter for the number of PQ sub-vectors. Applies to IVF_PQ only.
+             */
+            num_sub_vectors?: number | null;
+            /**
              * Remove Stop Words
              * @description Optional FTS parameter for stop word removal
              */
             remove_stop_words?: boolean | null;
             /**
+             * Sample Rate
+             * @description Optional vector index parameter for the per-partition sample rate used during IVF training.
+             */
+            sample_rate?: number | null;
+            /**
              * Stem
              * @description Optional FTS parameter for stemming
              */
             stem?: boolean | null;
+            /**
+             * Target Partition Size
+             * @description Optional vector index parameter for the target partition size. Alternative to num_partitions.
+             */
+            target_partition_size?: number | null;
             /**
              * With Position
              * @description Optional FTS parameter for position tracking
@@ -5472,6 +5512,11 @@ export interface components {
             bucket?: string | null;
             /** Id */
             id: string;
+            /**
+             * Primary
+             * @default false
+             */
+            primary: boolean;
             /** Project */
             project: string;
             /**
@@ -8673,6 +8718,8 @@ export interface components {
             created_at?: string | null;
             /** Id */
             id: string;
+            /** Primary */
+            primary?: boolean | null;
             /** Project */
             project: string;
             /** Protected */

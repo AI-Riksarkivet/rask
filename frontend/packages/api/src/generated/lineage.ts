@@ -648,8 +648,48 @@ export interface paths {
          *     **Durable** (survives restart / replica-shared) and **governed** like ``/events`` and the per-dataset
          *     reads: a run is shown only if the caller ``can_get_metadata`` on every dataset it wrote, so the board
          *     can't enumerate dataset names / creators / errors outside the caller's reach. Auth off → pass-through.
+         *
+         *     **BOUNDED AT THE QUERY, newest first.** The board is polled every two seconds and the graph has no run
+         *     retention, so an unbounded read grows without limit: measured live 2026-09-07 it answered 5,122 runs /
+         *     2.65 MB, against 272 rows fifteen days earlier. A limit applied here rather than in the Cypher would
+         *     change nothing — the cost is the READ, and asking for one run took 2.5 s while asking for a hundred
+         *     took 1.4 s.
+         *
+         *     The over-fetch window is ``/events``' answer, for the same reason: governance drops rows AFTER the
+         *     read, so a page cut to size first comes back short — or empty — while visible runs sit below it. With
+         *     auth off the filter is pass-through and the headroom is pure waste, so the fetch is exactly ``limit``.
          */
         get: operations["get_runs_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run
+         * @description ONE run's state — the point read the board is not.
+         *
+         *     "Is this run in the graph?" was answered by downloading `/runs` and scanning it, which is
+         *     O(estate) for a one-row question and became WRONG once the board was bounded: a run outside the
+         *     newest page is missing from the response while present in the graph, so the caller concluded
+         *     ABSENT and reported a provenance defect that did not exist.
+         *
+         *     GOVERNED EXACTLY LIKE THE BOARD — visible only if the caller `can_get_metadata` on every dataset
+         *     the run wrote — and an invisible run answers 404, the same as one that is not there. Deliberately
+         *     the same answer: distinguishing them would let a caller enumerate runs it may not see by watching
+         *     which ids give a different refusal.
+         */
+        get: operations["get_run_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1246,10 +1286,19 @@ export interface components {
          *     the checks it ran (from the standard ``dataQualityAssertions`` facet); ``quality_passed=False`` with a
          *     real ``dataset_version`` is the auditable record of a batch the gate blocked from promotion. Both are
          *     ``None`` / empty when the quality gate did not run.
+         *
+         *     ``consumed_from_version`` / ``consumed_to_version`` are the Lance version RANGE this run consumed
+         *     to produce the write, when it pinned one. They ride the per-dataset read so "what has this lane
+         *     consumed?" is a question about the DATASET — a scan of the whole run board answers it only while
+         *     every relevant run is still on the board, which is a property of the data rather than of the code.
          */
         ProducerInfo: {
             /** Author */
             author?: string | null;
+            /** Consumed From Version */
+            consumed_from_version?: number | null;
+            /** Consumed To Version */
+            consumed_to_version?: number | null;
             /** Dataset Version */
             dataset_version?: string | null;
             /** Error Message */
@@ -1438,6 +1487,8 @@ export interface components {
         RunStatus: {
             /** Author */
             author?: string | null;
+            /** Consumed From Version */
+            consumed_from_version?: number | null;
             /** Consumed To Version */
             consumed_to_version?: number | null;
             /** Error Message */
@@ -2462,7 +2513,9 @@ export interface operations {
     };
     get_runs_runs_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -2480,6 +2533,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Runs"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStatus"];
                 };
             };
             /** @description Validation Error */

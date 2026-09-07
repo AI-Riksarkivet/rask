@@ -1108,7 +1108,7 @@
         "type": "object"
       },
       "ProducerInfo": {
-        "description": "A run that wrote (or attempted to write) a dataset \u2014 who / when / how / version / measured size.\n\nA **failed** run (``event_type`` FAIL/ABORT) appears here too, with no\n``dataset_version`` and an ``error_message`` \u2014 it tried but produced no data.\n\n``row_count`` / ``size_bytes`` are the runtime-measured output statistics the compute recorded for\nthis write (the rows + on-disk bytes it actually produced, from the standard ``outputStatistics``\nfacet); ``None`` when the run was a dummy emit (no compute) or a failure (no data produced).\n\n``quality_passed`` is the validator gate's verdict (all assertions succeeded) and ``quality_assertions``\nthe checks it ran (from the standard ``dataQualityAssertions`` facet); ``quality_passed=False`` with a\nreal ``dataset_version`` is the auditable record of a batch the gate blocked from promotion. Both are\n``None`` / empty when the quality gate did not run.",
+        "description": "A run that wrote (or attempted to write) a dataset \u2014 who / when / how / version / measured size.\n\nA **failed** run (``event_type`` FAIL/ABORT) appears here too, with no\n``dataset_version`` and an ``error_message`` \u2014 it tried but produced no data.\n\n``row_count`` / ``size_bytes`` are the runtime-measured output statistics the compute recorded for\nthis write (the rows + on-disk bytes it actually produced, from the standard ``outputStatistics``\nfacet); ``None`` when the run was a dummy emit (no compute) or a failure (no data produced).\n\n``quality_passed`` is the validator gate's verdict (all assertions succeeded) and ``quality_assertions``\nthe checks it ran (from the standard ``dataQualityAssertions`` facet); ``quality_passed=False`` with a\nreal ``dataset_version`` is the auditable record of a batch the gate blocked from promotion. Both are\n``None`` / empty when the quality gate did not run.\n\n``consumed_from_version`` / ``consumed_to_version`` are the Lance version RANGE this run consumed\nto produce the write, when it pinned one. They ride the per-dataset read so \"what has this lane\nconsumed?\" is a question about the DATASET \u2014 a scan of the whole run board answers it only while\nevery relevant run is still on the board, which is a property of the data rather than of the code.",
         "properties": {
           "author": {
             "anyOf": [
@@ -1120,6 +1120,28 @@
               }
             ],
             "title": "Author"
+          },
+          "consumed_from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed From Version"
+          },
+          "consumed_to_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed To Version"
           },
           "dataset_version": {
             "anyOf": [
@@ -1562,6 +1584,17 @@
               }
             ],
             "title": "Author"
+          },
+          "consumed_from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed From Version"
           },
           "consumed_to_version": {
             "anyOf": [
@@ -4404,9 +4437,21 @@
     },
     "/runs": {
       "get": {
-        "description": "Live run-status board \u2014 each run's current state folded onto its ``(:Run)`` node in Apache AGE.\n\n**Durable** (survives restart / replica-shared) and **governed** like ``/events`` and the per-dataset\nreads: a run is shown only if the caller ``can_get_metadata`` on every dataset it wrote, so the board\ncan't enumerate dataset names / creators / errors outside the caller's reach. Auth off \u2192 pass-through.",
+        "description": "Live run-status board \u2014 each run's current state folded onto its ``(:Run)`` node in Apache AGE.\n\n**Durable** (survives restart / replica-shared) and **governed** like ``/events`` and the per-dataset\nreads: a run is shown only if the caller ``can_get_metadata`` on every dataset it wrote, so the board\ncan't enumerate dataset names / creators / errors outside the caller's reach. Auth off \u2192 pass-through.\n\n**BOUNDED AT THE QUERY, newest first.** The board is polled every two seconds and the graph has no run\nretention, so an unbounded read grows without limit: measured live 2026-09-07 it answered 5,122 runs /\n2.65 MB, against 272 rows fifteen days earlier. A limit applied here rather than in the Cypher would\nchange nothing \u2014 the cost is the READ, and asking for one run took 2.5 s while asking for a hundred\ntook 1.4 s.\n\nThe over-fetch window is ``/events``' answer, for the same reason: governance drops rows AFTER the\nread, so a page cut to size first comes back short \u2014 or empty \u2014 while visible runs sit below it. With\nauth off the filter is pass-through and the headroom is pure waste, so the fetch is exactly ``limit``.",
         "operationId": "get_runs_runs_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "dapr-api-token",
@@ -4484,6 +4529,102 @@
           }
         ],
         "summary": "Get Runs",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/runs/{run_id}": {
+      "get": {
+        "description": "ONE run's state \u2014 the point read the board is not.\n\n\"Is this run in the graph?\" was answered by downloading `/runs` and scanning it, which is\nO(estate) for a one-row question and became WRONG once the board was bounded: a run outside the\nnewest page is missing from the response while present in the graph, so the caller concluded\nABSENT and reported a provenance defect that did not exist.\n\nGOVERNED EXACTLY LIKE THE BOARD \u2014 visible only if the caller `can_get_metadata` on every dataset\nthe run wrote \u2014 and an invisible run answers 404, the same as one that is not there. Deliberately\nthe same answer: distinguishing them would let a caller enumerate runs it may not see by watching\nwhich ids give a different refusal.",
+        "operationId": "get_run_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Run",
         "tags": [
           "query"
         ]

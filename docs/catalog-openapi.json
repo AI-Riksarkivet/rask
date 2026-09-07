@@ -3714,6 +3714,19 @@
             "description": "Distance metric type for vector indexes (e.g., l2, cosine, dot)",
             "title": "Distance Type"
           },
+          "ef_construction": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the number of candidates evaluated during HNSW graph construction. Applies to HNSW index types.",
+            "title": "Ef Construction"
+          },
           "id": {
             "anyOf": [
               {
@@ -3767,6 +3780,32 @@
             "description": "Optional FTS parameter for lowercase conversion",
             "title": "Lower Case"
           },
+          "m": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the number of edges per node in the HNSW graph. Applies to HNSW index types.",
+            "title": "M"
+          },
+          "max_iterations": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the maximum number of IVF k-means training iterations.",
+            "title": "Max Iterations"
+          },
           "max_token_length": {
             "anyOf": [
               {
@@ -3792,6 +3831,45 @@
             "description": "Optional name for the index. If not provided, a name will be auto-generated.",
             "title": "Name"
           },
+          "num_bits": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the number of bits used by the quantizer.",
+            "title": "Num Bits"
+          },
+          "num_partitions": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the number of IVF partitions. Applies to all IVF index types.",
+            "title": "Num Partitions"
+          },
+          "num_sub_vectors": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the number of PQ sub-vectors. Applies to IVF_PQ only.",
+            "title": "Num Sub Vectors"
+          },
           "remove_stop_words": {
             "anyOf": [
               {
@@ -3804,6 +3882,19 @@
             "description": "Optional FTS parameter for stop word removal",
             "title": "Remove Stop Words"
           },
+          "sample_rate": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the per-partition sample rate used during IVF training.",
+            "title": "Sample Rate"
+          },
           "stem": {
             "anyOf": [
               {
@@ -3815,6 +3906,19 @@
             ],
             "description": "Optional FTS parameter for stemming",
             "title": "Stem"
+          },
+          "target_partition_size": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional vector index parameter for the target partition size. Alternative to num_partitions.",
+            "title": "Target Partition Size"
           },
           "with_position": {
             "anyOf": [
@@ -4397,6 +4501,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "primary": {
+            "default": false,
+            "title": "Primary",
+            "type": "boolean"
           },
           "project": {
             "title": "Project",
@@ -11583,6 +11692,17 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "primary": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary"
           },
           "project": {
             "title": "Project",
