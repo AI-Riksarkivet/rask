@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 144 open, 78 struck.**
-That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 223 tracked, 143 open, 80 struck.**
+That splits into 59 lettered rows (51 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -935,13 +935,128 @@ catalog registry / warehouse roots; create the Dataset vertex from on-disk `line
 **Where.** `lineage/api/dapr.py:302-310`, `services/consumer.py:33-35`, `core/config.py:70-79`.
 **Closes it.** Q6; `enforce_output_authz` as the stamped subject on the bus door too.
 
-### E3 · Run state regresses on out-of-order ingest
-**Where.** `repository.py:98-110` (last-delivery-wins), fed by outbox drain and DLQ replay.
-**Closes it.** Sticky terminal state; a START-after-COMPLETE test.
+### ~~E3 · Run state regresses on out-of-order ingest~~ — FIXED 2026-09-08 (`cypher.py`)
+**Where.** `cypher.py::MERGE_RUN` — `r.event_type=$et, r.event_time=$tm, r.author=$au, r.producer=$pr,
+r.error_message=$err`, five properties assigned last-DELIVERY-wins beside six that had already been made
+conditional. Fed by Dapr redelivery, the `POST /admin/dlq/{run_id}/replay` door and external
+OpenLineage producers over HTTP — none of which delivers in order.
 
-### E4 · `GET /events` is a lossy subset of the graph, and notifications replays from it
-**Where.** `ingest.py:261-264`, `consumer.py:445-454`, `repository.py:1295-1296` (20 000-row prune per
-insert). **Closes it.** Feed row inside the ingest transaction; time-based retention.
+**NOT A HYPOTHETICAL — it had already fired.** Measured on the deployed graph 2026-09-07: run
+`f280fd32-617d-5292-9323-993d021bb79e`, the cascade's `derive_media` writing `silver-media$features`,
+holds two terminal events in the durable feed —
+
+    seq 118723   FAIL       2026-09-07T13:30:31.410352+00:00
+    seq 118724   COMPLETE   2026-09-07T13:29:50.154780+00:00
+
+FAIL delivered first, COMPLETE second, but the COMPLETE is stamped **41 s earlier**. The graph reported
+that run **COMPLETE**, and `GET /runs/<id>` served `started_at` 13:30:31 with `updated_at` 13:29:50 — a
+run that finished before it began. The erased `error_message` was
+*"catalog could not say where 'bronze-media$objects' lives: HTTP 503"*, so a real cascade failure was
+badged a success in the one place the estate records what happened. Two consumers read that badge:
+`_fold_writes` marks a dataset failed only from a producing run's FAIL/ABORT, and `LATEST_WRITE` filters
+`WHERE r.event_type = 'COMPLETE'`.
+
+**Closed with TWO rules, because neither covers the other.** `MERGE_RUN` now binds one `supersedes`
+predicate and gates the whole state family on it: an event OLDER than what is stored never writes (the
+measured case — both terminal, so only time separates them), and a NON-terminal event never overwrites a
+terminal one whatever its stamp (the row's own START-after-COMPLETE case, which a time test alone lets
+through). Terminal-to-terminal is still decided by time, so a retry that genuinely succeeds later
+supersedes. `started_at` became the EARLIEST time seen rather than the first DELIVERED one; `events_count`
+stays unguarded because it counts deliveries.
+
+**Verified where it lands, not where it is configured.** The `WITH`-bound predicate was probed against
+the deployed AGE 1.5.0 before being written — that seam has a known quirk (a `SET` fused to a MERGE on an
+EDGE drops `$params`, which is why four statements in `cypher.py` are split out), so a guard AGE silently
+ignored would have looked identical in the source. Then built with Dagger (`e3-runstate`), deployed to
+`rask-lineage`, and driven through the real HTTP door: FAIL@13:30:31 → COMPLETE@13:29:50 **blocked** →
+START@14:00:00 **blocked** → ABORT@14:05:00 **applied**, ending `started_at` 13:29:50 / `events_count` 4.
+The corrupted live run was then healed by replaying its own FAIL event from the feed through the fixed
+door — it reads `FAIL` with its error message restored.
+
+**Gates.** `tests/e2e-py/test_lineage_e2e.py::test_a_run_state_is_decided_by_event_time_not_by_delivery_order`
+replays the measured shape against real AGE; `tests/unit/test_a_run_state_does_not_regress.py` is the
+drift half — DERIVED from `MERGE_RUN`'s own source, so a new `r.foo=$foo` fails there (it names all five
+at `HEAD~1`), and it pins `cypher._TERMINAL` equal to `postgres.TERMINAL_TYPES`, the two spellings of
+"terminal" that nothing else keeps together.
+
+### ~~E4 · `GET /events` is a lossy subset of the graph, and notifications replays from it~~ — FIXED 2026-09-08
+**Where.** `consumer.py::record_event_best_effort` (own connection, opened AFTER `ingest_event`'s
+transaction had already committed, swallowing every exception into a WARNING), `postgres.PRUNE_EVENTS`,
+`config.py` `events_retention` (default 20 000), run per insert by `repository.record_event`.
+
+**BOTH HALVES WERE WORSE THAN THE ROW SAID.**
+
+*The lossiness was structural, not probabilistic.* The feed write happened on a second connection after
+the graph transaction committed, on the stated ground that *"a feed-write failure must never break
+ingest (the authoritative AGE graph write already succeeded)"*. A connection error, an eviction or a
+statement timeout between the two therefore left an event permanently in the graph and permanently
+absent from the feed — undetectable afterwards, because the two stores share no key to reconcile on,
+and traced only by a WARNING whose `extra=` fields `kubectl logs` drops. FOUR call sites (HTTP ingest,
+the JetStream consumer, the DLQ replay door, the reconcile relay) each carried their own paragraph
+explaining that the second call must not be forgotten. `backfill_write` had the same split: four Cypher
+statements deliberately made atomic, and its feed row left outside them.
+
+*The retention was a window in **bigserial**, not in rows and not in time.* `DELETE … WHERE seq <=
+MAX(seq) - 20000`, with the knob read as "keep 20 000 events". `INSERT_EVENT` is `ON CONFLICT DO
+NOTHING` and Postgres consumes the sequence value BEFORE the conflict check, so **every rejected
+redelivery burned a seq without leaving a row.** Measured on the deployed feed 2026-09-08:
+
+    seq window 101229…121228 = 20 000     rows retained = 3 133     (84.3% burned on duplicates)
+    oldest retained 2026-08-31T20:13Z     newest 2026-09-07T21:56Z     7 360 kB
+
+The horizon shortened exactly when redelivery rose — when a consumer is most likely to be behind. It
+had already cost: `notifications_feed_gaps_total` in GreptimeDB, one increment per reconciler pass that
+found the feed pruned below its cursor, reads **0 → 559 on 2026-08-29 and 0 → 1 537 on 2026-08-30**,
+flat 0 for the eight days since. 2 096 passes that could not tell whether anything had been lost.
+
+**Closed.** `ingest_event` and `backfill_write` write their feed row inside their own graph
+transaction — one write, nothing to keep in step, and a failure retries BOTH (the graph MERGEs, the
+feed is `ON CONFLICT DO NOTHING`, so the stricter contract costs nothing). `record_event_best_effort`
+and `feed_fields` are gone; `record_event` survives only as a declared seeding primitive with no
+production caller. Retention became `LINEAGE_EVENTS_RETENTION_DAYS` (default 7, the horizon the feed
+happened to hold) over a new `received_at timestamptz DEFAULT now()` — the ESTATE'S clock, never the
+producer-supplied `event_time`, which this service stores as an unparsed string. It runs BATCHED on
+the reconcile tick under that sweep's single-flight lock, not on every insert: the feed's hottest path
+no longer pays for a DELETE per event, and two replicas can no longer race the same delete.
+
+**Verified where it lands.** Built with Dagger (`e4-feed`), deployed to `rask-lineage`, and observed:
+the boot DDL created `received_at` + `lineage_events_received_at` on the live database (existing rows
+backfilled to the upgrade moment, so the first pass cannot delete history it cannot date); an event
+POSTed to the real `/api/v1/lineage` door landed in the graph AND the feed with a database-stamped
+arrival; a row backdated past the window was deleted by the reconcile tick at 22:37:16 (3 182 → 3 181),
+and `pruned_events` now rides the sweep report on every tick. The window is a chart value
+(`services.lineage.eventsRetentionDays`, beside `runRetentionDays`) rather than a code-only default, so
+an operator can say how long an outage this estate's feed must survive.
+
+**Gates.** `tests/e2e-py/test_lineage_e2e.py` — a feed write that fails takes the graph write with it
+(RED against the pre-fix body: the failure was swallowed and ingest reported success), and the prune
+drops exactly the rows received outside the window. `tests/unit/test_the_events_feed_has_one_door.py`
+is the drift half: both graph writers must write their feed row in-transaction, no method may write it
+on its own connection, and no module may reintroduce a best-effort projection (AST, not a text scan —
+the name is discussed in prose). `tests/unit/test_lineage_auth.py` pins that recording an event issues
+no DELETE; `tests/unit/test_reconcile.py` pins `pruned_events` on every tick, present even at zero,
+because a key that appears only when it did something makes "nothing was pruned" and "the pass never
+ran" the same observation.
+
+### E7 · The lakehouse zone polls `/events` unauthenticated, forever
+**Observed 2026-09-08** while verifying § E4, in `rask-lineage`'s own access log:
+
+    10.42.0.147 - "GET /events?limit=1&summary=true HTTP/1.1" 401 Unauthorized
+
+26 of the last 500 log lines, steady. `10.42.0.147` is `rask-web-lakehouse`, the zone's SSR server —
+so a zone panel is polling a governed endpoint it has never once been able to read, and the failure is
+invisible from the zone (a 401 renders as an empty feed, which is also what an idle estate looks like).
+
+**NOT a lineage defect, and the contrast is the evidence.** The notifications reconciler reaches the
+same feed correctly from `10.42.0.48` — `GET /events?limit=500&summary=false` → 200, `lineage_feed_reconciled`
+every 30 s — because it sends lineage's service-door PAIR (`dapr-api-token` + `x-lance-service-identity`,
+both or neither, see `reconciler._headers`). The zone sends neither, and SSR has no user token on that
+path.
+
+**Closes it.** Decide which identity that panel reads with — the zone's own service identity, or the
+viewer's token forwarded from the BFF — and make the failure visible in the zone rather than an empty
+list. Edge/zone work: this row is recorded here because it was measured here, and belongs to
+`open_gateway.md` or the frontend register when it is worked.
 
 ### E5 · Unbounded growth, O(history) hot paths, no default pruning
 
@@ -973,9 +1088,25 @@ went **5,514 -> 5,586 Run**, 1,230 -> 1,236 Dataset, 2,429 -> 2,460 Job over a s
 
 ### E6 · Model gaps
 **What.** Versions are `WROTE` edge properties (one per run+dataset); no branch/tag/clone/base
-representation; `parent` facets parsed and discarded; column lineage latest-only; rename strands history
-on the old vertex. **Closes it.** Version and branch nodes; persist `parent`; clone edge (C3); rename
-carries history.
+representation; the `parent` run facet is not represented; column lineage latest-only; rename strands
+history on the old vertex. **Closes it.** Version and branch nodes; persist `parent`; clone edge (C3);
+rename carries history.
+
+**THE `parent` CLAUSE IS A TWO-SIDED GAP, measured 2026-09-08, and the row's wording hid half of it.**
+It said "parsed and discarded". It is not parsed: `services/lineage` contains **no `parent` handling of
+any kind** — grep the whole service and the only hit is `Path(__file__).parent`. So the ingest side
+would drop it if it arrived.
+
+**AND IT DOES NOT ARRIVE.** `lineage_kit` can stamp it — `schemas.py:222` renders the facet and
+`runs.py:137` / `stage.py:51` / `actor.py:55,87` pass a parent — but on the deployed estate:
+
+    0 of 3 181 durable feed events carry `run.facets.parent`
+    0 `(:Run)` nodes record any parent
+
+So fixing only the consumer changes nothing observable, and fixing only the producer writes a facet
+into a store that drops it. That ordering is the finding: this row needs BOTH halves in one change, and
+a test that drives a real cascade rather than a synthetic event — the cascade is the only producer with
+a parent to declare, and it is currently declaring none.
 
 ---
 
