@@ -440,6 +440,17 @@ class LineageRepository:
         rows = await fetch(self._pool, self._graph, cy.bounded_walk(cy.DOWNSTREAM, depth), {"name": name}, columns=2)
         return Neighbors(dataset=name, related=[DatasetRef(name=r[0], namespace=r[1]) for r in rows])
 
+    async def run_status(self, run_id: str) -> RunStatus | None:
+        """ONE run's lifecycle state, or ``None`` when the graph does not have it.
+
+        A POINT READ, and the distinction is the whole reason it exists: "is this run in the graph?"
+        was answered by downloading the board and scanning it, which is O(estate) for a one-row
+        question — and became WRONG once the board was bounded, because a run outside the newest page
+        is absent from the response while being present in the graph.
+        """
+        rows = await fetch(self._pool, self._graph, cy.RUN_BY_ID, {"rid": run_id}, columns=16)
+        return self._run_status_from(rows[0]) if rows else None
+
     async def run_inputs(self, run_id: str) -> RunInputs:
         """One run's direct inputs with the pinned version it read on each (the READ-edge version).
 
@@ -629,29 +640,36 @@ class LineageRepository:
         """
         query = cy.list_runs_page(limit) if limit is not None else cy.LIST_RUNS
         rows = await fetch(self._pool, self._graph, query, columns=16)
-        runs = [
-            RunStatus(
-                run_id=r[0],
-                job=(r[1] or None),
-                author=(r[2] or None),
-                state=(r[3] or None),
-                progress_done=r[4],
-                progress_total=r[5],
-                error_message=(r[6] or None),
-                started_at=(r[7] or None),
-                updated_at=(r[8] or None),
-                events=int(r[9] or 0),
-                outputs=_tags_from(r[10]),
-                operation=(r[11] or None),
-                source_run_id=(r[12] or None),
-                promotion_status=(r[13] or None),
-                consumed_to_version=(r[14] if len(r) > 14 and isinstance(r[14], int) and r[14] >= 0 else None),
-                consumed_from_version=(r[15] if len(r) > 15 and isinstance(r[15], int) and r[15] >= 0 else None),
-            )
-            for r in rows
-        ]
+        runs = [self._run_status_from(r) for r in rows]
         runs.sort(key=lambda run: run.updated_at or "", reverse=True)
         return Runs(runs=runs)
+
+    @staticmethod
+    def _run_status_from(r: list[Any]) -> RunStatus:
+        """One AGE row of `LIST_RUNS`' projection as a `RunStatus`.
+
+        Shared by the board and the point read so the two cannot answer different shapes for the same
+        run — they already share the projection (`RUN_BY_ID` is built from `LIST_RUNS`' body), and a
+        second hand-written mapping is where that agreement would quietly end.
+        """
+        return RunStatus(
+            run_id=r[0],
+            job=(r[1] or None),
+            author=(r[2] or None),
+            state=(r[3] or None),
+            progress_done=r[4],
+            progress_total=r[5],
+            error_message=(r[6] or None),
+            started_at=(r[7] or None),
+            updated_at=(r[8] or None),
+            events=int(r[9] or 0),
+            outputs=_tags_from(r[10]),
+            operation=(r[11] or None),
+            source_run_id=(r[12] or None),
+            promotion_status=(r[13] or None),
+            consumed_to_version=(r[14] if len(r) > 14 and isinstance(r[14], int) and r[14] >= 0 else None),
+            consumed_from_version=(r[15] if len(r) > 15 and isinstance(r[15], int) and r[15] >= 0 else None),
+        )
 
     async def list_all_columns(self) -> list[tuple[str, str]]:
         """Every (dataset, field) in the CURRENT column inventory — the /search column tier."""

@@ -86,12 +86,15 @@ class ProvenanceRefused(Exception):
 class LineageProvenanceReader:
     """Answers "is this ingest run in the graph?" against the lineage service's runs board.
 
-    **A PRESENT run is remembered.** The board is the estate's whole run list — the endpoint takes no
-    run-id filter and no page (`services/lineage/.../endpoints/runs.py`) — so answering this question
-    costs one download of every run the caller may see, plus a linear scan. `GET /ingests/{run_id}`
-    asks it on every read of a COMPLETE run, and the compute zone POLLS that endpoint, so a finished
-    run re-downloaded the whole board every couple of seconds for as long as anyone had its page open
-    (ING-14).
+    **ASKED AS A POINT READ** — `GET /runs/{run_id}`, which the graph answers from
+    `MATCH (r:Run {run_id: $rid})`. The board is not the right question for a one-row answer: it costs
+    a download of every run the caller may see plus a linear scan, and `GET /ingests/{run_id}` asks
+    this on every read of a COMPLETE run while the compute zone POLLS that endpoint (ING-14). It is
+    also no longer a CORRECT question — `/runs` is bounded to its newest page, so a run older than
+    that page is absent from the response while present in the graph, and a scan would report a
+    provenance defect that does not exist.
+
+    **A PRESENT run is remembered**, so a settled verdict costs nothing on later reads.
 
     Only the TRUE answer is memoized, and that asymmetry is the point: a run present in the graph is
     present permanently, while "absent" is a snapshot of a race — the ingest run reaches COMPLETE
@@ -129,7 +132,7 @@ class LineageProvenanceReader:
             # ingestion at `/api/v1/lineage`). Guessing `/v1/runs` from the module layout returns a
             # 404, which this method's except-branch would have reported as "graph unreachable" —
             # a wrong path and a down service would have been indistinguishable.
-            response = shared_client().get(f"{lineage_base_url()}/runs", headers=_service_headers(), timeout=TIMEOUT_SECONDS)
+            response = shared_client().get(f"{lineage_base_url()}/runs/{target}", headers=_service_headers(), timeout=TIMEOUT_SECONDS)
             # BEFORE raise_for_status, so a refusal never reaches the generic handler below. This is
             # the whole fix: a 401 used to fall into `except Exception` and be reported as an outage,
             # which the endpoint then rendered as "no defect".
@@ -140,14 +143,19 @@ class LineageProvenanceReader:
                     response.status_code,
                 )
                 raise ProvenanceRefused(f"lineage refused the provenance read with {response.status_code}")
+            # 404 IS AN ANSWER — "the graph does not have this run" — not an outage. Lineage returns it
+            # both for a run that is absent and for one this caller may not see, deliberately: telling
+            # the two apart would let a caller enumerate runs it cannot read by watching which ids
+            # refuse differently.
+            if response.status_code == 404:
+                return False
             response.raise_for_status()
-            runs = response.json().get("runs") or []
+            found = str((response.json() or {}).get("run_id") or "") == target
         except ProvenanceRefused:
             raise
         except Exception:
             logger.debug("lineage graph unreachable while resolving run %s", run_id, exc_info=True)
             return None
-        found = any(isinstance(run, dict) and run.get("run_id") == target for run in runs)
         if found:
             with self._lock:
                 self._present[target] = None

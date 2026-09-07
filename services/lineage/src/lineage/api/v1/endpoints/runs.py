@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, governed, is_external_source
-from lineage.schemas import Events, RunInputs, Runs
+from lineage.schemas import Events, RunInputs, Runs, RunStatus
 from lineage.services.repository import EventRecord
 
 
@@ -83,6 +83,29 @@ async def get_runs(
     visible = await governed(datasets, settings.fga_enabled, result.runs, lambda r: set(r.outputs))
     result.runs = visible[:limit]
     return result
+
+
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str, repository: RepositoryDep, datasets: FilterDep, settings: SettingsDep) -> RunStatus:
+    """ONE run's state — the point read the board is not.
+
+    "Is this run in the graph?" was answered by downloading `/runs` and scanning it, which is
+    O(estate) for a one-row question and became WRONG once the board was bounded: a run outside the
+    newest page is missing from the response while present in the graph, so the caller concluded
+    ABSENT and reported a provenance defect that did not exist.
+
+    GOVERNED EXACTLY LIKE THE BOARD — visible only if the caller `can_get_metadata` on every dataset
+    the run wrote — and an invisible run answers 404, the same as one that is not there. Deliberately
+    the same answer: distinguishing them would let a caller enumerate runs it may not see by watching
+    which ids give a different refusal.
+    """
+    run = await repository.run_status(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    visible = await governed(datasets, settings.fga_enabled, [run], lambda r: set(r.outputs))
+    if not visible:
+        raise HTTPException(status_code=404, detail="run not found")
+    return visible[0]
 
 
 @router.get("/runs/{run_id}/inputs")

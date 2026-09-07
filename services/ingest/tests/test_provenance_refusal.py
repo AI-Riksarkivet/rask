@@ -73,7 +73,7 @@ def test_a_present_run_is_still_found(monkeypatch: pytest.MonkeyPatch) -> None:
     target = lineage_run_id("run-42")
 
     def _ok(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
-        return httpx.Response(200, json={"runs": [{"run_id": target}]}, request=httpx.Request("GET", url))
+        return httpx.Response(200, json={"run_id": target}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr("httpx.Client.get", _ok)
 
@@ -85,7 +85,7 @@ def test_an_ABSENT_run_is_False_not_None(monkeypatch: pytest.MonkeyPatch) -> Non
     stay distinguishable from every flavour of "we could not tell"."""
 
     def _empty(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
-        return httpx.Response(200, json={"runs": []}, request=httpx.Request("GET", url))
+        return httpx.Response(404, json={"detail": "run not found"}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr("httpx.Client.get", _empty)
 

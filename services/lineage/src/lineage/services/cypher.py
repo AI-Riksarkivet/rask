@@ -83,6 +83,10 @@ _LIST_RUNS_BODY: Final = (
     "r.promotion_status, r.consumed_to_version, r.consumed_from_version"
 )
 LIST_RUNS: Final = _LIST_RUNS_BODY
+#: ONE run's state, projected identically to the board so both answer the same shape. Built from the
+#: same body rather than written out, because a column added to the board must arrive here too — the
+#: caller declares a column count and a mismatch is a 500, not a short row.
+RUN_BY_ID: Final = _LIST_RUNS_BODY.replace("MATCH (r:Run)", "MATCH (r:Run {run_id:$rid})", 1)
 #: The widest page `list_runs_page` will build. A ceiling on the interpolated value is what lets the
 #: `LiteralString` cast below be a statement about the value rather than a way past the checker.
 MAX_RUNS_FETCH: Final = 5000
