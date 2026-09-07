@@ -13,9 +13,6 @@ MinIO, AWS S3, Ceph RGW, GCS via S3 interop. The design is
 * :class:`StsVendor` — STS ``AssumeRole`` + an inline session policy: short-TTL,
   per-table, read/write-scoped tokens. For backends that implement plain ``AssumeRole``
   (AWS, MinIO, Ceph RGW) — NOT RustFS.
-* :class:`StaticPrefixVendor` — hands out a pre-provisioned per-bucket key
-  (long-lived). For simple setups (e.g. a static MinIO/HMAC key, or GCS interop)
-  where direct client I/O is wanted but STS isn't configured.
 * :class:`ModeBVendor` — ``vend`` returns ``None``: no credential ever leaves the
   catalog; the client uses the server-mediated (Arrow-IPC) data endpoints. The
   simplest, backend-agnostic default — nothing is delegated.
@@ -34,11 +31,11 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
-from service_kit.lakehouse.objectfs import lance_storage_options, normalise_credential_keys
+from service_kit.lakehouse.objectfs import lance_storage_options
 
 
 Tier = Literal["read", "write"]
-VendingMode = Literal["mode_b", "static", "sts", "web_identity"]
+VendingMode = Literal["mode_b", "sts", "web_identity"]
 
 
 class VendedCredentials(BaseModel):
@@ -139,36 +136,6 @@ class ModeBVendor:
 
     def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
         return None
-
-
-class StaticPrefixVendor:
-    """Hand out pre-provisioned per-bucket ``storage_options`` (long-lived keys).
-
-    ``keys_by_bucket`` maps a bucket name to the ``storage_options`` for that
-    bucket (typically loaded from OpenBao). Returns ``None`` for an unknown
-    bucket so the caller falls back to Mode B rather than vending nothing useful.
-
-    For S3-compatible stores where you provision a dedicated, rotatable,
-    least-privilege key per bucket (e.g. a static MinIO/HMAC key or GCS interop
-    key). Prefer :class:`StsVendor` when the backend supports STS — static keys
-    are long-lived and can't be scoped per-table the way a session policy can.
-    """
-
-    def __init__(self, keys_by_bucket: dict[str, dict[str, str]]) -> None:
-        self._keys = keys_by_bucket
-
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
-        bucket, _ = split_s3_location(table_location)
-        opts = self._keys.get(bucket)
-        if opts is None:
-            return None
-        # NORMALISED, not passed through. These options come from configuration (typically OpenBao),
-        # so their spelling is whoever wrote the secret's choice — and the bare credential spellings do
-        # not displace a pod's ambient AWS_* environment: object_store blends the two and signs with a
-        # pair belonging to neither identity (`403 SignatureDoesNotMatch`, measured in-cluster
-        # 2026-09-03). Every vendor must emit ONE vocabulary or a client would have to sniff which
-        # vendor the deployment configured, which is what `test_vending.py` pins.
-        return VendedCredentials(storage_options=normalise_credential_keys(opts), expires_at_millis=None)
 
 
 def _expiry_millis(expiration: object, ttl_seconds: int) -> int:
@@ -341,7 +308,6 @@ def make_vendor(
     sts_endpoint: str | None = None,
     assume_role_arn: str | None = None,
     ttl_seconds: int = 900,
-    static_keys: dict[str, dict[str, str]] | None = None,
     access_key: str | None = None,
     secret_key: str | None = None,
 ) -> CredentialVendor:
@@ -352,8 +318,6 @@ def make_vendor(
     """
     if mode == "mode_b":
         return ModeBVendor()
-    if mode == "static":
-        return StaticPrefixVendor(static_keys or {})
     if mode == "sts":
         if not assume_role_arn:
             raise ValueError("assume_role_arn is required for sts vending mode")

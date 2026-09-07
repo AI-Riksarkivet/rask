@@ -14,7 +14,6 @@ import pytest
 
 from catalog.core.vending import (
     ModeBVendor,
-    StaticPrefixVendor,
     StsVendor,
     Tier,
     WebIdentityVendor,
@@ -56,16 +55,6 @@ def test_mode_b_vendor_returns_none() -> None:
     assert ModeBVendor().vend(table_location="s3://b/t", tier="read") is None
 
 
-def test_static_prefix_vendor() -> None:
-    vendor = StaticPrefixVendor({"b": {"access_key_id": "AK", "secret_access_key": "SK"}})
-    out = vendor.vend(table_location="s3://b/t", tier="write")
-    assert out is not None
-    assert out.storage_options["aws_access_key_id"] == "AK"
-    assert out.expires_at_millis is None
-    # unknown bucket -> None (caller falls back to Mode B)
-    assert vendor.vend(table_location="s3://other/t", tier="read") is None
-
-
 def test_sts_vendor_with_fake_assume_role() -> None:
     captured: dict[str, Any] = {}
 
@@ -103,7 +92,6 @@ def test_sts_vendor_with_fake_assume_role() -> None:
 
 def test_make_vendor_selection() -> None:
     assert isinstance(make_vendor("mode_b"), ModeBVendor)
-    assert isinstance(make_vendor("static"), StaticPrefixVendor)
     assert isinstance(make_vendor("sts", assume_role_arn="arn:aws:iam::1:role/r"), StsVendor)
 
 

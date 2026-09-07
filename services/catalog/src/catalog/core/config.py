@@ -257,14 +257,13 @@ class Settings(GovernedAuthSettings, BaseSettings):
     # storage (MinIO default, AWS S3, Ceph RGW, RustFS). Default "mode_b": server-mediated — no
     # credential leaves the catalog (the simplest, backend-agnostic default). "sts": STS AssumeRole
     # short-TTL per-table scoped tokens (the recommended path; MinIO/Ceph/AWS all implement STS).
-    # "static": pre-provisioned per-bucket keys (simple setups / GCS interop).
     # Client-DIRECT is the default WRITE path via POST /{id}/commit (the catalog never proxies data bytes);
     # the vending MODE is the separate CREDENTIAL mechanism. Default `mode_b` (server_mediated) is safe on
     # any store; `web_identity`/`sts` are the SCOPED-credential upgrade and are opt-in because they need an
     # STS endpoint — WITHOUT one, boto3 resolves to the PUBLIC AWS STS endpoint and would POST the caller's
     # OIDC token there (audit 2026-07-14). The chart pairs `web_identity` with the endpoint + rustfs.oidc,
     # and `_validate_vending` below fails closed if the mode needs an endpoint that isn't set.
-    vending_mode: Literal["mode_b", "static", "sts", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
+    vending_mode: Literal["mode_b", "sts", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
     vending_ttl_seconds: int = Field(default=900, ge=60, alias="LANCE_VENDING_TTL_SECONDS")
     s3_assume_role_arn: str | None = Field(default=None, alias="LANCE_S3_ASSUME_ROLE_ARN")
     s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
