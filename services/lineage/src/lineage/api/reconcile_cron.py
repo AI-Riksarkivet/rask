@@ -208,18 +208,16 @@ async def _on_cron(
             log.info("lineage_reconcile_skipped_locked")
             return {"skipped": True, "reason": "another reconcile sweep is in progress"}
         opts = storage_options(settings)
-        report = summarize_sweep(await _sweep(repository, settings, opts))
-        # Drain the lineage OUTBOX (#4): re-ingest any event a producer STAGED but whose publish never got
-        # acked — a crash between the Lance commit and the fire-and-forget publish — then delete it. Unlike
-        # the version+schema back-fill above, this recovers the FULL event (inputs, author, columnLineage).
-        # Idempotent: ingest_event MERGEs on run_id, so a redundant republish (publish DID land, producer
-        # crashed before deleting) is a no-op. Runs inside the same single-flight lock — no double-drain.
+        # BEFORE the sweep, and `_drain_outbox` carries why. Both reasons — cost and fidelity — are
+        # properties of the drain relative to the sweep, so they live with the function that has them.
+        outcome = DrainOutcome()
         if settings.outbox_uri:
             try:
                 outcome = await _drain_outbox(repository, settings, opts, publisher)
-                report.outbox_drained, report.outbox_stranded = outcome.drained, outcome.stranded
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
+        report = summarize_sweep(await _sweep(repository, settings, opts))
+        report.outbox_drained, report.outbox_stranded = outcome.drained, outcome.stranded
         report.pruned_runs = await _prune_old_runs(repository, settings)
     log_sweep(report)
     return report.model_dump()
@@ -231,6 +229,18 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
     An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is ingested
     idempotently (``ingest_event`` MERGEs on ``run_id``) and then deleted; a delete that fails just leaves
     the object for the next tick to re-ingest (a no-op) and retry the delete. Returns the count ingested.
+
+    RUNS BEFORE THE SWEEP, and the order is load-bearing on two counts (§ Q8-16).
+
+    COST: this step is BOUNDED — ``outbox_drain_limit`` events, a handful of object reads — while the
+    sweep is O(datasets): measured 2026-09-07 on the live estate, ``checked: 400`` per tick with
+    completed sweeps minutes apart against a 30 s cron. Behind the sweep, a committed write's lineage
+    stays at risk for as long as the estate is large, which is the wrong variable to depend on.
+
+    FIDELITY: a dataset whose event is still staged looks like drift to the version check, so a sweep
+    running first back-fills from STORAGE what the outbox was about to supply from the EVENT —
+    recovering a bare version stamp where the staged copy carries inputs, author and columnLineage,
+    and reporting a ``backfilled`` finding that would not otherwise have existed.
 
     PER-EVENT ISOLATION, and it is what makes the sentence above true. One event the graph refuses must
     not decide anything about the others: the failure is caught around a SINGLE event's work, counted as

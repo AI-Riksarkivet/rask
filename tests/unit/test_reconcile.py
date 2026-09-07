@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -363,6 +364,60 @@ class _LockRepo(_FakeRepo):
     async def list_datasets(self, namespace: str | None = None, tag: str | None = None) -> list[DatasetSummary]:
         self.swept = True
         return await super().list_datasets(namespace, tag)
+
+
+class _OrderRepo(_LockRepo):
+    """Records the ORDER in which the tick's two expensive steps touch the repository."""
+
+    def __init__(self) -> None:
+        super().__init__(acquired=True)
+        self.order: list[str] = []
+
+    async def list_datasets(self, namespace: str | None = None, tag: str | None = None) -> list[DatasetSummary]:
+        self.order.append("sweep")
+        return await super().list_datasets(namespace, tag)
+
+    async def ingest_event(self, event: Any) -> None:
+        self.order.append("drain")
+
+
+def test_the_outbox_DRAINS_BEFORE_the_storage_sweep(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ Q8-16. Ordering inside the lock decides how long a committed write's lineage stays at risk.
+
+    The two steps have completely different costs. The drain is BOUNDED — `outbox_drain_limit` events,
+    a handful of object reads. The sweep is O(datasets): measured 2026-09-07 on the live estate,
+    `checked: 400` per tick, and completed sweeps minutes apart while the cron ticked every 30 s. With
+    the sweep first, every staged event waits behind the whole estate, so recovery latency is set by
+    how many datasets exist — the wrong variable entirely.
+
+    The second reason is the sweep's OWN report. A dataset whose event is still staged looks like drift
+    to the version check, so the sweep back-fills from storage what the outbox was about to supply from
+    the event itself, and reports a `backfilled` finding that would not exist had it simply waited. The
+    outbox holds the better record: the FULL event, with inputs, author and columnLineage.
+    """
+    from medallion.schemas.events import build_run_event
+    from service_kit.lakehouse import outbox
+
+    uri = f"file://{tmp_path}/_lineage_outbox"
+    event = build_run_event(
+        operation="ingest_events",
+        author="alice",
+        job_namespace="medallion",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="bronze",
+        output_name="bronze$events",
+        version=1,
+        token="order",
+    )
+    outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
+
+    repo = _OrderRepo()
+    asyncio.run(_on_cron(cast(Any, repo), _settings(outbox_uri=uri), None, None))
+
+    assert repo.order[:2] == ["drain", "sweep"], (
+        f"the tick touched the repository in the order {repo.order[:2]} — the bounded drain must run before the "
+        "O(datasets) sweep, or a staged event's recovery waits on the whole estate"
+    )
 
 
 def test_cron_skips_when_another_sweep_holds_the_lock() -> None:
