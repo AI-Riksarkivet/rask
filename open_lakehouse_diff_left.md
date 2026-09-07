@@ -451,8 +451,30 @@ proves it can be USED. **The row COUNT is the insert's assertion, not the respon
 `num_inserted_rows`** — the native path leaves that field null, so trusting it would let the leg pass
 while nothing was written (3 -> 6 measured instead).
 
-**STILL OPEN, and the row stays open for it:** the other two clients it names — lancedb
-`namespace_client_impl="rest"` and lance-ray namespace mode. The suite is shaped to take them: one
+**THE SECOND CLIENT IS MEASURED, AND IT CANNOT REACH A NESTED NAMESPACE — upstream, not ours.**
+lancedb 0.34.0 connects fine (`namespace_client_impl="rest"` + `namespace_client_properties`, the
+same `headers.Authorization` property) and `list_tables()` at the root correctly returns nothing,
+because this estate's root holds NAMESPACES rather than tables — the stock `lance_namespace` client
+agrees, listing `['bronze', 'transcripts_v2']` there and the tables one level down. But
+`open_table("acme-bronze$agnostic")` is refused **400 InvalidInput**:
+
+    request body id ['acme-bronze$agnostic'] does not match the path identifier ['acme-bronze', 'agnostic']
+
+**Its request is internally inconsistent and our refusal is the spec's own rule.** It puts the whole
+name in the PATH, where the spec says a delimited identifier splits into segments, and the SAME
+unsplit string in the BODY as one segment — so the request asserts two different identifiers, which
+`operations/index.md` says is a 400 (`core/identifiers.py::reconcile_body_id`). Measured: lancedb's
+`open_table` accepts **only a `str`** (`['a','b']` and `('a','b')` both raise
+`TypeError: argument 'name': 'list' object is not an instance of 'str'`), so it has no way to express
+a multi-segment identifier, and no connection property scopes it to a parent — `parent=`, `namespace=`
+and `root=` were all driven and none changes what it addresses.
+
+So lancedb works against a FLAT catalog and cannot address a nested one. **Not papered over here**:
+relaxing `reconcile_body_id` to accept the unsplit spelling would be exactly the outer-layer
+workaround for a library bug that `CLAUDE.md` forbids, and it would weaken the one check that stops a
+request naming two objects at once. The fix is upstream, and it is worth filing.
+
+**STILL OPEN:** lance-ray namespace mode, the third client. The suite is shaped to take it: one
 marker, one make target, one more client fixture.
 
 **Closes it.** One suite that drives every op with the three stock clients. A1–A10 land behind it.
