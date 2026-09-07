@@ -181,7 +181,7 @@ canonicalisation designed.
 server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding `parse_identifier` and
 `canonical_object_id`.
 
-### A5 · Error bodies without `code` — **TAG/BRANCH HALF DONE AND VERIFIED LIVE 2026-09-07** (`1be78b1c`, `e2a03129`; earlier: `f1ee42d3` framework 404/405, `0699bac3` `Unsupported` 406). REMAINING: the column/data ops never mint 14/20, and one branch-name case is upstream-blocked — both below.
+### A5 · Error bodies without `code` — **DONE AND VERIFIED LIVE 2026-09-07**, one upstream-blocked residual (`1be78b1c`, `e2a03129`, `82bdaa49`, `256c9cc1`; earlier `f1ee42d3`, `0699bac3`). Codes 8/9/11/13/20/22/23 reachable where they were not, and 14 answers a lost race. The residual — a malformed BRANCH name — is a Lance panic, not a mapping gap; both are below.
 **MOSTLY DONE 2026-09-02.** Two halves landed. `f1ee42d3`: FastAPI's own 404/405 went out as
 `{"detail": ...}` with no `code`, so the reference client reported `InternalError 18` — a
 `StarletteHTTPException` handler now stamps `Unsupported` (the honest code for "this backend does
@@ -220,6 +220,35 @@ first attempt got the second one wrong in a way only adversarial re-verification
 renders a missing source BRANCH and a missing source VERSION with the same object-store text, so
 matching it answered 11 for a branch that did not exist — the caller sent hunting a version when the
 branch was absent. Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py`.
+
+**COLUMN/DATA OPS: 14 AND 20 DONE 2026-09-07, both driven on the deployed estate.**
+
+*Code 20 was an ASYMMETRY, not a missing feature.* `insert_into_table` and `merge_insert_into_table`
+split on `branch`: without one they delegate to the native backend, which maps a schema mismatch to
+`TableSchemaValidationError` (20 -> 400); with one they run pylance in-process, where the identical
+mismatch escaped as a bare `OSError` and was reported `Internal 18`. Measured across three payload
+shapes — wrong Arrow type, an extra column, a wholly unrelated schema — main answered 20 for all three
+and the branch answered 500 for all three. A second sat beside it: `dataset.merge_insert(on)` is where
+Lance rejects a key column that does not exist, and it was constructed OUTSIDE `_user_sql`'s guard, so
+the one door whose entire job is matching on that column answered 18 for naming it wrongly while the
+branchless path answered 13. Live after the fix, on `acme-bronze$agnostic`: main 20 / branch 20, and
+main 13 / branch 13. The test asserts PARITY rather than a literal code — the branchless door already
+decided, so pinning the two together states the contract and cannot drift from the native backend.
+**This estate has shipped the branch-path-is-worse bug before** (`test_branch_scoped_mutations_hit_the_branch.py`:
+update and delete silently rewriting MAIN). Same door family, same asymmetry, caught late both times
+because nothing compared the two paths.
+
+*Code 14 is the one error here that is nobody's mistake.* Lance calls it RETRYABLE in its own message.
+Reported as 18, both of the things a caller should do become impossible: a client cannot know to
+re-read and re-commit, and an operator is paged for contention that resolves itself. The vocabulary
+already existed — `_COMMIT_CONFLICT_MARKERS`, which `_classify_commit_error` already mints 14 from for
+the commit door — and the column ops simply never asked, so the fix is one branch in the one guard all
+four share. It sits AFTER the missing-column test and that ordering is pinned by its own test: the
+marker tuple carries the bare word `concurrent`, so testing it first would answer 14 to a caller who
+merely named a column `concurrent`, turning a typo into "retry", advice that can never succeed.
+**Proven live by racing the deployed catalog** — six concurrent `add_columns` on one table, three won
+and three lost with `409 / code 14`; before the fix all three were 500/18. (The probe columns were
+dropped afterwards; the table is back to its seven.)
 
 **RESIDUAL, UPSTREAM-BLOCKED: a malformed BRANCH name answers 18 on the deployed estate.** pylance's
 ref-name validator produces `Ref is invalid: ...` — mapped to `InvalidInput` 13 (400) and proven live
