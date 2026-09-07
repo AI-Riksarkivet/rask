@@ -70,9 +70,13 @@ from lance_namespace import (
     RegisterTableRequest,
     ServiceUnavailableError,
     TableAlreadyExistsError,
+    TableBranchAlreadyExistsError,
+    TableBranchNotFoundError,
     TableColumnNotFoundError,
     TableNotFoundError,
+    TableTagAlreadyExistsError,
     TableTagNotFoundError,
+    TableVersionNotFoundError,
     UnsupportedOperationError,
     UpdateFieldMetadataResponse,
     UpdateTableRequest,
@@ -1492,6 +1496,63 @@ def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], l
     return out
 
 
+#: Substrings that PROVE a ref operation failed on the VERSION rather than on the ref. Two spellings
+#: because two layers answer: pylance's ref API raises `ValueError("Version not found error: version
+#: main:999999 does not exist")`, while `create_branch` reaches the object store first and raises
+#: `OSError("Dataset at path .../_versions/999999.manifest was not found")`. Measured on pylance 10.0.0.
+_REF_VERSION_MISSING_MARKERS = ("version not found", ".manifest was not found")
+
+#: The ref failure's own noun. pylance flattens every tag and branch failure into a bare
+#: `ValueError` whose only discriminator is its text — the same constraint `_classify_commit_error`
+#: works under, because the Rust layer's typed variants do not cross the pyo3 boundary.
+#:
+#: It captures the NOUN rather than testing `"branch" in message`, and that precision is load-bearing:
+#: a tag literally named `branch` would make the substring test report code 22 for a missing tag. The
+#: noun the message names also BEATS the caller's own kind, because a tag op scoped to a branch fails
+#: on the BRANCH — answering 8 there sends the caller hunting a tag that was never the problem.
+_REF_FAILURE_RE = re.compile(r"ref (?P<failure>not found|conflict) error:\s*(?P<noun>tag|branch)\b", re.IGNORECASE)
+
+
+def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
+    """Map a pylance tag/branch failure onto the Lance Namespace spec's coded error.
+
+    Returns ``exc`` UNCHANGED when nothing matches, so an unrecognised failure stays an honest
+    Internal rather than being forced into a code that would misdirect the caller.
+    """
+    message = str(exc)
+    if any(marker in message.lower() for marker in _REF_VERSION_MISSING_MARKERS):
+        return TableVersionNotFoundError(f"no such version for {kind} {name!r}: {exc}")
+    match = _REF_FAILURE_RE.search(message)
+    if match is None:
+        return exc
+    noun = match.group("noun").lower()
+    if match.group("failure").lower() == "conflict":
+        if noun == "branch":
+            return TableBranchAlreadyExistsError(f"branch {name!r} already exists")
+        return TableTagAlreadyExistsError(f"tag {name!r} already exists")
+    if noun == "branch":
+        return TableBranchNotFoundError(f"branch {name!r} not found")
+    return TableTagNotFoundError(f"tag {name!r} not found")
+
+
+@contextmanager
+def _ref_errors(kind: str, name: str) -> Iterator[None]:
+    """Translate the tag/branch failures inside the block into their spec-coded errors.
+
+    Without this every one of them reaches `install_problem_handlers` as a bare exception and is
+    reported as **Internal 18** — a generated client dispatches on `code`, so "your tag already
+    exists" arrives as "the server broke": unretryable, unactionable, and indistinguishable from a
+    real fault in an alerting pipeline.
+    """
+    try:
+        yield
+    except (ValueError, OSError) as exc:
+        translated = _classify_ref_error(exc, kind=kind, name=name)
+        if translated is exc:
+            raise
+        raise translated from exc
+
+
 def list_tags(ns: LanceNamespace, so: StorageOptions, req: ListTableTagsRequest) -> ListTableTagsResponse:
     """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``."""
     table_id = _table_id(req)
@@ -1516,7 +1577,8 @@ def _tag_reference(branch: str | None, version: int | None) -> int | tuple[str |
 
 def create_tag(ns: LanceNamespace, so: StorageOptions, req: CreateTableTagRequest) -> CreateTableTagResponse:
     """Tag the given table version with a name (honoring the request's optional ``branch``)."""
-    open_dataset(ns, so, _table_id(req)).tags.create(req.tag, _tag_reference(req.branch, req.version))
+    with _ref_errors("tag", req.tag):
+        open_dataset(ns, so, _table_id(req)).tags.create(req.tag, _tag_reference(req.branch, req.version))
     return CreateTableTagResponse()
 
 
@@ -1536,13 +1598,15 @@ def get_tag_version(ns: LanceNamespace, so: StorageOptions, req: GetTableTagVers
 
 def update_tag(ns: LanceNamespace, so: StorageOptions, req: UpdateTableTagRequest) -> UpdateTableTagResponse:
     """Move an existing tag to a new table version (honoring the request's optional ``branch``)."""
-    open_dataset(ns, so, _table_id(req)).tags.update(req.tag, _tag_reference(req.branch, req.version))
+    with _ref_errors("tag", req.tag):
+        open_dataset(ns, so, _table_id(req)).tags.update(req.tag, _tag_reference(req.branch, req.version))
     return UpdateTableTagResponse()
 
 
 def delete_tag(ns: LanceNamespace, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
     """Delete a tag from the table."""
-    open_dataset(ns, so, _table_id(req)).tags.delete(req.tag)
+    with _ref_errors("tag", req.tag):
+        open_dataset(ns, so, _table_id(req)).tags.delete(req.tag)
     return DeleteTableTagResponse()
 
 
@@ -1579,14 +1643,34 @@ def list_branches(ns: LanceNamespace, so: StorageOptions, req: ListTableBranches
 
 
 def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranchRequest) -> CreateTableBranchResponse:
-    """Create a branch from main (or a source branch/version) — maps to pylance ``create_branch``."""
-    open_dataset(ns, so, _table_id(req)).create_branch(req.name, _branch_reference(req))
+    """Create a branch from main (or a source branch/version) — maps to pylance ``create_branch``.
+
+    A COLLISION IS ESTABLISHED BY READING, NOT BY MATCHING A MESSAGE, and this is the one ref failure
+    where that distinction is forced. pylance answers an existing branch with its own bug-report text
+    — ``OSError("Encountered internal error. Please file a bug report ... Clone operation should not
+    enter build_manifest.")`` — which is neither a stable discriminator nor an honest thing to pattern
+    match: the day upstream fixes that panic, a matcher keyed on it silently reports Internal again.
+    So the door reads the branch list, and confirms by RE-READING when the create still fails, which
+    also answers the create/create race the pre-check alone would lose.
+    """
+    table_id = _table_id(req)
+    dataset = open_dataset(ns, so, table_id)
+    if req.name in dataset.branches.list():
+        raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
+    try:
+        with _ref_errors("branch", req.name):
+            dataset.create_branch(req.name, _branch_reference(req))
+    except OSError:
+        if req.name in open_dataset(ns, so, table_id).branches.list():
+            raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
+        raise
     return CreateTableBranchResponse()
 
 
 def delete_branch(ns: LanceNamespace, so: StorageOptions, req: DeleteTableBranchRequest) -> DeleteTableBranchResponse:
     """Delete a branch from the table."""
-    open_dataset(ns, so, _table_id(req)).branches.delete(req.name)
+    with _ref_errors("branch", req.name):
+        open_dataset(ns, so, _table_id(req)).branches.delete(req.name)
     return DeleteTableBranchResponse()
 
 
