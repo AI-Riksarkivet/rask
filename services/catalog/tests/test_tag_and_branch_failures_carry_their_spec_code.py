@@ -45,6 +45,7 @@ from lance_namespace import (
     DeleteTableBranchRequest,
     DeleteTableTagRequest,
     GetTableTagVersionRequest,
+    InvalidInputError,
     TableBranchAlreadyExistsError,
     TableBranchNotFoundError,
     TableTagAlreadyExistsError,
@@ -139,6 +140,29 @@ def test_a_missing_version_mints_VERSION_NOT_FOUND(ns, door: str, call: _Call) -
     assert caught.value.code == 11, f"{door} minted code {caught.value.code} for a missing version, not 11"
 
 
+@pytest.mark.parametrize(
+    ("door", "call"),
+    [
+        # pylance validates the ref NAME before it looks anything up, and enforces five distinct rules.
+        # One representative per rule, across both refs, because the wording differs per ref ("Branch
+        # segment ... contains invalid characters" vs "Ref characters must be either alphanumeric") and
+        # only the shared `Ref is invalid:` prefix is matched.
+        ("branch, invalid character", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a b"))),
+        ("branch, .lock suffix", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="feat.lock"))),
+        ("branch, leading slash", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="/lead"))),
+        ("branch, consecutive slashes", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a//b"))),
+        ("branch, '..' inside a segment", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a..b"))),
+        ("tag, invalid character", lambda ns: create_tag(ns, {}, CreateTableTagRequest(id=TABLE_ID, tag="a b", version=1))),
+        ("tag, .lock suffix", lambda ns: create_tag(ns, {}, CreateTableTagRequest(id=TABLE_ID, tag="x.lock", version=1))),
+    ],
+)
+def test_a_malformed_ref_name_mints_INVALID_INPUT(ns, door: str, call: _Call) -> None:  # noqa: ANN001
+    """Spec code 13 — a malformed parameter is the caller's to fix (400), never a server fault (500)."""
+    with pytest.raises(InvalidInputError) as caught:
+        call(ns)
+    assert caught.value.code == 13, f"{door} minted code {caught.value.code} for a malformed name, not 13"
+
+
 def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(ns) -> None:  # noqa: ANN001
     """Spec code 9 — a name collision the caller can fix, not a server fault."""
     with pytest.raises(TableTagAlreadyExistsError) as caught:
@@ -146,11 +170,41 @@ def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(ns) -> None
     assert caught.value.code == 9, f"a tag collision minted code {caught.value.code}, not 9"
 
 
-def test_deleting_a_branch_that_does_not_exist_mints_BRANCH_NOT_FOUND(ns) -> None:  # noqa: ANN001
+@pytest.mark.parametrize(
+    ("door", "call"),
+    [
+        ("branches/delete", lambda ns: delete_branch(ns, {}, DeleteTableBranchRequest(id=TABLE_ID, name=ABSENT))),
+        # THE SOURCE branch, not the one being created — and both spellings, because pylance renders
+        # them differently and the first version of this fix got both wrong: with a `from_version` it
+        # answered 11 (a missing VERSION, when the BRANCH is what is absent), and without one it
+        # matched no marker at all and stayed Internal 18.
+        (
+            "branches/create from a missing source, with a version",
+            lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT, from_version=1)),
+        ),
+        (
+            "branches/create from a missing source, no version",
+            lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT)),
+        ),
+    ],
+)
+def test_a_missing_branch_mints_BRANCH_NOT_FOUND(ns, door: str, call: _Call) -> None:  # noqa: ANN001
     """Spec code 22 — added to the spec WITH the branch ops, and unreachable until now."""
     with pytest.raises(TableBranchNotFoundError) as caught:
-        delete_branch(ns, {}, DeleteTableBranchRequest(id=TABLE_ID, name=ABSENT))
-    assert caught.value.code == 22, f"deleting a missing branch minted code {caught.value.code}, not 22"
+        call(ns)
+    assert caught.value.code == 22, f"{door} minted code {caught.value.code} for a missing branch, not 22"
+
+
+def test_a_version_error_names_the_SOURCE_branch_not_the_one_being_created(ns) -> None:  # noqa: ANN001
+    """The detail a caller reads must name what was missing.
+
+    Branching from a real branch at a version it does not have is correctly 11 — but the first fix
+    rendered it as "no such version for branch '<the NEW name>'", naming a branch that exists nowhere
+    yet and telling the caller nothing about which history lacked the version.
+    """
+    with pytest.raises(TableVersionNotFoundError) as caught:
+        create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=LIVE_BRANCH, from_version=MISSING_VERSION))
+    assert LIVE_BRANCH in str(caught.value), f"the version error named the wrong branch: {caught.value}"
 
 
 def test_creating_a_branch_that_already_exists_mints_BRANCH_ALREADY_EXISTS(ns) -> None:  # noqa: ANN001

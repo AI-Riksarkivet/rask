@@ -1512,6 +1512,14 @@ _REF_VERSION_MISSING_MARKERS = ("version not found", ".manifest was not found")
 #: on the BRANCH — answering 8 there sends the caller hunting a tag that was never the problem.
 _REF_FAILURE_RE = re.compile(r"ref (?P<failure>not found|conflict) error:\s*(?P<noun>tag|branch)\b", re.IGNORECASE)
 
+#: The ref-NAME validator's variant, raised before anything is looked up — a malformed name is a
+#: malformed parameter, so it is `InvalidInput` (13 -> 400), never a not-found. Measured on pylance
+#: 10.0.0 for both refs and every rule it enforces: invalid characters, a `.lock` suffix, a leading or
+#: trailing `/`, consecutive `/`, and `..` inside a segment. The wording differs per ref ("Branch
+#: segment ... contains invalid characters" vs "Ref characters must be either alphanumeric ..."), so
+#: the shared PREFIX is what is matched.
+_REF_INVALID_MARKER = "ref is invalid:"
+
 
 def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
     """Map a pylance tag/branch failure onto the Lance Namespace spec's coded error.
@@ -1520,6 +1528,8 @@ def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
     Internal rather than being forced into a code that would misdirect the caller.
     """
     message = str(exc)
+    if _REF_INVALID_MARKER in message.lower():
+        return InvalidInputError(f"invalid {kind} name {name!r}: {exc}")
     if any(marker in message.lower() for marker in _REF_VERSION_MISSING_MARKERS):
         return TableVersionNotFoundError(f"no such version for {kind} {name!r}: {exc}")
     match = _REF_FAILURE_RE.search(message)
@@ -1655,10 +1665,21 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
     """
     table_id = _table_id(req)
     dataset = open_dataset(ns, so, table_id)
-    if req.name in dataset.branches.list():
+    branches = dataset.branches.list()
+    if req.name in branches:
         raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
+    # THE SOURCE IS ESTABLISHED BY READING TOO, and here the message leaves no choice: pylance renders
+    # a missing source BRANCH and a missing source VERSION with the same object-store text, so a
+    # classifier reading it alone answers 11 for a branch that does not exist — the wrong code, and a
+    # caller sent hunting a version when the branch is what is absent. With no `from_version` at all it
+    # renders differently again and matches nothing, falling through as Internal 18.
+    if req.from_branch is not None and req.from_branch not in branches:
+        raise TableBranchNotFoundError(f"source branch {req.from_branch!r} not found")
+    # The residual version failure belongs to the SOURCE, so name that — not the branch being created,
+    # which exists nowhere yet and tells the caller nothing about what was missing.
+    source = req.from_branch if req.from_branch is not None else "main"
     try:
-        with _ref_errors("branch", req.name):
+        with _ref_errors("branch", source):
             dataset.create_branch(req.name, _branch_reference(req))
     except OSError:
         if req.name in open_dataset(ns, so, table_id).branches.list():
