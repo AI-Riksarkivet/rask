@@ -33,8 +33,11 @@ broken server.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import uuid
 
+import pyarrow as pa
 import pytest
 import requests
 
@@ -151,3 +154,43 @@ def test_the_client_is_REALLY_unauthenticated_without_a_credential() -> None:
     with pytest.raises(ln.UnauthenticatedError) as caught:
         tokenless.list_namespaces(ln.ListNamespacesRequest(id=[]))
     assert caught.value.code == 16, f"an uncredentialed call answered code {caught.value.code}, not 16"
+
+
+def test_the_stock_client_drives_a_WRITE_round_trip(stock) -> None:  # noqa: ANN001
+    """create -> insert -> tag -> read the tag -> untag -> drop, all through the stock client.
+
+    The read surface above proves the catalog can be *read* idiomatically; this proves it can be
+    *used*. Deliberately ONE scenario rather than independent cases: the steps are a story, each
+    depends on the last, and a table that exists only inside it cannot be asserted about separately.
+
+    A fresh uuid-suffixed table per run, dropped at the end, so re-runs never collide and a failure
+    leaves at most one small table behind. The row COUNT is the assertion for the insert rather than
+    the response's `num_inserted_rows` — the native path leaves that null, so trusting it would make
+    this leg pass while nothing was written.
+    """
+    ln = _requests()
+    name = f"stockprobe_{uuid.uuid4().hex[:8]}"
+    table = [NAMESPACE, name]
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
+    rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "s": pa.array(["a", "b", "c"])}, schema=schema)
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, schema) as writer:
+        writer.write_table(rows)
+    ipc = sink.getvalue().to_pybytes()
+
+    try:
+        stock.create_table(ln.CreateTableRequest(id=table), ipc)
+        assert stock.count_table_rows(ln.CountTableRowsRequest(id=table)) == 3, "the create did not land its rows"
+
+        stock.create_table_tag(ln.CreateTableTagRequest(id=table, tag="v1", version=1))
+        assert stock.get_table_tag_version(ln.GetTableTagVersionRequest(id=table, tag="v1")).version == 1
+
+        stock.insert_into_table(ln.InsertIntoTableRequest(id=table), ipc)
+        assert stock.count_table_rows(ln.CountTableRowsRequest(id=table)) == 6, "the insert did not append"
+
+        stock.delete_table_tag(ln.DeleteTableTagRequest(id=table, tag="v1"))
+        with pytest.raises(ln.TableTagNotFoundError):
+            stock.get_table_tag_version(ln.GetTableTagVersionRequest(id=table, tag="v1"))
+    finally:
+        with contextlib.suppress(Exception):
+            stock.drop_table(ln.DropTableRequest(id=table))

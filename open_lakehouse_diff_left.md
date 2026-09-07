@@ -423,9 +423,16 @@ property that carries a bearer is `headers.Authorization`. The spec's OWN spelli
 accepted by `connect()` and then silently ignored, and every call answers `UnauthenticatedError`. So
 are `bearer_token`, `api_key` and `additional_headers`. Costs an hour to rediscover.
 
-**STILL OPEN, and the row stays open for it:** the WRITE ops through the stock client, and the other
-two clients the row names — lancedb `namespace_client_impl="rest"` and lance-ray namespace mode. The
-suite is shaped to take them: one marker, one make target, one more client fixture.
+**THE WRITE ROUND TRIP IS PROVEN TOO** (2026-09-07): create -> insert -> tag -> read the tag -> untag
+-> drop, every step through the stock client against the governed catalog, on a fresh uuid-suffixed
+table dropped in a `finally`. The read surface proves the catalog can be READ idiomatically; this
+proves it can be USED. **The row COUNT is the insert's assertion, not the response's
+`num_inserted_rows`** — the native path leaves that field null, so trusting it would let the leg pass
+while nothing was written (3 -> 6 measured instead).
+
+**STILL OPEN, and the row stays open for it:** the other two clients it names — lancedb
+`namespace_client_impl="rest"` and lance-ray namespace mode. The suite is shaped to take them: one
+marker, one make target, one more client fixture.
 
 **Closes it.** One suite that drives every op with the three stock clients. A1–A10 land behind it.
 
