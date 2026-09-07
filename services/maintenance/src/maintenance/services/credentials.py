@@ -32,12 +32,12 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from service_kit.governed.dapr_auth import DaprDoorSettings
 from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
+from maintenance.services.catalog_identity import service_headers
 
 
 logger = logging.getLogger(__name__)
@@ -94,10 +94,7 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None
     # subject, and sending one is a refusal whose reason is invisible from this side. The token is read
     # from `APP_API_TOKEN`, which daprd injects — `DaprDoorSettings` is the estate's one reader of it,
     # replacing what used to be four bare `os.environ.get` calls.
-    token = DaprDoorSettings().app_api_token
-    headers = {"x-lance-service-identity": settings.catalog_service_identity}
-    if token:
-        headers["dapr-api-token"] = token
+    headers = service_headers(settings)
     try:
         # `params`, NOT a body. The door declares `tier: Annotated[Tier, Query()] = "read"`, and
         # FastAPI ignores an unknown body on a query parameter — a body-borne tier came back READ with

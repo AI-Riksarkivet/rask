@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from maintenance.services.compaction_executor import CommittedWork, CompactionPlaneUnavailable, DistributedCompactionError, PlannedWork
-from service_kit.governed.dapr_auth import DaprDoorSettings
 
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
+from maintenance.services.catalog_identity import service_headers
 
 
 log = logging.getLogger(__name__)
@@ -38,14 +38,6 @@ log = logging.getLogger(__name__)
 #: The plan is a manifest read and the commit is one metadata transaction — neither is unbounded in
 #: the data, so a call that blocks longer than this is a door in trouble rather than a big table.
 _TIMEOUT_SECONDS = 30.0
-
-
-def _headers(settings: MaintenanceSettings) -> dict[str, str]:
-    """Both halves of the service identity, or the door refuses with a reason invisible from here."""
-    headers = {"x-lance-service-identity": settings.catalog_service_identity}
-    if token := DaprDoorSettings().app_api_token:
-        headers["dapr-api-token"] = token
-    return headers
 
 
 def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: MaintenanceSettings) -> PlannedWork:
@@ -57,7 +49,7 @@ def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: Mainten
     """
     url = f"{settings.catalog_url.rstrip('/')}/v1/table/{table_id}/compaction_plan"
     try:
-        response = httpx.post(url, json=policy or {}, headers=_headers(settings), timeout=_TIMEOUT_SECONDS)
+        response = httpx.post(url, json=policy or {}, headers=service_headers(settings), timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
         raise CompactionPlaneUnavailable(f"compaction plan unreachable for {table_id}: {exc}") from exc
     if response.status_code >= 400:
@@ -78,7 +70,7 @@ def commit_via_catalog(table_id: str, results: list[str], *, settings: Maintenan
     """
     url = f"{settings.catalog_url.rstrip('/')}/v1/table/{table_id}/compaction_commit"
     try:
-        response = httpx.post(url, json={"results": results}, headers=_headers(settings), timeout=_TIMEOUT_SECONDS)
+        response = httpx.post(url, json={"results": results}, headers=service_headers(settings), timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
         raise DistributedCompactionError(
             f"compaction commit unreachable for {table_id} — {len(results)} rewrite(s) are written and unreferenced: {exc}"

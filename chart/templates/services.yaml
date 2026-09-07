@@ -257,15 +257,18 @@ spec:
                    derivation; in prod an operator seeds them, and an unseeded one is a fail-closed
                    refusal rather than a silent downgrade to the shared token. */}}
             {{- $privileged := append (compact $cascadeWriters | uniq) .Values.medallion.train.trainerIdentity }}
-            {{- /* NOT RENDERED YET — deliberately. Measured 2026-08-26: switching this on refuses every
-                   stage runner, because the server-side expectation is only HALF the control. The catalog then
-                   demands `service-token-<identity>` for a privileged subject, but the stage runners still
-                   PRESENT the shared APP_API_TOKEN, so every catalog call 401s and the cascade stops
-                   (`POST /v1/table/acme-silver$features/describe -> 401`, repeating). Turning it on
-                   needs the CLIENT half too: each privileged service must read its own dedicated token
-                   out of the secret store and send THAT instead of APP_API_TOKEN.
-                   The tokens are already seeded (openbao.yaml) and the derivation below is correct; what
-                   is missing is the outbound wiring, which is a service change, not a chart one. */}}
+            {{- $privileged = append $privileged .Values.maintenance.catalogServiceIdentity }}
+            {{- /* EVERY NAME HERE MUST ALREADY PRESENT ITS OWN CREDENTIAL. The server-side expectation is
+                   half the control: this makes the catalog demand `service-token-<identity>` from a
+                   privileged subject, and a subject still sending the shared APP_API_TOKEN is refused
+                   outright — measured 2026-08-26, when rendering this alone 401'd every catalog call and
+                   stopped the cascade (`POST /v1/table/acme-silver$features/describe -> 401`, repeating).
+                   The client half exists for each name on this list: the cascade writers and the trainer
+                   through `medallion.core.config.dedicated_token_for`, and maintenance through
+                   `maintenance.services.catalog_compaction.dedicated_token_for`. ADDING A NAME WITHOUT ITS
+                   CLIENT HALF IS AN OUTAGE, and there is no safe ordering — the two land together.
+                   `service-ingest` and `notifications` are absent for exactly that reason: neither reads a
+                   dedicated token yet. */}}
             {{- if .Values.auth.dedicatedServiceCredentials }}
             - { name: LANCE_PRIVILEGED_SUBJECTS, value: {{ compact $privileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}

@@ -182,7 +182,11 @@ spec:
                        block's own note records what that buys — "Reading one web pod's environment was
                        the whole attack." It needs no client half, because the BFF already reads
                        `LINEAGE_SERVICE_TOKEN` from env. */}}
-                {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity .Values.frontend.serviceIdentity }}
+                {{- /* `maintenance.catalogServiceIdentity` is on this list because the catalog's
+                       `LANCE_PRIVILEGED_SUBJECTS` names it: a privileged subject whose token is not
+                       seeded resolves to nothing, falls back to the shared bearer, and is refused —
+                       so the SEED is a third half of this control, not an afterthought to the pair. */}}
+                {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity .Values.frontend.serviceIdentity .Values.maintenance.catalogServiceIdentity }}
                 {{- range .Values.medallion.stageRunners }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
