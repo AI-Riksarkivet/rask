@@ -114,21 +114,42 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.Monkey
 
 
 def test_the_consumed_reader_asks_for_a_route_lineage_ACTUALLY_SERVES() -> None:
-    """Lineage mounts its run board at `/runs`, not under a version prefix.
+    """A route is not a thing to derive from a prefix convention — it is a thing to read off the router.
 
-    Probed live against the deployed service: `/v1/runs` 404, `/api/v1/runs` 404, `/runs` 401 —
-    present and asking for a credential. This is the SECOND route-that-does-not-exist in this file's
-    short history, so the rule is worth stating: a route is not a thing to derive from a prefix
-    convention, it is a thing to read off the router.
+    Two routes-that-do-not-exist have shipped from this module, which is why the rule is stated rather
+    than assumed. This asserts it against LINEAGE'S OWN ROUTER instead of against a literal: the
+    previous version pinned the string `/runs`, and when the reader correctly stopped scanning the run
+    board — a point read at `/datasets/{name}/producers` replaced a scan of a board that had just been
+    bounded to 200 rows, so the reader was silently answering from a truncated list — the test failed
+    for the improvement. A literal cannot tell "the route moved" from "the route is wrong"; the router
+    can, and it is the thing the reader must actually agree with.
     """
     import re
     from pathlib import Path
 
+    from lineage.main import app as lineage_app
     from medallion.services import cascade_lag_readers as readers
 
-    # The URL EXPRESSION, not the whole file: the dead spelling is named in a comment right beside
-    # the live one, and a file-wide grep would either miss the defect or refuse the explanation.
+    # The URL EXPRESSION, not the whole file: a dead spelling may be named in a comment beside the live
+    # one, and a file-wide grep would either miss the defect or refuse the explanation.
     source = Path(readers.__file__).read_text(encoding="utf-8")
-    urls = re.findall(r'url = f"\{[^"]*?\}(/[a-z0-9/_]*)"', source)
-    assert "/runs" in urls, f"the consumed reader must ask for /runs; it asks for {urls}"
-    assert not [u for u in urls if u.startswith("/api/")], f"lineage serves no /api prefix; found {urls}"
+    expressions = re.findall(r'url = f"(\{str\(settings\.train_lineage_url\)[^"]*)"', source)
+    assert expressions, "no lineage URL found in the reader — the extraction regex has drifted from the source"
+
+    # Reduce an f-string to the route SHAPE: drop the base-url expression (it ends at the first `}`),
+    # then collapse every remaining interpolation — `{quote(wanted, safe='')}` interpolates a dataset
+    # NAME — to the same placeholder the router's own `{name}` reduces to.
+    def _shape(text: str) -> str:
+        return re.sub(r"\{[^}]*\}", "{}", text.split("}", 1)[1])
+
+    # `app.openapi()`, NOT `app.routes`: this service builds its routers at app-construction time under
+    # a factory, and the module-level object exposes only `/dapr/subscribe` and `/ui` as plain routes —
+    # asserting against that set passes nothing and would read as "lineage serves no routes at all".
+    # The committed-contract test reads the same surface for the same reason.
+    served = {_shape("{}" + path) for path in lineage_app.openapi()["paths"]}
+    for expression in expressions:
+        shape = _shape(expression)
+        assert shape in served, f"the reader asks lineage for {shape!r}, which its OpenAPI does not serve"
+
+    all_urls = re.findall(r'url = f"\{[^"]*?\}(/[a-z0-9/_{}]*)"', source)
+    assert not [u for u in all_urls if u.startswith("/api/")], f"lineage serves no /api prefix; found {all_urls}"
