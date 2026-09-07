@@ -470,9 +470,21 @@ spec:
             - { name: LINEAGE_RECONCILE_BINDING_NAME, value: {{ .Values.services.lineage.reconcile.bindingName | quote }} }
             {{- end }}
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            {{- /* THE LINEAGE PLANE'S SCOPED IDENTITY (§F2-1). The ACCESS KEY alone scopes the plane; the
+                 secret is DERIVED unless supplied (`lance.scopedStorageSecret`), so naming the identity
+                 needs no secret in a values file. Empty falls back to the tenant ROOT, which is what an
+                 install runs until one is named — a chart that silently repointed a live service at a
+                 credential nobody created would take it down on upgrade. */}}
+            {{- $linScoped := .Values.rustfs.lineageAccessKey }}
+            - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.lineageAccessKey .Values.rustfs.accessKey (not (not $linScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LINEAGE_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            - { name: LINEAGE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.rustfs.lineageAccessKey .Values.rustfs.lineageSecretKey)) .Values.rustfs.secretKey (not (not $linScoped)) | quote }} }
+            {{- else if $linScoped }}
+            {{- /* THE OTHER HALF OF THE PAIR, and the half that has bitten twice. `dapr_secret_s3_field`
+                 defaults to `rustfs-secret-key` — the tenant ROOT's secret — so a SCOPED access key left
+                 on that default is signed with a mismatched pair and every operation fails
+                 `SignatureDoesNotMatch`. The Ray and maintenance pairs each paid for this. */}}
+            - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }
             {{- end }}
             - { name: LINEAGE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}

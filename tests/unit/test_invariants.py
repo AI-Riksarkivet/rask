@@ -658,6 +658,16 @@ _UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
     # DERIVE. `Settings.registry_root` is `control_root or root`, so an unset control root puts the
     # warehouse registry in the catalog's own bucket — which is where a single-bucket estate wants it.
     "LANCE_CONTROL_ROOT": "empty derives the registry root from LANCE_REST_ROOT",
+    # SAFE OFF, and the absence is the MEASURED answer rather than an omission. The resolver behind
+    # this flag is correct and tested — `notifications.api.service_identity.feed_token` reads
+    # `service-token-notifications` and puts it on the wire — and the subject still cannot present it:
+    # its reconciler reaches lineage through DAPR SERVICE INVOCATION, and daprd stamps its own
+    # `dapr-api-token` on delivery, so the door sees the estate's shared token whatever the caller
+    # sets. Landed and reverted live 2026-09-07 (release 107 -> 108), where every walk answered
+    # `401 the presented credential may not claim 'notifications'`. Arming this would buy a secret-store
+    # read per boot for a value the transport discards. One values edit away if that call ever moves
+    # off service invocation — which is F2-3's actual remainder.
+    "RASK_NOTIFICATIONS_SECRETS_FROM_DAPR": "the transport overwrites the credential, so off is correct until the feed read leaves Dapr service invocation",
     # SAFE OFF, and LOUD rather than silent: only the `http` transport reads this, the chart renders
     # `LANCE_LINEAGE_TRANSPORT=dapr` (services.yaml), and `_validate_lineage` REFUSES TO BOOT on
     # http-with-no-url. There is no configuration in which the absence quietly does less.

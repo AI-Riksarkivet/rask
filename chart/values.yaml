@@ -377,10 +377,13 @@ services:
       # grants allow. A deployment that admits it and grants it nothing gets a reconciler that runs
       # cleanly and reconciles nothing — the quiet failure this whole lane exists to prevent.
       RASK_LINEAGE_SERVICE_IDENTITY: notifications
-      # notifications presents its OWN `service-token-notifications` at lineage's door, resolved from
-      # the store by `notifications.api.service_identity`. Explicitly opt-in like its siblings: a dev
-      # stack has no store, and reading one unconditionally fails closed on a working configuration.
-      RASK_NOTIFICATIONS_SECRETS_FROM_DAPR: "true"
+      # NOT ARMED, deliberately — the flag is absent and `secrets_from_dapr` defaults false.
+      # `notifications.api.service_identity` can resolve a dedicated credential and is tested, but this
+      # subject CANNOT PRESENT one: it reaches lineage through Dapr service invocation, and daprd
+      # stamps its own `dapr-api-token` on delivery, so the door sees the estate's shared token
+      # whatever the caller sets. Measured live 2026-09-07 (release 107 → 108, reverted). Arming it
+      # would cost a secret-store read per boot for a value the transport discards. One values edit
+      # away if that call ever moves off service invocation.
     waitFor: []
   gateway:
     module: "gateway:app"
@@ -1937,6 +1940,16 @@ rustfs:
   # prefix read-only.
   medallionAccessKey: ""
   medallionSecretKey: ""
+  # THE LINEAGE SERVICE'S SCOPED IDENTITY, and its policy is the TIGHTEST of the three because its S3
+  # surface is the smallest — measured 2026-09-07 rather than assumed. Lineage opens datasets READ-ONLY
+  # to probe versions, schema and dangling blobs (`core/reconcile.py`, `demo.py`), and the only bytes it
+  # changes anywhere are DELETES of its own outbox objects once the relay has re-ingested them
+  # (`outbox.drop_event`). It calls `stage_event` nowhere — staging is the producers' half — so this
+  # identity needs NO PutObject at all, which no other plane can say.
+  # Empty falls back to the tenant ROOT credential, which is what an install runs until one is named.
+  # Provisioned by `rustfs-scoped-users.yaml` as `rask-lineage`.
+  lineageAccessKey: ""
+  lineageSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog

@@ -77,10 +77,20 @@ PARTIAL 8, MISSING 1) and said items 1-4 "decide whether the claim is honest":
           they are RELEASE INTENT rather than drift: `helm get values` carries
           rustfs.medallionAccessKey + maintenanceAccessKey, the post-upgrade hook rotated both RustFS
           users onto DERIVED secrets, and the governed-union suite passed 5/5 after the roll (Q17-17
-          closed). `rask-catalog` is the ONE identity left, and it is a design question rather than
+          closed).
+          **`rask-lineage` DONE 2026-09-07**, and measuring it produced the TIGHTEST policy of the four
+          because its SURFACE is smallest, not because it matters less: NO `PutObject` anywhere — it
+          opens datasets read-only to probe versions and the only bytes it changes are DELETES of its
+          own outbox (`outbox.drop_event`; `stage_event` belongs to the producers). The READ stays
+          deliberately WIDE, which is the interesting half: it reconciles datasets this chart cannot
+          enumerate, so a narrowed read is a reconciler that silently stops seeing part of the estate —
+          and one that cannot read reports `known=False`, publishing nothing and looking exactly like a
+          healthy cascade. DECLARED BUT NOT ARMED (`lineageAccessKey` defaults empty, so an install
+          keeps the root credential), the way medallion and maintenance shipped before they were named.
+          **`rask-catalog` is the ONE identity left**, and it stays a design question rather than
           another copy of the pattern: the catalog vends credentials for every runtime-minted
           warehouse, so "what may the thing that grants access itself reach?" has no answer this
-          policy shape supplies. `rask-lineage` is root too and was never counted — check it.
+          policy shape supplies.
     F2-2  fail closed in CODE — DONE 2026-09-07 (`2c69c270`). `assert_authentication_configured`
           refuses to boot a governed service whose auth is off with nobody having acknowledged it;
           the refusal is on the AMBIGUITY, not on being open. Landed for the three services that

@@ -195,7 +195,6 @@ spec:
                 {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
-                {{- if $.Values.services.notifications }}{{- $privileged = append $privileged ((get ($.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
                 service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) }} \
                 {{- end }}
@@ -217,6 +216,15 @@ spec:
                        raises rather than degrading. */}}
                 {{- if $.Values.rustfs.medallionAccessKey }}
                 medallion-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.rustfs.medallionAccessKey $.Values.rustfs.medallionSecretKey) }} \
+                {{- end }}
+                {{- /* THE LINEAGE PLANE'S SCOPED S3 SECRET, on the same terms as the two above: its own
+                       field rather than a second value on `rustfs-secret-key`, which IS the tenant root's
+                       secret that other services read. Seeded only when the access key is set, matching
+                       the Deployment's own `$linScoped` test — a field the service is told to read and
+                       nothing writes is a fail-closed boot, since `fetch_required_secrets` raises rather
+                       than degrading. */}}
+                {{- if $.Values.rustfs.lineageAccessKey }}
+                lineage-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.rustfs.lineageAccessKey $.Values.rustfs.lineageSecretKey) }} \
                 {{- end }}
 
               echo "seeded secret/lance into OpenBao"

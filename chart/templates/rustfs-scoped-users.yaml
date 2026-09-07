@@ -1,7 +1,8 @@
 {{- $ray := .Values.rustfs.rayComputeAccessKey }}
 {{- $maint := .Values.rustfs.maintenanceAccessKey }}
 {{- $medallion := .Values.rustfs.medallionAccessKey }}
-{{- if and .Values.rustfs.enabled (or $ray $maint $medallion) }}
+{{- $lineage := .Values.rustfs.lineageAccessKey }}
+{{- if and .Values.rustfs.enabled (or $ray $maint $medallion $lineage) }}
 # RustFS SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
 #
 # `rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
@@ -78,6 +79,10 @@ spec:
             {{- if $medallion }}
             - name: MEDALLION_SECRET_KEY
               value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey) | quote }}
+            {{- end }}
+            {{- if $lineage }}
+            - name: LINEAGE_SECRET_KEY
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.lineageAccessKey .Values.rustfs.lineageSecretKey) | quote }}
             {{- end }}
           command:
             - sh
@@ -355,5 +360,55 @@ spec:
               mc admin user add rfs {{ .Values.rustfs.medallionAccessKey }} "$MEDALLION_SECRET_KEY" || true
               mc admin policy attach rfs rask-medallion --user {{ .Values.rustfs.medallionAccessKey }} || true
               echo "provisioned scoped user {{ .Values.rustfs.medallionAccessKey }} (rask-medallion)"
+              {{- end }}
+
+              {{- if $lineage }}
+              cat >/tmp/lineage.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "ReadAnythingItReconciles",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject"],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  },
+                  {
+                    "Sid": "DrainItsOwnOutboxAndNothingElse",
+                    "Effect": "Allow",
+                    "Action": ["s3:DeleteObject"],
+                    "Resource": ["arn:aws:s3:::*/_lineage_outbox/*"]
+                  },
+                  {
+                    "Sid": "NeverTheObservabilityStore",
+                    "Effect": "Deny",
+                    "Action": ["s3:*"],
+                    "Resource": ["arn:aws:s3:::{{ .Values.observability.bucket }}", "arn:aws:s3:::{{ .Values.observability.bucket }}/*"]
+                  }
+                ]
+              }
+              POLICY
+              {{- /*
+                THE TIGHTEST OF THE FOUR, and it is tight because the SURFACE is small — measured
+                2026-09-07 against the source rather than inferred from the service's importance.
+
+                NO PutObject ANYWHERE, which no other plane here can say. Lineage opens datasets
+                READ-ONLY to probe versions, schema and dangling blobs (`core/reconcile.py:58,76,93,108`,
+                `demo.py:112`), and the only bytes it changes are DELETES of outbox objects the relay has
+                already re-ingested (`outbox.drop_event`). `outbox.stage_event` — the write half — is
+                called by the PRODUCERS (medallion, maintenance) and never here, so granting this
+                identity a write would grant a capability it has no code to use.
+
+                THE READ IS DELIBERATELY UNSCOPED, for the reason the two policies above already record:
+                the bucket set is not knowable at render time. Lineage reconciles whatever datasets the
+                graph names, across warehouses this chart does not enumerate, so a narrowed read is a
+                reconciler that silently stops seeing part of the estate — and a reconciler that cannot
+                read reports `known=False`, which publishes nothing and looks exactly like a healthy
+                estate. That failure mode is why the read stays wide and the WRITE is what gets scoped.
+              */}}
+              mc admin policy create rfs rask-lineage /tmp/lineage.json
+              mc admin user add rfs {{ .Values.rustfs.lineageAccessKey }} "$LINEAGE_SECRET_KEY" || true
+              mc admin policy attach rfs rask-lineage --user {{ .Values.rustfs.lineageAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.rustfs.lineageAccessKey }} (rask-lineage)"
               {{- end }}
 {{- end }}
