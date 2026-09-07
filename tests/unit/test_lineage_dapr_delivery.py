@@ -70,10 +70,8 @@ class _FakeRepo:
         self.ingested: list[RunEvent] = []
 
     async def ingest_event(self, event: RunEvent) -> None:
+        # Graph AND durable /events row, in one transaction — one call, nothing to stub twice.
         self.ingested.append(event)
-
-    async def record_event(self, **_kwargs: object) -> None:
-        return None
 
 
 def _delivery_app(monkeypatch: pytest.MonkeyPatch, *, dlq_topic: str | None = None) -> tuple[TestClient, _FakeRepo]:
@@ -213,8 +211,19 @@ def test_redelivery_acks_and_writes_the_identical_idempotent_statements(
         return []  # governance reads see "no node yet"
 
     class _Conn:
+        """The transaction speaks BOTH dialects — the AGE Cypher through `run_cypher`, and the plain-SQL
+        `lineage_events` INSERT on this same connection, because the durable feed row is part of the
+        ingest rather than a projection after it. `sql` is captured for the same convergence assertion
+        the Cypher is: a redelivery must issue the identical statements."""
+
+        def __init__(self) -> None:
+            self.sql: list[tuple[str, object]] = []
+
         def transaction(self) -> Any:
             return _Ctx()
+
+        async def execute(self, statement: str, params: object = None) -> None:
+            self.sql.append((statement, params))
 
     class _Ctx:
         async def __aenter__(self) -> None:
@@ -224,30 +233,44 @@ def test_redelivery_acks_and_writes_the_identical_idempotent_statements(
             return False
 
     class _PoolCM:
+        def __init__(self, conn: _Conn) -> None:
+            self._conn = conn
+
         async def __aenter__(self) -> _Conn:
-            return _Conn()
+            return self._conn
 
         async def __aexit__(self, *_a: object) -> bool:
             return False
 
     class _Pool:
+        """ONE connection for the pool's lifetime, so both deliveries' SQL lands in one place."""
+
+        def __init__(self) -> None:
+            self.conn = _Conn()
+
         def connection(self) -> _PoolCM:
-            return _PoolCM()
+            return _PoolCM(self.conn)
 
     monkeypatch.setattr(repo_mod, "run_cypher", _capture)
-    repo = repo_mod.LineageRepository(cast(Any, _Pool()), "g")
+    pool = _Pool()
+    repo = repo_mod.LineageRepository(cast(Any, pool), "g")
 
     first_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT))
-    first = list(calls)
+    first, first_sql = list(calls), list(pool.conn.sql)
     calls.clear()
+    pool.conn.sql.clear()
     second_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT))
-    second = list(calls)
+    second, second_sql = list(calls), list(pool.conn.sql)
 
     assert first_status == second_status == {"status": "SUCCESS"}
     assert first, "the ingest issued no Cypher — the capture harness drifted"
     creates = sorted({q for q, _ in first if "CREATE (" in q})
     assert not creates, f"ingest must MERGE, never CREATE — a redelivery would duplicate: {creates}"
     assert second == first, "redelivery is not a pure function of the event — convergence is unproven"
+    # The feed row rides the same transaction and must converge on the same terms — it is what makes a
+    # redelivery safe to fail into: ON CONFLICT DO NOTHING on the natural key, issued identically twice.
+    assert first_sql and all("ON CONFLICT DO NOTHING" in q for q, _ in first_sql), f"the feed INSERT is not idempotent: {first_sql}"
+    assert second_sql == first_sql, "the durable feed row is not a pure function of the event either"
 
 
 # --------------------------------------------------------------------------- #

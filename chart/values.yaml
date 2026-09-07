@@ -470,6 +470,22 @@ services:
     # (batched DETACH DELETE under the sweep's single-flight lock). 0 = off — keep full provenance
     # (the dev/demo default). Only meaningful with reconcile.enabled (the cron is the pruner).
     runRetentionDays: 0
+    # Durable /events feed retention, in DAYS of ARRIVAL time (`received_at`, stamped by the database —
+    # never the producer-supplied eventTime, which lineage stores as an unparsed string). Pruned batched
+    # on the same reconcile tick, under the same single-flight lock. 0 = unbounded.
+    #
+    # DAYS, BECAUSE THE CONSUMER OF THIS FEED REASONS IN DAYS. `services/notifications` walks it from a
+    # persisted cursor as the estate's catch-up path after an outage — the bus alone provably misses
+    # ingest, Ray TRAIN and every external OpenLineage producer — so what an operator needs from this
+    # number is *how long an outage the feed survives*. A row- or seq-denominated bound cannot say:
+    # measured 2026-09-08, a 20 000-seq window held 3 133 rows because every ON CONFLICT-rejected
+    # redelivery consumes a sequence value without leaving a row, so the horizon contracted precisely
+    # when redelivery rose. `notifications_feed_gaps_total` recorded 559 lossy reconciler passes on
+    # 2026-08-29 and 1 537 on 2026-08-30.
+    #
+    # 7 is the horizon the deployed feed was measured holding, so the default states it rather than
+    # changes it. Raise it if this estate's acceptable notifications outage is longer than a week.
+    eventsRetentionDays: 7
     # Server-side per-statement timeout (seconds) on the AGE pool — bounds a runaway Cypher traversal.
     ageStatementTimeoutSeconds: 30
 

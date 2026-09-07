@@ -5,8 +5,8 @@ configured with ``OPENLINEAGE_URL`` pointed here ingests with no glue — the li
 contract. Durable catalog→lineage delivery rides the Dapr subscription (``lineage.api.dapr``) instead.
 
 **THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in AGE and the durable feed
-and drives NOTHING — the whole handler is authorize, ``ingest_event``, ``record_event_best_effort``,
-return, with no publish anywhere on the path. The medallion cascade's head is a Dapr subscription on
+and drives NOTHING — the whole handler is authorize, ``ingest_event``, return, with no publish
+anywhere on the path. The medallion cascade's head is a Dapr subscription on
 the ``lineage.events.v1`` TOPIC (``medallion.api.bronze_arrival``), and nothing republishes from HTTP
 ingest onto that topic.
 
@@ -29,7 +29,6 @@ from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
 from lineage.core.metrics import Outcome, record_ingest_duration, record_outcome
 from lineage.models import RunEvent
-from lineage.services.consumer import record_event_best_effort
 
 
 # Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
@@ -54,10 +53,9 @@ async def ingest_event(event: RunEvent, request: Request, repository: Repository
     enforce_author(event, token)
     await enforce_output_authz(event, request, settings, token)
     started = time.perf_counter()
+    # ONE transaction: the AGE graph and the durable /events row. A feed write that fails takes the
+    # ingest down with it, so the caller retries and the two can never disagree (see `ingest_event`).
     await repository.ingest_event(event)
-    # The durable events feed is a secondary projection of the authoritative AGE graph (committed above);
-    # the feed write is best-effort and shared with the JetStream consumer so both paths project alike.
-    await record_event_best_effort(repository, event)
     # Domain metrics for the HTTP transport too — the trainer's whole lifecycle and every external
     # producer land here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
     # A rejected request (401/403/422) never reaches this point, matching the subscriber's DROPPED-vs-

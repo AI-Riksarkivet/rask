@@ -22,8 +22,20 @@ from typing import Final
 CREATE_EVENTS_TABLE: Final = (
     "CREATE TABLE IF NOT EXISTS public.lineage_events ("
     "seq bigserial PRIMARY KEY, run_id text, event_type text, event_time text, "
-    "job text, author text, inputs jsonb, outputs jsonb, event jsonb)"
+    "job text, author text, inputs jsonb, outputs jsonb, event jsonb, "
+    # received_at is the ESTATE'S clock, and that is the whole reason the column exists rather than the
+    # retention reading event_time. `event_time` is a producer-supplied string this service never parses
+    # (`RunEvent.event_time: str`), so a skewed or malformed stamp would either strand a row forever or
+    # delete a fresh one. now() is ours, monotone with arrival, and indexed below for the prune.
+    "received_at timestamptz NOT NULL DEFAULT now())"
 )
+# The same column on a table created before it existed. Postgres backfills the DEFAULT for existing rows
+# as a metadata-only rewrite (PG 11+), so an already-populated feed gets a received_at equal to the
+# moment of the upgrade — which is honest: those rows' true arrival time was never recorded, and dating
+# them "now" keeps the first retention pass after an upgrade from deleting history it cannot date.
+ADD_EVENTS_RECEIVED_AT: Final = "ALTER TABLE public.lineage_events ADD COLUMN IF NOT EXISTS received_at timestamptz NOT NULL DEFAULT now()"
+# The prune's index. Without it a time-bounded DELETE seq-scans the whole feed on every retention pass.
+CREATE_EVENTS_RECEIVED_AT_INDEX: Final = "CREATE INDEX IF NOT EXISTS lineage_events_received_at ON public.lineage_events (received_at)"
 # A pre-existing table (created before this index) may already hold redelivered duplicates that would make
 # CREATE UNIQUE INDEX fail — remove them first, keeping the earliest row (min seq) per natural key, so the
 # index can always be established. NULL event_type/event_time never match (SQL NULL ≠ NULL), matching the
@@ -77,13 +89,32 @@ LIST_EVENTS_SUMMARY: Final = "SELECT seq, event_type, event_time, job, author, i
 LIST_EVENTS_SUMMARY_AFTER: Final = (
     "SELECT seq, event_type, event_time, job, author, inputs, outputs FROM public.lineage_events WHERE seq < %s ORDER BY seq DESC LIMIT %s"
 )
-# Retention prune — keep the most-recent N rows (by the monotonic seq), drop older. Cheap (PK-indexed seq).
-PRUNE_EVENTS: Final = "DELETE FROM public.lineage_events WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM public.lineage_events) - %s"
+# Retention prune — drop rows the estate RECEIVED longer ago than the configured window.
+#
+# TIME IS THE UNIT BECAUSE IT IS THE ONE THE CONSUMERS REASON IN. The notifications reconciler walks
+# this feed from a persisted cursor as the estate's catch-up path after an outage, so the only question
+# a retention knob has to answer is *how long an outage does the feed survive*.
+#
+# NEITHER A ROW COUNT NOR A SEQ WINDOW CAN ANSWER IT, and the seq window is the trap worth naming:
+# `INSERT_EVENT` is ON CONFLICT DO NOTHING and Postgres consumes the sequence value BEFORE the conflict
+# check, so a redelivery that leaves no row still advances `seq`. Measured on the deployed feed
+# 2026-09-08 under a 20 000-seq bound: 101229…121228 held **3 133 rows**, 84% of the window spent on
+# duplicates — a horizon that contracts precisely when redelivery rises, which is when a consumer is
+# most likely to be behind. `notifications_feed_gaps_total` recorded 559 reconciler passes on
+# 2026-08-29 and 1 537 on 2026-08-30 that found the feed pruned below their cursor.
+#
+# BATCHED for the same reason the graph's `PRUNE_OLD_RUNS_TEMPLATE` is: an all-or-nothing DELETE over a
+# window enabled late or shortened would exceed the pool's statement_timeout, roll back, and never
+# converge — each tick retrying the identical oversized delete.
+PRUNE_EVENTS: Final = (
+    "DELETE FROM public.lineage_events WHERE seq IN "
+    "(SELECT seq FROM public.lineage_events WHERE received_at < now() - make_interval(days => %s) ORDER BY seq LIMIT %s)"
+)
 # The FLOOR the prune above leaves behind — the oldest row the feed can still serve.
 #
-# It exists because the prune runs on EVERY ingest and knows about no consumer: a reader whose cursor
-# has fallen below this number lost rows before it read them, and walking to the end of the feed would
-# otherwise look exactly like being caught up. Lineage cannot detect that itself — the notifications
+# It exists because the prune knows about no consumer: a reader whose cursor has fallen below this
+# number lost rows before it read them, and walking to the end of the feed would otherwise look exactly
+# like being caught up. Lineage cannot detect that itself — the notifications
 # reconciler's cursor lives in ITS Dapr state store, which lineage is not scoped to and must not be —
 # so lineage publishes the floor and each consumer draws its own conclusion.
 #

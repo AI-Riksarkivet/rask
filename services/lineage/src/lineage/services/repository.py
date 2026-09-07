@@ -84,7 +84,30 @@ def _tags_from(value: object) -> list[str]:
     return value.split(",") if isinstance(value, str) and value else []
 
 
+#: Rows per retention DELETE. Sized like the graph prune's 500: far enough under the pool's
+#: statement_timeout that a long-disabled window converges in bounded steps instead of timing out whole.
+_EVENT_PRUNE_BATCH: Final = 500
+
 _NO_WRITES: Final[tuple[list[str], bool]] = ([], False)
+
+
+def feed_columns(event: RunEvent) -> dict[str, Any]:
+    """The durable-events-feed columns for one ``RunEvent``.
+
+    Lives beside the writer rather than beside a caller because :meth:`LineageRepository.ingest_event`
+    now writes the feed row itself, inside the graph transaction — there is no longer a second path that
+    projects an event independently and could project it differently.
+    """
+    return {
+        "run_id": event.run.run_id,
+        "event_type": event.event_type,
+        "event_time": event.event_time,
+        "job": f"{event.job.namespace}/{event.job.name}",
+        "author": event.author,
+        "inputs": [d.name for d in event.inputs],
+        "outputs": [d.name for d in event.outputs],
+        "event": event.model_dump(by_alias=True),
+    }
 
 
 def _fold_writes(rows: list[list[Any]]) -> dict[str, tuple[list[str], bool]]:
@@ -107,18 +130,33 @@ class LineageRepository:
         self,
         pool: AsyncConnectionPool,
         graph: str,
-        events_retention: int = 0,
         statement_timeout_seconds: float = 30.0,
     ) -> None:
         self._pool = pool
         self._graph = graph
-        self._events_retention = events_retention
         # The same configured value make_pool sets session-wide on every pooled connection — used to
         # bound the first-boot DDL with a transaction-scoped SET LOCAL (see ensure_events_table).
         self._statement_timeout_seconds = statement_timeout_seconds
 
     async def ingest_event(self, event: RunEvent) -> None:
-        """Upsert the run, its job, its datasets, and their edges in one transaction."""
+        """Upsert the run, its job, its datasets, their edges AND the durable feed row, in ONE transaction.
+
+        THE FEED ROW IS PART OF THE INGEST, not a projection appended after it, and the transaction is
+        what makes ``GET /events`` a complete view of the graph rather than a subset of it. A feed write
+        on its own connection can fail — a dropped connection, a pod eviction, a cancelled statement —
+        while the graph write has already committed, and nothing afterwards can detect the difference:
+        the two stores share no key to reconcile on.
+
+        The feed is not a diagnostic. `services/notifications` walks it from a persisted cursor as the
+        estate's catch-up path after an outage, because the bus alone provably misses ingest, Ray TRAIN
+        and every external OpenLineage producer. A row missing from it is a person who is never told.
+
+        FAILING THE WHOLE INGEST IS THE SAFE DIRECTION HERE, and that is what makes the strict contract
+        affordable: both writes are idempotent — the graph MERGEs on ``run_id``, the feed is
+        ``ON CONFLICT DO NOTHING`` on its natural key — so the redelivery a failure provokes re-runs both
+        harmlessly. It is also what keeps the four ingest paths (HTTP, the JetStream consumer, the DLQ
+        replay door, the reconcile relay) identical without each having to remember a second call.
+        """
         async with self._pool.connection() as conn, conn.transaction():
             await run_cypher(
                 conn,
@@ -306,6 +344,10 @@ class LineageRepository:
                         cy.LINK_CREATED,
                         {"name": event.author, "ds": ds.name, "tm": event.event_time},
                     )
+            # LAST, inside the same transaction: the append-only observation of what arrived. Ordered
+            # after the graph so the lock order is the same at every call site (AGE label tables, then
+            # public.lineage_events) and two concurrent ingests cannot form a cycle.
+            await self._insert_feed_row(conn, **feed_columns(event))
 
     async def _schema_is_current(self, conn: psycopg.AsyncConnection, name: str, version: str) -> bool:
         """True when ``version`` is at least the newest WROTE version the graph records for ``name``
@@ -825,52 +867,56 @@ class LineageRepository:
             # ONE transaction (like ingest_event) — on autocommit these were 4 independent statements, so a
             # crash mid-back-fill left a RECONCILED Run with no WROTE/version visible to /runs until the
             # NEXT sweep re-ran the idempotent MERGEs (§4). Atomic: no half-written window between sweeps.
-            # Stamp job + outputs on the run so it appears CONSISTENTLY across views — /runs (governed by
-            # the run's outputs) showed nothing for a job/outputs-less run while producers() showed it.
+            # The FEED ROW IS INSIDE IT TOO, on the same rule as ingest_event: a repair that reaches the
+            # graph and not /events is a repair the audit surface cannot show, and the reconcile sweep
+            # would report success. Stamp job + outputs on the run so it appears CONSISTENTLY across views
+            # — /runs (governed by the run's outputs) showed nothing for a job/outputs-less run while
+            # producers() showed it.
             await run_cypher(conn, self._graph, cy.BACKFILL_RUN, {"rid": rid, "tm": tm, "job": job, "outs": name})
             await run_cypher(conn, self._graph, cy.LINK_WROTE, params)
             await run_cypher(conn, self._graph, cy.SET_WROTE_VERSION, {**params, "ver": str(version)})
             # Recover the per-version schema onto the same edge when reconciliation could read it off storage.
             if schema:
                 await run_cypher(conn, self._graph, cy.SET_WROTE_SCHEMA, {**params, "schema": json.dumps(schema)})
-        # A feed row too, so /events also knows the reconcile (the third view) — the repair is auditable
-        # next to the ingested writes it recovered.
-        #
-        # The blob is a REAL OpenLineage RunEvent, so a Marquez-style consumer replaying /events ingests it
-        # unchanged. Two fidelity rules the first cut broke (found 2026-07-26 by validating the live feed
-        # against https://openlineage.io/spec/2-0-2/OpenLineage.json — 14 of 200 events failed):
-        #   * ``eventType`` must be in the spec enum. ``RECONCILED`` is not; ``OTHER`` is the spec's own slot
-        #     for "additional metadata added to the same run [after it completed]", which is exactly what a
-        #     back-fill is. The ``lance.operation="reconcile"`` marker (below) is what names it precisely.
-        #   * every facet — custom ones included — must carry ``_producer`` + ``_schemaURL`` (BaseFacet
-        #     ``required``). The bare ``{"operation": ...}`` dict didn't; ``custom_facet`` is the helper that
-        #     stamps both, and is what every other emitter already uses.
-        # ``event_type=RECONCILED`` stays on the ROW (and on the ``(:Run)`` node): it is our own storage
-        # marker — the /events + /runs views and the ``pg.TERMINAL_TYPES`` dedup index key off it, and it must
-        # stay distinguishable from a producer-sent OTHER.
-        synthetic = {
-            "eventType": "OTHER",
-            "eventTime": tm,
-            "producer": _RECONCILE_PRODUCER,
-            "schemaURL": RUN_EVENT_SCHEMA_URL,
-            "run": {
-                "runId": rid,
-                "facets": {"lance": custom_facet(_RECONCILE_PRODUCER, operation="reconcile", version=version)},
-            },
-            "job": {"namespace": "lance-reconcile", "name": f"reconcile.{name}"},
-            "inputs": [],
-            "outputs": [{"namespace": "", "name": name}],
-        }
-        await self.record_event(
-            run_id=rid,
-            event_type="RECONCILED",
-            event_time=tm,
-            job=job,
-            author="reconcile",
-            inputs=[],
-            outputs=[name],
-            event=synthetic,
-        )
+            # A feed row too, so /events also knows the reconcile (the third view) — the repair is auditable
+            # next to the ingested writes it recovered.
+            #
+            # The blob is a REAL OpenLineage RunEvent, so a Marquez-style consumer replaying /events ingests it
+            # unchanged. Two fidelity rules the first cut broke (found 2026-07-26 by validating the live feed
+            # against https://openlineage.io/spec/2-0-2/OpenLineage.json — 14 of 200 events failed):
+            #   * ``eventType`` must be in the spec enum. ``RECONCILED`` is not; ``OTHER`` is the spec's own slot
+            #     for "additional metadata added to the same run [after it completed]", which is exactly what a
+            #     back-fill is. The ``lance.operation="reconcile"`` marker (below) is what names it precisely.
+            #   * every facet — custom ones included — must carry ``_producer`` + ``_schemaURL`` (BaseFacet
+            #     ``required``). The bare ``{"operation": ...}`` dict didn't; ``custom_facet`` is the helper that
+            #     stamps both, and is what every other emitter already uses.
+            # ``event_type=RECONCILED`` stays on the ROW (and on the ``(:Run)`` node): it is our own storage
+            # marker — the /events + /runs views and the ``pg.TERMINAL_TYPES`` dedup index key off it, and it must
+            # stay distinguishable from a producer-sent OTHER.
+            synthetic = {
+                "eventType": "OTHER",
+                "eventTime": tm,
+                "producer": _RECONCILE_PRODUCER,
+                "schemaURL": RUN_EVENT_SCHEMA_URL,
+                "run": {
+                    "runId": rid,
+                    "facets": {"lance": custom_facet(_RECONCILE_PRODUCER, operation="reconcile", version=version)},
+                },
+                "job": {"namespace": "lance-reconcile", "name": f"reconcile.{name}"},
+                "inputs": [],
+                "outputs": [{"namespace": "", "name": name}],
+            }
+            await self._insert_feed_row(
+                conn,
+                run_id=rid,
+                event_type="RECONCILED",
+                event_time=tm,
+                job=job,
+                author="reconcile",
+                inputs=[],
+                outputs=[name],
+                event=synthetic,
+            )
 
     async def prune_runs(self, cutoff_iso: str) -> int:
         """DETACH DELETE runs older than ``cutoff_iso`` in LIMIT-bounded batches (opt-in retention, §4).
@@ -917,6 +963,12 @@ class LineageRepository:
                 await conn.execute(pg.CREATE_EVENTS_INDEX)
                 await conn.execute(pg.DEDUP_TERMINAL)
                 await conn.execute(pg.CREATE_TERMINAL_INDEX)
+                # A feed created before retention became time-based has no received_at; add it and the
+                # index the prune reads. Both IF NOT EXISTS, so this is the same idempotent boot step as
+                # the rest — and it runs under the same SET LOCAL bound, because the ADD COLUMN takes an
+                # ACCESS EXCLUSIVE lock and must not be able to hang boot behind a long reader.
+                await conn.execute(pg.ADD_EVENTS_RECEIVED_AT)
+                await conn.execute(pg.CREATE_EVENTS_RECEIVED_AT_INDEX)
         except psycopg.errors.DuplicateTable:
             pass
 
@@ -995,6 +1047,36 @@ class LineageRepository:
                     with suppress(Exception):
                         await conn.execute("SELECT pg_advisory_unlock(%s)", (pg.RECONCILE_LOCK_KEY,))
 
+    async def _insert_feed_row(
+        self,
+        conn: psycopg.AsyncConnection,
+        *,
+        run_id: str | None,
+        event_type: str | None,
+        event_time: str | None,
+        job: str | None,
+        author: str | None,
+        inputs: list[str],
+        outputs: list[str],
+        event: dict[str, Any],
+    ) -> None:
+        """Append one row to the durable feed ON THE CALLER'S connection, so the write can join whatever
+        transaction the caller already holds. ``ON CONFLICT DO NOTHING`` makes it idempotent under the
+        redelivery that transaction's failure would provoke."""
+        await conn.execute(
+            pg.INSERT_EVENT,
+            (
+                run_id,
+                event_type,
+                event_time,
+                job,
+                author,
+                json.dumps(inputs),
+                json.dumps(outputs),
+                json.dumps(event),
+            ),
+        )
+
     async def record_event(
         self,
         *,
@@ -1007,23 +1089,52 @@ class LineageRepository:
         outputs: list[str],
         event: dict[str, Any],
     ) -> None:
-        """Append one ingested OpenLineage event to the durable feed (survives restart)."""
+        """Append one event to the durable feed on its OWN connection.
+
+        A SEEDING PRIMITIVE WITH NO PRODUCTION CALLER, deliberately — the same shape as the registry's
+        `put_warehouse`/`put_project`, and pinned as such by
+        ``tests/unit/test_the_events_feed_has_one_door.py``. Every write that HAS a graph transaction to
+        join writes its feed row inside it (:meth:`ingest_event`, :meth:`backfill_write`), because a feed
+        row that can fail on its own is a feed that silently desynchronises from the graph it projects.
+        What is left for this method is writing a feed row with no graph write at all, which only the
+        feed's own dedup tests need.
+        """
         async with self._pool.connection() as conn:
-            await conn.execute(
-                pg.INSERT_EVENT,
-                (
-                    run_id,
-                    event_type,
-                    event_time,
-                    job,
-                    author,
-                    json.dumps(inputs),
-                    json.dumps(outputs),
-                    json.dumps(event),
-                ),
+            await self._insert_feed_row(
+                conn,
+                run_id=run_id,
+                event_type=event_type,
+                event_time=event_time,
+                job=job,
+                author=author,
+                inputs=inputs,
+                outputs=outputs,
+                event=event,
             )
-            if self._events_retention:
-                await conn.execute(pg.PRUNE_EVENTS, (self._events_retention,))
+
+    async def prune_events(self, retention_days: int) -> int:
+        """Drop feed rows RECEIVED longer than ``retention_days`` ago, in LIMIT-bounded batches.
+
+        ON THE RECONCILE TICK, NOT THE INGEST PATH, under the same cluster-wide advisory lock as
+        :meth:`prune_runs`. Retention on the write path would make every ingested event pay for a
+        DELETE, and would let two replicas ingesting concurrently race the same one; one pass per tick
+        under a single-flight lock has neither cost.
+
+        Batched for the reason `prune_runs` is: a window enabled late, or shortened, presents a backlog
+        an all-or-nothing DELETE would carry past the pool's statement_timeout — cancelled, rolled back,
+        and retried identically forever. Returns rows actually deleted, which is the honest number here
+        (unlike the graph prune's up-front count) because each batch reports its own rowcount.
+        """
+        deleted = 0
+        async with self._pool.connection() as conn:
+            while True:
+                async with conn.transaction():
+                    cur = await conn.execute(pg.PRUNE_EVENTS, (retention_days, _EVENT_PRUNE_BATCH))
+                if not cur.rowcount:
+                    return deleted
+                deleted += cur.rowcount
+                if cur.rowcount < _EVENT_PRUNE_BATCH:
+                    return deleted
 
     async def ensure_reads_table(self) -> None:
         """Create the read-audit log table if absent (idempotent, called on boot)."""

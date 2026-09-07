@@ -69,10 +69,8 @@ class _Repo:
         self.ingested: list[Any] = []
 
     async def ingest_event(self, event: Any) -> None:
+        # Graph and durable /events row in one transaction — a replay has one call to make, not two.
         self.ingested.append(event)
-
-    async def record_event(self, **_kwargs: object) -> None:
-        pass
 
 
 def _request(**state: object) -> Any:

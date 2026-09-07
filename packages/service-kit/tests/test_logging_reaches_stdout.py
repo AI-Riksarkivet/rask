@@ -14,9 +14,9 @@ Nothing was red, because the code that logs is never the code that fails. Measur
 at all. After the fix the identical request logs it. The medallion stage runner's workflow-dispatch
 logs were invisible the same way, which is why a running cascade read as an idle one.
 
-The class this closes is the SWALLOWED DIAGNOSTIC: `record_event_best_effort` catches a feed
-write failure by design and reports it with a WARNING that had nowhere to go — so the one signal
-distinguishing a healthy feed from a failing one did not exist.
+The class this closes is the SWALLOWED DIAGNOSTIC: any handler that catches a failure by design and
+reports it with a WARNING that had nowhere to go — so the one signal distinguishing a healthy path
+from one that has been failing all week did not exist.
 
 The fix is what the function already intended: configure the ROOT logger, so `getLogger(__name__)`
 anywhere inherits a handler. These tests pin the property rather than the implementation — a future

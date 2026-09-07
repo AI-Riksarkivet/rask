@@ -33,7 +33,6 @@ from lineage.core.reconcile import (
 )
 from lineage.models import RunEvent, author_sub_from_payload
 from lineage.schemas import ReconcileState, ReconcileStatus
-from lineage.services.consumer import record_event_best_effort
 from service_kit import dapr_publish
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import outbox, outbox_metrics
@@ -60,6 +59,7 @@ class SweepReport(BaseModel):
     outbox_drained: int = 0
     outbox_stranded: int = 0
     pruned_runs: int = 0
+    pruned_events: int = 0
 
 
 class DrainOutcome(BaseModel):
@@ -79,8 +79,8 @@ def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
     """Partition one sweep's statuses into the tick's finding classes.
 
     Pure and public so the unit tier can drive a partition from a handful of statuses instead of standing
-    up a whole sweep. ``outbox_drained`` / ``pruned_runs`` are not derived from statuses — the caller
-    stamps them on.
+    up a whole sweep. ``outbox_drained`` / ``pruned_runs`` / ``pruned_events`` are not derived from
+    statuses — the caller stamps them on.
     """
     return SweepReport(
         checked=len(statuses),
@@ -135,6 +135,7 @@ def log_sweep(report: SweepReport) -> None:
             "outbox_drained": report.outbox_drained,
             "outbox_stranded": report.outbox_stranded,
             "pruned_runs": report.pruned_runs,
+            "pruned_events": report.pruned_events,
         },
     )
 
@@ -185,6 +186,29 @@ async def _prune_old_runs(repository: RepositoryDep, settings: SettingsDep) -> i
     return pruned
 
 
+async def _prune_old_events(repository: RepositoryDep, settings: SettingsDep) -> int:
+    """Durable-feed retention — drop rows RECEIVED longer ago than the budget; 0 days keeps everything.
+
+    Runs beside `_prune_old_runs`, under the same single-flight lock and with the same isolation: a
+    retention failure degrades to a warning rather than 500ing a tick whose sweep already completed.
+
+    IT IS HERE RATHER THAN ON THE INGEST PATH for two reasons that only this position satisfies: the
+    feed's hottest path must not pay for a retention DELETE per event, and two replicas ingesting
+    concurrently must not be able to race the same delete. One pass per tick under the lock has neither
+    problem.
+    """
+    if not settings.events_retention_days:
+        return 0
+    try:
+        pruned = await repository.prune_events(settings.events_retention_days)
+    except Exception as exc:
+        log.warning("lineage_event_prune_failed", extra={"error": str(exc)})
+        return 0
+    if pruned:
+        log.info("lineage_events_pruned", extra={"pruned": pruned, "retention_days": settings.events_retention_days})
+    return pruned
+
+
 async def _on_cron(
     repository: RepositoryDep,
     settings: SettingsDep,
@@ -219,6 +243,7 @@ async def _on_cron(
         report = summarize_sweep(await _sweep(repository, settings, opts))
         report.outbox_drained, report.outbox_stranded = outcome.drained, outcome.stranded
         report.pruned_runs = await _prune_old_runs(repository, settings)
+        report.pruned_events = await _prune_old_events(repository, settings)
     log_sweep(report)
     return report.model_dump()
 
@@ -297,12 +322,10 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
             continue
         try:
-            await repository.ingest_event(event)  # idempotent — MERGE on run_id (authoritative AGE graph)
-            # Mirror BOTH live ingest paths (JetStream consumer + HTTP ingest): also project onto the durable
-            # `lineage_events` feed. Without this the drained run reaches /runs + /producers but is SILENTLY
-            # absent from the /events audit surface — exactly the run the outbox exists to save. The feed INSERT
-            # is ON CONFLICT DO NOTHING on the natural key, so a later genuine redelivery won't duplicate.
-            await record_event_best_effort(repository, event)
+            # Graph AND durable feed, in one transaction — see `ingest_event`. The drained run reaching
+            # /runs + /producers while SILENTLY absent from /events was the shape this relay exists to
+            # prevent, and it is no longer expressible: there is one write.
+            await repository.ingest_event(event)  # idempotent — MERGE on run_id, feed ON CONFLICT DO NOTHING
             # RE-PUBLISH, then drop. Ingesting alone repairs the GRAPH and leaves every SUBSCRIBER unaware:
             # medallion's `/bronze-arrival` reacts to this announcement, so a head event recovered but never
             # re-published means provenance is restored while the bronze->silver->gold run it should have

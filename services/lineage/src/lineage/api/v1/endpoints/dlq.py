@@ -29,7 +29,6 @@ from lineage.api.security import CurrentToken
 from lineage.core.config import storage_options
 from lineage.models import RunEvent
 from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse
-from lineage.services.consumer import record_event_best_effort
 from service_kit.governed import audit
 from service_kit.governed.audit import SUCCESS
 from service_kit.lakehouse import outbox
@@ -133,8 +132,7 @@ async def replay_dlq(
             raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     # Same gate as ingest — a caller may only replay a run they were authorized to write in the first place.
     await enforce_output_authz(event, request, settings, token)
-    await repository.ingest_event(event)  # idempotent MERGE on run_id
-    await record_event_best_effort(repository, event)  # project onto the durable /events feed too
+    await repository.ingest_event(event)  # idempotent — MERGE on run_id, and the /events row in the same transaction
     # Drop exactly what was replayed — dropping by run id would miss it and leave a redundant object.
     await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged_key)
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz

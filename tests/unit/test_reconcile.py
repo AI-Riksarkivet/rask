@@ -522,6 +522,11 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "stale": [],
         "contract_violations": {},
         "pruned_runs": 0,
+        # `pruned_events` joined the report when the durable /events feed's retention moved OFF the ingest
+        # path onto this tick. Its presence on every tick is the contract for the same reason
+        # `pruned_runs`'s is: a key that appears only when it did something makes "nothing was pruned"
+        # and "the pass never ran" the same observation, and those need opposite responses.
+        "pruned_events": 0,
     }
 
 

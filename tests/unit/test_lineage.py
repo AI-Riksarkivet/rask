@@ -258,23 +258,40 @@ class _Tx:
 
 
 class _Conn:
+    """One connection speaking BOTH dialects, because `ingest_event`'s transaction does: the AGE
+    Cypher through `run_cypher`, and the plain-SQL `lineage_events` INSERT on this same connection —
+    which is what makes the durable feed row part of the ingest rather than a projection after it."""
+
+    def __init__(self) -> None:
+        self.sql: list[tuple[str, object]] = []
+
     def transaction(self) -> _Tx:
         return _Tx()
 
+    async def execute(self, statement: str, params: object = None) -> None:
+        self.sql.append((statement, params))
+
 
 class _PoolCM:
+    def __init__(self, conn: _Conn) -> None:
+        self._conn = conn
+
     async def __aenter__(self) -> _Conn:
-        return _Conn()
+        return self._conn
 
     async def __aexit__(self, *_a: object) -> bool:
         return False
 
 
 class _FakePool:
-    """Just enough of an AsyncConnectionPool to exercise ingest_event without a database."""
+    """Just enough of an AsyncConnectionPool to exercise ingest_event without a database. ONE
+    connection for the pool's lifetime, so a test can read back everything the transaction issued."""
+
+    def __init__(self) -> None:
+        self.conn = _Conn()
 
     def connection(self) -> _PoolCM:
-        return _PoolCM()
+        return _PoolCM(self.conn)
 
 
 def _capture_ingest(monkeypatch: pytest.MonkeyPatch, event_index: int) -> list[tuple[str, dict[str, object]]]:
@@ -1106,7 +1123,6 @@ def test_pool_closed_when_bootstrap_fails(monkeypatch: pytest.MonkeyPatch) -> No
         database_url="postgresql://x",
         age_statement_timeout_seconds=30.0,
         graph="g",
-        events_retention=None,
         outbox_uri="",
     )
 

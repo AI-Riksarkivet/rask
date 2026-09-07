@@ -558,7 +558,7 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
     rid, rid2 = str(uuid.uuid4()), str(uuid.uuid4())
     reader = f"user:analyst-{uuid.uuid4().hex[:8]}"  # unique per run — the audit log is a plain INSERT
 
-    async def run() -> tuple[list, list, list, list, Readers]:
+    async def run() -> tuple[list, list, tuple[int, list], list, Readers]:
         pool = make_pool(dsn)
         await pool.open()
         try:
@@ -592,10 +592,19 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
             await repo.ensure_events_table()
             after_ddl = [r for r in await repo.list_events() if r.event.get("run", {}).get("runId") == rid]
 
-            # retention: a repo bootstrapped with a keep-window prunes older rows on the next insert.
-            pruning = LineageRepository(pool, "lineage", events_retention=1)
-            await pruning.record_event(event_type="START", event_time="2026-07-06T00:01:00+00:00", **kw(rid2))
-            survivors = await pruning.list_events()
+            # Retention prunes by ARRIVAL time (`received_at`, the database's own clock), so ageing a row
+            # means backdating that column — the producer-supplied event_time above is not what decides.
+            #
+            # THE WINDOW IS DELIBERATELY ABSURD. This suite points at whatever AGE the DSN names, which on
+            # a developer machine is the live estate's, and `prune_events` is estate-wide by nature: a
+            # realistic 7-day window would delete real feed rows as a side effect of a test. Backdating
+            # this run's own rows past any age a real row can have, and pruning at ten years, exercises
+            # the same predicate, batching and rowcount while being unable to touch anything else.
+            await repo.record_event(event_type="START", event_time="2026-07-06T00:01:00+00:00", **kw(rid2))
+            async with pool.connection() as conn:
+                await conn.execute("UPDATE public.lineage_events SET received_at = now() - interval '4000 days' WHERE run_id = %s", (rid,))
+            pruned = await repo.prune_events(3650)
+            survivors = [r.event.get("run", {}).get("runId") for r in await repo.list_events() if r.event.get("run", {}).get("runId") in (rid, rid2)]
 
             await repo.ensure_reads_table()
             await repo.record_read(reader=reader, dataset="silver$features")
@@ -608,11 +617,11 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
                 reads = await cur.fetchall()
             # The QUERY surface (#41 was capture-only): who READ silver$features, aggregated per principal.
             audited = await repo.readers("silver$features")
-            return records, after_ddl, survivors, reads, audited
+            return records, after_ddl, (pruned, survivors), reads, audited
         finally:
             await pool.close()
 
-    records, after_ddl, survivors, reads, audited = asyncio.run(run())
+    records, after_ddl, (pruned, survivors), reads, audited = asyncio.run(run())
 
     # 5 record_event calls → 3 rows AT INSERT TIME: both redeliveries (exact + fresh-time terminal) were
     # dropped by ON CONFLICT, the first COMPLETE won, and the RUNNING trail kept both distinct times.
@@ -627,8 +636,10 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
     # a DDL re-run on the populated table is a no-op on already-settled rows (full model equality —
     # a DDL-time dedup that mangled payload/seq while preserving type+time would still be caught)
     assert after_ddl == records
-    # the prune kept only the newest seq window: rid2's row survives, every older row is gone.
-    assert [r.event.get("run", {}).get("runId") for r in survivors] == [rid2]
+    # the prune drops what was RECEIVED outside the window and keeps what was not: the backdated run's
+    # three rows are gone, the row received just now survives.
+    assert pruned == 3, f"expected the three backdated rows to be reclaimed, got {pruned}"
+    assert survivors == [rid2], f"the prune took the wrong rows: {survivors}"
     assert reads == [
         (reader, "silver$features"),
         (reader, "silver$features"),
@@ -704,3 +715,182 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
     assert alive is None  # (2) the recreate outranks it — nothing stored, nothing to clear
     assert inventory == ["x", "y"]  # (3) the replaced columns are GONE from the CURRENT inventory
     assert after_stale == ["x", "y"]  # …and a stale redelivery cannot bring them back
+
+
+def test_a_run_state_is_decided_by_event_time_not_by_delivery_order(dsn: str) -> None:
+    """A run's state must not be whichever event happened to be delivered last.
+
+    `open_lakehouse_diff_left.md` § E3 ("run state regresses on out-of-order ingest"), whose close
+    condition is *"Sticky terminal state; a START-after-COMPLETE test."*
+
+    MEASURED ON THE DEPLOYED GRAPH 2026-09-07, and it is not the hypothetical the row describes — the
+    regression has already landed. Run `f280fd32-617d-5292-9323-993d021bb79e`, the medallion cascade's
+    `derive_media` writing `silver-media$features`, holds two terminal events in the durable feed::
+
+        seq 118723   FAIL       2026-09-07T13:30:31.410352+00:00
+        seq 118724   COMPLETE   2026-09-07T13:29:50.154780+00:00
+
+    Delivered FAIL first, COMPLETE second — but the COMPLETE is stamped 41 seconds EARLIER. `MERGE_RUN`
+    assigned `r.event_type=$et` unconditionally, so the graph reports that run COMPLETE while the newest
+    event says it failed. Everything downstream reads the wrong answer from it: `_fold_writes` badges a
+    dataset failed only from a producing run's FAIL/ABORT, and `LATEST_WRITE` filters
+    `WHERE r.event_type = 'COMPLETE'`. It is also visible from the node alone — `event_time` (last
+    delivery) sits 41 s BEFORE `started_at` (first delivery), which is a run that finished before it began.
+
+    THE ESTATE ALREADY MADE THIS RULING ONE LAYER OVER. The column inventory has a recency gate, and the
+    test above ends by proving a stale redelivery cannot resurrect a replaced schema. The run's own
+    lifecycle had no such gate.
+
+    TWO RULES, because neither covers the other. Newest-event-wins settles the measured case (both
+    events terminal, so only time separates them). Terminal-stickiness settles the row's named case, a
+    START arriving after a COMPLETE with a *fresher* stamp, which newest-event-wins would let through.
+
+    DRIVEN THROUGH `ingest_event` AGAINST REAL AGE rather than asserted over the Cypher string: the
+    guard is a `WITH`-bound predicate consumed by a `SET`, and AGE 1.5.0 has quirks in exactly that
+    seam — it drops a `$param` in a `SET` fused to a MERGE-on-edge, which is why four statements in
+    `cypher.py` are split out. A string assertion would pass on a guard AGE silently ignores.
+    """
+    from lineage.core.age import make_pool
+    from lineage.models import RunEvent
+    from lineage.services.repository import LineageRepository
+
+    run_id = str(uuid.uuid4())
+    name = f"e2e-order-{uuid.uuid4().hex[:8]}"
+
+    def event(event_type: str, tm: str) -> RunEvent:
+        return RunEvent.model_validate(
+            {
+                "eventType": event_type,
+                "eventTime": tm,
+                "run": {"runId": run_id, "facets": {}},
+                "job": {"namespace": "medallion", "name": "derive_media"},
+                "outputs": [{"namespace": "e2e", "name": name}],
+            }
+        )
+
+    async def run() -> list[tuple[str | None, str | None, str | None]]:
+        pool = make_pool(dsn)
+        await pool.open()
+        try:
+            repo = LineageRepository(pool, "lineage")
+            seen: list[tuple[str | None, str | None, str | None]] = []
+
+            async def state() -> tuple[str | None, str | None, str | None]:
+                status = await repo.run_status(run_id)
+                assert status is not None, f"run {run_id} was not stored at all"
+                return status.state, status.updated_at, status.started_at
+
+            # The live shape: a run that FAILED at :31, delivered before the COMPLETE stamped at :50.
+            await repo.ingest_event(event("FAIL", "2026-09-07T13:30:31.410352+00:00"))
+            seen.append(await state())
+            await repo.ingest_event(event("COMPLETE", "2026-09-07T13:29:50.154780+00:00"))
+            seen.append(await state())
+            # The row's own case: a START arriving after the terminal, with a FRESHER stamp.
+            await repo.ingest_event(event("START", "2026-09-07T14:00:00.000000+00:00"))
+            seen.append(await state())
+            # …and the direction that must still work: a genuinely newer terminal supersedes.
+            await repo.ingest_event(event("ABORT", "2026-09-07T14:05:00.000000+00:00"))
+            seen.append(await state())
+            return seen
+        finally:
+            await pool.close()
+
+    after_fail, after_stale_complete, after_late_start, after_newer_abort = asyncio.run(run())
+
+    assert after_fail[0] == "FAIL", f"the first event did not land: {after_fail}"
+    assert after_stale_complete[0] == "FAIL", (
+        f"an OLDER COMPLETE overwrote a FAIL because it was delivered second — the graph now reports a "
+        f"failed run as succeeded, which is the live defect: {after_stale_complete}"
+    )
+    assert after_late_start[0] == "FAIL", f"a START regressed a terminal run: {after_late_start}"
+    assert after_newer_abort[0] == "ABORT", f"a genuinely newer terminal was refused: {after_newer_abort}"
+
+    # event_time is `updated_at` and the runs board ORDERs BY it, so it must never move backwards…
+    assert after_stale_complete[1] == "2026-09-07T13:30:31.410352+00:00", f"event_time regressed: {after_stale_complete}"
+    # …and started_at must be the EARLIEST time seen, not the first DELIVERED one, or a run reads as
+    # having finished before it began — exactly what the live node shows.
+    assert after_stale_complete[2] == "2026-09-07T13:29:50.154780+00:00", (
+        f"started_at kept the first-delivered time, so the run still finished before it began: {after_stale_complete}"
+    )
+
+
+def test_a_failed_feed_write_takes_the_graph_write_with_it(dsn: str) -> None:
+    """`GET /events` must not be able to become a subset of the graph.
+
+    `open_lakehouse_diff_left.md` § E4. The feed row used to be written by `record_event_best_effort` —
+    a SECOND connection, opened after `ingest_event`'s transaction had already committed, catching every
+    exception into a WARNING on the stated ground that *"a feed-write failure must never break ingest
+    (the authoritative AGE graph write already succeeded)"*. Under that contract a connection error, an
+    eviction or a statement timeout between the two writes left an event permanently in the graph and
+    permanently absent from the feed. Nothing could detect it afterwards: the two stores have no shared
+    key to reconcile on, and the only trace was a log line `kubectl logs` strips the `extra=` fields from.
+
+    THE FEED IS NOT A DIAGNOSTIC. `services/notifications` walks it from a persisted cursor as the
+    estate's catch-up path after an outage, because the bus alone provably misses ingest, Ray TRAIN and
+    every external OpenLineage producer. A row missing from it is a person who is never told.
+
+    THE TEST FORCES THE FAILURE AT THE WRITER, which is the only way to observe the boundary: the feed
+    INSERT is `ON CONFLICT DO NOTHING` and takes no constraint a caller can violate, so no input makes it
+    fail. A subclass whose `_insert_feed_row` raises puts the failure exactly where a dead connection or
+    a cancelled statement would, and leaves every other statement genuine.
+
+    BOTH ASSERTIONS ARE LOAD-BEARING and neither alone is the property. `raised` is what the old shape
+    lost — the failure was caught and ingest reported success. `rolled_back` is what a feed write outside
+    the transaction loses. Measured 2026-09-08: against an `ingest_event` with no feed write at all (the
+    pre-fix body), `raised` is False; the fix makes both true.
+    """
+    import psycopg
+
+    from lineage.core.age import make_pool
+    from lineage.models import RunEvent
+    from lineage.services.repository import LineageRepository
+
+    class _FeedWriteFails(LineageRepository):
+        """Everything the real repository does, except the feed row, which fails the way a dropped
+        connection would — inside whatever transaction the caller has open."""
+
+        async def _insert_feed_row(self, conn: psycopg.AsyncConnection, **columns: object) -> None:
+            raise RuntimeError("feed write failed")
+
+    run_id = str(uuid.uuid4())
+    name = f"e2e-atomic-{uuid.uuid4().hex[:8]}"
+    event = RunEvent.model_validate(
+        {
+            "eventType": "COMPLETE",
+            "eventTime": "2026-09-08T10:00:00+00:00",
+            "run": {"runId": run_id, "facets": {}},
+            "job": {"namespace": "e2e", "name": "atomicity"},
+            "outputs": [{"namespace": "e2e", "name": name}],
+        }
+    )
+
+    async def run() -> tuple[bool, bool, bool]:
+        pool = make_pool(dsn)
+        await pool.open()
+        try:
+            repo = LineageRepository(pool, "lineage")
+
+            async def stored() -> bool:
+                return await repo.run_status(run_id) is not None
+
+            raised = False
+            try:
+                await _FeedWriteFails(pool, "lineage").ingest_event(event)
+            except RuntimeError:
+                raised = True
+            rolled_back = not await stored()
+            # …and the same event through the real repository must still land — this guard is worthless
+            # if all it proves is that a raising method raises.
+            await repo.ingest_event(event)
+            return raised, rolled_back, await stored()
+        finally:
+            await pool.close()
+
+    raised, rolled_back, landed = asyncio.run(run())
+
+    assert raised, "a feed-write failure was swallowed — ingest still reported success"
+    assert rolled_back, (
+        "the run reached the AGE graph while its /events row did not: the two writes are in separate "
+        "transactions, so the feed is a subset of the graph by construction and nothing can detect it"
+    )
+    assert landed, "the unbroken ingest did not store the run — the test proves nothing"

@@ -114,16 +114,13 @@ def test_no_outbox_uri_degrades_to_plain_publish(tmp_path: Any) -> None:
 
 class _Repo:
     def __init__(self) -> None:
+        # ONE list, because there is one call: `ingest_event` writes the graph AND the durable /events
+        # row in a single transaction. A recovered run that reached /runs + /producers while silently
+        # absent from the /events audit surface is no longer expressible at this seam.
         self.ingested: list[str] = []
-        self.recorded: list[str] = []  # the durable /events feed rows the drain must ALSO write (finding 1)
 
     async def ingest_event(self, event: Any) -> None:
         self.ingested.append(event.run.run_id)
-
-    async def record_event(self, *, run_id: str, **_fields: Any) -> None:
-        # The drain must project onto the feed like the JetStream + HTTP ingest paths, else a recovered run
-        # reaches /runs + /producers but is silently absent from the /events audit surface.
-        self.recorded.append(run_id)
 
 
 class _Settings:
@@ -163,8 +160,7 @@ def test_relay_drain_reingests_valid_and_drops_poison(tmp_path: Any) -> None:
     outcome = asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}))
 
     assert outcome.drained == 1  # the valid event ingested; the poison was dropped, not ingested
-    assert repo.ingested == [run_id]
-    assert repo.recorded == [run_id]  # ...AND projected onto the durable /events feed (finding 1 guard)
+    assert repo.ingested == [run_id]  # graph AND the durable /events row, in one transaction
     assert list(outbox.list_events(uri, {})) == []  # both objects gone (ingested / dropped)
 
 

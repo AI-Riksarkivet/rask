@@ -11,7 +11,8 @@ import asyncio
 from typing import Any, cast
 
 from lineage.models import RunEvent
-from lineage.services.consumer import feed_fields, handle_cloud_event
+from lineage.services.consumer import handle_cloud_event
+from lineage.services.repository import feed_columns
 
 
 _VALID = {
@@ -27,9 +28,11 @@ _CLOUD_EVENT = {"id": "ce-1", "source": "catalog", "type": "com.dapr.event.sent"
 
 
 class _FakeRepo:
+    """The whole repository surface this handler uses is `ingest_event` — the graph write and the
+    durable /events row are one transaction inside it, so there is no second call to stub or forget."""
+
     def __init__(self, *, fail: bool = False) -> None:
         self.ingested: RunEvent | None = None
-        self.recorded = False
         self._fail = fail
 
     async def ingest_event(self, event: RunEvent) -> None:
@@ -37,14 +40,11 @@ class _FakeRepo:
             raise RuntimeError("AGE unavailable")
         self.ingested = event
 
-    async def record_event(self, **_kwargs: object) -> None:
-        self.recorded = True
-
 
 def test_handle_ingests_and_acks_a_valid_cloud_event() -> None:
     repo = _FakeRepo()
     status = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT))
-    assert repo.ingested is not None and repo.recorded  # graph write + durable feed projection
+    assert repo.ingested is not None  # graph write + durable feed row, in one call
     assert status == {"status": "SUCCESS"}
 
 
@@ -63,9 +63,9 @@ def test_handle_retries_on_transient_ingest_failure() -> None:
     assert status == {"status": "RETRY"}
 
 
-def test_feed_fields_projects_the_event() -> None:
+def test_the_feed_columns_project_the_event() -> None:
     event = RunEvent.model_validate(_VALID)
-    fields = feed_fields(event)
+    fields = feed_columns(event)
     assert fields["run_id"] == "r1"
     assert fields["job"] == "ray-jobs/ingest"
     assert fields["author"] == "alice"

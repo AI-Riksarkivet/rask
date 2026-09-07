@@ -54,10 +54,11 @@ def setup_logging() -> None:
       equally invisible, which is why a running cascade read as an idle one and its Dapr Workflow had
       to be found by querying the sidecar rather than by reading a log.
 
-    The class this closes is the swallowed diagnostic: ``record_event_best_effort`` catches a feed
-    write failure by design (it must not break the authoritative graph write) and reports it with a
-    WARNING. That warning had nowhere to go, so the one signal distinguishing "the feed is fine" from
-    "the feed has been failing" did not exist.
+    The class this closes is the swallowed diagnostic — any handler that catches a failure by design
+    and reports it with a WARNING instead. That warning had nowhere to go, so the one signal
+    distinguishing "this is fine" from "this has been failing all week" did not exist. The estate has
+    fewer of those than it did (lineage's feed write is now part of the ingest transaction and fails
+    loudly rather than warning), but every best-effort arm that remains depends on this being fixed.
 
     ``RASK_LOG_LEVEL`` is the volume lever (default INFO). Root-level INFO does make chatty
     third-party libraries audible; that is the correct trade against losing every application log,

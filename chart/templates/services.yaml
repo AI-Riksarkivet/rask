@@ -422,9 +422,11 @@ spec:
             {{- end }}
             - { name: LINEAGE_GRAPH, value: {{ .Values.age.lineageDb | quote }} }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
-            # §4 reliability knobs: Run-node retention (pruned by the reconcile cron; 0 = keep all) and
+            # §4 reliability knobs, all three pruned or bounded by the reconcile cron: Run-node retention
+            # (0 = keep all), durable /events feed retention in days of ARRIVAL time (0 = unbounded), and
             # the AGE pool's per-statement timeout (bounds runaway traversals).
             - { name: LINEAGE_RUN_RETENTION_DAYS, value: {{ .Values.services.lineage.runRetentionDays | quote }} }
+            - { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }
             - { name: LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS, value: {{ .Values.services.lineage.ageStatementTimeoutSeconds | quote }} }
             - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
             # The lineage app's OWN subscriber component (queueGroupName=lineage, deliverPolicy=all) —

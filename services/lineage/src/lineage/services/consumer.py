@@ -40,30 +40,6 @@ _RETRY = {"status": "RETRY"}
 _DROP = {"status": "DROP"}
 
 
-def feed_fields(event: RunEvent) -> dict[str, Any]:
-    """The durable-events-feed columns for one ``RunEvent`` (shared by the HTTP handler + the Dapr
-    subscriber so the two ingest paths project identically)."""
-    return {
-        "run_id": event.run.run_id,
-        "event_type": event.event_type,
-        "event_time": event.event_time,
-        "job": f"{event.job.namespace}/{event.job.name}",
-        "author": event.author,
-        "inputs": [d.name for d in event.inputs],
-        "outputs": [d.name for d in event.outputs],
-        "event": event.model_dump(by_alias=True),
-    }
-
-
-async def record_event_best_effort(repository: LineageRepository, event: RunEvent) -> None:
-    """Append ``event`` to the durable feed; a feed-write failure must never break ingest (the
-    authoritative AGE graph write already succeeded)."""
-    try:
-        await repository.record_event(**feed_fields(event))
-    except Exception as exc:
-        log.warning("record_event_failed", extra={"run": event.run.run_id, "error": str(exc)})
-
-
 async def handle_cloud_event(repository: LineageRepository, body: Any) -> dict[str, str]:
     """Ingest one Dapr-delivered CloudEvent. ``body["data"]`` is the OpenLineage event (Dapr parses it
     since we publish with ``datacontenttype=application/json``). ``body`` is an untrusted external
@@ -77,8 +53,9 @@ async def handle_cloud_event(repository: LineageRepository, body: Any) -> dict[s
         return _DROP  # malformed — redelivery won't help; drop it (don't poison the subscription)
     started = time.perf_counter()
     try:
+        # Graph and durable feed in one transaction — a failure here retries BOTH, which is what makes
+        # /events a complete projection rather than a subset (see `ingest_event`).
         await repository.ingest_event(event)
-        await record_event_best_effort(repository, event)
     except Exception as exc:
         log.warning("lineage_ingest_failed", extra={"run": event.run.run_id, "error": str(exc)})
         record_outcome(Outcome.RETRIED)

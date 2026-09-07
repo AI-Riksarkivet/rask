@@ -158,10 +158,19 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
     dapr_secret_db_field: str = Field(default="postgres-password", alias="LINEAGE_DAPR_SECRET_DB_FIELD")
 
-    # --- Durable /events feed retention — keep at most this many most-recent rows in public.lineage_events
-    # (older rows pruned on ingest). 0 = unbounded. The feed is a secondary projection of the AGE graph
-    # (the authoritative provenance), so capping it bounds the high-volume log without losing lineage.
-    events_retention: int = Field(default=20000, ge=0, alias="LINEAGE_EVENTS_RETENTION")
+    # --- Durable /events feed retention, in DAYS of arrival time (the estate's own `received_at`, never
+    # the producer-supplied eventTime). 0 = unbounded. Pruned once per reconcile tick under that sweep's
+    # cluster-wide lock, never on the ingest path.
+    #
+    # DAYS BECAUSE THE CONSUMER REASONS IN DAYS. `services/notifications` walks this feed from a persisted
+    # cursor as the estate's catch-up path after an outage, so the only question an operator needs a
+    # retention knob to answer is "how long an outage does the feed survive". A count cannot answer it at
+    # any volume, and `postgres.PRUNE_EVENTS` carries the measurement of what a seq-denominated bound
+    # does instead.
+    #
+    # 7 DAYS IS THE HORIZON THE DEPLOYED FEED WAS MEASURED HOLDING (2026-08-31 → 2026-09-07, 3 133 rows),
+    # so the default states the working estate's horizon rather than changing it.
+    events_retention_days: int = Field(default=7, ge=0, alias="LINEAGE_EVENTS_RETENTION_DAYS")
 
     # --- Run-node retention (§4) — prune graph :Run nodes older than this many days on each reconcile
     # sweep (under its cluster-wide lock). 0 = off (the dev/demo default: keep full provenance). Pruning a

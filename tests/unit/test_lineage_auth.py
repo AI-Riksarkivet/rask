@@ -996,20 +996,17 @@ def _record(repo: LineageRepository) -> None:
     )
 
 
-def test_events_retention_prunes_when_set() -> None:
+def test_recording_an_event_does_not_also_prune() -> None:
+    """Retention is a reconcile-tick pass under the sweep's single-flight lock, not an ingest-path cost.
+
+    It used to run inside `record_event`, so every ingested event paid for a retention DELETE and two
+    replicas ingesting concurrently raced the same delete. A prune reappearing here would restore both.
+    """
     conn = _FakeConn()
-    repo = LineageRepository(cast(Any, _FakePool(conn)), "g", events_retention=5)
+    repo = LineageRepository(cast(Any, _FakePool(conn)), "g")
     _record(repo)
     assert any("INSERT INTO public.lineage_events" in s for s, _ in conn.calls)
-    prune = [p for s, p in conn.calls if "DELETE FROM public.lineage_events" in s]
-    assert prune == [(5,)]  # exactly one prune, parameterized with the retention cap
-
-
-def test_events_retention_unbounded_does_not_prune() -> None:
-    conn = _FakeConn()
-    repo = LineageRepository(cast(Any, _FakePool(conn)), "g", events_retention=0)
-    _record(repo)
-    assert not any("DELETE FROM public.lineage_events" in s for s, _ in conn.calls)
+    assert not [s for s, _ in conn.calls if "DELETE FROM public.lineage_events" in s], f"recording one event issued a retention DELETE: {conn.calls}"
 
 
 # --------------------------------------------------------------------------- #
