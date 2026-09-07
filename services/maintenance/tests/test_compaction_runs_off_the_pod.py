@@ -118,7 +118,7 @@ def test_a_table_already_at_TARGET_is_a_successful_no_op(tmp_path: Path) -> None
     assert catalog.committed == [], "an empty plan must not reach the commit door"
 
 
-def test_the_EXECUTE_credential_is_the_one_this_worker_was_given(tmp_path: Path) -> None:
+def test_the_EXECUTE_credential_is_the_one_this_worker_was_given(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The credential split, asserted at the only seam where it is decidable.
 
     Plan and commit are the catalog's calls, signed by the key that may read every manifest — spying
@@ -136,23 +136,20 @@ def test_the_EXECUTE_credential_is_the_one_this_worker_was_given(tmp_path: Path)
         seen.append(dict(write_options))
         return real(uri, {})  # opened for real against the local fixture; the OPTIONS are the assertion
 
-    ce._open_for_rewrite = _spy  # type: ignore[assignment]
-    try:
-        ce.compact_distributed(
-            uri,
-            table_id="acme-bronze$events",
-            write_options=vended,
-            plan=catalog.plan,
-            commit=catalog.commit,
-            policy={"target_rows_per_fragment": 1024},
-        )
-    finally:
-        ce._open_for_rewrite = real  # type: ignore[assignment]
+    monkeypatch.setattr(ce, "_open_for_rewrite", _spy)
+    ce.compact_distributed(
+        uri,
+        table_id="acme-bronze$events",
+        write_options=vended,
+        plan=catalog.plan,
+        commit=catalog.commit,
+        policy={"target_rows_per_fragment": 1024},
+    )
 
     assert seen == [vended], f"the rewrite opened with {seen}, not the credential it was handed"
 
 
-def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Path) -> None:
+def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Measured policy, not a preference: the successful tasks' files are already written.
 
     Discarding them leaves bytes on the store for the orphan sweep to find — a whole-bucket scan with
@@ -171,18 +168,15 @@ def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Pat
             raise RuntimeError("worker OOM on task 2")
         return real_execute(task_json, dataset)
 
-    ce._execute_one = _flaky  # type: ignore[assignment]
-    try:
-        outcome = ce.compact_distributed(
-            uri,
-            table_id="acme-bronze$events",
-            write_options={},
-            plan=catalog.plan,
-            commit=catalog.commit,
-            policy={"target_rows_per_fragment": 20},
-        )
-    finally:
-        ce._execute_one = real_execute  # type: ignore[assignment]
+    monkeypatch.setattr(ce, "_execute_one", _flaky)
+    outcome = ce.compact_distributed(
+        uri,
+        table_id="acme-bronze$events",
+        write_options={},
+        plan=catalog.plan,
+        commit=catalog.commit,
+        policy={"target_rows_per_fragment": 20},
+    )
 
     assert outcome is not None
     assert outcome.tasks_failed == 1, "the failure must be reported, or a half-done pass reads as clean"
@@ -191,22 +185,18 @@ def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Pat
     assert lance.dataset(uri).count_rows() == 120, "a partial commit lost rows"
 
 
-def test_EVERY_task_failing_commits_NOTHING(tmp_path: Path) -> None:
+def test_EVERY_task_failing_commits_NOTHING(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The commit door refuses an empty result list, and calling it anyway would turn a total worker
     failure into a 400 that reads like a malformed request rather than what it is."""
     uri = _fragmented(tmp_path)
     catalog = _Catalog(uri)
-    real_execute = ce._execute_one
 
     def _always_fails(task_json: str, dataset: lance.LanceDataset) -> str:
         raise RuntimeError("no capacity")
 
-    ce._execute_one = _always_fails  # type: ignore[assignment]
-    try:
-        with pytest.raises(ce.DistributedCompactionError, match="no task"):
-            ce.compact_distributed(uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, policy={})
-    finally:
-        ce._execute_one = real_execute  # type: ignore[assignment]
+    monkeypatch.setattr(ce, "_execute_one", _always_fails)
+    with pytest.raises(ce.DistributedCompactionError, match="no task"):
+        ce.compact_distributed(uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, policy={})
 
     assert catalog.committed == []
 

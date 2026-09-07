@@ -22,7 +22,7 @@ unroutable case here already returns.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -57,7 +57,7 @@ async def test_the_root_namespace_id_does_not_explode_the_router() -> None:
     root_id = "$"
     from catalog.api import dependencies
 
-    resolved = await dependencies.get_namespace(cast(Any, _request(root_id)), cast(Any, _settings(warehouses=True)))
+    resolved = await dependencies.get_namespace(_request(root_id), _settings(warehouses=True))
     assert resolved is DEFAULT_NS, "the root has no warehouse above it, so the default namespace is the answer"
 
 
@@ -73,5 +73,5 @@ async def test_a_normal_id_still_routes_by_its_top_segment(monkeypatch: pytest.M
         return None
 
     monkeypatch.setattr(dependencies, "_resolve_warehouse_root", fake_root)
-    await dependencies.get_namespace(cast(Any, _request("acme$silver$t")), cast(Any, _settings(warehouses=True)))
+    await dependencies.get_namespace(_request("acme$silver$t"), _settings(warehouses=True))
     assert seen == ["acme"]

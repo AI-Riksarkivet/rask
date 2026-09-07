@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import lance
 import lance_ray
@@ -40,7 +41,7 @@ def _dockerfile() -> str:
     return _DOCKERFILE.read_text(encoding="utf-8")
 
 
-def _chart_ray_tasks() -> list[dict[str, object]]:
+def _chart_ray_tasks() -> list[dict[str, Any]]:
     """`medallion.rayTasks` as the chart declares it — the estate's statement of what Ray can run."""
     import yaml
 

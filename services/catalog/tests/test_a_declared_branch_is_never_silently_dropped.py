@@ -99,7 +99,7 @@ def _functions(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
-def _calls_native(fn: ast.AST) -> bool:
+def _calls_native(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(
         isinstance(n, ast.Call)
         and isinstance(n.func, ast.Attribute)
@@ -110,7 +110,7 @@ def _calls_native(fn: ast.AST) -> bool:
     )
 
 
-def _branched_models_in(fn: ast.AST) -> tuple[set[str], set[str]]:
+def _branched_models_in(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[set[str], set[str]]:
     """The branch-carrying models this function takes as a BODY, and the ones it CONSTRUCTS.
 
     The distinction decides whether a branch can reach the call at all, and getting it wrong makes the
@@ -134,7 +134,7 @@ def _branched_models_in(fn: ast.AST) -> tuple[set[str], set[str]]:
     return from_body, constructed
 
 
-def _mentions_branch(fn: ast.AST) -> bool:
+def _mentions_branch(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Does a `branch` value reach this function at all?
 
     A handler that builds its request with no `branch=` and never names `branch` cannot drop one — the

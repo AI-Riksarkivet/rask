@@ -18,6 +18,7 @@ record WHOLE or the chart's settings WHOLE, never merged, and it names which won
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 from medallion.services import transform
 
@@ -54,7 +55,9 @@ def _drive(*, review_enabled: bool, chart_flag: bool) -> list[str]:
         patch.object(transform.gate_svc, "effective_gate", lambda *_a, **_k: gate),
         patch.object(transform.gate_svc, "resolve_gate_async", _resolved),
     ):
-        return asyncio.run(transform._review_reasons(settings, trigger, result=result, project="acme", transition="silver->gold"))
+        return asyncio.run(
+            transform._review_reasons(cast("Any", settings), cast("Any", trigger), result=cast("Any", result), project="acme", transition="silver->gold")
+        )
 
 
 def test_a_declared_review_is_evaluated_even_when_the_chart_flag_is_OFF() -> None:

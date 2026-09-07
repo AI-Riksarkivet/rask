@@ -28,14 +28,14 @@ def test_the_component_and_the_env_var_carry_the_SAME_name() -> None:
     assert len(components) == 1, f"expected exactly one cascade-lag cron Component, got {[c['metadata']['name'] for c in components]}"
     component_name = components[0]["metadata"]["name"]
 
-    told: list[str] = []
+    told: list[tuple[str, str]] = []
     for doc in docs:
         if doc.get("kind") != "Deployment":
             continue
         for container in doc["spec"]["template"]["spec"]["containers"]:
             for env in container.get("env") or []:
                 if env.get("name") == "MEDALLION_CASCADE_LAG_BINDING_NAME":
-                    told.append((doc["metadata"]["name"], env.get("value")))
+                    told.append((str(doc["metadata"]["name"]), str(env.get("value") or "")))
 
     assert told, "no Deployment is told the binding name — the Component fires into a 404 forever"
     assert {value for _, value in told} == {component_name}, f"Component is {component_name!r} but the app is told {told!r}"

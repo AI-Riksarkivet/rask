@@ -65,9 +65,11 @@ def test_it_REFRESHES_before_the_credential_expires_rather_than_after() -> None:
     clock = {"t": 1_000.0}
     cache = VendedCredentialCache(vendor, now=lambda: clock["t"])
 
-    assert cache.storage_options("ns", "ds")["session_token"] == "T1"
+    first = cache.storage_options("ns", "ds")
+    assert first is not None and first["session_token"] == "T1"
     clock["t"] = 1_890.0  # inside the safety margin, still technically valid
-    assert cache.storage_options("ns", "ds")["session_token"] == "T2"
+    refreshed = cache.storage_options("ns", "ds")
+    assert refreshed is not None and refreshed["session_token"] == "T2"
     assert vendor.calls == 2
 
 

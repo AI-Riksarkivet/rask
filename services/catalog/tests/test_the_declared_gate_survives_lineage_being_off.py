@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -69,7 +70,7 @@ async def test_the_declared_gate_applies_with_lineage_emission_OFF(registry_root
     monkeypatch.setattr(door.warehouses, "project_for_namespace", lambda *_a, **_k: PROJECT, raising=False)
 
     settings = SimpleNamespace(registry_root=registry_root, storage_options=lambda: {})
-    effective = await resolve_effective_gate(settings, {}, _NoopLineage(), [TOP_NS], _Body())
+    effective = await resolve_effective_gate(cast("Any", settings), {}, cast("Any", _NoopLineage()), [TOP_NS], cast("Any", _Body()))
 
     assert effective.key_column == "declared_id", (
         "the declared gate was not applied with lineage emission off — a project's quality policy must not depend on an observability switch"

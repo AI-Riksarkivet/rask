@@ -19,6 +19,9 @@ graph and cannot ask for `CurrentSubject` itself.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
+
+from fastapi import Request
 
 from service_kit.rate_limit import by_subject
 
@@ -33,17 +36,24 @@ class _Req:
         self.client = SimpleNamespace(host=host) if host else None
 
 
+def _req(*, subject: str | None, host: str | None = "10.0.0.7") -> Request:
+    """The double, cast at ONE seam. `by_subject` reads two attributes off a real `Request`; a
+    structural stand-in is the honest fixture, and casting here — rather than at each call — keeps the
+    substitution visible and keeps a genuinely wrong argument checkable at every other site."""
+    return cast("Request", _Req(subject=subject, host=host))
+
+
 def test_two_callers_behind_one_gateway_do_not_share_a_bucket() -> None:
     """THE HEADLINE: the same observed IP, two principals, two keys."""
-    alice = by_subject(_Req(subject="alice", host="10.0.0.7"))
-    bob = by_subject(_Req(subject="bob", host="10.0.0.7"))
+    alice = by_subject(_req(subject="alice", host="10.0.0.7"))
+    bob = by_subject(_req(subject="bob", host="10.0.0.7"))
 
     assert alice != bob, "two authenticated callers behind one gateway shared a rate-limit bucket"
 
 
 def test_an_anonymous_caller_still_gets_metered() -> None:
     """The fallback is mandatory: presenting no credential must not buy an exemption."""
-    key = by_subject(_Req(subject=None, host="10.0.0.7"))
+    key = by_subject(_req(subject=None, host="10.0.0.7"))
 
     assert key.startswith("ip:"), "an anonymous caller must still be keyed, not un-metered"
 

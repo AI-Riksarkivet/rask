@@ -46,7 +46,7 @@ def test_the_vendor_factory_forwards_them() -> None:
 
 def test_an_sts_vendor_signs_with_the_credentials_it_was_built_with() -> None:
     """End to end through the vendor: the key pair reaches the boto client, not just the signature."""
-    from catalog.core.vending import make_vendor
+    from catalog.core.vending import StsVendor, make_vendor
 
     seen: dict[str, Any] = {}
 
@@ -68,6 +68,9 @@ def test_an_sts_vendor_signs_with_the_credentials_it_was_built_with() -> None:
         access_key="ROOTKEY",
         secret_key="ROOTSECRET",
     )
+    # `make_vendor` answers the PROTOCOL; the STS client is the concrete vendor's, and narrowing here
+    # is also the assertion that `sts` mode built the vendor this test is about.
+    assert isinstance(vendor, StsVendor), f"sts mode built a {type(vendor).__name__}, so this test signs nothing"
     vendor._client = fake_client(  # the vendor builds its client lazily; hand it one to observe
         aws_access_key_id="ROOTKEY", aws_secret_access_key="ROOTSECRET"
     )

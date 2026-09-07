@@ -50,6 +50,7 @@ def dataset(tmp_path: Path) -> tuple[Any, str]:
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["ns1"]))
     location = ns.declare_table(DeclareTableRequest(id=["ns1", "t"])).location
+    assert location, "the namespace declared a table with no location — every assertion below would be about nothing"
     lance.write_dataset(pa.table({"id": pa.array(range(64), pa.int64())}), location)
     return ns, location
 

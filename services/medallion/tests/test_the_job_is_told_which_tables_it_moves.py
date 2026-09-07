@@ -72,7 +72,9 @@ async def test_the_submitted_job_is_told_the_catalog_identifiers_it_moves(captur
     env = captured["body"]["runtime_env"]["env_vars"]
     assert env.get("RASK_SOURCE_TABLE") == "acme-bronze$events", f"the job cannot name its input table: {sorted(env)}"
     assert env.get("RASK_DEST_TABLE") == "acme-silver$features", f"the job cannot name its output table: {sorted(env)}"
-    assert env.get("RASK_RUN_ID") == "0f9f1f1e-0000-4000-8000-000000000001", f"the job's own lineage events would key on a run nothing else knows: {sorted(env)}"
+    assert env.get("RASK_RUN_ID") == "0f9f1f1e-0000-4000-8000-000000000001", (
+        f"the job's own lineage events would key on a run nothing else knows: {sorted(env)}"
+    )
 
 
 @pytest.mark.asyncio
@@ -93,7 +95,9 @@ async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: d
     )
 
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert "RASK_SOURCE_TABLE" not in env and "RASK_DEST_TABLE" not in env and "RASK_RUN_ID" not in env, f"an unwired lane sent blank identities instead of none: {sorted(env)}"
+    assert "RASK_SOURCE_TABLE" not in env and "RASK_DEST_TABLE" not in env and "RASK_RUN_ID" not in env, (
+        f"an unwired lane sent blank identities instead of none: {sorted(env)}"
+    )
 
 
 def test_the_dispatch_hands_the_WORKFLOW_the_identity(monkeypatch: pytest.MonkeyPatch) -> None:

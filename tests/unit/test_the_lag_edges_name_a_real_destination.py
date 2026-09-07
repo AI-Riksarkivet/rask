@@ -15,6 +15,8 @@ duplicate of the one declaration that already exists, which is how the edge and 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import Any
 
 import pytest
 import yaml
@@ -96,8 +98,9 @@ def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.Monkey
     )
     seen: list[dict[str, str]] = []
 
-    def _capture(url: str, **kwargs: object) -> httpx.Response:
-        seen.append({k.lower(): v for k, v in dict(kwargs.get("headers") or {}).items()})
+    def _capture(url: str, **kwargs: Any) -> httpx.Response:
+        headers: Mapping[str, str] = kwargs.get("headers") or {}
+        seen.append({k.lower(): v for k, v in headers.items()})
         return httpx.Response(200, json={"tags": {}, "runs": []}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(readers.httpx, "get", _capture)

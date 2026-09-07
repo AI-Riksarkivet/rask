@@ -93,7 +93,10 @@ def test_the_lakehouse_services_import_no_engine() -> None:
         offenders = [
             str(path.relative_to(REPO))
             for path in src.rglob("*.py")
-            if any(line.startswith(("import ray", "from ray ", "from ray.", "from ray_kit", "import ray_kit")) for line in path.read_text(encoding="utf-8").splitlines())
+            if any(
+                line.startswith(("import ray", "from ray ", "from ray.", "from ray_kit", "import ray_kit"))
+                for line in path.read_text(encoding="utf-8").splitlines()
+            )
         ]
         assert not offenders, f"services/{service} imports a compute engine: {offenders}"
 

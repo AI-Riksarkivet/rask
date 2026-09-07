@@ -45,7 +45,7 @@ def test_the_writer_forwards_vended_storage_options(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(lance.fragment, "write_fragments", spy)
     uri = str(tmp_path / "t.lance")
-    lance.write_dataset(_batch([0]), uri, **dict(lander.CREATION_FLAGS))
+    lance.write_dataset(_batch([0]), uri, **lander.CREATION_FLAGS)
 
     vended = {"access_key_id": "AK", "secret_access_key": "SK", "session_token": "TOK", "allow_http": "true"}
     lander.write_unit_fragments(uri, _batch([1, 2]), storage_options=vended)
@@ -61,7 +61,7 @@ def test_no_options_still_writes_exactly_as_before(tmp_path: Any) -> None:
     from ingest import lander
 
     uri = str(tmp_path / "t.lance")
-    lance.write_dataset(_batch([0]), uri, **dict(lander.CREATION_FLAGS))
+    lance.write_dataset(_batch([0]), uri, **lander.CREATION_FLAGS)
     written = lander.write_unit_fragments(uri, _batch([1, 2]))
     assert written and isinstance(written[0], str)
 

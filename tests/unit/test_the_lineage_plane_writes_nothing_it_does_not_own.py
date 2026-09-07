@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
+from typing import Any
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -73,6 +74,20 @@ def _policy(*sets: str) -> dict[str, object] | None:
     return json.loads(body)
 
 
+def _statements(*sets: str) -> list[dict[str, Any]]:
+    """The policy's statements, NARROWED here so every reader below stays checkable.
+
+    `json.loads` answers `object`, so subscripting the document at each call site is unverifiable and
+    a suppression there would silence a genuinely wrong key in the same breath as the parse. Narrowing
+    once, with the shape asserted, keeps the three gates below reading a real list of statements.
+    """
+    document = _policy(*sets)
+    assert document is not None, "the rask-lineage policy did not render — every gate below would be vacuous"
+    statements = document["Statement"]
+    assert isinstance(statements, list), f"the policy's Statement is a {type(statements).__name__}, not a list of statements"
+    return [s for s in statements if isinstance(s, dict)]
+
+
 def test_the_gate_can_see_both_halves() -> None:
     """A renamed value or a moved hook would make every assertion below vacuous."""
     assert _lineage_env(SCOPED), "no lineage Deployment rendered — this gate is blind"
@@ -93,8 +108,7 @@ def test_the_KEY_and_its_SECRET_FIELD_move_together() -> None:
     env = _lineage_env(SCOPED)
     assert env["LINEAGE_S3_ACCESS_KEY_ID"] == "rask-lineage"
     assert env["LINEAGE_DAPR_SECRET_S3_FIELD"] == "lineage-s3-secret-key", (
-        "the scoped key is set and the secret field still points at the tenant root's secret — every "
-        "S3 operation will fail SignatureDoesNotMatch"
+        "the scoped key is set and the secret field still points at the tenant root's secret — every S3 operation will fail SignatureDoesNotMatch"
     )
 
 
@@ -114,7 +128,7 @@ def test_the_secret_is_SEEDED_under_the_name_the_service_reads() -> None:
 def test_the_policy_grants_NO_write_anywhere() -> None:
     """THE GATE. This plane has no code that writes an object; a policy permitting one grants a
     capability nothing uses, which is exactly what §F2-1 exists to remove."""
-    statements = _policy(SCOPED)["Statement"]  # type: ignore[index]
+    statements = _statements(SCOPED)
     allowed = {a for s in statements if s["Effect"] == "Allow" for a in s["Action"]}
     forbidden = {"s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts", "s3:*"}
     assert not (allowed & forbidden), f"the lineage policy allows writes it has no code to perform: {sorted(allowed & forbidden)}"
@@ -122,7 +136,7 @@ def test_the_policy_grants_NO_write_anywhere() -> None:
 
 def test_the_only_DELETE_is_its_own_outbox() -> None:
     """`drop_event` is the one mutation this plane makes, and the prefix it makes it on is its own."""
-    statements = _policy(SCOPED)["Statement"]  # type: ignore[index]
+    statements = _statements(SCOPED)
     deletes = [s for s in statements if s["Effect"] == "Allow" and "s3:DeleteObject" in s["Action"]]
     assert deletes, "the relay cannot drain its outbox — every re-ingested event is re-delivered forever"
     for statement in deletes:
@@ -134,7 +148,7 @@ def test_the_READ_stays_wide_on_purpose() -> None:
     """Narrowing it would be the silent failure, not the safe choice: lineage reconciles datasets this
     chart does not enumerate, and a reader that cannot read reports `known=False` — which publishes
     nothing and is indistinguishable from a healthy estate."""
-    statements = _policy(SCOPED)["Statement"]  # type: ignore[index]
+    statements = _statements(SCOPED)
     reads = [s for s in statements if s["Effect"] == "Allow" and "s3:GetObject" in s["Action"]]
     assert reads, "lineage cannot read the datasets it reconciles"
     assert any("arn:aws:s3:::*/*" in s["Resource"] for s in reads), "the read was narrowed to a bucket set the chart cannot know"

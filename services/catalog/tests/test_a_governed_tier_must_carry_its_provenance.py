@@ -40,7 +40,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import LanceNamespace, connect
 
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep, get_lineage_emitter
 from catalog.api.security import CurrentToken
@@ -144,11 +144,11 @@ def registry_root(tmp_path: Path) -> str:
     return str(root)
 
 
-def _client_over(payload: bytes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[TestClient]:
+def _client_over(payload: bytes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[tuple[TestClient, LanceNamespace]]:
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     create_table(namespace, {}, TABLE_ID, payload, mode="create")
     with TestClient(_app(namespace, monkeypatch, registry_root)) as c:
-        yield c, namespace  # type: ignore[misc]
+        yield c, namespace
 
 
 def _publish(client: TestClient, **body: Any) -> Any:  # noqa: ANN401

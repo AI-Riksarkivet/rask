@@ -19,7 +19,7 @@ index today. The WHOLE build crosses to the worker instead, which still takes it
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
@@ -128,7 +128,7 @@ def test_the_unit_id_is_DETERMINISTIC_so_a_redelivery_is_one_build() -> None:
     delivery would make two deliveries of one request look like two builds."""
     kwargs: dict[str, Any] = {"uri": "s3://b/t", "column": "v", "kind": VECTOR_INDEX, "index_type": "IVF_PQ"}
     assert IndexWorkItem(**kwargs).unit_id == IndexWorkItem(**kwargs).unit_id
-    assert IndexWorkItem(**kwargs).unit_id != IndexWorkItem(**{**kwargs, "column": "w"}).unit_id
+    assert IndexWorkItem(**kwargs).unit_id != IndexWorkItem(**{**kwargs, "column": cast("Any", "w")}).unit_id
 
 
 def test_the_lane_is_OFF_unless_a_topic_is_configured() -> None:

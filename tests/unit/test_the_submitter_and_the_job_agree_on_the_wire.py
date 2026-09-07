@@ -47,23 +47,25 @@ JOB_SCRIPTS = (
 
 #: Names the job legitimately reads that no `WorkOrder` supplies — the pod's own environment rather
 #: than this run's. Listed so the gate compares the ORDER's half and nothing else.
-NOT_FROM_THE_ORDER = frozenset({
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_PROTOCOL",
-    "OTEL_EXPORTER_OTLP_HEADERS",
-    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-    "OTEL_SERVICE_NAME",
-    "OTEL_RESOURCE_ATTRIBUTES",
-    "TRACEPARENT",
-    "TRACESTATE",
-    "S3_ENDPOINT",
-    "S3_REGION",
-    "S3_KEY_ID",
-    "S3_KEY",
-    "S3_SECRET",
-    "RAY_ADDRESS",
-    "RASK_STAGE_MEDIA_BATCH_ROWS",
-})
+NOT_FROM_THE_ORDER = frozenset(
+    {
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_SERVICE_NAME",
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "TRACEPARENT",
+        "TRACESTATE",
+        "S3_ENDPOINT",
+        "S3_REGION",
+        "S3_KEY_ID",
+        "S3_KEY",
+        "S3_SECRET",
+        "RAY_ADDRESS",
+        "RASK_STAGE_MEDIA_BATCH_ROWS",
+    }
+)
 
 _READ = re.compile(r'(?:os\.environ|environ|e)\s*(?:\.get\(\s*|\[\s*)"([A-Z][A-Z0-9_]*)"')
 
