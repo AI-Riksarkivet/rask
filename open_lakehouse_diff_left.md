@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 209 tracked, 171 open, 38 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 209 tracked, 168 open, 41 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -952,8 +952,8 @@ after it fail for a reason that is not its own):
 
 | # | Finding | Sev | What remains |
 | --- | --- | --- | --- |
-| Q8-1 | `test_medallion_e2e::test_produce_cascades_bronze_to_gold` fails | high | The core cascade proof — `POST /produce` through bronze→silver→gold. Had never run against the deployed estate |
-| Q8-2 | `POST /ingest-media` answers 503 `media ingest catalog registration failed; retry` | high | Confirmed reproducing ALONE, so not contamination. The media chain's head door |
+| ~~Q8-1~~ | ~~`test_medallion_e2e::test_produce_cascades_bronze_to_gold` fails~~ | ~~high~~ | ~~CLOSED 2026-09-07 — `test_medallion_e2e` runs 5 passed live. The suite also stopped reading as the anonymous principal in the same pass (Q17-8).~~ |
+| ~~Q8-2~~ | ~~`POST /ingest-media` answers 503 `media ingest catalog registration failed; retry`~~ | ~~high~~ | ~~CLOSED 2026-09-07 by `a86f5407` — recorded in full as Q16-9. The head ASKS the catalog and names the answer on the trigger; `test_media_lane_derives_under_governance` passes.~~ |
 | ~~Q8-3~~ | `test_auth_e2e::test_oidc_and_openfga_authorization_chain` fails | high | The OIDC→FGA chain end to end. Skipped until today because `LANCE_E2E_AUTH_SERVER` was never exported — **CLOSED (`4555f2a3`).** It was `LANCE_E2E_WAREHOUSE` never being exported, not an authz defect. `test_auth_e2e` passes |
 | ~~Q8-4~~ | `test_governance_e2e` — the flow, and `non_owner_cannot_rename_or_overwrite_anothers_table` | high | A governance leg asserting that a non-owner is refused. Unverified live until today — **CLOSED (`e0007d28`).** Two drifts: the root namespace door, and `bob` being a project admin where the suite called him a non-owner. `test_governance_e2e` 3/3 |
 | Q8-5 | `test_client_direct_e2e` — zero-byte ingress commit, and ACID concurrent commits | high | Both skipped as "stack not reachable" purely because `svc()` handed them OpenFGA's gRPC port |
@@ -985,7 +985,7 @@ single dissenting pointer in the estate.
 | ~~Q9-2~~ | The catalog governed a 4-row table while 5,370 rows sat ungoverned | high | **CLOSED.** `acme-bronze$events` → `medallion/bronze` (5,370); `acme-bronze$objects` → `4750a5b9_acme-bronze$events` (4). Both verified by `count_rows` through the catalog |
 | ~~Q9-3~~ | A repoint would have orphaned `service-ingest`'s real ingest data | high | **CLOSED, and it is why the ruling was re-put.** I had described the drift as "nothing is lost", which was wrong — the 4 rows are real blob data with a `published` tag. Registering them under their own id keeps them governed; `service-ingest` was re-granted `owner`, which `register` had re-seeded to the calling operator |
 | Q9-4 | The cascade head still TELLS the catalog a composed location | high | The split fixes the DATA; the rule violation stands. `produce.py` composes `{root}/medallion/{ns}` and registers it, while every mover asks (`ensure_stage_output`, rule I2). `_require_same_location` correctly refuses a disagreement and the head has NO convergence path — it answers `503 Retry-After: 5`, promising a convergence no retry can produce. The next tenant whose catalog and head disagree is 503 again |
-| Q9-5 | `/ingest-media` is the same defect at a second door | high | `bronze-media$objects` is registered at `s3://lakehouse-wh/medallion/bronze-media` while `MEDALLION_MEDIA_BRONZE_URI` is `s3://lance-catalog/medallion/bronze-media`. Projectless, so not fixed by the acme split — registration/deployment-contract drift, same root cause as Q9-4 |
+| ~~Q9-5~~ | ~~`/ingest-media` is the same defect at a second door~~ | ~~high~~ | ~~CLOSED 2026-09-07 with Q8-2/Q16-9 — the same fix closed both doors.~~ |
 
 ## Q10. Is this an idiomatic Lance lakehouse? (2026-09-06, fable 5.1 audit)
 
