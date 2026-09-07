@@ -125,9 +125,18 @@ Then F2-5..12, ALL of which now have verdicts (2026-09-07):
     F2-9   refuse well-known defaults — DONE (Q17-13). Four guards already existed and all four keyed
            on one OPT-IN flag; `prod-credentials.yaml` now answers "is this a real deployment?" once,
            unconditionally, on a signal an operator cannot forget.
-    F2-6   TLS to every store — MEASURED live, still open: every store is plaintext (RustFS S3 from
-           five services plus STS, OpenFGA, the AGE DSN, OpenBao, NATS monitor, OTLP). Dapr mTLS is
-           the estate's only transport security and every store sits outside it.
+    F2-6   TLS to every store — RE-MEASURED AND SIZED 2026-09-07, still open, and the size is the
+           finding. Counted off the live Deployments rather than the templates: **171 `http://` store
+           URLs**, 9 `https://` (all EXTERNAL), and one `postgresql://` with no `sslmode`. Dapr mTLS
+           is the estate's only transport security and every store sits outside it.
+           **THE ONE DSN IS NOT THE TRACTABLE SLICE IT LOOKS LIKE**: `SHOW ssl` on the running
+           `rask-age-0` answers **off**, so the server offers no TLS at all and `sslmode=require` on
+           the client would be an outage — the same asymmetric ordering as a credential's two halves.
+           This is a SERVER change (certificate + `ssl=on`) before it is a connection-string one.
+           Measuring it also corrected `CLAUDE.md`: AGE and OpenFGA are served by the `rask-age`
+           StatefulSet, NOT CloudNativePG — zero `Cluster` objects exist, `age.cnpgCluster.enabled`
+           defaults false, and the CNPG OPERATOR is installed with nothing to reconcile. An enabled
+           operator toggle is not evidence the resource exists.
     F2-11  lock root create — DONE 2026-09-07 (`e6f4ce37`). THE SHIPPED DEFAULT WAS THE DEFECT, not
            its value: `hasKey` finds a key whether or not anyone chose it, so `values.yaml`'s
            `lockRootCreate: false` beat any derivation and the control could only be armed by an
