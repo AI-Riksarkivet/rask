@@ -56,8 +56,8 @@ turned out to be are § Q16.
 
   A port with two adapters, one of them dead, is a decoupling claim rather than a decoupled system.
 
-**G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md` — 191 tracked, 158 open,
-33 struck as of 2026-09-07. Order: anything provably wrong on the LIVE ESTATE first (the shape the
+**G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md` — 207 tracked, 172 open,
+35 struck as of 2026-09-07 (re-read the file's own header; this line goes stale by design). Order: anything provably wrong on the LIVE ESTATE first (the shape the
 trainer 401 had — silent, data-losing, nothing red), then correctness, then tidiness. Every row
 reaches a verdict: fixed, or struck with the measurement that refutes it. The file is DELETED when it
 is empty, and not before — its header count is re-derived from its own rows, never asserted.
