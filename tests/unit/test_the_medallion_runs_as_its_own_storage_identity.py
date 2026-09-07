@@ -4,9 +4,15 @@ Q17-5, the estate's one MISSING zero-trust control of nineteen. Measured on the 
 2026-09-07, two consumers were already scoped and three were not:
 
     rask-maintenance          MAINTENANCE_S3_ACCESS_KEY_ID = rask-maintenance      scoped
-    movers' Ray lane          MEDALLION_RAY_S3_ACCESS_KEY_ID = rask-ray-compute    scoped
     rask-medallion-producer   MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
     the three movers' own     MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
+
+THE RAY LANE IS NOT A MOVER ENV AND IS NOT THIS FILE'S SUBJECT. No credential rides `runtime_env` —
+`ray_submit.py` says why: the Jobs API echoes it back on `GET /api/jobs/<id>`, an unauthenticated
+dashboard published at the edge. The stage job therefore reads `S3_KEY`/`S3_SECRET` from the RAY
+POD's own environment, which `chart/templates/rayservice.yaml` mounts by `secretKeyRef` off
+infra-credentials. A mover env naming the Ray lane's key would bind to no setting and read as a
+control while being decoration, so its ABSENCE from the assertions below is deliberate.
 
 THE PAIR IS THE WHOLE TEST. `dapr_secret_s3_field` defaults to `rustfs-secret-key`, which IS the
 tenant root's secret — so a scoped ACCESS KEY left on that default is signed with a mismatched pair
