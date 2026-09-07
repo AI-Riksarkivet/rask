@@ -1491,6 +1491,20 @@ consumer and its provider, the two move together or not at all.
 previous ReplicaSet until the new pods are Ready, so the old pods went on serving while the new ones
 crash-looped. Fail-closed plus rolling update is what turned a bad upgrade into a visible one.
 
+**A SECOND GAP, found by curling the route rather than trusting the rollout.** The rename changed the
+gateway's route table (`/api/movers` -> `/api/stage-runners`), and the gateway runs its OWN image —
+not the `lance-rest-catalog` family the medallion shares. Bumping only the catalog tag left the
+gateway serving the old table against a producer that had already moved, so BOTH paths 404'd: the old
+one because the producer no longer serves it, the new one because the gateway did not know it. Every
+pod was Ready and the cascade e2e passed 5/5 throughout, because that suite talks to the services by
+ClusterIP and never traverses the gateway.
+
+**So: a rename's blast radius is every IMAGE its changed files belong to, not every service its
+changed files belong to.** The two are not the same here — five services changed prose only, and one
+image (`rest-catalog`) covers seven services. The check that found it was a `curl` of the actual
+route; the check that would have found it earlier is mapping changed source paths to images before
+deploying, which takes one command.
+
 **The forward fix was simply to stop holding it back** — the identities are declared in
 `values-local.yaml`, so the corrective upgrade seeded both secrets, rendered both Deployments on the
 scoped identity, and its post-upgrade `mc` hook created both policies and rotated both RustFS users
