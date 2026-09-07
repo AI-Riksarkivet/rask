@@ -147,14 +147,28 @@ Then F2-5..12, ALL of which now have verdicts (2026-09-07):
                K8s 1.33+ with ImageVolume     required   ->  v1.36.2 (gate default-on at 1.35)  MET
                CNPG >= 1.27                   required   ->  operator 1.29.1                    MET
                containerd >= 2.1              required   ->  containerd 2.3.2-k3s2              MET
-               the AGE extension image        required   ->  NOT BUILT                          the only gap
+               the AGE extension image        required   ->  BUILT 2026-09-07                   MET
 
-           `.docker/cnpg-age-ext.dockerfile` builds it and `scripts/dagger-image.sh --name
-           cnpg-age-ext` is the invocation; `docs/CNPG-AGE.md` carries the design. **What stays an
-           OWNER decision is the cutover itself, because it is a DATA MIGRATION**: the lineage graph
-           and OpenFGA's tables live in the StatefulSet's PVC, and `age-cluster.yaml` deliberately
-           fails the render if both stores are on. Building the image is cheap and reversible; moving
-           the data is not.
+           **AND THE CUTOVER'S LAST UNPROVEN LAYER IS PROVEN TOO.** `docs/CNPG-AGE.md` recorded a
+           2026-07-20 investigation: layers 1 (the AGE extension + `extension_control_path`) and 2
+           (the ImageVolume prerequisites) PROVEN, and layer 3 — the operator managing a real Cluster
+           — failed as an explicitly-diagnosed KIND-HOST gremlin across CNPG 1.30/1.28. On THIS estate
+           the operator is 1.29.1, **1/1 Running**, leader-elected, and its log carries hourly
+           `pki: Periodic TLS certificates maintenance` — the very machinery this row needs, running
+           and idle for want of a Cluster. The image is `age-cnpg-ext:1.7.0-18`
+           (`sha256:2b9572f1…`), verified from the REGISTRY MANIFEST rather than a build log: three
+           layers matching the three `COPY` lines, including **1,497,689 B of `/lib/age.so`**.
+           (`dagger core container … entries` lists a `FROM scratch` image as EMPTY — it lists
+           `alpine:3.20` fine, so the manifest is the check to trust. That nearly got reported as a
+           build defect.)
+           **A SECOND WIN THIS ROW NEVER MENTIONED**: CNPG does PHYSICAL backups + PITR, which deletes
+           the "does a logical `pg_dump` round-trip the AGE graph labels?" DR hazard —
+           `scripts/age_restore_drill.sh` exists to prove against exactly that. The cutover buys TLS
+           and removes a restore risk.
+           **WHAT STAYS AN OWNER DECISION is the cutover itself, because it is a DATA MIGRATION**: the
+           lineage graph and OpenFGA's tables live in the StatefulSet's PVC, and `age-cluster.yaml`
+           deliberately fails the render if both stores are on. Building the image was cheap and
+           reversible; moving the data is neither.
     F2-11  lock root create — DONE 2026-09-07 (`e6f4ce37`). THE SHIPPED DEFAULT WAS THE DEFECT, not
            its value: `hasKey` finds a key whether or not anyone chose it, so `values.yaml`'s
            `lockRootCreate: false` beat any derivation and the control could only be armed by an
