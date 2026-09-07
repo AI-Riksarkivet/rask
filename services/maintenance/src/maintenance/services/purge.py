@@ -345,6 +345,24 @@ def check(record: dict[str, Any], *, roots: set[str], live_ids: set[str] | None)
 # --------------------------------------------------------------------------- #
 
 
+#: The Lance table-layout marker — a directory IS a dataset iff it holds this child. The same string
+#: `maintenance.services.optimize.discover_datasets` decides discovery by, named here so the purge and
+#: the walk cannot drift apart about what a dataset is.
+_VERSIONS_MARKER = "_versions"
+
+
+class NotADatasetRootError(RuntimeError):
+    """The recorded location does not look like a Lance dataset, so a recursive delete of it is not a
+    purge — it is data loss with a trash record for an alibi.
+
+    The marker is `_versions/`, which is the SAME one `discover_datasets` uses to decide a directory
+    is a dataset — one definition rather than a second opinion. On the happy path a trash record's
+    location comes from `describe_table` at drop time and always has it; this guard is for the paths
+    where it does not (a corrupted or hand-edited record, a location reused after a rename, a bug
+    upstream writing the wrong string), none of which the other refusals in `check` can see.
+    """
+
+
 class ProtectedBaseError(RuntimeError):
     """Refusal: another dataset's manifest resolves its files through this location (#128d).
 
@@ -380,6 +398,21 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     fs, path = fs_and_base(location, storage_options)
     infos = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
     files = [info for info in infos if info.type == pafs.FileType.File]
+    # IS THIS A DATASET AT ALL? The refusal ladder in `check` bounds WHERE a location may point — inside
+    # the estate, not a store root, not across a control prefix — and never asks WHAT is there. The
+    # marker is `_versions/`, the same one `discover_datasets` uses to decide a directory is a dataset,
+    # so the two cannot disagree about the definition. It costs nothing: the recursive listing above,
+    # which exists to sum the bytes, already carries it.
+    #
+    # AN EMPTY OR ABSENT PATH IS STILL SUCCESS, and that is the contract rather than an oversight: a
+    # crash between the delete and the record clear re-runs the whole record, so a half-completed purge
+    # must be able to finish. Only a location that HOLDS something unrecognisable is refused.
+    prefix = f"{path.rstrip('/')}/"
+    if infos and not any(info.path.rstrip("/").removeprefix(prefix).split("/")[0] == _VERSIONS_MARKER for info in infos):
+        raise NotADatasetRootError(
+            f"refusing to delete {location}: it holds {len(files)} file(s) but no {_VERSIONS_MARKER}/ marker, "
+            f"so it is not a Lance dataset — a recursive delete here would destroy whatever it really is"
+        )
     with suppress(FileNotFoundError):
         fs.delete_dir(path)
     return sum(int(info.size or 0) for info in files), len(files)
@@ -456,6 +489,15 @@ async def _purge_one(
     if location and kind != "namespace":
         try:
             deleted_bytes, deleted_files = await run_in_threadpool(_delete_guarded, location, storage_options, protected)
+        except NotADatasetRootError as exc:
+            # A REFUSAL, like the protected-base one below and for the same reason: the bytes are
+            # deliberately untouched. Its own arm rather than a shared one, because the two say
+            # different things to an operator — that one means "a live clone needs these bytes", this
+            # one means "this record points at something that is not a dataset", and only the second
+            # is a sign the record itself is wrong.
+            out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=str(exc)))
+            log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
+            return
         except ProtectedBaseError as exc:
             # A REFUSAL, not a failure: the bytes are deliberately untouched because a live dataset
             # resolves through them. The record survives, so an operator who drops the clone first can

@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 145 open, 77 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 144 open, 78 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1030,7 +1030,12 @@ line refs, `lease_expired`, the feed grant, render on control rows, delivery mem
 
 ## H. Maintenance (from the maintenance sweep)
 
-### H1 · On-demand doors destroy live shallow clones — **HIGH** (see C3)
+### ~~H1 · On-demand doors destroy live shallow clones — **HIGH** (see C3)~~ — **REFUTED 2026-09-07**
+The same claim as §C3's headline clause, and refuted by the same reading: `endpoints/maintenance.py`'s
+`run_maintenance` computes `protected = await _base_refs(ds, so)` and passes it into `run_gc`, and
+`compact_maintenance` does the same before `require_compactable`. Both doors carry the guard. The
+service functions default `protected` to `None`, which is why the CALL SITES had to be read rather
+than the signatures. Measured live: 220 `maintenance_refused_protected_base` refusals in six hours.
 ### H2 · Bucket-granular external bases freeze purge and protect whole buckets — **HIGH** (see C4)
 ### H3 · Clone protection bounded to maintained buckets — **MEDIUM-HIGH** (see C3)
 
@@ -1043,9 +1048,32 @@ and `last_refusal` on the trash record; `strategy: Recreate`.
 **Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`. **Closes it.**
 Per-dataset structured log plus a `table_maintained` control event from sweep and doors.
 
-### H6 · Purge deletes any sub-prefix a trash record names; root key everywhere
-**Where.** `purge.py:326-340,380-385`, `maintenance.yaml:123`, `values.yaml:1517`. **Closes it.** Verify
-the location is a Lance root before `delete_dir`; a maintenance identity scoped per warehouse (C4/§F).
+### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
+**"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
+already bounded WHERE a location may point (inside the maintained estate, not a store root, not
+crossing a control prefix) and never asked WHAT is there. `delete_location` now refuses a location
+holding files but no `_versions/` marker, with `NotADatasetRootError` surfaced as a `RefusedRecord`
+the way the protected-base refusal already is — its own arm and its own log body, because the two say
+different things to an operator: one means "a live clone needs these bytes", this one means "this
+record points at something that is not a dataset", and only the second says the RECORD is wrong.
+
+**The marker is `_versions/`, the same string `discover_datasets` decides discovery by** — one
+definition of what a dataset is rather than a second opinion — and it costs nothing: the recursive
+listing `delete_location` already performs to sum reclaimed bytes carries it.
+
+**An empty or absent path stays idempotent success, deliberately.** A crash between the delete and the
+record clear re-runs the whole record, so a half-completed purge must be able to finish; refusing
+there would strand every interrupted one. Only a location that HOLDS something unrecognisable is
+refused. All four cases pinned by
+`tests/unit/test_purge_refuses_a_location_that_is_not_a_dataset.py`, against a real `file://` store.
+
+**On the happy path this never fires** — a trash record's location comes from `describe_table` at drop
+time. It is for the paths where it does not: a corrupted or hand-edited record, a location reused
+after a rename, a bug upstream writing the wrong string. In each the blast radius is a recursive delete
+of live data that no other refusal in the ladder can see.
+
+**STILL OPEN:** the second clause — a maintenance identity scoped per warehouse rather than a root key
+everywhere (C4 / §F2-1). **Where.** `maintenance.yaml:123`, `values.yaml:1517`.
 
 ---
 
