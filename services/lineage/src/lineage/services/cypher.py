@@ -36,16 +36,57 @@ MERGE_JOB: Final = "MERGE (j:Job {namespace:$ns, name:$nm}) RETURN 1"
 # Where the job's code lives (the standard sourceCodeLocation facet), as a JSON string scalar on the Job
 # node — SET only when the event carries it, so an event that omits it never clobbers a prior value.
 SET_JOB_SOURCE: Final = "MATCH (j:Job {namespace:$ns, name:$nm}) SET j.source_location=$src RETURN 1"
+#: The lifecycle states a run cannot leave. Kept byte-identical to ``postgres.TERMINAL_TYPES`` — the
+#: feed's dedup index keys off the same notion of "a run has at most one of these" — and pinned equal by
+#: ``tests/unit/test_a_run_state_does_not_regress.py``. Spelled as a Cypher list literal rather than
+#: derived from that SQL fragment so every constant in this module stays a ``LiteralString`` by
+#: construction, which is what keeps caller data out of the raw-SQL slot (see the module docstring).
+_TERMINAL: Final = "['COMPLETE','FAIL','ABORT','RECONCILED']"
 # The (:Run) node folds the whole lifecycle so /runs is durable (survives restart, replica-shared)
-# instead of folding an in-memory buffer: event_type IS the current state and event_time IS
-# updated_at (both last-event-wins via the repeated SET); started_at keeps the first event's time;
-# events_count counts lifecycle events RECEIVED (incl. redeliveries — it is a delivery counter, not a
-# distinct-event count; the graph nodes/edges are idempotent, the feed dedups). job is denormalised so
-# /runs needs no OF_JOB join.
+# instead of folding an in-memory buffer: event_type IS the current state and event_time IS updated_at;
+# started_at is the EARLIEST event time seen; events_count counts lifecycle events RECEIVED (incl.
+# redeliveries — it is a delivery counter, not a distinct-event count; the graph nodes/edges are
+# idempotent, the feed dedups). job is denormalised so /runs needs no OF_JOB join.
+#
+# THE STATE FAMILY IS NEWEST-EVENT-WINS, NOT LAST-DELIVERY-WINS, and the difference is a correctness one.
+# Delivery is at-least-once and unordered (Dapr redelivery, the DLQ replay door, external producers over
+# HTTP), so the last event to ARRIVE is not the last event to HAPPEN. MEASURED ON THE DEPLOYED GRAPH
+# 2026-09-07: run f280fd32-617d-5292-9323-993d021bb79e (the cascade's derive_media) took a FAIL stamped
+# 13:30:31 and then a COMPLETE stamped 13:29:50 — older, delivered second — and the graph reported the
+# failed run as succeeded, with event_time 41 s BEFORE started_at. `_fold_writes` badges a dataset failed
+# only from a producing run's FAIL/ABORT and LATEST_WRITE filters on event_type='COMPLETE', so both read
+# the wrong answer off it.
+#
+# TWO RULES, because neither covers the other. `supersedes` is false for an event OLDER than what is
+# stored (the measured case: both terminal, so only time separates them) AND false for a non-terminal
+# event over a terminal one whatever its stamp (the START-after-COMPLETE case, which a time test alone
+# would let through). Terminal-to-terminal is decided by time, so a retry that genuinely succeeds later
+# still supersedes.
+#
+# THE TIME TEST IS A STRING COMPARE, and its assumption is bounded: ISO-8601 stamps compare
+# lexicographically only within one format, and this compares two events OF ONE RUN, which come from one
+# producer stamping one format. That is strictly narrower than the assumption COUNT_OLD_RUNS already
+# makes estate-wide. The terminal half needs no such assumption, which is why the case that loses a
+# recorded failure is protected by both.
+#
+# The five STICKY properties below are deliberately NOT gated on `supersedes` as well: each already
+# refuses to write when its event says nothing, so the erasure that matters cannot happen, and an older
+# event that DOES carry a lance facet carries the same run-constant value a newer one would.
 MERGE_RUN: Final = (
     "MERGE (r:Run {run_id:$rid}) "
-    "SET r.event_type=$et, r.event_time=$tm, r.author=$au, r.producer=$pr, r.error_message=$err, "
-    # operation is STICKY (like started_at): a later event of the same run that carries no lance facet
+    # Bound once and consumed by every guarded assignment below. Verified on the deployed AGE 1.5.0:
+    # a WITH-bound boolean does reach a CASE inside a SET that follows a node MERGE, with $params intact
+    # — unlike a SET fused to a MERGE on an EDGE, which drops them (see SET_WROTE_VERSION).
+    "WITH r, (coalesce(r.event_time, '') <= $tm "
+    f"AND NOT (r.event_type IN {_TERMINAL} AND NOT $et IN {_TERMINAL})) AS supersedes "
+    "SET r.event_type=(CASE WHEN supersedes THEN $et ELSE r.event_type END), "
+    "r.event_time=(CASE WHEN supersedes THEN $tm ELSE r.event_time END), "
+    "r.author=(CASE WHEN supersedes THEN $au ELSE r.author END), "
+    "r.producer=(CASE WHEN supersedes THEN $pr ELSE r.producer END), "
+    # error_message rides the same gate rather than being sticky: a retry that genuinely succeeds later
+    # MUST clear the earlier failure's message, and a stale FAIL must not re-attach one to a live run.
+    "r.error_message=(CASE WHEN supersedes THEN $err ELSE r.error_message END), "
+    # operation is STICKY: a later event of the same run that carries no lance facet
     # ($op='') must not erase the operation an earlier event declared (START stamps it, terminal may not).
     "r.job=$job, r.operation=(CASE WHEN $op = '' THEN r.operation ELSE $op END), "
     # source_run_id is STICKY for the same reason as operation: the producer stamps its own run id
@@ -66,7 +107,12 @@ MERGE_RUN: Final = (
     # the floor is what makes a history CONTIGUOUS. Clobbered to null on a reconcile tick, a
     # gap-free chain of ranges reads as a gap and the loss detector becomes a permanent false alarm.
     "r.consumed_from_version=(CASE WHEN $cfv < 0 THEN r.consumed_from_version ELSE $cfv END), "
-    "r.started_at=coalesce(r.started_at, $tm), r.events_count=coalesce(r.events_count, 0)+1 "
+    # started_at is the EARLIEST time seen, not the first DELIVERED one. coalesce() alone recorded
+    # whichever event arrived first, which on the measured run put the start 41 s AFTER the finish.
+    "r.started_at=(CASE WHEN r.started_at IS NULL OR $tm < r.started_at THEN $tm ELSE r.started_at END), "
+    # events_count stays unguarded on purpose: it counts DELIVERIES, and a superseded one was still
+    # delivered. Gating it would hide exactly the redelivery storms this guard exists to survive.
+    "r.events_count=coalesce(r.events_count, 0)+1 "
     "RETURN 1"
 )
 # Progress + outputs ride only some events (RUNNING carries progress; only the terminal event names
