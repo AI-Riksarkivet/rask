@@ -21,8 +21,17 @@ override-dependencies = [
     # KEEP. pylance 10.0.0 still declares `lance-namespace<0.9,>=0.8.5`, so without this override
     # `uv lock` fails outright — the two halves of the same project ship incompatible pins. Floor moved
     # to 0.11.0 with the 2026-08-16 upgrade so the generated client cannot skew from the spec model.
-    "lance-namespace>=0.11.0",
-    "lance-namespace-urllib3-client>=0.11.0",
+    #
+    # THE CEILING IS AS LOAD-BEARING AS THE FLOOR, and it was measured rather than assumed (2026-09-07).
+    # lance-namespace 0.12.0 types `MergeInsertIntoTableRequest.on` as `List[str]` and REJECTS a string;
+    # pylance 10.0.0's native backend types it as a string and raises
+    # `TypeError: unexpected type: 'list' object is not an instance of 'str'` from
+    # `lance/namespace.py:580`. The two are mutually incompatible, so `merge_insert` through the native
+    # path is broken with that pair for ANY value of `on` — not just a composite key. Lifting this cap
+    # therefore means bumping pylance too (11.0.0 exists), and that is a major bump of the core format
+    # library, not a pin edit. Tracked as A10.
+    "lance-namespace>=0.11.0,<0.12",
+    "lance-namespace-urllib3-client>=0.11.0,<0.12",
 ]
 
 [tool.uv.workspace]

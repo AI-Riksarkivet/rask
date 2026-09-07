@@ -13,7 +13,7 @@ dependencies = [
     "httpx>=0.27",
     "pyarrow",
     "pylance[otel]>=10.0.0",
-    "lance-namespace>=0.11.0",
+    "lance-namespace>=0.11.0,<0.12",
     # >=0.10.4 with service-kit: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
     "openfga-sdk>=0.10.4",
     # The canonical S3 seam — warehouses.py builds its bucket client through storage.s3_client.
