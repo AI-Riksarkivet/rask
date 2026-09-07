@@ -1511,3 +1511,54 @@ scoped identity, and its post-upgrade `mc` hook created both policies and rotate
 onto the derived secrets. Release 102 `deployed`, which also cleared a `failed` revision that had
 stood since 2026-09-03.
 
+## A privileged credential has THREE halves (2026-09-07)
+
+Adding `service-maintenance` to the catalog's privileged subjects, the pair everyone talks about was
+in place — the service reads its own token (`catalog_compaction.dedicated_token_for`) and the door
+demands it (`LANCE_PRIVILEGED_SUBJECTS`) — and it would still have 401'd every call.
+
+**The third half is that the token must actually be SEEDED.** `openbao.yaml` derives which
+`service-token-<identity>` values to mint from its OWN list; `services.yaml` derives which identities
+to demand from a DIFFERENT list. Nothing made the two agree, and the disagreement is silent in the
+worst direction: an unseeded identity resolves to `None`, which is the CORRECT answer for "not
+provisioned", so the caller falls back to the shared bearer — and the door refuses it precisely
+because the name is privileged. Both visible halves look present; every call fails.
+
+**Caught by rendering the seed and grepping for the token before deploying**, not by a test and not
+by the rollout. `test_a_privileged_subject_can_present_its_own_credential.py` now asserts all three:
+the client half is discovered from the service sources, the server half from the rendered
+`*_PRIVILEGED_SUBJECTS`, and the seed from the rendered OpenBao Job.
+
+**The ordering rule, which is asymmetric and was learned the expensive way.** For a subject being
+ADDED to the privileged set there is no safe gap: the client half alone is inert, the server half
+alone is an outage, so they land together. For a subject ALREADY privileged the client half goes
+first, because the door already expects the dedicated token. Applying the second rule to the first
+case opened a live 401 window on 2026-09-07.
+
+## A control's NAME is not evidence that it exists (2026-09-07)
+
+Draining §F2 produced three findings in one day that are the same mistake wearing different clothes,
+and none of them was settled by reading the thing that carried the name:
+
+  * **A field that WAS passed and was read by nothing.** `MEDALLION_RAY_S3_ACCESS_KEY_ID=rask-ray-compute`
+    sat on three live Deployments and was quoted by `open_goal.md`, by a backlog row and by a test's
+    own docstring as proof the Ray lane ran scoped. No service read it; no template rendered it. The
+    control was real, on the Ray POD, and the variable was residue.
+  * **A field NEVER passed that is stamped anyway.** "Audit records carry no request or trace id" is
+    true of all 118 `audit()` call sites and false of every record, because `CorrelationFilter` is
+    installed on the ROOT handler and stamps both.
+  * **A FUNCTION NAMED for the control it does not implement.** `.dagger/images.go`'s `provenance()`
+    emits three OCI labels — `BUILD_DATE`, `VCS_REF`, `VERSION`. No SBOM, no signature, no attestation.
+
+**The rule: verify a control where its value LANDS, not where its name appears.** For a credential,
+that is the request on the wire; for an env var, the settings field that binds it; for a log field,
+the record; for provenance, the artifact. Every one of these took a single command to settle — a
+grep for the reader, a render of the seed, a look at the filter's install point — and each had stood
+unchallenged in prose for weeks.
+
+**The corollary is about counting.** A sweep that greps for a name produces a count, and the count is
+what gets scheduled. Two of these rows were scheduled work that did not need doing; one was a control
+credited to the estate that was not there. Measuring a row before scheduling it changed the answer
+about as often as fixing it did — which is the case for demanding a verdict per row rather than a
+status.
+

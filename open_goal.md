@@ -125,11 +125,23 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
            turned out to be read by nothing. Its second clause survives: whether GreptimeDB satisfies
            an append-only compliance sink is unanswered.
 
-Remaining with no verdict yet: F2-5 (Dapr access control + NetworkPolicy — measured tractable: only
+    F2-12  sign and attest images — CONFIRMED (Q17-16), with a naming trap that makes the opposite
+           easy to believe. `.dagger/images.go` has a helper called `provenance()`, and it emits three
+           OCI LABELS — BUILD_DATE, VCS_REF, VERSION. No SBOM, no signature, no in-toto/SLSA
+           attestation. A reader asking "do we have provenance?" finds a function by that name on the
+           publish path.
+
+Remaining with no verdict: F2-5 alone (Dapr access control + NetworkPolicy — measured tractable: only
 TWO service-invocation callers exist, so a defaultAction:deny needs 11 allow entries and has ONE home
-in the shared `lance-tracing` Configuration) and F2-12 (sign and attest images). So §F2 stands at
-EIGHT of twelve with a verdict, THREE of them refutations rather than fixes — which is the point of
-demanding one per row, and a reason to measure a row before scheduling it.
+in the shared `lance-tracing` Configuration), plus the append-only-sink half of F2-10. So §F2 stands
+at NINE of twelve with a verdict, THREE of them refutations rather than fixes.
+
+**THE PATTERN BEHIND ALL THREE REFUTATIONS, recorded in docs/DECISIONS.md: a control's NAME is not
+evidence that it exists.** A field that WAS passed and was read by nothing (Q17-20); a field NEVER
+passed that is stamped on every record anyway (Q17-14); a FUNCTION NAMED for the control it does not
+implement (Q17-16). Verify where a control's value LANDS — the request on the wire, the settings
+field that binds it, the record, the artifact — not where its name appears. Each took one command and
+each had stood in prose for weeks.
 
 ---
 
