@@ -189,7 +189,7 @@ spec:
                 {{- /* BOTH HALVES FROM ONE OBJECT, and that is the fix rather than tidiness. The key
                      used to arrive only through the submitter's `runtime_env` while the secret came
                      from here, so the pair had two owners: repointing the pod alone gave every job
-                     `SignatureDoesNotMatch`, and repointing the mover alone took the MOVER down
+                     `SignatureDoesNotMatch`, and repointing the stage runner alone took the STAGE RUNNER down
                      (it does its own S3 work — `outbox.stage_event` issues a HeadBucket, which needs
                      an unconditioned ListBucket a scoped policy refuses). Both measured 2026-08-30.
                      `ray-compute-*` defaults to the root credential, so this is inert until an

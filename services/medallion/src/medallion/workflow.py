@@ -30,7 +30,7 @@ runtime-managed timer that holds no thread, no connection and no ack. The instan
 across pod restarts. This is Dapr's documented async-HTTP / monitor pattern.
 
 THE SHAPE. `stage_run` submits, polls to a terminal state, and only then publishes the trigger back to
-the mover with `ray_job_done` set — at which point the existing handler runs its measure/emit/cascade
+the stage runner with `ray_job_done` set — at which point the existing handler runs its measure/emit/cascade
 path unchanged, against a dataset that is now actually written. Re-publishing rather than re-hosting
 the handler's 520 lines as activities is deliberate: the post-compute path is the same code on every
 lane (in-process, Ray), and forking it per lane is how the lanes drift apart.
@@ -151,7 +151,7 @@ class StageJobSpec(BaseModel):
     #: THE RUN'S PROVENANCE IDENTITY, which the trigger cannot carry. `from_id`/`to_id` are the
     #: CATALOG identifiers this hop moves (`acme-silver$features`) — resolved by
     #: `transform.resolve_stage_identity` from the declared record or the env, so they exist nowhere on
-    #: the publisher's payload — and `run_id` is the run the mover already minted for this hop. The Ray
+    #: the publisher's payload — and `run_id` is the run the stage runner already minted for this hop. The Ray
     #: job emits its own OpenLineage and has no other way to learn any of the three; without them it
     #: names its output by the URI's stem, which matches no grant, and keys its events on a run nothing
     #: else knows. Carried here rather than re-derived in the activity for the reason `submission_id`
@@ -159,7 +159,7 @@ class StageJobSpec(BaseModel):
     from_id: str = ""
     to_id: str = ""
     run_id: str = ""
-    #: The trigger to re-publish once the job is terminal, verbatim as the mover will re-parse it.
+    #: The trigger to re-publish once the job is terminal, verbatim as the stage runner will re-parse it.
     #: Held as a dict rather than a `StageTrigger` so a field added to the trigger contract does not
     #: silently drop off the round trip.
     trigger: dict[str, Any] = Field(default_factory=dict)
@@ -246,7 +246,7 @@ def _watch_seconds(ctx: DaprWorkflowContext, started_at: str) -> float | None:
 
 
 def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
-    """Submit the stage job, wait for it to reach a terminal state, then wake the mover.
+    """Submit the stage job, wait for it to reach a terminal state, then wake the stage runner.
 
     The ONLY workflow in this service. Its whole reason for existing is the ordering: nothing after
     the poll loop runs until Ray says the job is done, which is the guarantee `transform.py`'s Ray
@@ -354,7 +354,7 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
 
     if not _is_terminal(status):
         # The ceiling, with the job still running. Distinct from a failure ON PURPOSE: reporting a
-        # slow job as FAILED would have the mover emit a failure for work that may still land, and
+        # slow job as FAILED would have the stage runner emit a failure for work that may still land, and
         # this estate's recurring defect is exactly that — a state reported as something it is not.
         # `or ""` matches the submit-failure path above, and is load-bearing rather than defensive:
         # a resubmit hands the next turn `submission_id=None`, so an activity that answers None leaves
@@ -383,7 +383,7 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         log.info("medallion_stage_job_terminal", extra={"submission_id": submission_id, "status": status, "polls": polls})
 
     # THE POINT OF THE WHOLE FILE: this runs only on the success branch, and only after a terminal
-    # read. The mover's measure/emit/cascade path is downstream of this publish.
+    # read. The stage runner's measure/emit/cascade path is downstream of this publish.
     if verdict == "succeeded":
         # AN ERROR BOUNDARY, because pass 1 already acked the trigger. This publish is the ONLY thing
         # that can drive the measure/emit/cascade, so an exhausted retry policy used to raise into the
@@ -506,7 +506,7 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
             # The delta boundary rides the trigger too, and reaches the job as `BASE_VERSION`. Read
             # off the raw trigger for the same reason the two above are: this is the carrier.
             from_version=(spec.trigger or {}).get("from_version"),
-            # Off the SPEC, not the trigger: the mover resolved these names and minted this run id,
+            # Off the SPEC, not the trigger: the stage runner resolved these names and minted this run id,
             # and the publisher's payload has never carried either. A field added to the spec and not
             # read here reaches the state store, survives every checkpoint and never reaches the job.
             from_id=spec.from_id,
@@ -532,16 +532,16 @@ def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
         # THE POOLED CLIENT (DUP-21), not a fresh one per tick. This activity runs on every polling
         # tick of every running stage, so an `async with httpx.AsyncClient(...)` here paid a TCP
         # connect, a TLS handshake and a pool teardown per tick — beside a client for the same host
-        # that `ray_submit` already opens once per worker and the mover's lifespan closes.
+        # that `ray_submit` already opens once per worker and the stage runner's lifespan closes.
         return await job_status(await ray_client(), submission_id)
 
     return _run_async(_read())
 
 
 def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> None:
-    """Re-publish the original trigger with `ray_job_done` set, waking the mover's measure path.
+    """Re-publish the original trigger with `ray_job_done` set, waking the stage runner's measure path.
 
-    The mover re-parses it through the same `parse_stage_trigger` guard as any bus arrival — this is
+    The stage runner re-parses it through the same `parse_stage_trigger` guard as any bus arrival — this is
     not a privileged back channel, and a payload this activity malformed would be DROPped exactly as
     an external one would.
     """
@@ -560,7 +560,7 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> N
     settings = get_settings()
 
     trigger = dict(spec.trigger)
-    # The flag the mover branches on. Named for what it ASSERTS — the job reached SUCCEEDED — rather
+    # The flag the stage runner branches on. Named for what it ASSERTS — the job reached SUCCEEDED — rather
     # than "skip_submit", so a reader of the handler sees the precondition and not the shortcut.
     trigger["ray_job_done"] = True
     trigger["ray_submission_id"] = outcome.submission_id
@@ -583,7 +583,7 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> N
                 client,
                 timeout_seconds=settings.publish_timeout_seconds,
                 pubsub_name=settings.pubsub,
-                # The mover's OWN subscription topic: this wakes the same handler the original trigger
+                # The stage runner's OWN subscription topic: this wakes the same handler the original trigger
                 # reached, so the measure/emit/cascade path is the one already under test — not a fork.
                 topic_name=settings.sub_topic,
                 data=json.dumps(trigger),
@@ -597,7 +597,7 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> N
 def report_stage_outcome(ctx: WorkflowActivityContext, payload: StageReport) -> None:
     """Record a job that FAILED, was STOPPED, or outlived the watch.
 
-    A terminal-bad job publishes NOTHING: waking the mover would run the measure against a dataset the
+    A terminal-bad job publishes NOTHING: waking the stage runner would run the measure against a dataset the
     job did not write, which is the very defect this workflow exists to close. The record is the log
     line and the counter; the lineage reconciler is what reconciles storage truth (A13), and S5's
     compensation slice is where a failed promotion grows a saga.
@@ -1129,14 +1129,14 @@ class PromotionSpec(BaseModel):
     #: landed while the approver was deciding, and publishing that would ship a version nobody
     #: reviewed. 0 means the hold predates a tag-driven cascade and can only resume by trigger.
     version: int = 0
-    #: The HELD STAGE's own lineage identity, resolved at hold time in the mover. `emit_promotion_outcome`
+    #: The HELD STAGE's own lineage identity, resolved at hold time in the stage runner. `emit_promotion_outcome`
     #: runs in the PRODUCER — which hosts the review workflow and sets neither `MEDALLION_OPERATION` nor
     #: `MEDALLION_AUTHOR` — so without these it recorded every approved promotion under the code defaults
-    #: (`embed_features`/`data_eng`). Those are the bronze→silver mover's real values, so a silver hold was
+    #: (`embed_features`/`data_eng`). Those are the bronze→silver stage runner's real values, so a silver hold was
     #: right by accident and a gold hold said the silver stage produced `gold$catalog`.
     #:
     #: Same carrier and same reasoning as `pub_topic` directly above: the producer has no idea which
-    #: mover held this, so anything the emit needs about the stage has to ride the spec. Empty means a
+    #: stage runner held this, so anything the emit needs about the stage has to ride the spec. Empty means a
     #: hold serialized before this field existed — the emit falls back to settings, which is the old
     #: behaviour and better than an empty job name.
     operation: str = ""
@@ -1284,7 +1284,7 @@ def resolve_review_policy(ctx: WorkflowActivityContext, spec: PromotionSpec) -> 
 def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     """Tell the approver there is something to decide. Returns whether the ask went out.
 
-    Published DIRECTLY rather than through `process_control_emitter()`: the mover never sets a
+    Published DIRECTLY rather than through `process_control_emitter()`: the stage runner never sets a
     process emitter, so that path is a no-op here and the ask would be silently swallowed — the exact
     class of defect this feature exists to fix.
     """
@@ -1339,7 +1339,7 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
 
 
 def _dedicated(settings: Any) -> Callable[[str], str | None] | None:
-    """The mover's own credential resolver — imported locally, like every other config use here."""
+    """The stage runner's own credential resolver — imported locally, like every other config use here."""
     from medallion.core.config import dedicated_token_for
 
     return dedicated_token_for(settings)

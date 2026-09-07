@@ -11,7 +11,7 @@ Nothing was red, because the code that logs is never the code that fails. Measur
 2026-08-17 and verified three times: a malformed event POSTed to the running ingest returned
 `{"status":"DROP"}` — returned on the single line immediately after
 `log.error("lineage_event_invalid")`, so the branch demonstrably ran — and produced no log line
-at all. After the fix the identical request logs it. The medallion mover's workflow-dispatch
+at all. After the fix the identical request logs it. The medallion stage runner's workflow-dispatch
 logs were invisible the same way, which is why a running cascade read as an idle one.
 
 The class this closes is the SWALLOWED DIAGNOSTIC: `record_event_best_effort` catches a feed

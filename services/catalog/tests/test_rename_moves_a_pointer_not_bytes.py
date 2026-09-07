@@ -190,9 +190,7 @@ def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
     finally:
         ns.register_table = original
 
-    assert ns.describe_table(DescribeTableRequest(id=["ns1", "keepme"])).location == source, (
-        "a failed rename left the table reachable by no id at all"
-    )
+    assert ns.describe_table(DescribeTableRequest(id=["ns1", "keepme"])).location == source, "a failed rename left the table reachable by no id at all"
 
 
 def test_the_SOURCE_is_claimed_before_the_destination_exists(tmp_path: Path) -> None:

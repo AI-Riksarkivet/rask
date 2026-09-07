@@ -102,7 +102,7 @@ def test_both_emitters_pin_output_versions_with_the_same_facet() -> None:
 
 
 def test_a_role_literal_never_becomes_an_originator() -> None:
-    """The medallion movers' live defect, which dummy's module exists partly to NOT reproduce: a
+    """The medallion stage runners' live defect, which dummy's module exists partly to NOT reproduce: a
     role literal carried as originator writes into an inbox actor literally named `ray`."""
     event = dummy.build_run_event(
         event_type="COMPLETE",
@@ -162,12 +162,8 @@ def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> No
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_TOKEN": "a.valid.bearer"},
             monkeypatch,
         )
-        assert headers.get("x-lance-service-identity") != "", (
-            f"{name} sends an EMPTY service identity, which takes the service door with no subject and 403s"
-        )
-        assert "authorization" in headers, (
-            f"{name} discarded a valid LINEAGE_TOKEN bearer while presenting no usable service identity"
-        )
+        assert headers.get("x-lance-service-identity") != "", f"{name} sends an EMPTY service identity, which takes the service door with no subject and 403s"
+        assert "authorization" in headers, f"{name} discarded a valid LINEAGE_TOKEN bearer while presenting no usable service identity"
 
 
 def test_a_named_service_id_still_takes_the_service_door(monkeypatch: Any) -> None:

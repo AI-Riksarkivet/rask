@@ -13,7 +13,7 @@ version and the operation, and no fragment or row count, so nothing here can tel
 already its sanctioned "nothing to do".
 
 Subscribing to `lineage.events.v1` rather than minting a trigger topic: it is the one lane every
-governed writer converges on (catalog doors, medallion movers, ingest, Ray, annotator publish), which
+governed writer converges on (catalog doors, medallion stage runners, ingest, Ray, annotator publish), which
 `notifications`' reconciler established from the other direction. The control topic is deliberately not
 used — it is a broadcast with no queue group, and competing consumers need one.
 """

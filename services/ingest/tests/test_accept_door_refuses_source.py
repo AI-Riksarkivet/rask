@@ -57,7 +57,7 @@ async def test_outside_the_confinement_root_is_400(lance_root: str, tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_a_governed_dataset_is_400_and_names_the_mover(lance_root: str, tmp_path, monkeypatch) -> None:
+async def test_a_governed_dataset_is_400_and_names_the_stage_runner(lance_root: str, tmp_path, monkeypatch) -> None:
     """The security guard. Its message must name where the caller SHOULD go, or they build a copy path by hand."""
     monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
     with pytest.raises(ValidationError, match="catalog-governed"):

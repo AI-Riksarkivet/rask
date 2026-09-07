@@ -8,7 +8,7 @@ a round trip: the round trip passes either way.
 2. **A targetable principal.** This job authenticates as a SERVICE, and the lineage ingest's
    `enforce_author` OVERWRITES `author` with that service's verified sub — deliberately, since
    honouring a producer-supplied author would let any producer file a row in a named person's inbox.
-   So the human rides `lance.originator`, never `author`. The medallion movers get this wrong today:
+   So the human rides `lance.originator`, never `author`. The medallion stage runners get this wrong today:
    they author with a chart role literal (`ray`, `data_eng`), which addresses an inbox actor named
    `ray` and reaches no one.
 3. **`lance.project`.** Optional to the schema, and omitting it silently costs EVERY watcher.

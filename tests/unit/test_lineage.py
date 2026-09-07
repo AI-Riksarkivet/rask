@@ -862,7 +862,7 @@ def test_ingest_versionless_schema_event_seeds_but_never_prunes(
 
 def test_ingest_without_schema_facet_never_prunes(monkeypatch: pytest.MonkeyPatch) -> None:
     # ASSERTS: no schema facet = PARTIAL knowledge of the column set — pruning is skipped entirely
-    # (a facet-less mover event must never wipe the inventory a create built).
+    # (a facet-less stage runner event must never wipe the inventory a create built).
     event = {
         "eventType": "COMPLETE",
         "eventTime": "2026-07-11T09:00:00Z",

@@ -11,7 +11,7 @@ stateful layer.
 The FastAPI services and the event plumbing hold no durable state; they can be killed, scaled, or
 re-imaged at any time with no data loss.
 
-- `catalog`, `lineage`, `medallion` (producer + 3 movers), `compaction`, `gateway`, `web`
+- `catalog`, `lineage`, `medallion` (producer + 3 stage runners), `compaction`, `gateway`, `web`
 - `dapr` control plane, `dex`
 
 These read their config from env / OpenBao and their data from the durable tier below. Rolling them is a

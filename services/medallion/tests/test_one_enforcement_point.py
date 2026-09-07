@@ -6,7 +6,7 @@ reimplements the contract and they drift." It is also the only door that can det
 advance, because `UpdateTableTag` returns `ConcurrentModification` while a tag file carries no
 format-level CAS.
 
-`GateOutcome.TRIGGER` was a SECOND enforcement point: the mover fired the next stage's topic itself,
+`GateOutcome.TRIGGER` was a SECOND enforcement point: the stage runner fired the next stage's topic itself,
 promoting without the catalog ruling. Two doors, one contract, and the flag deciding which one ran
 (`MEDALLION_CASCADE_VIA_PUBLISH`, default False) meant the DEFAULT deployment used the door the
 module says must not exist.
@@ -90,7 +90,7 @@ def test_publishing_requires_a_catalog_and_an_ungoverned_estate_ACKS() -> None:
     """The precondition the deleted flag was carrying, and the failure it caused when it went.
 
     A target is a table id plus a committed version; neither implies anything can move a tag.
-    `publish_stage_output` raises on an empty catalog URL, so without this the mover returned RETRY on
+    `publish_stage_output` raises on an empty catalog URL, so without this the stage runner returned RETRY on
     every trigger of an ungoverned deployment -- a mode the estate supports and pins elsewhere
     (`test_an_ungoverned_deployment_still_uses_its_configured_URI`). Redelivery cannot set an env var,
     so retrying is the one answer guaranteed never to make progress.

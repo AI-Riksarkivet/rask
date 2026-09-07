@@ -245,8 +245,8 @@ def test_bronze_satisfies_the_columns_THE_VIEWER_PROJECTS() -> None:
         Invalid user input: Schema error: No field named stage. Valid fields are id, source_uri.
 
     Every ingest gate passed throughout, because they all read the dataset directly. The drop was
-    recorded in open_ingest.md as cheap and "not fatal" on the reasoning that the movers re-stamp an
-    absent `stage` — true for the movers, and irrelevant to a reader that projects it.
+    recorded in open_ingest.md as cheap and "not fatal" on the reasoning that the stage runners re-stamp an
+    absent `stage` — true for the stage runners, and irrelevant to a reader that projects it.
 
     Imported from the viewer rather than restated, so the two cannot drift apart again: a column
     added to the viewer's projection fails HERE, at ingest, which is where it can still be fixed.

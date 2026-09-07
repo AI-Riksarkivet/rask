@@ -133,7 +133,7 @@ footer{margin-top:72px;padding-top:18px;border-top:1px solid var(--rule);font-fa
       <tr><td>Catalog</td><td>Owns the hierarchy (project → warehouse → namespace → table), vends storage locations and credentials, runs the publish gate, announces every write.</td><td><b>It should not.</b> Today it does — it validates Ray entrypoints.</td></tr>
       <tr><td>Lineage</td><td>Ingests OpenLineage events into AGE, serves the durable feed, relays the staged outbox.</td><td>No.</td></tr>
       <tr><td>Medallion producer</td><td>Seeds bronze, reacts to arrival events, fires the cascade.</td><td>No — it publishes triggers, it does not run compute.</td></tr>
-      <tr><td>Movers (×3)</td><td>One Deployment per hop. Authorises the write, submits a job, waits for it, publishes the next trigger.</td><td><b>Yes</b> — this is where the engine is named.</td></tr>
+      <tr><td>Stage runners (×3)</td><td>One Deployment per hop. Authorises the write, submits a job, waits for it, publishes the next trigger.</td><td><b>Yes</b> — this is where the engine is named.</td></tr>
       <tr><td>Maintenance</td><td>Compaction, index optimisation, version cleanup, drift reconcile.</td><td>No — runs in-process on pylance.</td></tr>
       <tr><td>Ingest</td><td>Acquisition: a source-agnostic control API, a durable unit queue, a fragment lander.</td><td>No — Dapr + JetStream, no Ray anywhere.</td></tr>
       <tr><td>Ray (KubeRay)</td><td>Runs the job.</td><td>It <em>is</em> the engine.</td></tr>
@@ -156,7 +156,7 @@ flowchart TB
   end
   subgraph ORCH["ORCHESTRATION PLANE — Dapr"]
     PROD["Medallion producer<br/>seeds bronze, fires cascade"]
-    MOV["Movers x3<br/>bronze to silver, silver to gold, media"]
+    MOV["Stage runners x3<br/>bronze to silver, silver to gold, media"]
     WF["Dapr Workflow<br/>submit poll publish"]
   end
   subgraph EXEC["EXECUTION PLANE"]
@@ -197,7 +197,7 @@ flowchart TB
     <thead><tr><th>Term</th><th>Means</th></tr></thead>
     <tbody>
       <tr><td>bronze / silver / gold</td><td>Three governed Lance tables. Every row is <code>{id, payload, stage, lineage, source_rowid}</code> and <code>payload</code> is <b>opaque</b> — the tier does not know what is in it.</td></tr>
-      <tr><td>mover</td><td>A Deployment that owns one hop. Generic code; the hop is chart config.</td></tr>
+      <tr><td>stage runner</td><td>A Deployment that owns one hop. Generic code; the hop is chart config.</td></tr>
       <tr><td>trigger</td><td>A small JSON message on a NATS topic saying “there is new data at this tier”.</td></tr>
       <tr><td>cascade</td><td>The chain: an arrival fires bronze→silver, whose publish fires silver→gold.</td></tr>
     </tbody>
@@ -210,7 +210,7 @@ sequenceDiagram
   participant P as Producer
   participant C as Catalog
   participant N as NATS
-  participant M as Mover
+  participant M as Stage runner
   participant W as Dapr Workflow
   participant R as Ray
 
@@ -274,7 +274,7 @@ sequenceDiagram
     <thead><tr><th>Sense</th><th>What it means <em>there</em></th></tr></thead>
     <tbody>
       <tr><td>The declared record</td><td><b>Renamed away.</b> It is now a <code>TransformSpec</code>. <code>lane</code> survives only as a read-compat alias so pre-rename records still parse — a migration shim, not vocabulary.</td></tr>
-      <tr><td>A mover Deployment</td><td><b>Never actually called a lane in code</b> — the chart key is <code>name</code>. The word appears only in comments around it. A mover is a <code>(from-ns, to-ns, sub-topic, pub-topic, identity)</code> tuple.</td></tr>
+      <tr><td>A stage runner Deployment</td><td><b>Never actually called a lane in code</b> — the chart key is <code>name</code>. The word appears only in comments around it. A stage runner is a <code>(from-ns, to-ns, sub-topic, pub-topic, identity)</code> tuple.</td></tr>
       <tr><td><code>lane_key(project, id)</code></td><td>Genuinely named lane, and a <b>misnomer</b>: it strips the tenant prefix, turning <code>acme-bronze$events</code> into <code>bronze$events</code>. It is a de-qualified catalog identifier.</td></tr>
       <tr><td><code>&lt;tier&gt;-&lt;lane&gt;</code> naming</td><td>A directory suffix (<code>bronze-media</code>). <b>This one causes real bugs</b> — the catalog composes the opposite order (<code>acme-bronze</code>), so a parser reducing from the wrong end returns a tier that does not exist.</td></tr>
       <tr><td>“Which code branch ran”</td><td>Three unrelated uses: <code>lane=full|delta</code> in the job, <code>durable|inline</code> in flows, <code>BUS|FEED</code> in notifications. None relate to the medallion.</td></tr>
@@ -294,9 +294,9 @@ sequenceDiagram
 %%{init: {'theme':'base','themeVariables':{'background':'#fbfbf9','mainBkg':'#eaeef2','primaryColor':'#eaeef2','primaryTextColor':'#16202b','primaryBorderColor':'#5b6775','secondaryColor':'#e4e9ee','secondaryTextColor':'#16202b','secondaryBorderColor':'#5b6775','tertiaryColor':'#f0f2f4','tertiaryTextColor':'#16202b','tertiaryBorderColor':'#5b6775','lineColor':'#3f4a57','textColor':'#16202b','nodeTextColor':'#16202b','titleColor':'#16202b','clusterBkg':'#f4f5f3','clusterBorder':'#a8ada0','edgeLabelBackground':'#fbfbf9','labelBackground':'#fbfbf9','labelBoxBkgColor':'#eaeef2','labelBoxBorderColor':'#5b6775','labelTextColor':'#16202b','actorBkg':'#eaeef2','actorBorder':'#5b6775','actorTextColor':'#16202b','actorLineColor':'#3f4a57','signalColor':'#3f4a57','signalTextColor':'#16202b','noteBkgColor':'#f6ecd4','noteTextColor':'#2b2308','noteBorderColor':'#8a6d13','sequenceNumberColor':'#ffffff','activationBkgColor':'#dfe8f3','activationBorderColor':'#1f4d7a','fontSize':'14px','fontFamily':'Public Sans, sans-serif'}}}%%
 flowchart TB
   T["trigger on medallion.bronze<br/>carries a dataset field"]
-  T --> M1["mover A"]
-  T --> M2["mover B"]
-  T --> M3["mover C"]
+  T --> M1["stage runner A"]
+  T --> M2["stage runner B"]
+  T --> M3["stage runner C"]
   M1 --> C1{"is dataset in MY<br/>accepted_input_names?"}
   M2 --> C2{"same string test"}
   M3 --> C3{"same string test"}
@@ -314,11 +314,11 @@ flowchart TB
   style RUN fill:#dcefe3,stroke:#1f6b3f,stroke-width:2px,color:#12241a
   style DROP fill:#fbdcd7,stroke:#9c2a20,color:#2b100c
   </pre></div>
-  <p class="cap"><b>Topics are shared, not per-edge.</b> Every subscribed mover receives every trigger on its topic and decides by a <b>string comparison</b> on the payload’s <code>dataset</code> field. That <code>in</code> test is the only thing separating pipelines — not a queue, not a namespace, not a Deployment boundary.</p>
+  <p class="cap"><b>Topics are shared, not per-edge.</b> Every subscribed stage runner receives every trigger on its topic and decides by a <b>string comparison</b> on the payload’s <code>dataset</code> field. That <code>in</code> test is the only thing separating pipelines — not a queue, not a namespace, not a Deployment boundary.</p>
 
   <div class="note bad">
     <div class="h">The silent failure this creates</div>
-    <p>Declaring a transform <b>silently changes the ingest head’s behaviour</b>: its <code>from_id</code> becomes a cascade entry point, so arrivals on that table now publish a trigger — <b>even when no mover is bound to that declaration</b>. The trigger goes out, every mover compares the string, they all drop it as “another lane’s”, and the run is over. You get a counter tick and a debug log. <b>Nothing is red.</b></p>
+    <p>Declaring a transform <b>silently changes the ingest head’s behaviour</b>: its <code>from_id</code> becomes a cascade entry point, so arrivals on that table now publish a trigger — <b>even when no stage runner is bound to that declaration</b>. The trigger goes out, every stage runner compares the string, they all drop it as “another lane’s”, and the run is over. You get a counter tick and a debug log. <b>Nothing is red.</b></p>
     <p>So a declaration alone does nothing useful, and is <em>not obviously inert</em>. Making it real still needs a chart edit and a <code>helm upgrade</code> — which is precisely the deploy-time step the declared record was invented to escape.</p>
   </div>
 
@@ -326,7 +326,7 @@ flowchart TB
   <p>Mostly no, and the parts are more separable than you feared:</p>
   <ul class="tight">
     <li><b>Ingest works with zero declarations.</b> The head recognises the chart-configured bronze pair directly.</li>
-    <li><b>The cascade works with zero declarations.</b> Unset, the mover uses its Deployment’s own settings — and <b>no shipped mover row sets one</b>, so declarations are not in use in the deployed estate at all.</li>
+    <li><b>The cascade works with zero declarations.</b> Unset, the stage runner uses its Deployment’s own settings — and <b>no shipped stage runner row sets one</b>, so declarations are not in use in the deployed estate at all.</li>
     <li><b>The gate is keyed by PROJECT, not by pipeline</b> — <code>gate_specs.py</code> says so in capitals. One spec per tenant, resolved on every stage write, falling back to chart settings when absent. That is the <em>opposite</em> policy from a transform, which refuses rather than falls back.</li>
   </ul>
   <p>So the welding is not ingest↔batch. It is <b>batch↔gate</b> (§9.4), plus the fact that a hop is a Deployment rather than a declaration (§9.5) — which is the one you have chosen to fix.</p>
@@ -373,7 +373,7 @@ flowchart LR
     <thead><tr><th>Guarantee</th><th>What it survives</th><th>What breaks without it</th></tr></thead>
     <tbody>
       <tr><td>Exactly-one submission</td><td>The same trigger delivered twice (NATS is at-least-once)</td><td>Two Ray jobs write the same output table, concurrently.</td></tr>
-      <tr><td>Durable waiting</td><td>The mover pod being killed mid-wait</td><td>Nothing is watching the job. It succeeds and the next tier never wakes.</td></tr>
+      <tr><td>Durable waiting</td><td>The stage runner pod being killed mid-wait</td><td>Nothing is watching the job. It succeeds and the next tier never wakes.</td></tr>
       <tr><td>The ack is not held</td><td>A job outliving the queue’s redelivery window</td><td>The broker redelivers forever because the handler never returned.</td></tr>
       <tr><td>Publish retry</td><td>The catalog being briefly unreachable <em>after</em> the job succeeded</td><td>Good data lands and the cascade stops, with nothing red.</td></tr>
       <tr><td>72-hour approval</td><td>Days passing, pods restarting</td><td>You cannot have a human in the loop at all.</td></tr>
@@ -419,7 +419,7 @@ flowchart TB
   PROD["producer"] --> E1
   E1 --> PROD
   PROD --> E2
-  E2 --> MOV["movers"]
+  E2 --> MOV["stage runners"]
   MOV --> WF["Dapr Workflow"]
   WF --> K1
   K1 --- K2
@@ -453,7 +453,7 @@ flowchart TB
     <tbody>
       <tr><td>Actors</td><td><b>No</b> — none at all</td><td>Actors give you a turn-based lock per entity. The cascade has no per-entity mutable state to serialise, so there is nothing to be an actor. They are used only in the <b>annotator</b> (per-project, per-task) and <b>notifications</b> (per-subject inbox). <em>That is the right call.</em></td></tr>
       <tr><td>State store (KV)</td><td><b>Yes — but not by the application</b></td><td>This is the subtle one. The lakehouse writes no application state to KV. But <b>Dapr’s workflow engine is itself built on the actor runtime</b>, and the actor runtime requires a state store the app-id can load. So the KV holds <em>workflow history</em>, not business data. Unscope it and the sidecar logs “actor hosting disabled” and every run 500s — a healthy-looking pod with a permanently broken feature.</td></tr>
-      <tr><td>Pub/sub (NATS JetStream)</td><td><b>Yes — it is the nervous system</b></td><td>Every hop between services is a topic, never a direct call: <code>lineage.events.v1</code> (writes announced), <code>medallion.bronze</code> / <code>medallion.silver</code> / <code>medallion.media</code> (triggers), <code>table_published</code> (control). Durable and replayable, so a mover can be down when data lands and still process it when it returns.</td></tr>
+      <tr><td>Pub/sub (NATS JetStream)</td><td><b>Yes — it is the nervous system</b></td><td>Every hop between services is a topic, never a direct call: <code>lineage.events.v1</code> (writes announced), <code>medallion.bronze</code> / <code>medallion.silver</code> / <code>medallion.media</code> (triggers), <code>table_published</code> (control). Durable and replayable, so a stage runner can be down when data lands and still process it when it returns.</td></tr>
       <tr><td>Bindings (cron)</td><td><b>Yes — five of them</b></td><td>Maintenance sweep, maintenance reconcile, lineage reconcile, notifications reconcile, job prune. All are <b>convergence</b> work — idempotent, self-healing, late-is-free — which is the textbook case for a reconcile loop rather than a scheduler. <b>Zero on the medallion</b>, which is §9’s biggest finding.</td></tr>
       <tr><td>Secrets</td><td><b>Yes</b></td><td>OpenBao is the sole source, fail-closed, no env fallback. The Ray pods have no sidecar, so their credential is injected by the submitting service — which fetches it from the store first.</td></tr>
       <tr><td>Workflow</td><td><b>Yes</b> — 5 of them</td><td>See §6.</td></tr>
@@ -671,7 +671,7 @@ flowchart LR
   CAT["catalog"]
   MNT["maintenance"]
   LIN["lineage / AGE"]
-  MOV["mover"]
+  MOV["stage runner"]
 
   SRC -->|"bytes"| ING
   ING -->|"writes fragments"| B
@@ -702,7 +702,7 @@ flowchart LR
   style LIN fill:#eaeef2,stroke:#5b6775,color:#16202b
   style SRC fill:#ececec,stroke:#888,color:#333
   </pre></div>
-  <p class="cap"><b>Only three things touch row bytes: ingest, the Ray job, and maintenance.</b> The mover — the thing people assume is “the pipeline” — never sees a row. It passes URIs and reads a status. That is why swapping the compute engine is a smaller change than it looks: the engine is the only component on the data path that would move.</p>
+  <p class="cap"><b>Only three things touch row bytes: ingest, the Ray job, and maintenance.</b> The stage runner — the thing people assume is “the pipeline” — never sees a row. It passes URIs and reads a status. That is why swapping the compute engine is a smaller change than it looks: the engine is the only component on the data path that would move.</p>
 
   <div class="note ok">
     <div class="h">Why this matters for decoupling</div>
@@ -875,7 +875,7 @@ sequenceDiagram
       <tr><td>3</td><td><b>Submit as a <code>RayJob</code> CR</b> instead of the Jobs REST API.</td><td>Runs become cluster objects, and it is the <b>only</b> thing that makes Kueue reachable.</td><td><code>kubectl get rayjobs</code> lists a run; a Kueue queue shows it admitted.</td></tr>
       <tr><td>4</td><td><b>Turn Kueue on</b> — quota + gang scheduling.</td><td>Impossible before 3.</td><td>A job waits in a queue when quota is exhausted, then runs.</td></tr>
       <tr><td>5</td><td><b>Split the gate</b>: structural integrity mandatory, data-quality policy opt-in.</td><td>Your explicit requirement — “run batch without a quality gate” — is impossible today.</td><td>A declaration with <code>policy: none</code> publishes; an empty table still cannot.</td></tr>
-      <tr><td>6</td><td><b><code>Transform</code> CRD + one generic runner</b>, replacing three movers.</td><td>The shape you chose. Depends on 1–3 being settled.</td><td>Adding a hop is a git commit; <code>kubectl get transforms</code> shows the cascade.</td></tr>
+      <tr><td>6</td><td><b><code>Transform</code> CRD + one generic runner</b>, replacing three stage runners.</td><td>The shape you chose. Depends on 1–3 being settled.</td><td>Adding a hop is a git commit; <code>kubectl get transforms</code> shows the cascade.</td></tr>
       <tr><td>7</td><td><b>A reconciler and a re-run verb.</b></td><td>The cascade is forward-only and unrepairable today.</td><td>A deliberately missed hop is detected and re-driven.</td></tr>
       <tr><td>6b</td><td><b>Named-task validation</b> — the catalog stops seeing filesystem paths (Decision 2).</td><td>Removes the layering violation without building a registry.</td><td><code>grep -r "/home/ray/jobs" services/catalog packages/service-kit</code> is empty, and a bad task name still 422s.</td></tr>
       <tr><td>8</td><td><b>Finish the “lane” rename.</b></td><td>Pure hygiene, no risk, and it stops six meanings sharing a word.</td><td>The word survives only where it means a code branch.</td></tr>
@@ -905,7 +905,7 @@ sequenceDiagram
 
   <div class="note warn">
     <div class="h">What must be true before implementing anything</div>
-    <p>Two items in the backlog are <b>blocked on you</b>, not on me: the OpenBao Kubernetes auth backend (ExternalSecrets cannot work without it), and a ruling on <code>dedicatedServiceCredentials</code> — today every mover holds <code>owner</code> on every warehouse and the control that bounds it is unrendered. Neither blocks steps 1–2, but both should be settled before more of the estate is built on top of the current posture.</p>
+    <p>Two items in the backlog are <b>blocked on you</b>, not on me: the OpenBao Kubernetes auth backend (ExternalSecrets cannot work without it), and a ruling on <code>dedicatedServiceCredentials</code> — today every stage runner holds <code>owner</code> on every warehouse and the control that bounds it is unrendered. Neither blocks steps 1–2, but both should be settled before more of the estate is built on top of the current posture.</p>
   </div>
 </section>
 
@@ -979,8 +979,8 @@ flowchart TB
   end
   DC --> BR[("bronze<br/>NOT bronze-media")]
   DB --> BM[("bronze-media")]
-  BR --> M1["bronze-to-silver mover"]
-  BM --> M2["media-to-silver mover<br/>pubTopic empty = TERMINAL"]
+  BR --> M1["bronze-to-silver stage runner"]
+  BM --> M2["media-to-silver stage runner<br/>pubTopic empty = TERMINAL"]
   M1 --> SI[("silver")]
   M2 --> SM[("silver-media<br/>never reaches gold")]
   SI --> M3["silver-to-gold"] --> GO[("gold")]
@@ -997,7 +997,7 @@ flowchart TB
   style M2 fill:#eaeef2,stroke:#5b6775,color:#16202b
   style M3 fill:#eaeef2,stroke:#5b6775,color:#16202b
   </pre></div>
-  <p class="cap"><b>The consequence nobody would guess from the names:</b> a million images ingested properly land in <code>bronze</code>, not <code>bronze-media</code> — so they do <b>not</b> flow down the “media lane”. They flow down the events lane, which does continue to gold. The media mover is reachable only from the small, capped, un-exposed door.</p>
+  <p class="cap"><b>The consequence nobody would guess from the names:</b> a million images ingested properly land in <code>bronze</code>, not <code>bronze-media</code> — so they do <b>not</b> flow down the “media lane”. They flow down the events lane, which does continue to gold. The media stage runner is reachable only from the small, capped, un-exposed door.</p>
 
   <div class="note bad">
     <div class="h">Five things that would bite a real million-image run</div>
@@ -1070,7 +1070,7 @@ flowchart TB
   <div class="tw"><table>
     <thead><tr><th>The lakehouse</th><th>Not the lakehouse — <em>our way</em> of doing ETL</th></tr></thead>
     <tbody>
-      <tr><td>Catalog, Lance tables, versioning + tagging</td><td>The medallion <b>movers</b> (three Deployments)</td></tr>
+      <tr><td>Catalog, Lance tables, versioning + tagging</td><td>The medallion <b>stage runners</b> (three Deployments)</td></tr>
       <tr><td><b>Governance</b> — OpenFGA, the project→warehouse→namespace→table hierarchy</td><td>The cascade <b>choreography</b> (the topic chain)</td></tr>
       <tr><td><b>Lineage</b> — OpenLineage → AGE</td><td>The <b>ingest plane</b></td></tr>
       <tr><td><b>Maintenance</b> — compaction, GC, drift reconcile</td><td>Ray submission, Dapr Workflow, Kueue</td></tr>
@@ -1078,7 +1078,7 @@ flowchart TB
     </tbody>
   </table></div>
 
-  <div class="big">The real test is not “which processes can I switch off?” It is: <b>if I move the data myself — my own ETL, my own schedule, no mover and no Ray — do I still get governance, lineage, versioning, provenance and the quality gate?</b></div>
+  <div class="big">The real test is not “which processes can I switch off?” It is: <b>if I move the data myself — my own ETL, my own schedule, no stage runner and no Ray — do I still get governance, lineage, versioning, provenance and the quality gate?</b></div>
 
   <p>That is a question about <b>who moves the data</b>, not about which services are running, and it is the one the next section's ranking should be read against.</p>
 </section>

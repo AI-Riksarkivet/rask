@@ -1,7 +1,7 @@
 """Unit tests for the fake-Ray medallion compute (#25 / P1 #6 seam) — real Lance, no S3/Dapr.
 
 Drives the in-process Lance read→transform→write against a temp directory (Lance writes local paths with
-empty ``storage_options``), then proves the mover/producer WIRING carries the REAL Lance version into the
+empty ``storage_options``), then proves the stage runner/producer WIRING carries the REAL Lance version into the
 emitted OpenLineage event — i.e. with compute on, the event-driven cascade produces actual versioned data,
 not just provenance. The async handlers are driven with stdlib ``asyncio.run`` (the project convention).
 """
@@ -33,7 +33,7 @@ def test_seed_bronze_writes_a_real_dataset(tmp_path: Any) -> None:
     result = seed_bronze(uri, {}, rows=5)
     table = lance.dataset(uri).to_table()
     assert table.num_rows == 5
-    # The stage stamp lands AT INGEST (R23 — the retired raw→bronze mover's logic, merged into the head).
+    # The stage stamp lands AT INGEST (R23 — the retired raw→bronze stage runner's logic, merged into the head).
     assert table.column_names == ["id", "payload", "stage"]
     assert set(table.column("stage").to_pylist()) == {"bronze"}
     assert result.version == lance.dataset(uri).version  # the returned version == what lineage records
@@ -81,7 +81,7 @@ def test_the_version_advances_WITH_THE_DATA_and_not_otherwise(tmp_path: Any) -> 
     actually mattered. It still holds, and is asserted below: when the DATA advances, the version
     advances with it.
 
-    What no longer holds is the first clause. Dapr delivers at least once, so a mover re-runs a
+    What no longer holds is the first clause. Dapr delivers at least once, so a stage runner re-runs a
     completed stage as a matter of routine; the old shape rewrote the entire tier to reproduce bytes
     already on disk, dropped the JSON index doing it (see `_index_lineage`), and committed a version
     that recorded nothing. An audit trail whose versions include "nothing happened, twice" is a worse
@@ -126,7 +126,7 @@ class _FakeDapr:
         self.published.append({"topic": topic_name, "data": json.loads(data)})
 
 
-def _mover_settings(bronze: str, silver: str) -> MedallionSettings:
+def _stage_runner_settings(bronze: str, silver: str) -> MedallionSettings:
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
@@ -145,7 +145,7 @@ def _mover_settings(bronze: str, silver: str) -> MedallionSettings:
 def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any) -> None:
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)
-    settings = _mover_settings(bronze, silver)
+    settings = _stage_runner_settings(bronze, silver)
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
@@ -165,20 +165,20 @@ def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any)
     assert stats["rowCount"] == 4
     assert stats["size"] > 0
     assert "OutputStatisticsOutputDatasetFacet" in stats["_schemaURL"]
-    # …and the mover fired NO next-stage topic. This asserted the opposite while `GateOutcome.TRIGGER`
-    # existed: the mover published `silver.ready` itself, promoting without the catalog ruling. That
+    # …and the stage runner fired NO next-stage topic. This asserted the opposite while `GateOutcome.TRIGGER`
+    # existed: the stage runner published `silver.ready` itself, promoting without the catalog ruling. That
     # was the second enforcement point `catalog/services/publication.py` exists to prevent, and it was
     # the DEFAULT path because MEDALLION_CASCADE_VIA_PUBLISH defaulted False.
     #
     # Inverted rather than deleted, because "the assertion went away" and "the door went away" read
     # identically in a diff, and only one of them is what happened.
     assert not any(p["topic"] == "silver.ready" for p in dapr.published), (
-        "the mover fired the next stage itself — there is ONE door, and it is the catalog's tag move"
+        "the stage runner fired the next stage itself — there is ONE door, and it is the catalog's tag move"
     )
 
 
 def test_handle_stage_compute_off_writes_no_data(tmp_path: Any) -> None:
-    # The gate: with compute OFF the mover writes no downstream dataset and still names the output.
+    # The gate: with compute OFF the stage runner writes no downstream dataset and still names the output.
     #
     # This test used to assert `datasetVersion == "1"` — it pinned the phantom AS the contract. That
     # half of it is deleted rather than relaxed: the claim it protected was false, and what a COMPLETE
@@ -187,7 +187,7 @@ def test_handle_stage_compute_off_writes_no_data(tmp_path: Any) -> None:
     # right — the output is still NAMED (the cascade shape survives) and nothing is written to disk.
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)
-    settings = _mover_settings(bronze, silver)
+    settings = _stage_runner_settings(bronze, silver)
     settings.compute_enabled = False
     dapr = _FakeDapr()
 
@@ -207,7 +207,7 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     """A COMPLETE must never describe a dataset that was never written.
 
     ``chart/values.yaml`` defaults ``compute.enabled: false``, so this is the DEPLOYED path, not an
-    edge case. With compute off the mover writes nothing, yet it emitted a COMPLETE whose output
+    edge case. With compute off the stage runner writes nothing, yet it emitted a COMPLETE whose output
     carried ``version: "1"`` — a measured property of a dataset that does not exist. A consumer of
     the graph cannot distinguish that from a real v1 write, which is the specific way lineage stops
     being evidence and becomes decoration.
@@ -219,7 +219,7 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     """
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)
-    settings = _mover_settings(bronze, silver)
+    settings = _stage_runner_settings(bronze, silver)
     settings.compute_enabled = False
     dapr = _FakeDapr()
 
@@ -241,7 +241,7 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
 def test_produce_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     """Same contract at the cascade HEAD, which has the identical `result if else 1` shape.
 
-    Separate from the mover case on purpose: ``produce`` is where suppressing the event would
+    Separate from the stage runner case on purpose: ``produce`` is where suppressing the event would
     actually break the pipeline (``/bronze-arrival`` subscribes to THIS event to publish
     ``medallion.bronze``), so it is the site that proves marking was the necessary choice.
     """
@@ -400,7 +400,7 @@ def test_assert_quality_blob_fails_on_dangling_external_pointer(tmp_path: Any) -
     assert not passed(checks)  # the gate blocks the promotion
 
 
-def _quality_mover_settings(from_uri: str, to_uri: str) -> MedallionSettings:
+def _quality_stage_runner_settings(from_uri: str, to_uri: str) -> MedallionSettings:
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
@@ -418,18 +418,18 @@ def _quality_mover_settings(from_uri: str, to_uri: str) -> MedallionSettings:
     )
 
 
-def test_a_failed_assertion_is_RECORDED_by_the_mover_and_RULED_ON_by_the_catalog(tmp_path: Any) -> None:
-    """The mover measures; it does not rule. Both halves are asserted here.
+def test_a_failed_assertion_is_RECORDED_by_the_stage_runner_and_RULED_ON_by_the_catalog(tmp_path: Any) -> None:
+    """The stage runner measures; it does not rule. Both halves are asserted here.
 
-    This test used to expect DROP: the mover ran `assert_quality` on its own write and blocked the
+    This test used to expect DROP: the stage runner ran `assert_quality` on its own write and blocked the
     promotion itself. That was the second enforcement point — it answered the same question the
     catalog answers, with different consequences, and a stage could refuse a version the catalog had
     never been asked about.
 
     Nothing is lost by moving the verdict, and that is the part worth being precise about. The
-    mover's block only ever withheld the next-stage TRIGGER, and there is no trigger any more; the
+    stage runner's block only ever withheld the next-stage TRIGGER, and there is no trigger any more; the
     catalog's `publish` refusal is what withholds a promotion now, and it is asserted at the PUBLISH
-    branch. This mover has no catalog at all, so there is no promotion to withhold — it acks.
+    branch. This stage runner has no catalog at all, so there is no promotion to withhold — it acks.
 
     What must NOT be lost is the audit fact, and that is why `assert_quality` still runs: the failed
     `not_null` is stamped into the `dataQualityAssertions` facet on the run event, so the graph
@@ -438,7 +438,7 @@ def test_a_failed_assertion_is_RECORDED_by_the_mover_and_RULED_ON_by_the_catalog
     silver = str(tmp_path / "silver")
     lance.write_dataset(pa.table({"id": pa.array([1, None], pa.int64()), "p": ["a", "b"]}), silver, mode="overwrite")
     gold = str(tmp_path / "gold")
-    settings = _quality_mover_settings(silver, gold)
+    settings = _quality_stage_runner_settings(silver, gold)
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
@@ -458,7 +458,7 @@ def test_quality_gate_promotes_on_clean_data(tmp_path: Any) -> None:
     silver = str(tmp_path / "silver")
     seed_bronze(silver, {}, rows=4)  # clean ids 0..3
     gold = str(tmp_path / "gold")
-    settings = _quality_mover_settings(silver, gold)
+    settings = _quality_stage_runner_settings(silver, gold)
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
@@ -467,7 +467,7 @@ def test_quality_gate_promotes_on_clean_data(tmp_path: Any) -> None:
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     facet = lineage["data"]["outputs"][0]["facets"]["dataQualityAssertions"]
     assert all(a["success"] for a in facet["assertions"])
-    # Clean data does NOT buy a mover-fired promotion — there is one door and this mover has no
+    # Clean data does NOT buy a stage runner-fired promotion — there is one door and this stage runner has no
     # catalog to reach it. Asserted as an absence for the same reason as the failed-assertion case:
     # a deleted line and a deleted door look the same in a diff.
     assert not any(p["topic"] == "gold.ready" for p in dapr.published)
@@ -477,7 +477,7 @@ def test_quality_off_emits_no_assertions_facet(tmp_path: Any) -> None:
     # compute ON but quality OFF: a real write + outputStatistics, but NO dataQualityAssertions facet.
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=3)
-    settings = _mover_settings(bronze, silver)  # compute on, quality off
+    settings = _stage_runner_settings(bronze, silver)  # compute on, quality off
     dapr = _FakeDapr()
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
     output = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)["data"]["outputs"][0]

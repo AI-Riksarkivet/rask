@@ -2,7 +2,7 @@
 
 TWO CONSUMERS, ONE CONVENTION, which is why this is here and not in either of them. The maintenance
 plane discovers datasets by LISTING BUCKETS — recorded in ``docs/DECISIONS.md`` ("The lakehouse cloud-native cutover"), because rask's
-catalog is not the commit coordinator and the medallion movers write past it — so what it holds is a
+catalog is not the commit coordinator and the medallion stage runners write past it — so what it holds is a
 URI while the catalog's credential door needs an id. Its lineage emitter needs the same crossing, for
 a different reason: the id it recovers becomes the OpenLineage ``Dataset`` name AND the OpenFGA object
 id of the maintenance event.

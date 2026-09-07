@@ -11,7 +11,7 @@ dataset names):
 * no blob columns at all (tabular datasets) → a no-op
 
 So EVERY stage of EVERY lane runs the same transform and "just works" per dataset content — no
-per-mover media config, no modality branches in the platform.
+per-stage runner media config, no modality branches in the platform.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ ARTIFACT_COLUMNS: tuple[str, ...] = media.ARTIFACT_COLUMNS
 class UnderivableMediaError(ValueError):
     """A payload matched a deriver's probe but cannot actually be derived (e.g. a truncated image).
 
-    DETERMINISTIC bad data — redelivery cannot fix bytes — so the mover routes this to the same
+    DETERMINISTIC bad data — redelivery cannot fix bytes — so the stage runner routes this to the same
     DROP-with-FAIL-lineage path as an FGA denial / quality block, never the transient RETRY path
     (which would re-read every blob from S3 up to maxDeliver times for an identical failure).
     """

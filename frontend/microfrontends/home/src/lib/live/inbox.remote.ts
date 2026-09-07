@@ -83,7 +83,7 @@ const NotificationIdSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(512)
  * THE ROWS THIS CAN SPEAK FOR ARE THE ONES YOU AUTHORED, and that is the bound worth reading twice.
  * The panel's rows come from `GET /runs` — governed by DATASET visibility, so every run whose outputs
  * you can `can_get_metadata`, whoever ran it. The inbox is filled by AUTHORSHIP (D4's v1 targeting:
- * `audience_for(notice)` is `(notice.author,)`) and only on COMPLETE/FAIL/ABORT. A mover's failed run
+ * `audience_for(notice)` is `(notice.author,)`) and only on COMPLETE/FAIL/ABORT. A stage runner's failed run
  * you can see but did not start therefore has no pointer here, `markSeen` on it stores nothing, and it
  * is unread again after a reload — S1 does not regress that, and it does not fix it either. Closing it
  * is S3 (the panel renders inbox rows) or S4 (project watch widens the audience); it is not a loop to

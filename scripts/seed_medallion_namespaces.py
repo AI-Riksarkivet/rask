@@ -17,7 +17,7 @@ call's own error is meant to say so rather than paper over it.
 What was missing is the other half. ``scripts/seed_medallion_fga.sh`` links every cascade namespace
 under the warehouse in OpenFGA — ``bronze``, ``silver``, ``gold``, ``bronze-media``, ``silver-media``
 — so authorization passes for a namespace the CATALOG has never heard of. Measured live 2026-08-25:
-the media lane's mover cleared its ``can_create_table`` check and then died on
+the media lane's stage runner cleared its ``can_create_table`` check and then died on
 
     404 ... silver-media$features/create
 
@@ -25,8 +25,8 @@ which reads as a broken lane rather than an unprovisioned one. Authorization and
 seeded by different files and only one of them ran.
 
 AGNOSTIC BY CONSTRUCTION. The namespaces are read out of ``chart/values.yaml`` — the producer's
-``bronzeNamespace`` plus every mover's ``fromNamespace``/``toNamespace`` — so this names no lane and
-no workload. Add a mover to the chart and this seeds its namespaces; there is nothing here to edit.
+``bronzeNamespace`` plus every stage runner's ``fromNamespace``/``toNamespace`` — so this names no lane and
+no workload. Add a stage runner to the chart and this seeds its namespaces; there is nothing here to edit.
 
 THE WAREHOUSE IS REQUIRED, AND IT IS NOT THE BUCKET. Measured 2026-08-25, after this script was
 first written with ``--warehouse`` defaulting to ``lance-catalog``: that string is the S3 BUCKET and
@@ -99,7 +99,7 @@ def qualified(project: str, namespace: str) -> str:
 def declared_namespaces(values_path: pathlib.Path, project: str = "") -> list[str]:
     """Every top-level namespace the cascade will write into, read from the chart.
 
-    The producer's bronze namespace is the head; each mover names the two it moves between. Ordered
+    The producer's bronze namespace is the head; each stage runner names the two it moves between. Ordered
     and de-duplicated so the output reads the way the cascade runs. With ``project`` set, each is
     qualified the way the runtime will ask for it — see :func:`qualified`.
     """
@@ -109,9 +109,9 @@ def declared_namespaces(values_path: pathlib.Path, project: str = "") -> list[st
     head = (medallion.get("producer") or {}).get("bronzeNamespace")
     if head:
         seen[head] = None
-    for mover in medallion.get("movers") or []:
+    for stage_runner in medallion.get("stage_runners") or []:
         for key in ("fromNamespace", "toNamespace"):
-            name = mover.get(key)
+            name = stage_runner.get(key)
             if name:
                 seen[name] = None
     return [qualified(project, name) for name in seen]

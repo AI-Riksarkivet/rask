@@ -110,12 +110,12 @@ groups:
           severity: critical
           service: medallion
         annotations:
-          summary: "Medallion mover has registry resolution OFF — every tenant trigger it receives halts here"
+          summary: "Medallion stage runner has registry resolution OFF — every tenant trigger it receives halts here"
           description: >-
             A tenant trigger arrived with no control root configured. The code calls this "a DEPLOYMENT
             gap, and therefore permanent": it is not a transient fault and will not clear on its own,
-            so every trigger this mover ever receives is dropped and the cascade stops for that tenant
-            with every pod green. Set MEDALLION_CONTROL_ROOT on the mover.
+            so every trigger this stage runner ever receives is dropped and the cascade stops for that tenant
+            with every pod green. Set MEDALLION_CONTROL_ROOT on the stage runner.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: MedallionStageRefused
@@ -129,13 +129,13 @@ groups:
           description: >-
             A deterministic refusal before any byte was read — malformed, unconfined_uri, bad_project or
             unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending
-            token, URI and dataset are on the mover's WARNING log line; this alert carries only the
+            token, URI and dataset are on the stage runner's WARNING log line; this alert carries only the
             bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # THE LOSS DETECTOR, and it is DISJOINT from the two refusal rules above rather than a third
       # variation of them. A refusal counter can only see a hop that ARRIVED and was declined; it is
       # structurally blind to one that never happened — a dropped trigger, a publish that never
-      # landed, a mover that was down. `medallion_cascade_lag` measures the other side: how many
+      # landed, a stage runner that was down. `medallion_cascade_lag` measures the other side: how many
       # source versions a destination tier has not consumed, which rises whether or not anything was
       # ever refused. Neither substitutes for the other, and an estate with only the counters is
       # blind to exactly the failure the cascade-repair work exists for.
@@ -154,8 +154,8 @@ groups:
           description: >-
             A destination tier has not consumed versions its source has published, and has stayed behind
             for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost
-            trigger, a publish that did not land, a mover that was down — which no counter can see. The
-            repair is edge-addressed: POST /api/movers/stages/rerun with the published table, the range,
+            trigger, a publish that did not land, a stage runner that was down — which no counter can see. The
+            repair is edge-addressed: POST /api/stage-runners/stages/rerun with the published table, the range,
             and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: MedallionStageDenied
@@ -167,7 +167,7 @@ groups:
         annotations:
           summary: "Medallion stage FGA-denied — the cascade may stall at this stage"
           description: >-
-            A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh.
+            A stage runner lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   - name: lance-infra
@@ -759,7 +759,7 @@ groups:
       # THE LOAD-BEARING ONE. A ratio, not a count: absolute 5xx tells you nothing without traffic,
       # and a service that serves ten requests an hour would never cross a count threshold however
       # broken it is. `service_name` is the instrumentor's own label (verified live: catalog, gateway,
-      # ingest, lineage, notifications, maintenance, medallion-producer and the movers all report it).
+      # ingest, lineage, notifications, maintenance, medallion-producer and the stage runners all report it).
       - alert: HttpServerErrorRatioHigh
         expr: sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m])) / sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])) > 0.05
         for: 10m

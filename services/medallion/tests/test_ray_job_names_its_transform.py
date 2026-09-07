@@ -11,7 +11,7 @@ the originator, and it is the same distinction here: `metadata` comes back on
 ``GET /api/jobs/<id>``, so it is readable from OUTSIDE the job and AFTER it fails, which is exactly
 the read the job page makes. An env var is only visible to the process.
 
-The UNDECLARED case is not a hole to fill with a placeholder. A mover with no ``MEDALLION_LANE``
+The UNDECLARED case is not a hole to fill with a placeholder. A stage runner with no ``MEDALLION_LANE``
 runs the chart's settings and there IS no lane record to link to, so the key is OMITTED — the same
 stance `metadata` already takes for an absent originator, where `""` is not an identity and a
 reader must never mistake one for the other.

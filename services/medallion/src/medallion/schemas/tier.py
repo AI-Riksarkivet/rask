@@ -11,7 +11,7 @@ WHY THIS EXISTS. ``schemas/htr.py`` (deleted 2026-08-17) pinned a workload-shape
 ``page_key``, ``region_polygons``, ``line_polygons``, ``reading_order``, ``confidences`` — nine of its
 eleven columns describe transcribed page images. That makes the cascade a transcription pipeline
 wearing a lakehouse's name: a second workload cannot use these tiers without bending its data into
-HTR's shape or forking the movers. Audio, tabular records and embeddings have no ``page_width``.
+HTR's shape or forking the stage runners. Audio, tabular records and embeddings have no ``page_width``.
 
 WHAT IS ACTUALLY GENERIC, and why each one earns its place:
 
@@ -36,7 +36,7 @@ WHAT IS ACTUALLY GENERIC, and why each one earns its place:
 
 NOTE ON THE OLD PIN. ``GOLD_CONTRACT_COLUMNS`` was imported by NOTHING in production — only two unit
 tests, which assert it equals itself. So the "load-bearing contract" never constrained a writer: no
-mover is checked against it, and a mover that dropped ``confidences`` would fail no gate. Treat it as
+stage runner is checked against it, and a stage runner that dropped ``confidences`` would fail no gate. Treat it as
 what it is — HTR's declaration of its own payload — not as the tier's schema.
 
 MEMBERSHIP, NOT ORDER — and this file used to imply otherwise. ``TIER_COLUMNS`` was a TUPLE spelling
@@ -75,7 +75,7 @@ from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, SOURCE_ROWID_COLUM
 
 
 #: Columns every governed tier carries, whatever wrote it. A workload adds its own beside these; it
-#: does not replace them, and a mover that drops one breaks provenance rather than a format.
+#: does not replace them, and a stage runner that drops one breaks provenance rather than a format.
 #:
 #: A SET, so nothing can read a column order out of it — see the module docstring. Where the columns
 #: physically sit is `stamp_stage`'s answer, given once for every writer.

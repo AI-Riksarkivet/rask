@@ -26,7 +26,7 @@ Services (ClusterIP):
 {{- end }}
 {{- with .Values.medallion }}
 {{- if .enabled }}
-  - medallion-producer: {{ include "rask.fullname" $root }}-medallion-producer:{{ .port }} (medallion producer + movers)
+  - medallion-producer: {{ include "rask.fullname" $root }}-medallion-producer:{{ .port }} (medallion producer + stage runners)
 {{- end }}
 {{- end }}
 {{- with .Values.explorer }}

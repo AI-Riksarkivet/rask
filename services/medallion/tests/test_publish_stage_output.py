@@ -1,12 +1,12 @@
-"""The mover asks the CATALOG to gate and publish what it wrote, instead of gating locally.
+"""The stage runner asks the CATALOG to gate and publish what it wrote, instead of gating locally.
 
 Two gates ran the same assertions in two places with different consequences. The catalog's withholds
-the `published` TAG — data stays committed but unpublished. The mover's withheld only the next
+the `published` TAG — data stays committed but unpublished. The stage runner's withheld only the next
 TRIGGER, so a refused batch was already committed into silver or gold and visible to anyone reading
 `latest`; `assert_quality_on_batch` documents that hole in its own docstring. Only the tag is a real
-boundary, which is why the design deletes the local gate once the mover publishes.
+boundary, which is why the design deletes the local gate once the stage runner publishes.
 
-This is the mover's half of that: one call, the catalog's answer, and a refusal that is a normal
+This is the stage runner's half of that: one call, the catalog's answer, and a refusal that is a normal
 outcome rather than an error — the run did its job, it is the DATA that was refused.
 """
 
@@ -64,7 +64,7 @@ class TestTheAsk:
 
     @respx.mock
     def test_the_declared_columns_travel(self) -> None:
-        """Without them the door runs two assertions where the mover ran five — the breaking-change
+        """Without them the door runs two assertions where the stage runner ran five — the breaking-change
         detector, which is the reason the local gate cannot simply be deleted."""
         route = _route()
 
@@ -95,7 +95,7 @@ class TestTheAnswer:
     @respx.mock
     def test_a_REFUSAL_is_a_normal_outcome_naming_what_failed(self) -> None:
         """Not an exception. The run committed its output and did its job; the DATA was refused, and
-        the mover needs the assertion names to decide whether a person should be asked."""
+        the stage runner needs the assertion names to decide whether a person should be asked."""
         _route(
             published=False,
             assertions=[

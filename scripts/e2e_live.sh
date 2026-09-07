@@ -61,9 +61,9 @@ MAINT="$(svc "$RELEASE-maintenance")" || true
 # and every consumer probes it as `("medallion-producer", LANCERAY)` — so the variable names the
 # medallion producer, not anything on the Ray plane. Nine legs skipped for want of this one line.
 MEDALLION="$(svc "$RELEASE-medallion-producer")" || true
-# One mover is enough: the quality-block drive addresses whichever it is given, and bronze-to-silver
+# One stage runner is enough: the quality-block drive addresses whichever it is given, and bronze-to-silver
 # is the lane the cascade always has.
-MOVER="$(svc "$RELEASE-bronze-to-silver")" || true
+STAGE_RUNNER="$(svc "$RELEASE-bronze-to-silver")" || true
 AGE="$(svc "$RELEASE-age")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
 printf '   catalog=%s lineage=%s gateway=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$GATEWAY" "$S3"
@@ -177,8 +177,8 @@ export LANCE_E2E_S3_REGION="${LANCE_E2E_S3_REGION:-us-east-1}"
 # service for what that bring-up called it. The runner's job is to answer to all of them rather than
 # to make thirty suites agree on a spelling.
 [ -n "$MEDALLION" ] && export LANCE_E2E_LANCERAY_URL="http://$MEDALLION"
-[ -n "$MOVER" ] && export LANCE_E2E_MOVER_URL="http://$MOVER"
-[ -n "$MOVER" ] && export LANCE_E2E_MOVER_TOKEN="$DAPR_TOKEN"
+[ -n "$STAGE_RUNNER" ] && export LANCE_E2E_STAGE_RUNNER_URL="http://$STAGE_RUNNER"
+[ -n "$STAGE_RUNNER" ] && export LANCE_E2E_STAGE_RUNNER_TOKEN="$DAPR_TOKEN"
 export LANCE_E2E_AUTH_SERVER="http://$CATALOG"
 export MEDIA_CATALOG_URL="http://$CATALOG"
 export LANCE_REST_E2E_URL="http://$CATALOG"

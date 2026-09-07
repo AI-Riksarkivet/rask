@@ -33,11 +33,13 @@ _ROOTS = ("chart", "services", "packages", "tests", "docs", "scripts", ".claude"
 
 _CITATION = re.compile(r'DECISIONS\.md "([^"]+)"')
 
+
 #: Citations wrap across lines inside comments, so a heading match must not depend on where the line
 #: broke. Collapsing runs of whitespace is the difference between checking the citation and checking
 #: the formatter.
 def _flat(text: str) -> str:
     return " ".join(text.split())
+
 
 #: A row id beside a citation — `(M1)`, `(C3)`. Legitimate when DECISIONS itself defines it: the
 #: "Cascade repair" section enumerates "(C1, C3a, C3b, C3, C4, C2)", so a reader following `(C3)`
@@ -71,9 +73,7 @@ def test_every_cited_section_exists() -> None:
             flat = _flat(cited)
             if not any(_flat(head).startswith(flat) or flat in _flat(head) for head in sections):
                 unresolved.setdefault(cited, []).append(str(path.relative_to(REPO)))
-    assert not unresolved, "citations naming no section in DECISIONS.md: " + "; ".join(
-        f"{k!r} <- {', '.join(v[:3])}" for k, v in sorted(unresolved.items())
-    )
+    assert not unresolved, "citations naming no section in DECISIONS.md: " + "; ".join(f"{k!r} <- {', '.join(v[:3])}" for k, v in sorted(unresolved.items()))
 
 
 def test_no_citation_carries_a_deleted_plans_row_id() -> None:

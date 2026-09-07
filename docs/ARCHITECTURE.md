@@ -3,7 +3,7 @@
 The doc to read first. Plain-language map of **what we're building, how the pieces fit,
 where we are right now, and what's next**. Skim the diagrams; read the section you need.
 
-> 🧭 **Want the end-to-end pipeline in order — ingest → movers → gates → lineage → compaction?** Read
+> 🧭 **Want the end-to-end pipeline in order — ingest → stage runners → gates → lineage → compaction?** Read
 > **[`FLOW.md`](FLOW.md)**: the single coherent narrative of the *implemented* flow, with the distributed
 > (KubeRay / Ray Data) variants clearly marked as the rask future.
 >
@@ -247,7 +247,7 @@ flowchart LR
 `create`/`insert`(silver) [authz `can_create_table`/`can_write_data`] → commit a new
 Lance version. The catalog authorizes + locates + records; the engine moves bytes. **You
 can do this today with the existing endpoints** — and the promotion *job* is now built too: the
-event-driven medallion movers (see §7, [`FLOW.md`](FLOW.md)).
+event-driven medallion stage runners (see §7, [`FLOW.md`](FLOW.md)).
 
 ---
 
@@ -262,7 +262,7 @@ event-driven medallion movers (see §7, [`FLOW.md`](FLOW.md)).
 | Post-create ownership seeding (single `seed_ownership` helper) | ✅ done |
 | Resilience (retry + fail-closed incl. transport errors; one retry layer; bounded) | ✅ done |
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
-| **Promotion pipeline** (bronze→silver→gold; event-driven Dapr movers + opt-in authz + quality gates) | ✅ built & tested — see [`FLOW.md`](FLOW.md), [`MEDALLION.md`](MEDALLION.md) |
+| **Promotion pipeline** (bronze→silver→gold; event-driven Dapr stage runners + opt-in authz + quality gates) | ✅ built & tested — see [`FLOW.md`](FLOW.md), [`MEDALLION.md`](MEDALLION.md) |
 | Distributed promotion at scale (real lance-ray Ray Data job on KubeRay) | 🔶 rask integration — the in-process fake-Ray compute fills the same contract today ([`FLOW.md` §7](FLOW.md#7-future--the-distributed-variants)) |
 | `project` type + 3-axis governance (teams × projects × layers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested; app-side auto-seed of the full hierarchy is partial (see `DEPLOY.md`) |
 | Orchestration (cron → NATS → Dapr) | ✅ Dapr cron binding (compaction) + NATS/Dapr pub-sub built & deployed; Dapr **Workflow** still deferred |

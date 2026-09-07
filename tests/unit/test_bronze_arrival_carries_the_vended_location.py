@@ -1,17 +1,17 @@
 """The ingest-first ordering hazard: `/bronze-arrival` must name the location the CATALOG vends.
 
 `/publication-arrival` carries `from_uri` (I2) — it reads the catalog's vended `location` off the
-control event and puts it on the stage trigger, so the mover opens the table that was actually written.
-Without the same field on `/bronze-arrival`, the bronze->silver mover falls through to `_resolve_roots`'
+control event and puts it on the stage trigger, so the stage runner opens the table that was actually written.
+Without the same field on `/bronze-arrival`, the bronze->silver stage runner falls through to `_resolve_roots`'
 composed `{root}/medallion/{namespace}` — a DEPLOYMENT CONTRACT between `produce.py` and the chart's
 `MEDALLION_FROM_URI`, and a path no catalog-vended table occupies.
 
 That makes the first leg of the cascade depend on WHICH SERVICE CREATED THE TABLE FIRST:
 
 * producer first — `register_written_dataset` attaches `bronze$events` to the composed path, `ingest`'s
-  `ensure` adopts that registration, and both writers and the mover agree.
+  `ensure` adopts that registration, and both writers and the stage runner agree.
 * ingest first — `ensure` creates through the catalog's own door and takes the vended
-  `{root}/{hash}_{ns}${name}`. Ingest writes its rows there, the mover opens the composed path, and the
+  `{root}/{hash}_{ns}${name}`. Ingest writes its rows there, the stage runner opens the composed path, and the
   cascade fires correctly, wakes, finds none of those rows, and ACKS 200.
 
 The second ordering is what this suite pins. It is deliberately asserted on the SILVER OUTPUT rather
@@ -47,7 +47,7 @@ VENDED_STEM = "9f2c1a_acme-bronze$events"
 
 
 class _FakeDapr:
-    """Captures every published event — the head's stage trigger and the movers' lineage alike."""
+    """Captures every published event — the head's stage trigger and the stage runners' lineage alike."""
 
     def __init__(self) -> None:
         self.published: list[dict[str, Any]] = []
@@ -88,8 +88,8 @@ def _head_settings(control: Path, decoy_bronze: Path) -> MedallionSettings:
     return MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(decoy_bronze), "control_root": str(control), "catalog_url": CATALOG})
 
 
-def _mover_settings(control: Path, decoys: dict[str, str]) -> MedallionSettings:
-    """The bronze->silver mover, wired exactly as the chart wires it: composed env URIs + a control root."""
+def _stage_runner_settings(control: Path, decoys: dict[str, str]) -> MedallionSettings:
+    """The bronze->silver stage runner, wired exactly as the chart wires it: composed env URIs + a control root."""
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
@@ -113,14 +113,14 @@ def _describe(location: str, status: int = 200) -> respx.Route:
 @respx.mock
 def test_an_ingest_first_bronze_cascades_from_the_location_the_catalog_vends(tmp_path: Path) -> None:
     """THE ORDERING HAZARD. `ingest` created the table, so bronze lives at the vended hash path — and the
-    mover must transform THOSE rows, not whatever happens to sit at the composed path."""
+    stage runner must transform THOSE rows, not whatever happens to sit at the composed path."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
     vended = str(wh / VENDED_STEM)
     composed = str(wh / "medallion" / "bronze")
     # The rows ingest actually wrote, at the location the catalog vended for it.
     seed_bronze(vended, {}, rows=5)
-    # A STALE batch at the composed path. Seeded on purpose: with the path merely absent the mover
+    # A STALE batch at the composed path. Seeded on purpose: with the path merely absent the stage runner
     # errors and the failure is visible, which would hide the defect behind an accident. Present, the
     # spurious run succeeds end to end and ACKS 200 — which is the damage.
     seed_bronze(composed, {}, rows=2)
@@ -132,8 +132,8 @@ def test_an_ingest_first_bronze_cascades_from_the_location_the_catalog_vends(tmp
     assert asyncio.run(handle_bronze_arrival(cast("DaprClient", dapr), head, {"data": _bronze_event()})) == {"status": "SUCCESS"}
     trigger = next(p["data"] for p in dapr.published if p["topic"] == head.bronze_topic)
 
-    mover = _mover_settings(control, decoys)
-    assert asyncio.run(handle_stage(cast("DaprClient", dapr), mover, {"data": trigger})) == {"status": "SUCCESS"}
+    stage_runner = _stage_runner_settings(control, decoys)
+    assert asyncio.run(handle_stage(cast("DaprClient", dapr), stage_runner, {"data": trigger})) == {"status": "SUCCESS"}
 
     # THE DAMAGE, asserted before the mechanism: a green run over the wrong bytes is what the composed
     # path buys, and it is indistinguishable from a correct one on every other signal.
@@ -147,7 +147,7 @@ def test_an_ingest_first_bronze_cascades_from_the_location_the_catalog_vends(tmp
 def test_a_produce_first_bronze_still_cascades_from_the_composed_path(tmp_path: Path) -> None:
     """THE OTHER ORDERING, unchanged. `POST /produce` attaches its deployment-contract URI through
     `register_table`, so the catalog vends the composed `{root}/medallion/{ns}` — the head names it, the
-    mover's confinement accepts it (it IS the resolved root's own tier path), and the cascade reads
+    stage_runner's confinement accepts it (it IS the resolved root's own tier path), and the cascade reads
     exactly what it read before the trigger carried a location at all."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
@@ -162,8 +162,8 @@ def test_a_produce_first_bronze_still_cascades_from_the_composed_path(tmp_path: 
     trigger = next(p["data"] for p in dapr.published if p["topic"] == head.bronze_topic)
     assert trigger["from_uri"] == composed
 
-    mover = _mover_settings(control, decoys)
-    assert asyncio.run(handle_stage(cast("DaprClient", dapr), mover, {"data": trigger})) == {"status": "SUCCESS"}
+    stage_runner = _stage_runner_settings(control, decoys)
+    assert asyncio.run(handle_stage(cast("DaprClient", dapr), stage_runner, {"data": trigger})) == {"status": "SUCCESS"}
     assert lance.dataset(str(wh / "medallion" / "silver")).to_table().num_rows == 3
 
 
@@ -205,7 +205,7 @@ def test_a_table_the_catalog_does_not_govern_names_no_upstream(tmp_path: Path) -
 
 def test_an_ungoverned_head_names_no_upstream(tmp_path: Path) -> None:
     """The dev/demo shape (no `MEDALLION_CATALOG_URL`) asks nobody and carries nothing — the same
-    escape hatch `produce.py` and the movers keep, so a stack with no catalog still cascades."""
+    escape hatch `produce.py` and the stage runners keep, so a stack with no catalog still cascades."""
     control = tmp_path / "control"
     _provision(control, "acme", tmp_path / "acme-wh")
     dapr = _FakeDapr()
@@ -219,7 +219,7 @@ def test_an_ungoverned_head_names_no_upstream(tmp_path: Path) -> None:
 
 @respx.mock
 def test_a_vended_location_outside_the_read_root_is_still_refused(tmp_path: Path) -> None:
-    """THE CONFINEMENT GUARD STILL APPLIES. `from_uri` is honoured by OPENING it with the mover's own
+    """THE CONFINEMENT GUARD STILL APPLIES. `from_uri` is honoured by OPENING it with the stage runner's own
     object-store credentials, so a location outside the resolved root is DROPped — never silently
     swapped for the composed path, which would transform a dataset nobody asked for."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
@@ -233,6 +233,6 @@ def test_a_vended_location_outside_the_read_root_is_still_refused(tmp_path: Path
     assert asyncio.run(handle_bronze_arrival(cast("DaprClient", dapr), head, {"data": _bronze_event()})) == {"status": "SUCCESS"}
     trigger = next(p["data"] for p in dapr.published if p["topic"] == head.bronze_topic)
 
-    mover = _mover_settings(control, decoys)
-    assert asyncio.run(handle_stage(cast("DaprClient", dapr), mover, {"data": trigger})) == {"status": "DROP"}
+    stage_runner = _stage_runner_settings(control, decoys)
+    assert asyncio.run(handle_stage(cast("DaprClient", dapr), stage_runner, {"data": trigger})) == {"status": "DROP"}
     assert not Path(wh / "medallion" / "silver").exists()

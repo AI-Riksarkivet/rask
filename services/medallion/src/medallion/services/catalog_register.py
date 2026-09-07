@@ -13,34 +13,32 @@ every other lane wrote ungoverned bytes. Nothing in the logic was ever workload-
 an id and a URI. Governance belongs to the CASCADE, or every new workload starts ungoverned by
 default — the exact opposite of an agnostic platform.
 
-THE MOVER ASKS THE CATALOG, IT DOES NOT TELL IT — and this paragraph said the opposite for as long
-as that was true. It read "Register — not create-through-the-catalog. The mover owns where it
-WRITES", which described the ORIGINAL `register_stage_output` shape: compose `{root}/medallion/
-{tier}`, write there, then register the path after the fact. That ordering was the defect (I2 on the
-write side): the catalog's binding said somewhere else, so the publish that followed opened the
-catalog's answer and found nothing. `ensure_stage_output` — the seam every mover calls now — DOES
-create through the catalog's own door (`POST /v1/table/{id}/create` when `describe` 404s) and takes
-the location from that response, and `transform.py` calls it BEFORE the write. Registration is still
-the goal; asking first is how the goal is reached.
+THE STAGE RUNNER ASKS THE CATALOG, IT DOES NOT TELL IT (rule I2, write side). Composing a location —
+`{root}/medallion/{tier}` — and registering it after the write is the defect this seam exists to
+close: the catalog's namespace binding may resolve somewhere else entirely, so the publish that
+follows opens the catalog's answer and finds nothing there. `ensure_stage_output` therefore creates
+through the catalog's OWN door (`POST /v1/table/{id}/create` when `describe` 404s) and takes the
+location from that response, and `transform.py` calls it BEFORE the write. Registration is still the
+goal; asking first is how the goal is reached.
 
-TWO DOORS, AND WHICH ONE A WRITER USES IS DECIDED BY WHO OWNS ITS LOCATION. A MOVER asks
+TWO DOORS, AND WHICH ONE A WRITER USES IS DECIDED BY WHO OWNS ITS LOCATION. A STAGE RUNNER asks
 (`ensure_stage_output`): nothing else names where its output lives, so the catalog's answer is the
 only answer. The CASCADE HEAD tells (`register_written_dataset`): `POST /produce` writes to
 `MEDALLION_BRONZE_URI`, which `chart/templates/medallion.yaml` renders from the same expression as the
-bronze->silver mover's `MEDALLION_FROM_URI` — the head's location is a DEPLOYMENT CONTRACT the chart
+bronze->silver stage runner's `MEDALLION_FROM_URI` — the head's location is a DEPLOYMENT CONTRACT the chart
 already states, not something the catalog has to be asked for. `register_table` is the door built for
 exactly that case (bytes written outside the catalog's own doors), and it needs no WAREHOUSE, which is
 why it reaches the medallion path in the reserved platform bucket that no warehouse may ever claim.
 
 A THIRD, READ-ONLY DOOR sits beside them: `describe_table_location`, which asks where a table that
 ALREADY EXISTS lives and creates nothing. It is what lets a consumer — the cascade head, which writes
-no table of its own — name the upstream a mover should open instead of leaving it to compose a path,
+no table of its own — name the upstream a stage runner should open instead of leaving it to compose a path,
 and it is what keeps the ingest/produce creation ORDER from deciding whether the cascade's first leg
 reads anything.
 
 This paragraph used to say the telling form was GONE, and for a while it was: `register_stage_output`
-outlived its last caller when the movers' ordering was fixed, and three suites went on stubbing a door
-nothing opened. What was actually wrong with it was never the direction — it was that a MOVER used it.
+outlived its last caller when the stage runners' ordering was fixed, and three suites went on stubbing a door
+nothing opened. What was actually wrong with it was never the direction — it was that a STAGE RUNNER used it.
 The form is back, once, for the one writer whose location is a deployment contract rather than a guess,
 and the two lessons it paid for are kept: it mints no namespace (a top-level parent belongs to the
 warehouse, and `require_warehouse_scoped` refuses one outright — measured in-cluster, every hop
@@ -71,7 +69,7 @@ log = logging.getLogger(__name__)
 class RegisterError(RuntimeError):
     """The catalog refused or could not be reached — the stage must NOT report success.
 
-    An unregistered gold table is #88's defect intact, so this propagates and the mover RETRYs.
+    An unregistered gold table is #88's defect intact, so this propagates and the stage runner RETRYs.
     That re-runs the (expensive) transcribe too — stated cost: the overwrite is idempotent and a
     catalog outage is rarer than a Serve one; splitting the stage into resumable halves is P7b's
     re-cut, not a quiet retry layer here.
@@ -85,7 +83,7 @@ def credential(
     service_identity: str | None,
     dedicated_token: Callable[[str], str | None] | None = None,
 ) -> dict[str, str]:
-    """The credential a mover presents to the catalog, service door first.
+    """The credential a stage runner presents to the catalog, service door first.
 
     A service authenticates AS ITSELF — the app token daprd already injects plus the subject it
     claims — and needs no bearer. The bearer path came first here and was the wrong shape: the
@@ -103,7 +101,7 @@ def credential(
         # (`service_kit.governed.dapr_auth`) binds such a subject to `service-token-<identity>`, and
         # rendering that server-side alone is not enabling the control — it is refusing every
         # privileged caller. Measured 2026-08-26: the catalog began demanding the dedicated token
-        # while movers still sent APP_API_TOKEN, and every call 401'd until it was reverted.
+        # while stage runners still sent APP_API_TOKEN, and every call 401'd until it was reverted.
         #
         # `None` from the resolver means the bundle was READ and this identity is not privileged, so
         # the shared token is correct. Falling back rather than refusing keeps ONE authority over the
@@ -115,10 +113,10 @@ def credential(
 
 
 class PublishOutcome(BaseModel):
-    """What the catalog decided about a version the mover just wrote.
+    """What the catalog decided about a version the stage runner just wrote.
 
     A REFUSAL is not an error: the run committed its output and did its job, and it is the DATA that
-    was refused. `failed_assertions` is what the mover needs to decide whether a person should be
+    was refused. `failed_assertions` is what the stage runner needs to decide whether a person should be
     asked — structural findings are unanswerable, the rest are reviewable.
     """
 
@@ -157,10 +155,10 @@ def publish_stage_output(
     could publish has any business asking whether this door would accept a version.
 
     THE OTHER HALF OF REGISTERING. A commit makes the output readable; this is what makes it READY,
-    and it is the catalog's operation so that every writer — this mover, a Ray job, a backfill —
+    and it is the catalog's operation so that every writer — this stage runner, a Ray job, a backfill —
     publishes identically and meets the same rung and the same assertions.
 
-    It replaces the mover's own gate rather than joining it. Both ran the same checks; the local one
+    It replaces the stage runner's own gate rather than joining it. Both ran the same checks; the local one
     withheld only the next TRIGGER, so a refused batch was already committed into the tier and visible
     to anyone reading `latest`. Only the tag is a boundary.
 
@@ -179,9 +177,9 @@ def publish_stage_output(
         # Echoed by the catalog onto `table_published`, which is the ONE hop where a batch identity
         # would otherwise be lost — the publication head mints the next token from the event id.
         "cascade_id": cascade_id,
-        # THE HUMAN THE BATCH IS FOR, across the same lost hop and for the same reason. A mover
+        # THE HUMAN THE BATCH IS FOR, across the same lost hop and for the same reason. A stage runner
         # authenticates to this door AS ITSELF (`_credential` above), so the control event's actor is
-        # `service-<mover>` — an inbox actor named after a mover, which is worse than silence because
+        # `service-<stage runner>` — an inbox actor named after a stage runner, which is worse than silence because
         # it looks delivered. The person is only in this body, and the catalog decides what to do with
         # the claim (`publication_originator`): it authorizes nothing here and the notifications plane
         # re-derives every recipient's visibility at delivery.
@@ -215,7 +213,7 @@ def authorize_stage_write(
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> str:
-    """Prove this mover may WRITE `table_id`, at the catalog's own door. Returns the vending mode.
+    """Prove this stage runner may WRITE `table_id`, at the catalog's own door. Returns the vending mode.
 
     CALLED FOR ITS SIDE EFFECT, and the answer is deliberately discarded by the caller. The stage job
     opens its destination with the RustFS ROOT credential from the Ray pod's environment and performs
@@ -233,7 +231,7 @@ def authorize_stage_write(
     THE WRITE TIER SPECIFICALLY. Asking for `read` would pass a rung the cascade does not need and
     make a reader's grant indistinguishable from a writer's on the one path that writes.
 
-    Raises on a refusal. A 403 means this mover may not write the table it is about to write, and a
+    Raises on a refusal. A 403 means this stage runner may not write the table it is about to write, and a
     stage that proceeds anyway makes the check decorative — which is the failure mode of every
     authorization added for tidiness rather than for a decision.
     """
@@ -255,7 +253,7 @@ def _catalog_client(catalog_url: str, timeout_seconds: float, client: httpx.Clie
     """The shared client when the caller has one, otherwise a per-call client it owns.
 
     `fastapi` -> `production-patterns.md` § Lifespan wants one client built once and injected; the
-    mover's lifespan now builds it. The fallback is not laziness — every OTHER caller of these helpers
+    stage runner's lifespan now builds it. The fallback is not laziness — every OTHER caller of these helpers
     (the tests, `scripts/`, any direct use) has no app and no lifespan, and making the client mandatory
     would break them to satisfy a rule about the hot path. A caller that passes one must keep owning
     it: closing it here would shut the app's client after the first stage.
@@ -282,9 +280,9 @@ def ensure_stage_output(
 ) -> str:
     """Ask the catalog where this stage's output lives, creating the table if it does not exist yet.
 
-    THE MOVER ASKS INSTEAD OF TELLING, which is rule I2 applied to the write side. `transform.py` says
-    the quiet part: I2 was "read from the consuming end. Only the READ side: the mover still owns where
-    it WRITES." That half is the defect. The mover composed `{root}/medallion/{tier}` — a layout the
+    THE STAGE RUNNER ASKS INSTEAD OF TELLING, which is rule I2 applied to the write side. `transform.py` says
+    the quiet part: I2 was "read from the consuming end. Only the READ side: the stage runner still owns where
+    it WRITES." That half is the defect. The stage runner composed `{root}/medallion/{tier}` — a layout the
     catalog has never vended — wrote there, and then registered that path. The catalog's binding said
     somewhere else, so the publish that followed opened the catalog's answer and found nothing.
 
@@ -294,7 +292,7 @@ def ensure_stage_output(
     for an absent table, so believing it is what made a new table impossible to create at all.
 
     ``schema`` only has to be A schema, not the output's: the empty table exists so the catalog mints
-    and governs a URI, and the mover's `overwrite` replaces the schema wholesale afterwards. A stage
+    and governs a URI, and the stage runner's `overwrite` replaces the schema wholesale afterwards. A stage
     does not know its output schema until it has computed, and does not need to.
 
     Never falls back to a composed path. A catalog that vends no location is an error — guessing one
@@ -427,7 +425,7 @@ def register_written_dataset(
     """Attach the dataset at ``dataset_uri`` to the catalog as ``table_id``; 409 means already governed.
 
     THE DOOR FOR A WRITER THAT OWNS ITS OWN LOCATION — see this module's header for why the cascade
-    head is one and a mover is not. Registering is what turns written bytes into a ``table:`` object:
+    head is one and a stage runner is not. Registering is what turns written bytes into a ``table:`` object:
     it seeds the caller's FGA ownership through the catalog's own door, and every governed path —
     the maintenance policy, the protection record, trash/undrop, credential vending, the FGA doors —
     keys off that object rather than off the bytes.

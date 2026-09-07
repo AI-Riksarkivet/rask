@@ -6,10 +6,10 @@ edge would have been `bronze->?` — and `consumed_reader` splits on `->` and lo
 outputs mention the destination, so `?` matches nothing. The detector would have run cleanly, published
 points labelled `?`, and measured nothing: wired and inert, the shape this estate keeps paying for.
 
-DERIVED FROM THE MOVER DECLARATIONS, never a second list. `medallion.movers[]` already states
-`fromNamespace` and `toNamespace` for every lane, and `mediaMovers[]` does the same — so a lane added
+DERIVED FROM THE STAGE RUNNER DECLARATIONS, never a second list. `medallion.stageRunners[]` already states
+`fromNamespace` and `toNamespace` for every lane, and `mediaStageRunners[]` does the same — so a lane added
 there is measured with no second edit, and a lane renamed cannot half-move. A hand-kept map would be a
-duplicate of the one declaration that already exists, which is how the edge and the mover drift apart.
+duplicate of the one declaration that already exists, which is how the edge and the stage runner drift apart.
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ def test_every_ROUTED_source_has_a_destination() -> None:
     assert not missing, f"these routed lanes have no declared destination: {missing}"
 
 
-def test_the_destinations_come_from_the_MOVER_declarations() -> None:
-    """Not a hand-kept second list. Each value must be some mover's `toNamespace`, so a renamed lane
+def test_the_destinations_come_from_the_STAGE_RUNNER_declarations() -> None:
+    """Not a hand-kept second list. Each value must be some stage runner's `toNamespace`, so a renamed lane
     cannot half-move."""
     env = _producer_env()
     destinations = json.loads(env["MEDALLION_LANE_DESTINATIONS"])
@@ -61,9 +61,9 @@ def test_the_destinations_come_from_the_MOVER_declarations() -> None:
         for e in (c.get("env") or [])
         if e.get("name") == "MEDALLION_TO_NAMESPACE"
     }
-    assert declared_to, "no mover declares MEDALLION_TO_NAMESPACE — this gate would pass vacuously"
+    assert declared_to, "no stage runner declares MEDALLION_TO_NAMESPACE — this gate would pass vacuously"
     stray = sorted(set(destinations.values()) - declared_to)
-    assert not stray, f"these destinations match no mover's toNamespace: {stray}"
+    assert not stray, f"these destinations match no stage runner's toNamespace: {stray}"
 
 
 def test_both_lag_readers_SEND_THE_SERVICE_CREDENTIAL(monkeypatch: pytest.MonkeyPatch) -> None:

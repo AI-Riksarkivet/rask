@@ -58,11 +58,11 @@ still guaranteeing every survivor is eventually drained (a unit test drains N > 
 ## P2.1 — single-base cascade write
 
 **Decision.** The medallion/Ray cascade writes `mode="overwrite"` to **one** root; Lance multi-base (#3-B)
-stays REST-create-only and is deliberately **not** wired through the mover write path — WONTFIX, stated as
-a boundary in the `compute.py` mover docstring, not an accidental omission.
+stays REST-create-only and is deliberately **not** wired through the stage runner write path — WONTFIX, stated as
+a boundary in the `compute.py` stage runner docstring, not an accidental omission.
 
 **Rationale.** Base registration (`initial_bases`) is create-time-only while the cascade is overwrite-only,
-so distributing it would need first-write-vs-overwrite base state threaded through the movers — and a bare
+so distributing it would need first-write-vs-overwrite base state threaded through the stage runners — and a bare
 overwrite that doesn't re-send the base silently concentrates fragments in the primary root (a live proof
 flaky by construction). The pipeline already distributes at the *zone* level, and no cascade stage table is
 at the per-table multi-base scale. Revisit only when a real gold/training table demonstrably exceeds
@@ -160,10 +160,10 @@ remains a §9 residual.
 
 ## schema-declaration + claim-check hardening
 
-**Decision.** Two data-contract hardenings. (1) **Schema declaration** — movers declare `requiredColumns`;
+**Decision.** Two data-contract hardenings. (1) **Schema declaration** — stage runners declare `requiredColumns`;
 the quality gate asserts the declared columns landed (blocks promotion, the write still commits + audits a
 FAIL run) and the reconcile patrol re-checks the same declarations estate-wide, so a dropped/renamed declared
-column becomes a *pre-promotion contract violation* instead of a runtime mover stall. Additive evolution is
+column becomes a *pre-promotion contract violation* instead of a runtime stage runner stall. Additive evolution is
 never blocked; no declaration (default) = byte-identical gate. (2) **Claim-check** — events must be pointers,
 not payloads; the train path caps config at 8 KiB (head + consumer), but a payload-size guard at *every*
 publish site and a facet-bloat cap for thousand-column tables are still open.
@@ -239,7 +239,7 @@ sources, a false provenance claim.
 
 **Rationale.** The MV receives its source only as an opaque `source_query` blob the namespace server stores
 without interpreting; there is no structured list of source tables to name in a lineage event (unlike the
-cascade, where the source is known from mover settings). Unblocking requires **either** a SQL/plan parser to
+cascade, where the source is known from stage runner settings). Unblocking requires **either** a SQL/plan parser to
 extract source tables (the repo has none) **or** an API/contract change adding a structured
 `source_tables: list[str]` alongside `source_query`. Parked until an MV consumer needs it. The governance
 half is already done: `create_materialized_view` seeds FGA ownership on the `materialized_view` type.
@@ -487,7 +487,7 @@ Each replica appends events into a bounded, in-memory, drop-oldest ring buffer
 client principle); a per-connection JetStream ephemeral consumer was rejected in the 2026-07-22 review
 because Dapr subscriptions are app-level/startup-registered. The no-queueGroup broadcast is the
 multi-replica-correct fan-out with zero new dependencies. `deliverPolicy=new` + ephemeral is correct
-here (where it would be a bug for the cascade movers) because events are **refresh hints**, not the
+here (where it would be a bug for the cascade stage runners) because events are **refresh hints**, not the
 durable record — the audit trail is — so replaying history into a fresh buffer would only re-announce
 stale changes; a client bridging a restart just sees `reset` and re-reads authoritative state.
 
@@ -590,8 +590,8 @@ docs/DURABILITY.md + docs/runbooks/RUNBOOK-restore.md):
 - the OpenBao file-backend PVC has no backup path (back up the unseal material out-of-band);
 - a documented RPO/RTO and verification that the VolumeSnapshot actually succeeds (the empty
   `snapshotClassName` is a per-cluster value) are still owed;
-- lesser SPOFs stay documented, not fixed: the movers' single-flight lock is process-local (caps each
-  stage at 1 mover; a distributed lock is parked until throughput demands it), and Dex is a
+- lesser SPOFs stay documented, not fixed: the stage runners' single-flight lock is process-local (caps each
+  stage at 1 stage runner; a distributed lock is parked until throughput demands it), and Dex is a
   single-replica in-memory IdP (externalize for prod).
 
 ## Medallion tiers — hybrid physical layout (2026-07-24)
@@ -605,7 +605,7 @@ absent = a work warehouse). `common/warehouse_registry.py` resolves the two clas
 `serving == "gold"` records (same lowest-id determinism, same TTL cache, partitioned by class — so
 registering a gold warehouse can never hijack stage routing via the lowest-id rule). Behind
 `MEDALLION_GOLD_WAREHOUSE_ENABLED` (chart `medallion.goldWarehouse`, default false, rendered ONLY onto
-the terminal silver→gold mover), a tenant trigger's **target** root becomes the project's gold root when
+the terminal silver→gold stage runner), a tenant trigger's **target** root becomes the project's gold root when
 one exists; absent gold warehouse or flag off → byte-identical work-warehouse behavior, and the
 projectless path never retargets.
 
@@ -622,9 +622,9 @@ prefixes":
   external SINK zone; a per-tenant serving warehouse is that intent expressed through the existing
   warehouse control plane instead of a new mechanism.
 
-Interior stages stay prefixes because they share one producer/consumer (the movers), one lifecycle, and
+Interior stages stay prefixes because they share one producer/consumer (the stage runners), one lifecycle, and
 one FGA cascade — separate buckets there would triple the per-tenant provisioning surface for no
-isolation gain (the movers hold one credential either way).
+isolation gain (the stage runners hold one credential either way).
 
 **FGA.** The gold warehouse is a **normal `warehouse:` object** with the standard `project project:<p>`
 parent tuple (seeded by warehouse-create like any other) — so project grants cascade into it naturally
@@ -851,25 +851,25 @@ env-var contract. Until then the driver is the answer and the split is a known, 
 ## Lineage records what happened to DATA; an authorization denial is not a data event (2026-08-16)
 
 **Ruled** while closing the notifications coverage register, which proposed emitting an OpenLineage
-FAIL when a medallion mover is denied by FGA (`transform.py`'s `medallion_stage_denied` path). It
+FAIL when a medallion stage runner is denied by FGA (`transform.py`'s `medallion_stage_denied` path). It
 should not, and the existing behaviour — drop, count, log — is right.
 
 **An OpenLineage `RunEvent` describes a RUN of a JOB over DATASETS.** `FAIL` asserts that a dataset's
-production was attempted and failed. When the mover is denied, nothing is read and nothing is
+production was attempted and failed. When the stage runner is denied, nothing is read and nothing is
 written: no data is touched. A FAIL there mints provenance for a non-event, and a graph that records
 runs which never ran answers every later question wrongly — *"where did version 7 come from"* and
 *"what has touched this table"* both degrade, which is the one thing provenance exists to answer.
 Gaps in provenance are recoverable; fiction in it is not.
 
-**A denial is also a STEADY STATE, not an incident.** A mover that is permanently un-granted would
+**A denial is also a STEADY STATE, not an incident.** A stage runner that is permanently un-granted would
 emit a FAIL on every trigger, forever, turning the provenance graph into an alert stream. The
 observability rule is the ordinary one: a repeating operational condition is a METRIC, not an event —
 bounded cardinality, alertable, cheap. The estate already does exactly this
 (`record_denied` -> `_stage_denied`, labelled by transition, plus a `medallion_stage_denied` warning),
-and `test_mover_denied_when_not_authorized` pins the silence deliberately.
+and `test_stage_runner_denied_when_not_authorized` pins the silence deliberately.
 
 **The user-facing gap the proposal was really about is REAL, and belongs on the CONTROL lane.** The
-person who started a cascade should learn that it stopped. But "your run was blocked because a mover
+person who started a cascade should learn that it stopped. But "your run was blocked because a stage runner
 lacks a grant" is a GOVERNANCE fact about a principal, not a fact about data — the same distinction
 that keeps grants off the lineage lane today. It names a person, so it is a `NAMED_ACTIONS` control
 event, and `lance.originator` (added 2026-08-16) is the identity that makes it addressable at all.
@@ -1114,7 +1114,7 @@ the catalog's key, execute moves every byte under a vended one.
 **Maintenance discovers work by LISTING BUCKETS, and must.** Lakekeeper's catalog-directed task queue
 is sound because every Iceberg commit goes through the catalog — the commit pointer lives in it. rask
 deliberately does not have that (Lance puts the CAS in the object store, which is why this estate needs
-no relational DB), and the medallion movers call `lance.write_dataset` directly, so a catalog-directed
+no relational DB), and the medallion stage runners call `lance.write_dataset` directly, so a catalog-directed
 decider would be blind to the highest-churn writer in the estate. Two supporting facts: the selection
 function is whole-estate (`_protected_roots` must open every manifest in every bucket, because a shallow
 clone in bucket B is the only thing that knows bucket A's dataset must not be rewritten), and datasets
@@ -1351,15 +1351,15 @@ neither redelivers nor dead-letters and `medallion_stage_refused_total` is the o
 structurally blind to a hop that never happened. `medallion_cascade_lag` measures the other side: how
 many source versions a destination has not consumed, which rises whether or not anything was refused.
 
-**The re-run verb: `POST /api/movers/stages/rerun`.** Edge-addressed, so it re-drives ONE hop.
+**The re-run verb: `POST /api/stage-runners/stages/rerun`.** Edge-addressed, so it re-drives ONE hop.
 
 *The token is OPTIONAL.* It is the `table_published` event id, which the control outbox drops on ack
 and no durable store retains, so a verb that required one could not be built. Supplied, the trigger is
-verbatim and the mover's deterministic instance id reattaches at no extra call; absent, a fresh one
+verbatim and the stage runner's deterministic instance id reattaches at no extra call; absent, a fresh one
 and a full recompute, which is the common case for the never-ran shape anyway.
 
 *The rung is the EDGE's own* — `can_promote` on `namespace:<project>-gold` for silver→gold, exactly
-what the mover asks when it runs the hop itself. `/produce`'s `can_administer` is coarser AND
+what the stage runner asks when it runs the hop itself. `/produce`'s `can_administer` is coarser AND
 different and would lock out the non-admin validator the rung exists for. Its sibling `terminate`
 stays on `authorize_produce`: two verbs, two rungs, because stopping is not re-driving.
 
@@ -1368,7 +1368,7 @@ accepts no parameters at all — measured on this estate at 81,155 jobs / 164.7 
 1179 MiB RSS against a 1536 MiB limit. The stage write is `mode="overwrite"`, overwrite-convergent, so
 a racing fresh-token re-run reaches a correct final state and wastes only compute; the response says
 so rather than implying a guarantee the listing could not make. Dropping the check dissolved the only
-reason to forward to the mover, so the producer mints the trigger itself — which its own
+reason to forward to the stage runner, so the producer mints the trigger itself — which its own
 `table_published` subscription already does, through the same `build_stage_trigger`.
 
 **C3 shipped non-functional for weeks, and the chain is worth keeping.** Driven in-cluster for the
@@ -1431,5 +1431,36 @@ maintenance compute — admission and quota, not plurality.
 **Step 5 is deferred with a precedent, not a shrug.** A `Transform` CRD belongs to `rask-operator`:
 a CRD without its controller renders unreconciled CRs as objects stuck mid-provision, ruled 2026-08-16
 for the `Project` CRD and re-verified live. It is the change that would also retire the dual source a
-mover row still carries (`stageJob` beside the declaration that supersedes it); both rows live in
+stage runner row still carries (`stageJob` beside the declaration that supersedes it); both rows live in
 `open_lakehouse_diff_left.md`.
+
+## A stage runner runs a stage; nothing was ever moved (2026-09-07)
+
+**Owner ruling.** The three cascade Deployments are STAGE RUNNERS, not "movers". The old word is
+inherited from the R23 wave, whose vocabulary was "tier movement" — `ingest-and-tier-movement.md`
+still carries it in its filename.
+
+**Nothing moves, and that was measured before the rename.** There is no delete, no relocation and no
+rename of an upstream anywhere in the medallion. A stage runner reads a VERSION RANGE of the upstream
+Lance dataset — which stays exactly where it is — runs a transform, writes a NEW downstream dataset,
+emits `DERIVED_FROM`, and publishes the next trigger. Bronze is still there, unchanged, after silver
+exists. That is derivation; `DERIVED_FROM` is the edge the code already emits, and `services/derivers.py`
+already uses the word.
+
+**Why the name was load-bearing rather than cosmetic.** "Mover" is why "does the workflow touch the
+lakehouse?" is a natural question: movers sound like they relocate governed data. They do not — they
+add to it, leaving the upstream readable at the version it was read at. A reader who believes the
+name reasons about the cascade's blast radius wrongly.
+
+**What made the rename safe is that no WIRE identity carried the word.** Measured first: Deployment
+names 0 (they are `bronze-to-silver`, `silver-to-gold`, `media-to-silver`), Dapr app-ids 0, topics 0,
+queue groups 0 — those key on app-id — and the frontend has no caller of the operator route. The
+whole wire surface was three container commands, two env NAMES whose values are byte-identical, and
+one container name.
+
+**Two breaks were caught by diffing the RENDERED MANIFESTS against HEAD, not by a test**, and both
+would have shipped green: a values key renamed to `stageRunners` while the template read
+`stage_runners` rendered the chart cleanly and produced ZERO stage-runner Deployments; and `name:
+mover` is a Kubernetes CONTAINER name, so `stage runner` with a space renders happily and fails on
+apply. **A render that succeeds is not evidence that a rename is safe — diff the output.**
+

@@ -6,8 +6,8 @@ queryable in place — carrying everything a consumer needs to answer "where did
 without a Cypher query against Apache AGE.
 
 **Why it cannot disagree with the graph.** :func:`promotion_lineage` does not author provenance. It calls
-``build_run_event`` — the SAME builder whose output the mover publishes to the lineage service — and
-projects that event through :meth:`lineage_kit.consume.LineageDoc.from_run_event`. The mover fixes one
+``build_run_event`` — the SAME builder whose output the stage runner publishes to the lineage service — and
+projects that event through :meth:`lineage_kit.consume.LineageDoc.from_run_event`. The stage runner fixes one
 ``event_time`` and one token for the run, so the identity event projected into the column and the
 measured event published to the graph carry the same ``runId``, job, author, operation and instant.
 :meth:`LineageDoc.is_consistent_with` re-checks that pairing and is pinned by a test.
@@ -40,7 +40,7 @@ def promotion_lineage(
     token: str | None,
     project: str | None,
 ) -> LineageDoc:
-    """This stage's provenance document, projected from the run event the mover is about to emit.
+    """This stage's provenance document, projected from the run event the stage runner is about to emit.
 
     The projection deliberately ignores the identity event's output ``version`` facet: the document is
     written in the very commit that mints that version, so naming it would be a guess. A consumer holds

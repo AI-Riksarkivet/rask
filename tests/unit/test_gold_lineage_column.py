@@ -1,10 +1,10 @@
 """R26 — gold carries its lineage as a JSONB column, and the column is QUERYABLE, not just present.
 
-Drives the real in-process cascade (producer → bronze→silver mover → silver→gold mover) against a temp
+Drives the real in-process cascade (producer → bronze→silver stage runner → silver→gold stage runner) against a temp
 directory with real Lance, capturing every emitted OpenLineage event, then asserts the three things that
 make the consume layer (R25b) real:
 
-1. **The mover writes it.** Gold's schema carries ``lineage`` as Lance JSON, in the SAME commit as the
+1. **The stage runner writes it.** Gold's schema carries ``lineage`` as Lance JSON, in the SAME commit as the
    data — and the promotion builds the JSON scalar index over it.
 2. **It round-trips and answers filters IN PLACE.** Not "bytes landed": the dataset is re-opened and
    filtered with ``json_get_string`` / ``json_array_contains`` / ``json_array_length`` predicates, which
@@ -49,7 +49,7 @@ class _FakeDapr:
 
 
 def _run_cascade(tmp_path: Any) -> tuple[dict[str, str], _FakeDapr]:
-    """Producer + both movers, compute ON — the same code path the deployed pods run."""
+    """Producer + both stage runners, compute ON — the same code path the deployed pods run."""
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
@@ -83,7 +83,7 @@ def _gold_doc(uris: dict[str, str]) -> LineageDoc:
 
 
 # --------------------------------------------------------------------------- #
-# 1. the mover writes it
+# 1. the stage runner writes it
 # --------------------------------------------------------------------------- #
 
 

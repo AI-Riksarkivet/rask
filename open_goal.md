@@ -25,7 +25,7 @@ turned out to be are § Q16.
     carried four.
   * ~~**`POST /ingest-media` stops answering 503.**~~ **DONE 2026-09-07** (`a86f5407`). The head asks
     (`ensure_stage_output`), writes where told, and names that location on the `medallion.media`
-    trigger as `from_uri`; the mover asks where its own upstream lives and takes that as both the
+    trigger as `from_uri`; the stage runner asks where its own upstream lives and takes that as both the
     upstream and the confinement root, which NARROWS what a trigger may name rather than widening it.
     Proven live: `test_media_lane_derives_under_governance` passes.
 
@@ -45,7 +45,7 @@ turned out to be are § Q16.
       the only adapter anyone builds             InProcessExecutor (transform.py:760)
       the live Ray path                          ray_submit.py, a SECOND, older submission seam
       direct ray_submit callers                  9 sites / 4 modules — workflow.py x4, train.py x3,
-                                                 transform.py x1, mover.py x1
+                                                 transform.py x1, stage_runner.py x1
       `ray` imports inside rayjob_executor.py    0 — it submits a RayJob CR over HTTPX
 
   So the decoupling is real for the IN-PROCESS lane and fictional for the lane the estate runs. The
@@ -75,7 +75,7 @@ items 1-4 "decide whether the claim is honest":
           refuses to boot a governed service whose auth is off with nobody having acknowledged it;
           the refusal is on the AMBIGUITY, not on being open. Landed for the three services that
           have a human door (catalog, lineage, the medallion producer); `maintenance`,
-          `notifications` and the movers have none and were deliberately left out.
+          `notifications` and the stage runners have none and were deliberately left out.
     F2-3  kill the one shared service bearer — THE WIDEST HOLDER IS DONE 2026-09-07 (`bf273f07`):
           seven web pods stop mounting it and `service-web` is privileged with its own credential.
           The door already refuses a privileged name presented with the shared token, so the

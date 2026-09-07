@@ -1,6 +1,6 @@
 """The transform-spec registry: a lane is a DECLARED record, not a Deployment's env block.
 
-A lane used to exist only as env on a mover pod — `MEDALLION_FROM_URI`, `MEDALLION_RAY_ENTRYPOINT`,
+A lane used to exist only as env on a stage runner pod — `MEDALLION_FROM_URI`, `MEDALLION_RAY_ENTRYPOINT`,
 `MEDALLION_RAY_JOB_PARAMS`. That has three defects this registry exists to close:
 
 * **It is not a record.** Nothing can list the lanes, diff them, or answer "what runs on this
@@ -11,12 +11,12 @@ A lane used to exist only as env on a mover pod — `MEDALLION_FROM_URI`, `MEDAL
   that will not start, attributed to the image. Declared lanes let the door answer 422 naming the
   key, which is the difference between a typo and an outage.
 * **It does not survive the pod.** The whole point of the durability test below: a spec written by
-  the catalog must be readable by a mover that has never met it, in a different pod, after a
+  the catalog must be readable by a stage runner that has never met it, in a different pod, after a
   restart. Object-store-backed records do that; process memory does not.
 
 Same stateless-over-object-store shape as `maintenance_policies` and the warehouse registry, and for
 the same reason: one service WRITES (the catalog, admin-gated) and another READS (the medallion
-mover, which holds no catalog client on the submit path). A per-service copy of the format would
+stage runner, which holds no catalog client on the submit path). A per-service copy of the format would
 drift, so the format lives in service_kit.
 """
 
@@ -50,7 +50,7 @@ def _spec(**overrides: object) -> TransformSpec:
 def test_a_written_spec_is_readable_by_a_reader_that_never_saw_the_write(tmp_path: Path) -> None:
     """The durability property, stated as the deploy actually exercises it.
 
-    The catalog pod writes; a mover pod that started later — holding no shared memory, no cache and
+    The catalog pod writes; a stage runner pod that started later — holding no shared memory, no cache and
     no catalog client — resolves the lane. Reading through a fresh call with only the control root
     is exactly that: nothing but the object store carries the record across.
     """
@@ -59,7 +59,7 @@ def test_a_written_spec_is_readable_by_a_reader_that_never_saw_the_write(tmp_pat
 
     loaded = transform_specs.get_spec(root, {}, "acme", "dummy")
 
-    assert loaded is not None, "the spec did not survive the write — a restarted mover sees no lane"
+    assert loaded is not None, "the spec did not survive the write — a restarted stage runner sees no lane"
     assert loaded.task == "dummy-lane"
     assert loaded.params == {"batch_size": "64"}
     assert loaded.code_version == "main-abc1234"

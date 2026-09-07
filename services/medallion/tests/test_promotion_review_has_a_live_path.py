@@ -1,6 +1,6 @@
 """A tripwire on the promotion review's only dispatch path, so removing it is a decision, not a diff.
 
-The design deletes the mover's local quality gate once movers publish, on the grounds that the
+The design deletes the stage runner's local quality gate once stage runners publish, on the grounds that the
 catalog's publish gate then runs the identical assertions at the identical seam. That reasoning is
 sound and predates the review: `promotion_hold.publish_hold` has exactly ONE production call site,
 `transform.py`, inside the `if quality_blocked:` branch that deletion removes. Taking the branch out
@@ -41,7 +41,7 @@ def test_the_hold_dispatch_is_still_reachable_from_the_stage_handler() -> None:
     source = inspect.getsource(transform)
 
     assert "promotion_hold.publish_hold" in source, (
-        "the promotion review's only dispatch path is gone. If the mover's quality gate was deleted "
+        "the promotion review's only dispatch path is gone. If the stage runner's quality gate was deleted "
         "for the catalog's publish gate, that is the intended direction — but the review must move "
         "with it, and 'a validator accepted data the gate refused' has no door yet: publish re-gates "
         "and refuses, tags/update emits nothing. Decide where the review attaches before removing this."

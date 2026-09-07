@@ -194,7 +194,7 @@ class StsVendor:
     this plug out of reach.
 
     That matters for which mode can serve which caller. ``web_identity`` requires the CALLER to present an
-    OIDC token, so it cannot serve the cascade at all: a mover authenticates with ``dapr-api-token`` +
+    OIDC token, so it cannot serve the cascade at all: a stage runner authenticates with ``dapr-api-token`` +
     ``x-lance-service-identity`` and never holds a bearer, so the vend returns ``None``. This plug has no
     such requirement.
 

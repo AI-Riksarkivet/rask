@@ -143,7 +143,7 @@ def test_a_MISTYPED_catalog_flag_refuses_instead_of_silently_writing_locally(mon
     """The flag whose false reading is a data incident.
 
     `os.getenv("RASK_INGEST_USE_CATALOG").lower() in ("1", "true", "yes")` read `"ture"` as FALSE, and
-    a false reading means the run writes governed bytes no catalog knows about and no mover will ever
+    a false reading means the run writes governed bytes no catalog knows about and no stage runner will ever
     be told of — the silent local fallback `catalog_enabled`'s own docstring forbids.
     """
     from pydantic import ValidationError

@@ -4,7 +4,7 @@ Event-driven head (GOAL 4 B2, reshaped by R23 — bronze is the FIRST governed t
 world): ``POST /produce`` (with ``compute_enabled``) seeds a real ``bronze$events`` Lance dataset and
 emits ONE OpenLineage event for it. It does NOT itself publish ``medallion.bronze`` — this app also
 *subscribes* to the shared lineage topic (``/bronze-arrival``), reacts to a bronze-dataset write event,
-and publishes the trigger the ``bronze→silver`` mover consumes. So the cascade is driven by the
+and publishes the trigger the ``bronze→silver`` stage runner consumes. So the cascade is driven by the
 *arrival of external raw INTO bronze*, not the call: every stage, the head included, reacts to an event
 on the bus. What drives it is specifically a COMPLETE write whose output matches
 ``bronze_namespace``/``bronze_dataset`` (``bronze`` / ``bronze$events``, or a page lane's
@@ -29,11 +29,11 @@ from fastapi.concurrency import run_in_threadpool
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.cascade_lag_cron import mount_lag_cron
 from medallion.api.ingest_media import router as ingest_media_router
-from medallion.api.mover_ops import router as mover_ops_router
 from medallion.api.produce import router as produce_router
 from medallion.api.promotions import register_promotion_route
 from medallion.api.promotions import router as promotions_router
 from medallion.api.rerun import router as rerun_router
+from medallion.api.stage_runner_ops import router as stage_runner_ops_router
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
 from medallion.core.config import get_settings
@@ -58,7 +58,7 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Fail closed if behind a Dapr sidecar but the app-token is unset — /bronze-arrival would otherwise be
-    # an open forged-trigger path (symmetric with the movers + lineage). No-op in dev (dapr_enabled off).
+    # an open forged-trigger path (symmetric with the stage runners + lineage). No-op in dev (dapr_enabled off).
     app.state.startup_complete = False
     app.state.shutting_down = False
     configure_audit(enabled=get_settings().audit_enabled)  # #41 gate the compliance audit stream
@@ -101,10 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await attach_auth(app, get_settings(), service="medallion-producer", fatal=True)
     # THE WORKFLOW WORKER for `promotion_review` — and the reason this app hosts it at all.
     # `raise_workflow_event` resolves the instance through the CALLING app's app-id, so the approve
-    # route and the instance must share a process. The gate that holds a promotion runs in a mover,
-    # but a mover is bus-only: no gateway row, no Ingress, nothing a person can POST to. Hosting the
+    # route and the instance must share a process. The gate that holds a promotion runs in a stage runner,
+    # but a stage runner is bus-only: no gateway row, no Ingress, nothing a person can POST to. Hosting the
     # workflow here (beside the door, behind the same dual-auth as /produce) is what makes the ask
-    # answerable; the mover reaches it by publishing, like every other cascade hop.
+    # answerable; the stage runner reaches it by publishing, like every other cascade hop.
     #
     # Without this the door 404s honestly — which is the correct failure, not a working one.
     app.state.workflow_runtime = None
@@ -136,7 +136,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
             await probe_actor_state_store(capability="held promotions cannot be reviewed and training jobs cannot be watched")
         except Exception:
-            # Non-fatal, the mover's reasoning: refusing to start because the sidecar is not up yet
+            # Non-fatal, the stage runner's reasoning: refusing to start because the sidecar is not up yet
             # turns an ordering blip into a CrashLoopBackOff. A hold that cannot be scheduled RETRYs
             # at the subscription, where it is visible.
             log.warning("dapr workflow runtime unavailable — held promotions cannot be reviewed", exc_info=True)
@@ -182,13 +182,13 @@ _dapr_app = register_bronze_arrival_route(app)
 # The Ray TRAIN head (#115a): POST /train + the training-trigger subscription (own topic; submit-and-ack).
 app.include_router(train_router)
 register_train_trigger_route(app, _dapr_app)
-# The quality gate's third answer (S3/S4): a mover that HOLDS a promotion publishes it here, the
+# The quality gate's third answer (S3/S4): a stage runner that HOLDS a promotion publishes it here, the
 # review workflow runs in this process, and a `can_promote` holder answers it on /promotions/*.
 app.include_router(promotions_router)
-# The cascade's operator door (DWF-MGT-002/003). The ROUTES that touch the workflow live on the mover
+# The cascade's operator door (DWF-MGT-002/003). The ROUTES that touch the workflow live on the stage runner
 # — `terminate_workflow` resolves the instance through the calling app's app-id — so this end does the
-# human auth and forwards. See `api/mover_ops.py` for why the split is forced rather than chosen.
-app.include_router(mover_ops_router)
+# human auth and forwards. See `api/stage_runner_ops.py` for why the split is forced rather than chosen.
+app.include_router(stage_runner_ops_router)
 
 # THE RE-RUN VERB (docs/DECISIONS.md "Cascade repair" (C2)). Beside the operator proxy above but NOT through it:
 # it mints the stage trigger here rather than forwarding, because the only reason to forward was a

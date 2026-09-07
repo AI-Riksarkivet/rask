@@ -13,7 +13,7 @@ import { lineageFeed } from './feeds.remote';
  * WHY THE EXPLORER NEEDED ONE. It already had `lineageFeed`, but the only thing reading it was the
  * shell's notification bell: the zone could TELL you the estate had changed while every surface
  * under the notification went on showing the state from before it. Its Arrow reads — the atlas
- * points and the search results — were read once at mount and never again, so a mover run, a
+ * points and the search results — were read once at mount and never again, so a stage runner run, a
  * compaction or anyone else's write left a corpus view that was quietly out of date. Stale search
  * results are worse than a stale table, because the next thing someone does with them is SEND them
  * to a labelling project.

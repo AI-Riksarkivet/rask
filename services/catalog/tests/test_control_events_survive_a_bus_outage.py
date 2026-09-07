@@ -6,7 +6,7 @@ the publication endpoint asserted "a consumer that MISSES this event loses nothi
 tag still answers 'what is ready?'".
 
 Both claims hold for the catalog's console ring buffer and for any POLLING consumer. Both are false
-for the cascade, which is the consumer that matters: the mover does not fire its own topic, so the
+for the cascade, which is the consumer that matters: the stage runner does not fire its own topic, so the
 next hop happens ONLY when `/publication-arrival` receives this event -- and the medallion plane runs
 no cron and no reconcile binding, so it never re-reads the tag. A 5s publish timeout during a NATS
 blip therefore ends the cascade outright: the tag advanced, the data IS consumable, the route returned

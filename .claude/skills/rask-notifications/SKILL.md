@@ -178,21 +178,21 @@ so it must read as a reason a person would accept; and `notification-center.stor
 1. **A role literal in `author.sub` reaches nobody.** `author_subject()` reads `author.sub` and
    **nothing else** — never `author.name`, never the standard `ownership` facet — because those are
    producer-supplied and honouring them would let any producer put a row in a named person's inbox.
-   The medallion movers author with a chart role literal (`data_eng`/`analyst`, `chart/values.yaml`
-   `medallion.movers[].author`; the producer's is `ray`), so a failed cascade addresses an inbox
-   actor named `ray`. That is not a bug to fix at the mover — `enforce_author` would overwrite a
+   The medallion stage runners author with a chart role literal (`data_eng`/`analyst`, `chart/values.yaml`
+   `medallion.stageRunners[].author`; the producer's is `ray`), so a failed cascade addresses an inbox
+   actor named `ray`. That is not a bug to fix at the stage runner — `enforce_author` would overwrite a
    human there anyway (trap 2). The literal is *correct* as the author; what makes the cascade
    reachable is the ORIGINATOR riding beside it, which is why every trigger payload in the chain
    re-carries it.
    **The hop that lost it was the TIER BOUNDARY, and the lesson generalises past this cascade.**
-   `/produce` → `/bronze-arrival` → the mover's four FAIL emits all carried the human; the mover then
+   `/produce` → `/bronze-arrival` → the stage runner's four FAIL emits all carried the human; the stage runner then
    publishes its output to the CATALOG (the tag move is what wakes the next tier), and that call
    carried `cascade_id` and dropped the person. The publication head filled the gap by deriving an
-   originator from the control event's `actor` — but a mover authenticates to the catalog AS ITSELF,
+   originator from the control event's `actor` — but a stage runner authenticates to the catalog AS ITSELF,
    so the silver→gold trigger named `service-bronze-to-silver` and every gold failure wrote into an
-   inbox actor named after a mover. **A service subject in the originator is the same defect as a role
+   inbox actor named after a stage runner. **A service subject in the originator is the same defect as a role
    literal in the author, and it is worse than silence because it looks delivered.** Closed by the
-   `cascade_id` shape: the mover puts the human on the publish body
+   `cascade_id` shape: the stage runner puts the human on the publish body
    (`catalog_register.publish_stage_output`), the catalog RESOLVES it once
    (`publication.publication_originator` — a service caller's carried claim, else a human caller's own
    verified sub, else nothing) and echoes it onto `table_published`, and the head reads `extra`
@@ -279,7 +279,7 @@ notify somebody.
 4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse
    output, so even a perfect emit dies on `notifiable()`'s output rule; the controlplane keys watches
    by CR name while fan-out matches the FGA tenant id, and nothing joins the two namespaces.
-5. **Steady states wearing an event's clothes.** A permanently un-granted mover, a repeating denial, a
+5. **Steady states wearing an event's clothes.** A permanently un-granted stage runner, a repeating denial, a
    degraded lane — these are METRICS, and `docs/DECISIONS.md` records why lineage must not carry them.
 
 **The line, worth re-reading before adding anything:** lineage answers *what happened to this dataset

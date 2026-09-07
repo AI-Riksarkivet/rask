@@ -7,7 +7,7 @@ wrote it. It started in `medallion/services/quality.py` and moved here the momen
 writer has to reimplement, which is how the estate ends up with two definitions of "good enough".
 
 A medallion stage that produced a real Lance dataset (compute on) can be VALIDATED before it promotes: the
-mover runs cheap, exact assertions on the dataset it just wrote — does it have rows? is the key column free
+stage runner runs cheap, exact assertions on the dataset it just wrote — does it have rows? is the key column free
 of nulls? — and emits them as the standard OpenLineage ``dataQualityAssertions`` facet. When the quality
 GATE is enabled, a failed assertion BLOCKS promotion: the failed run is still recorded (lineage keeps the
 assertions, so the bad batch is auditable) but the next stage is never triggered, so bad data can't cascade.
@@ -184,7 +184,7 @@ def assert_quality_on_batch(
     propagate. Anyone reading that table directly, or any consumer resolving `latest` rather than
     the published tag, sees data the gate rejected.
 
-    D3 closes that window: where a hop's delta is a single transaction — every mover hop, and
+    D3 closes that window: where a hop's delta is a single transaction — every stage runner hop, and
     ingest's one commit — the assertions run on the batch BEFORE it is committed, so a rejected
     batch never becomes a version at all. Uncommitted fragments are invisible until commit
     (`lance_docs/guide.md:1533-1636`), which is what makes this possible rather than merely

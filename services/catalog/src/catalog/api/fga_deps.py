@@ -1220,7 +1220,7 @@ async def seed_warehouse(
         return
     obj = f"warehouse:{warehouse_id}"
     # The CASCADE's own identities, granted here and not per tier. `publish` is guarded by
-    # `can_update_tag` and the model defines `can_update_tag: owner`, so a mover without this cannot
+    # `can_update_tag` and the model defines `can_update_tag: owner`, so a stage runner without this cannot
     # promote — the tenant is created, its tiers are created, rows land, lineage records the run, and
     # the promotion is refused with a 403 in a log nobody is watching.
     #
@@ -1269,9 +1269,9 @@ async def backfill_cascade_grants(
     """Re-assert :func:`cascade_tuples` over a warehouse that ALREADY exists. Returns tuples submitted.
 
     Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
-    a config value that CHANGES. Adding a mover to `medallion.movers` extends
+    a config value that CHANGES. Adding a stage runner to `medallion.stageRunners` extends
     ``LANCE_FGA_CASCADE_WRITERS``, and every warehouse that predates the change is missing the new
-    subject — so the new mover cannot publish into any existing tenant, and the failure is a 403 at
+    subject — so the new stage runner cannot publish into any existing tenant, and the failure is a 403 at
     promotion time in a log nobody is watching. Measured on this estate: `user:service-silver-to-gold`
     held `owner` on NEITHER warehouse:acme-bucket NOR warehouse:research-bucket, both created before
     the setting existed.

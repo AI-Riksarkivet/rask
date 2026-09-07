@@ -19,7 +19,7 @@ binding. That is an accident of this estate, not a contract.
 
 So the head asks, exactly as `transform.py` already does for every silver and gold write, and it
 NAMES THE ANSWER ON THE TRIGGER (`from_uri`) — which is what `/bronze-arrival` already does for the
-tabular lane (`test_bronze_arrival_carries_the_vended_location`). Without that field the media mover
+tabular lane (`test_bronze_arrival_carries_the_vended_location`). Without that field the media stage runner
 falls through to its composed `{root}/medallion/{namespace}` and opens a path nothing writes to: the
 lane's first leg dead, with nothing red.
 """
@@ -129,7 +129,7 @@ async def test_the_blobs_land_where_the_CATALOG_says_not_where_the_chart_compose
 @respx.mock
 @pytest.mark.asyncio
 async def test_the_media_trigger_NAMES_the_upstream_it_wrote(wrote_to: list[str], published: list[dict[str, Any]]) -> None:
-    """Rule I2 from the consuming end. The mover composes `{root}/medallion/{namespace}`; without
+    """Rule I2 from the consuming end. The stage runner composes `{root}/medallion/{namespace}`; without
     `from_uri` it opens that path, finds none of these rows, and acks 200 — the lane dead, nothing red."""
     del wrote_to, published  # requested to patch the write and the outbox; the trigger is the assertion
     _describe()
@@ -171,7 +171,7 @@ async def test_asking_precedes_the_first_blob(wrote_to: list[str], published: li
 @respx.mock
 @pytest.mark.asyncio
 async def test_no_catalog_url_keeps_the_configured_uri(wrote_to: list[str], published: list[dict[str, Any]]) -> None:
-    """The ungoverned dev/demo shape the movers keep the same escape hatch for — there is nothing to
+    """The ungoverned dev/demo shape the stage runners keep the same escape hatch for — there is nothing to
     ask, so the deployment contract is the only answer available."""
     del published  # requested to patch the outbox
     await _ingest(_settings(MEDALLION_CATALOG_URL=""))
@@ -195,7 +195,7 @@ async def test_a_catalog_that_cannot_be_ASKED_lands_nothing_and_fires_nothing(wr
     assert (await _ingest(dapr=dapr))["status"] == "register_failed"
     assert wrote_to == [], "a media ingest the catalog cannot govern must not report success"
     assert published == [], "no head event, so no half-run media chain on an ungoverned tier"
-    assert dapr.published == [], "no trigger, so the media mover never derives from bytes nothing governs"
+    assert dapr.published == [], "no trigger, so the media stage runner never derives from bytes nothing governs"
 
 
 @respx.mock

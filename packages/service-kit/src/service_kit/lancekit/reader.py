@@ -466,7 +466,7 @@ def open_reader(
     serve: an ANONYMOUS request, re-issued to the catalog under MEDIA_CATALOG_TOKEN. Absent now means
     absent; the catalog decides what an unauthenticated read is worth.
 
-    The pattern is not wrong everywhere — the medallion's cascade movers genuinely have no caller and
+    The pattern is not wrong everywhere — the medallion's cascade stage runners genuinely have no caller and
     carry their own `MEDALLION_CATALOG_TOKEN`. It is wrong on a request path.
     """
     if settings.read_backend != "catalog":

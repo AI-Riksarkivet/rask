@@ -273,14 +273,10 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     """
     _seed(control_root)
 
-    armed = warehouses.upsert_warehouse(
-        control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True
-    )
+    armed = warehouses.upsert_warehouse(control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True)
     assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
 
     # A later re-POST naming neither must carry it forward — same rule as serving/protected. A GitOps
     # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
-    plain = warehouses.upsert_warehouse(
-        control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
-    )
+    plain = warehouses.upsert_warehouse(control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
     assert plain.get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"

@@ -1,4 +1,4 @@
-"""A mover authenticates to the catalog as a SERVICE, not by presenting a human's bearer.
+"""A stage runner authenticates to the catalog as a SERVICE, not by presenting a human's bearer.
 
 `MEDALLION_CATALOG_TOKEN` sends `Authorization: Bearer {token}`. That setting is rendered by no chart
 template, and it should not be: the catalog verifies OIDC JWTs, a JWT EXPIRES, and a static string in
@@ -8,7 +8,7 @@ to exist" (`ingest/catalog_service.py`).
 
 The catalog runs an identity door instead (`catalog/api/security.py`): `dapr-api-token` — which daprd
 already injects from a managed secret — plus `x-lance-service-identity`, the subject the caller
-claims, checked against `LANCE_SERVICE_SUBJECTS`. The mover has both halves in-cluster, and on a
+claims, checked against `LANCE_SERVICE_SUBJECTS`. The stage runner has both halves in-cluster, and on a
 governed estate (`auth.enabled: true`, the shipped default) a call that sends neither 401s, raises
 `RegisterError` and returns RETRY — an infinite redelivery.
 
@@ -19,7 +19,7 @@ THE SEAM UNDER TEST IS `publish_stage_output`, and this file used to drive `regi
 That door was deleted with its last caller: `_credential` is shared by every call this module makes,
 so the rule is pinned on a seam the cascade actually reaches rather than on one only tests opened.
 Two properties the old file pinned went with the door and are now STRUCTURAL, which is why no
-replacement assertion appears below: a mover cannot mint a top-level namespace (no namespace call
+replacement assertion appears below: a stage runner cannot mint a top-level namespace (no namespace call
 remains in the module at all — the one test that could still say so is kept), and a registration
 cannot disagree about WHERE the stage wrote (the stage writes where `ensure_stage_output` vended,
 so there is no second claim to disagree with).
@@ -151,10 +151,10 @@ class TestItNeverTriesToCreateATopLevelNamespace:
         Create it through its warehouse — POST /v1/warehouses/{id}/namespaces
 
     The guard runs BEFORE the existence check, so an already-existing namespace answers 400 rather
-    than 409 and the whole hop failed. A mover has no business minting a tenant's top-level
+    than 409 and the whole hop failed. A stage runner has no business minting a tenant's top-level
     namespace; that door is the warehouse's.
 
-    The mover reaches the catalog only through `ensure_stage_output` now, which knocks on no namespace
+    The stage runner reaches the catalog only through `ensure_stage_output` now, which knocks on no namespace
     door at all — so this asserts a property of the seam that replaced the offender rather than
     re-testing the offender.
     """
@@ -168,7 +168,7 @@ class TestItNeverTriesToCreateATopLevelNamespace:
 
         ensure_stage_output(catalog_url=CATALOG, table_id="silver$features", schema=pa.schema([pa.field("id", pa.int64())]))
 
-        assert not [c for c in respx.calls if "/namespace/" in str(c.request.url)], "the mover tried to mint a namespace the warehouse door owns"
+        assert not [c for c in respx.calls if "/namespace/" in str(c.request.url)], "the stage runner tried to mint a namespace the warehouse door owns"
 
 
 class TestAPrivilegedIdentityPresentsItsOwnCredential:
@@ -177,10 +177,10 @@ class TestAPrivilegedIdentityPresentsItsOwnCredential:
     `service_kit.governed.dapr_auth` already binds a privileged subject to its own
     `service-token-<identity>` on the SERVER side. Rendering that alone is not enabling the control,
     it is refusing every privileged caller — measured on the live estate 2026-08-26, where the catalog
-    began demanding the dedicated token while the movers went on presenting the shared
+    began demanding the dedicated token while the stage runners went on presenting the shared
     `APP_API_TOKEN`, and every call answered `401 Unauthorized` until it was reverted.
 
-    So the mover must PRESENT what the door will ask for. Until it does, the estate is stuck with the
+    So the stage runner must PRESENT what the door will ask for. Until it does, the estate is stuck with the
     shared token, and any holder of it can authenticate as any allowlisted identity — including ones
     that hold `owner` on every warehouse.
 
@@ -204,7 +204,7 @@ class TestAPrivilegedIdentityPresentsItsOwnCredential:
         )
 
         headers = route.calls.last.request.headers
-        assert headers["dapr-api-token"] == "dedicated-for-service-bronze-to-silver", "the mover still presented the SHARED token"
+        assert headers["dapr-api-token"] == "dedicated-for-service-bronze-to-silver", "the stage runner still presented the SHARED token"
         assert headers["x-lance-service-identity"] == "service-bronze-to-silver"
 
     @respx.mock

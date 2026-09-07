@@ -16,7 +16,7 @@ passing on config that did not exist. A gate over code must assert over code, so
 explicitly.
 
 WHAT IT LOOKS FOR IS THE DEFECT, NOT THE SUBSTRING. A first cut flagged every `/tmp/...` literal and
-caught eighteen inert ones — `"/tmp/from"` and `"/tmp/to"` handed to a MOCKED mover, `"/tmp/a.lance"` as
+caught eighteen inert ones — `"/tmp/from"` and `"/tmp/to"` handed to a MOCKED stage runner, `"/tmp/a.lance"` as
 a URI in an assertion. None of those touch a filesystem, and exempting them one by one would have built
 exactly the drifting allowlist this gate is supposed to make unnecessary. So the scan matches the three
 forms that actually point a REAL service at a root — `monkeypatch.setenv("<...>_ROOT", ...)`, a
@@ -142,7 +142,7 @@ def test_the_gate_fails_on_a_planted_offence(tmp_path: Path) -> None:
 
     A gate only ever observed passing is indistinguishable from one whose pattern matches nothing, which
     is the defect class this audit keeps finding. The planted file carries all three offending forms plus
-    the three shapes that must NOT trip it: a docstring, a bare literal, and a mover URI.
+    the three shapes that must NOT trip it: a docstring, a bare literal, and a stage runner URI.
     """
     planted = tmp_path / "planted.py"
     planted.write_text(
@@ -153,7 +153,7 @@ SETTINGS = {"root": "/tmp/lance-user-state-test"}
 s = Settings(root="/tmp/other")
 
 INERT = "/tmp/from"
-mover(source="/tmp/a.lance")
+stage_runner(source="/tmp/a.lance")
 '''
     )
     tree = ast.parse(planted.read_text())

@@ -197,7 +197,7 @@ spec:
             {{- if and $svc.lanceWriter (or (not $svc.governedAuth) $root.Values.auth.enabled) }}{{- $needsAppToken = true }}{{- end }}
             {{- if and $root.Values.dapr.sidecars $needsAppToken }}
             {{- /* One secret for both arms, so the whole plane presents ONE service identity — the same
-                 `{{ .Release.Name }}-dapr-app-token` the medallion producer, the movers and the
+                 `{{ .Release.Name }}-dapr-app-token` the medallion producer, the stage runners and the
                  maintenance cron read. It cannot dangle: `dapr.sidecars` is what renders that Secret
                  (dapr-app-token.yaml's gating invariant) and it also gates this reference.
 

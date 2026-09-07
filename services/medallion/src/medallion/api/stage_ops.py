@@ -1,16 +1,16 @@
 """The cascade's operator surface: observe and stop an in-flight `stage_run` (DWF-MGT-002/003).
 
-THESE ROUTES LIVE ON THE MOVER, and that is forced rather than chosen. `stage_run` executes in the
-mover's own runtime (`mover.py`), and both `get_workflow_state` and `terminate_workflow` resolve an
+THESE ROUTES LIVE ON THE STAGE RUNNER, and that is forced rather than chosen. `stage_run` executes in the
+stage runner's own runtime (`stage_runner.py`), and both `get_workflow_state` and `terminate_workflow` resolve an
 instance through the CALLING app's app-id. A copy of these routes on the producer would look for the
 instance under `medallion-producer`, not find it, and — the part that makes it dangerous — **accept
 the call anyway**: a 202 for a terminate that stopped nothing. `promotions.py` records the same trap
 from the other direction, which is why the promotion workflow is hosted beside its door.
 
-The mover has no gateway row and no Ingress, so it is reached through the producer, which has both:
-`producer.py` authenticates the human and forwards here over the mover's ClusterIP. Authorization
+The stage runner has no gateway row and no Ingress, so it is reached through the producer, which has both:
+`producer.py` authenticates the human and forwards here over the stage runner's ClusterIP. Authorization
 happens THERE, at the door a person can reach; this side verifies the service token, exactly like the
-mover's event routes.
+stage runner's event routes.
 
 What terminate does NOT do is stated in the response body. `stage_run` submits a Ray job and then
 polls it; terminating stops the WATCH and the next-tier trigger, never the job. An operator told

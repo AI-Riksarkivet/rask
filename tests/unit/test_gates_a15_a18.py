@@ -1,10 +1,10 @@
-"""A15–A18 as named gates, against the real mover and the real chart values.
+"""A15–A18 as named gates, against the real stage runner and the real chart values.
 
 The four claims the plan makes about the cascade ABOVE bronze. Each was prose; each is now a test
 that fails if the behaviour changes.
 
 Everything here drives `medallion.services.transform.handle_stage` — the same function the deployed
-mover's Dapr subscription calls — against real Lance in a temp directory. No mock stands in for the
+stage runner's Dapr subscription calls — against real Lance in a temp directory. No mock stands in for the
 thing under test: a gate over a double asserts that the double behaves, which is the failure mode
 the estate has been burned by (a Tiltfile that could never have worked, an ingest queue nothing
 drained; both looked healthy from every angle except an actual run).
@@ -53,7 +53,7 @@ def _bronze(tmp_path: Path) -> str:
     return uri
 
 
-def _mover(tmp_path: Path, **overrides: Any) -> MedallionSettings:
+def _stage_runner(tmp_path: Path, **overrides: Any) -> MedallionSettings:
     base: dict[str, Any] = {
         "compute_enabled": True,
         "from_uri": str(tmp_path / "bronze"),
@@ -151,24 +151,24 @@ def test_a16_indexed_search_returns_rows_from_the_LATEST_delta(tmp_path: Path) -
 
     assert dataset.count_rows() > baseline_rows
     # A scan bounded by the delta boundary must see exactly the new rows. This is the same CDF
-    # predicate the movers use, so if it stops working the whole cascade stops moving deltas.
+    # predicate the stage runners use, so if it stops working the whole cascade stops moving deltas.
     delta = dataset.to_table(with_row_id=True, filter=f"_row_created_at_version > {baseline_version}")
     assert delta.num_rows > 0, "the newest commit's rows are invisible to a delta-bounded read"
 
 
-# ── A17 — the mover contract (E1–E3) ──────────────────────────────────────────────────
+# ── A17 — the stage runner contract (E1–E3) ──────────────────────────────────────────────────
 
 
 def test_a17_a_redelivered_event_is_a_NO_OP_not_a_second_transform(tmp_path: Path) -> None:
     """E2. Redelivery is normal on an at-least-once bus, not exceptional.
 
     The same trigger token delivered twice must converge on one silver, not append a second copy of
-    every row. Asserted on ROW COUNT rather than on a call count: a mover that "ran twice but wrote
+    every row. Asserted on ROW COUNT rather than on a call count: a stage runner that "ran twice but wrote
     the same rows" is correct, and one that ran once but doubled the rows is not — only the data can
     tell them apart.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path)
+    settings = _stage_runner(tmp_path)
     dapr = _FakeDapr()
 
     first = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok-1"}}))
@@ -190,7 +190,7 @@ def test_a17_a_redelivered_event_reuses_the_SAME_lineage_run_id(tmp_path: Path) 
     precisely so a MERGE collapses them.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path)
+    settings = _stage_runner(tmp_path)
     dapr = _FakeDapr()
 
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "same"}}))
@@ -203,12 +203,12 @@ def test_a17_a_redelivered_event_reuses_the_SAME_lineage_run_id(tmp_path: Path) 
 def test_a17_a_publish_outage_returns_RETRY_rather_than_swallowing_the_hop(tmp_path: Path) -> None:
     """The RETRY contract — the entry point to resiliency, maxDeliver and the DLQ.
 
-    A mover that cannot announce its output must NOT report success: downstream would never be woken
+    A stage runner that cannot announce its output must NOT report success: downstream would never be woken
     and the data would sit in silver looking finished. Returning RETRY is what puts the event back on
     the bus and, after maxDeliver, into the DLQ where an operator can see it.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path)
+    settings = _stage_runner(tmp_path)
 
     result = asyncio.run(handle_stage(cast(DaprClient, _FakeDapr(fail=True)), settings, {"data": {"token": "tok"}}))
 
@@ -218,19 +218,19 @@ def test_a17_a_publish_outage_returns_RETRY_rather_than_swallowing_the_hop(tmp_p
 def test_a17_a_trigger_for_a_DIFFERENT_lane_is_acked_without_work(tmp_path: Path) -> None:
     """E1's stale/foreign-event half: ack, do nothing, and above all do not fail.
 
-    Every mover sees every event on its topic. One that treated another lane's trigger as an error
+    Every stage runner sees every event on its topic. One that treated another lane's trigger as an error
     would RETRY forever on traffic that was never addressed to it, and the redelivery storm would
     take out the lane that was working.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path)
+    settings = _stage_runner(tmp_path)
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok", "dataset": "some$other-lane"}}))
 
     # DROP, not SUCCESS — and the distinction is deliberate rather than cosmetic. Both ack, so
     # neither redelivers; DROP additionally says "this was not mine and produced nothing", which is
-    # what an operator needs to tell a mover that ignored an event from one that silently did no work
+    # what an operator needs to tell a stage runner that ignored an event from one that silently did no work
     # on an event that WAS its own. The load-bearing half is that it is not RETRY.
     assert result["status"] in ("DROP", "SUCCESS"), f"a foreign trigger must be acked, not {result}"
     assert result["status"] != "RETRY", "a foreign trigger would redeliver forever"
@@ -249,7 +249,7 @@ def test_a18_a_HELD_batch_publishes_NOTHING_downstream(tmp_path: Path) -> None:
     """
     _bronze(tmp_path)
     # A required column that silver cannot possibly carry: the gate must HOLD rather than promote.
-    settings = _mover(tmp_path, quality_enabled=True, quality_required_columns="a_column_that_does_not_exist")
+    settings = _stage_runner(tmp_path, quality_enabled=True, quality_required_columns="a_column_that_does_not_exist")
     dapr = _FakeDapr()
 
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))
@@ -264,9 +264,9 @@ def test_a18_a_HELD_batch_still_leaves_a_lineage_record(tmp_path: Path, monkeypa
     The medallion's original defect in miniature: it emitted only on COMPLETE, so a failure left no
     record at all. A held batch is a decision the estate made about data — it belongs in the graph.
 
-    THE HOLD NOW COMES FROM THE CATALOG, and this test had to move with it. It used to hand the mover
-    a required column that does not exist and let the mover's own `assert_quality` refuse. Under one
-    door the mover measures and does not rule (its assertions still populate the
+    THE HOLD NOW COMES FROM THE CATALOG, and this test had to move with it. It used to hand the stage runner
+    a required column that does not exist and let the stage runner's own `assert_quality` refuse. Under one
+    door the stage runner measures and does not rule (its assertions still populate the
     `dataQualityAssertions` facet, which is why the audit half is unchanged), so a refusal has exactly
     one source: `publish` answering `published=False`.
 
@@ -275,7 +275,7 @@ def test_a18_a_HELD_batch_still_leaves_a_lineage_record(tmp_path: Path, monkeypa
     quietly untested, which is what deleting the assertion would have done.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path, catalog_url="http://catalog.invalid")
+    settings = _stage_runner(tmp_path, catalog_url="http://catalog.invalid")
     monkeypatch.setattr(
         transform.catalog_register,
         "publish_stage_output",
@@ -298,7 +298,7 @@ def test_a18_a_PASSING_batch_publishes_the_version_it_actually_COMMITTED(tmp_pat
     it did produce are skipped. The event has to carry the commit's answer.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path)
+    settings = _stage_runner(tmp_path)
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))
@@ -322,7 +322,7 @@ def test_a18_a_terminal_stage_publishes_no_stage_trigger(tmp_path: Path) -> None
     false in a way only a broker inspection could reveal.
     """
     _bronze(tmp_path)
-    settings = _mover(
+    settings = _stage_runner(
         tmp_path,
         from_uri=str(tmp_path / "bronze"),
         to_uri=str(tmp_path / "gold"),
@@ -346,7 +346,7 @@ def test_a18_two_DIFFERENT_triggers_each_produce_their_own_run(tmp_path: Path, t
     and the second would silently overwrite the first's provenance.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path)
+    settings = _stage_runner(tmp_path)
     dapr = _FakeDapr()
 
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}}))

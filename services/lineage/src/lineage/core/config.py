@@ -105,7 +105,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # version commit is older — arrival cadence becomes an ASSERTED contract clause, not a dashboard.
     freshness_budget_hours: float = Field(default=0, alias="LINEAGE_FRESHNESS_BUDGET_HOURS")
     # Declared consumer dependencies per dataset (data-contract, Batch 23): a JSON map
-    # {"dataset": ["col", ...]} the chart derives from the movers' requiredColumns. The reconcile
+    # {"dataset": ["col", ...]} the chart derives from the stage runners' requiredColumns. The reconcile
     # sweep compares each declared dataset's STORAGE schema against it and reports
     # missing_declared_columns — the estate-patrol half of the gate's column_declared assertion
     # (same two-enforcement-point pattern as the blob probe). "" (default) = no checks, no reads.
@@ -129,7 +129,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LINEAGE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LINEAGE_S3_REGION")
     s3_bucket: str = Field(default="lakehouse", alias="LINEAGE_S3_BUCKET")
-    # #4: the durable lineage-outbox prefix (shared with the medallion movers). When set, the reconcile
+    # #4: the durable lineage-outbox prefix (shared with the medallion stage runners). When set, the reconcile
     # sweep also DRAINS it — re-ingesting any event a producer staged but whose publish never got acked
     # (a crash between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must
     # point at the SAME object-store prefix as ``MEDALLION_LINEAGE_OUTBOX_URI``.

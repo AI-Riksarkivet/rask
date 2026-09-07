@@ -17,7 +17,7 @@ authz model, and ONE storage substrate.
 | | Ray DATA (today's cascade) | Ray TRAIN (this design) |
 |---|---|---|
 | Duration | bounded stage transform (seconds–minutes) | long-running (minutes–hours), often GPU |
-| Trigger semantics | stage hop: mover blocks until the job lands, then fires the next stage | fire-and-track: submit + ack; the JOB reports its own lifecycle |
+| Trigger semantics | stage hop: stage runner blocks until the job lands, then fires the next stage | fire-and-track: submit + ack; the JOB reports its own lifecycle |
 | Output | the next stage's Lance dataset (+ version) | a MODEL artifact |
 | OpenLineage `jobType` | `ETL` / `TRANSFORMATION` | `TRAINING` |
 | Failure policy | RETRY (redelivery re-runs the transform) | terminal FAIL (no auto-resubmit — GPU-hours) |
@@ -33,10 +33,10 @@ authz model, and ONE storage substrate.
   resolved at the head and threaded through, never left floating (reproducibility).
 - **Own topic** (`training.jobs` via `MEDALLION_TRAIN_TOPIC`), own durable consumer + queue group.
   NOT a workload-type field on the medallion trigger: `{token, dataset, namespace}` is a
-  stage-hop contract with mover semantics (block-until-done ≤ ackWait, RETRY on failure).
+  stage-hop contract with stage runner semantics (block-until-done ≤ ackWait, RETRY on failure).
   Training is long-running and terminal-on-failure — overloading the stage trigger would couple
-  it to mover ack windows and redelivery policy. A separate topic is a separate resiliency
-  profile, and a slow training submit can never head-of-line-block a stage mover.
+  it to stage runner ack windows and redelivery policy. A separate topic is a separate resiliency
+  profile, and a slow training submit can never head-of-line-block a stage runner.
 - Trigger payload: `{token, model, features: [{dataset, version}], config}` — pointers only,
   never data (the claim-check invariant). Name shapes are enforced SYMMETRICALLY: `model` is a
   path-safe slug, every `dataset` is exactly `stage$name` (the names become S3 key prefixes, Lance
@@ -49,12 +49,12 @@ authz model, and ONE storage substrate.
 
 ## D2 — The trainer consumer: SUBMIT-AND-ACK, never block-and-poll
 
-`services/medallion/services/ray_submit.py` documents its own limitation: the mover blocks until
+`services/medallion/services/ray_submit.py` documents its own limitation: the stage runner blocks until
 the job finishes, so anything outliving the redelivery window exhausts it (default resiliency-ON deploy: sidecar-owned retries + a 720s broker crash-recovery ackWait; the `resiliency=false` escape hatch reverts to the broker-only ~2.5 min).
 That pattern is CORRECT for bounded stage transforms and WRONG for training. The trainer handler
 therefore:
 
-1. FGA-gates (D5) — deny → **DROP** (attributable, like the movers), outage → RETRY; the per-input
+1. FGA-gates (D5) — deny → **DROP** (attributable, like the stage runners), outage → RETRY; the per-input
    checks go through ONE `batch_check` round trip regardless of feature count, so the gate cannot
    stack per-check retry budgets past the 30s ack window;
 2. submits the training job via the shared Ray Jobs REST seam with a **deterministic
@@ -106,8 +106,8 @@ run is terminal until a human (or future automation) POSTs `/train` again with a
   `LINEAGE_SERVICE_SUBJECTS` allowlist (chart: only `service-trainer`), stamps it as author, and
   **still FGA-checks `can_write_data` on every output** — so the trainer records provenance only for
   what D5's `writer`-on-`namespace:models` rung permits. This does NOT mint a Dex user (which would be
-  the "second identity axis" D3 argues against), and it is *stricter* than the mover path it mirrors
-  (movers self-assert an unverified `MEDALLION_AUTHOR` config string; the trainer's outputs are
+  the "second identity axis" D3 argues against), and it is *stricter* than the stage runner path it mirrors
+  (stage runners self-assert an unverified `MEDALLION_AUTHOR` config string; the trainer's outputs are
   authorized). The allowlist is what stops an app-token holder speaking as a human. `LINEAGE_TOKEN`
   (an OIDC bearer) is still honoured for external producers/tests; the demo tier runs auth-off (no
   app token → the service door stays shut → the ingest is open).
@@ -179,11 +179,11 @@ authz shapes survive.
 - **`user:service-trainer`**: `reader` on the feature stage namespaces it reads (e.g.
   `namespace:silver`, `namespace:gold`) — per-namespace, NOT warehouse-wide; and `writer` on
   **`namespace:models` only** (→ `can_create_table` there). A trainer must never be able to
-  write a medallion stage, and a mover must never be able to write models — the rungs don't
+  write a medallion stage, and a stage runner must never be able to write models — the rungs don't
   overlap.
 - Seed: `warehouse parent namespace:models`, per-model `namespace:models parent table:models$<m>`
   (so humans' warehouse-reader rung cascades to models), plus the trainer grants — all in
-  `scripts/seed_medallion_fga.sh` next to the mover grants.
+  `scripts/seed_medallion_fga.sh` next to the stage runner grants.
 - The trainer handler checks `can_read_data` on EVERY pinned input and `can_create_table` on
   `namespace:models` BEFORE submitting; deny → DROP before any compute is spent.
 

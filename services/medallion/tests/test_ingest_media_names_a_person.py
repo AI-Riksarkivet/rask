@@ -8,7 +8,7 @@ token-guarded only, so no subject ever existed and no run it started could reach
 That silence is total and reported by nothing: `notifiable()` acks an event it cannot target with a
 SUCCESS, so a media chain that fails tells its requester nothing, and no metric moves. The door is
 the LAST place that identity exists — by the time a silver derive fails, the request is gone and the
-mover authors as a chart role literal.
+stage runner authors as a chart role literal.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class TestTheMediaChainCarriesItPastBronze:
     """Link 2. The door and the bronze emit are not the chain.
 
     `/produce`'s cascade threads the human the whole way down — `_cascade_originator` reads it back
-    off the bronze write event, every mover trigger re-carries it, and the gold stage still names the
+    off the bronze write event, every stage runner trigger re-carries it, and the gold stage still names the
     person who asked. The media head publishes its OWN trigger rather than going through
     `/bronze-arrival`, and that payload carried token/dataset/namespace only: the sub reached the
     bronze event and died there, so every media derive after it authored as a role literal.
@@ -84,7 +84,7 @@ class TestTheMediaChainCarriesItPastBronze:
         assert trigger, "the media trigger publish moved — this test is asserting on nothing"
         assert "originator" in trigger, "the media trigger drops the human the head resolved"
 
-    def test_the_mover_trigger_model_accepts_it(self) -> None:
+    def test_the_stage_runner_trigger_model_accepts_it(self) -> None:
         """Threading a field the guard drops is the same silence with more code."""
         from medallion.services.trigger_guards import StageTrigger
 

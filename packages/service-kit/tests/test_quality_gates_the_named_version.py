@@ -66,7 +66,7 @@ class TestItScansTheVersionItIsAsked_About:
 
 class TestTheDefaultIsUnchanged:
     def test_no_version_still_means_latest(self, clean_then_dirty: str) -> None:
-        """The mover calls this right after writing, where latest IS its write. Changing that default
+        """The stage runner calls this right after writing, where latest IS its write. Changing that default
         would move a caller this fix is not about."""
         assert not passed(assert_quality(clean_then_dirty, {}, key_column="id"))
 

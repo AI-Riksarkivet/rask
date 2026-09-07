@@ -163,7 +163,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
         infos = infos[:limit]
     for info in infos:
         run_id = info.path.rsplit("/", 1)[-1].removesuffix(".json")
-        # TOCTOU: the medallion mover stages-then-drops on this SAME prefix continuously, so an object
+        # TOCTOU: the medallion stage runner stages-then-drops on this SAME prefix continuously, so an object
         # listed above can vanish before we open it. A concurrently-dropped event was already published
         # (that's why it's being dropped) — skip it, don't let the race 500 the whole reconcile tick.
         try:

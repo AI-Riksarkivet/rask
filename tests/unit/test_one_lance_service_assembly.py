@@ -2,13 +2,13 @@
 
 DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
 `make_lance_service_app`." The eight were catalog, lineage, the medallion producer, the medallion
-mover, maintenance, viewer, search and annotator — each opening `app = FastAPI(...)` at module level
+stage runner, maintenance, viewer, search and annotator — each opening `app = FastAPI(...)` at module level
 and then repeating the same five steps in prose comments copied between them.
 
 The media three moved first, onto `service_kit.media.app.build_media_app` (see
 `test_one_media_service_seam.py`). This pins the other five onto `service_kit.lance_app`.
 
-THE DRIFT THE COPIES HAD ALREADY PRODUCED, and what makes this more than tidying: the medallion MOVER
+THE DRIFT THE COPIES HAD ALREADY PRODUCED, and what makes this more than tidying: the medallion STAGE RUNNER
 served no `RequestIDMiddleware` at all. Its four siblings each added one, under the same copied
 five-line comment about why a caller must be able to quote an id from a failed request — and the one
 service that consumes the cascade's bus deliveries did not have it. Nothing compared the five.
@@ -35,7 +35,7 @@ LANCE_MAINS = (
     "services/catalog/src/catalog/main.py",
     "services/lineage/src/lineage/main.py",
     "services/medallion/src/medallion/producer.py",
-    "services/medallion/src/medallion/mover.py",
+    "services/medallion/src/medallion/stage_runner.py",
     "services/maintenance/src/maintenance/service.py",
 )
 
@@ -43,7 +43,7 @@ LANCE_APPS = (
     ("catalog", "catalog.main"),
     ("lineage", "lineage.main"),
     ("medallion-producer", "medallion.producer"),
-    ("medallion-mover", "medallion.mover"),
+    ("medallion-stage runner", "medallion.stage_runner"),
     ("maintenance", "maintenance.service"),
 )
 
@@ -89,7 +89,7 @@ def _app(module_path: str) -> FastAPI:
 
 @pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])
 def test_every_lance_app_stamps_one_request_id(name: str, module_path: str) -> None:
-    """THE DRIFT: the medallion mover served no request-id layer at all.
+    """THE DRIFT: the medallion stage runner served no request-id layer at all.
 
     Driven through a REQUEST rather than by looking for the class on `app.user_middleware`: a
     middleware that is registered but never reached stamps nothing, and the header is the contract.

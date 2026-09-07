@@ -4,7 +4,7 @@
 # The chart runs every lakehouse container from this image with a different command
 # (see chart/templates/{services,medallion,maintenance,media}.yaml → include "lance.catalogImage"):
 #   catalog.main:app (:2333) · lineage.main:app (:8000) · medallion.producer:app /
-#   medallion.mover:app (:8000) · maintenance.service:app (:8000) ·
+#   medallion.stage_runner:app (:8000) · maintenance.service:app (:8000) ·
 #   viewer.main:app (:8101) · search.main:app (:8102) · annotator.main:app (:8103)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
 # Build context = repo root:  docker build -f .docker/rest-catalog.dockerfile .

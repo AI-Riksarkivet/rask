@@ -39,7 +39,7 @@ async def ingest_media(
     REGISTERS the bronze media table with the catalog, then seeds/reads the configured external source
     prefix through the SourceAdapter seam, writes the bronze blob-v2 table, emits the ``source → bronze``
     lineage (blob schema facet), and publishes the ``medallion.media`` trigger the bronze→silver media
-    mover consumes (which then derives the inline thumbnail + embedding schema-driven). 409 when the media
+    stage runner consumes (which then derives the inline thumbnail + embedding schema-driven). 409 when the media
     head isn't configured (real media can't be dummied — unlike ``/produce`` there is no compute-off
     emit); 503 when the catalog registration or a publish fails (retryable — registration precedes every
     effect, and the ingest is an idempotent overwrite). Dual-auth like ``/produce``: without a door any in-cluster

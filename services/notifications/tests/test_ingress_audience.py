@@ -436,7 +436,7 @@ async def test_letting_a_blank_subject_reach_the_inbox_would_redeliver_a_permane
 
 
 def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[str, Any]:
-    """A mover's FAIL, shaped as the medallion really emits one.
+    """A stage runner's FAIL, shaped as the medallion really emits one.
 
     `author` is a ROLE LITERAL from chart values (`data_eng`/`analyst`/`htr`/`ray`), which is the whole
     problem: it is a truthful statement about who ran the stage and a useless inbox address. The human
@@ -455,15 +455,15 @@ def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[
 
 @pytest.mark.asyncio
 async def test_a_failed_cascade_reaches_the_human_who_started_it() -> None:
-    """THE DEFECT. A mover authors with a chart role literal, so a failed bronze->silver->gold run
+    """THE DEFECT. A stage runner authors with a chart role literal, so a failed bronze->silver->gold run
     addressed an inbox actor named `data_eng` — nobody. The person whose ingest caused the run was
     told nothing, and only an explicit project watcher heard anything at all.
 
-    The originator is carried, not substituted: `author` still says the mover ran it, because
+    The originator is carried, not substituted: `author` still says the stage runner ran it, because
     overwriting attribution to fix targeting would trade one wrong answer for another."""
     notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator="alice")))
     assert notice is not None
-    assert notice.author == "data_eng", "attribution is unchanged — the mover really did run the stage"
+    assert notice.author == "data_eng", "attribution is unchanged — the stage runner really did run the stage"
     assert notice.originator == "alice"
     assert await audience_for(notice) == ("data_eng", "alice")
 

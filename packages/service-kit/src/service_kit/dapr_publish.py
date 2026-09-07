@@ -7,7 +7,7 @@ every SDK gRPC call, and ``publish_event`` exposes no per-call timeout arg (the 
 HTTP with its own 5s-per-attempt bound — unaffected either way). So we wrap each publish in a deliberately
 tighter ``asyncio.timeout`` (default 5s) that fires
 well before the 30s gRPC deadline, turning a wedged sidecar / NATS stall into a ``TimeoutError`` the existing
-failure path already handles (mover → RETRY / redeliver; catalog+compaction emit → best-effort swallow)
+failure path already handles (stage runner → RETRY / redeliver; catalog+compaction emit → best-effort swallow)
 without a coroutine sitting stalled for 30s. One helper so the tighter bound is applied at every publish site.
 
 CLAIM-CHECK GUARD (§9 P1, 2026-07-11): events carry POINTERS (dataset/version/URI), never data — NATS

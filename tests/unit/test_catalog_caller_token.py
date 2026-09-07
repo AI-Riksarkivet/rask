@@ -20,7 +20,7 @@ does not apply to a request-scoped read.
 UPDATED 2026-08-26: the seam no longer falls back AT ALL. This file argued the principle from the
 start and still encoded the exception, and the exception was the whole hole — `caller_token or
 settings.catalog_token` fires exactly when a request arrives with no bearer. `MEDIA_CATALOG_TOKEN` is
-removed from the media settings and the chart with it; the movers' `MEDALLION_CATALOG_TOKEN` stays,
+removed from the media settings and the chart with it; the stage runners' `MEDALLION_CATALOG_TOKEN` stays,
 because they genuinely have no caller to forward.
 """
 

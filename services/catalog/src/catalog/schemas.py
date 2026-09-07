@@ -647,7 +647,7 @@ class CreateWarehouseRequest(BaseModel):
     project: str
     bucket: str | None = None  # defaults to the id (a warehouse = one bucket)
     # Serving designation (DECISIONS "Medallion tiers — hybrid physical layout"): "gold" marks this as the
-    # project's gold SERVING warehouse — the silver→gold mover's tenant target root when the chart's
+    # project's gold SERVING warehouse — the silver→gold stage runner's tenant target root when the chart's
     # medallion.goldWarehouse is on. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
     serving: str | None = None
     # #123 deletion protection, ARMABLE at last. The guard (`require_not_protected` at the delete
@@ -834,7 +834,7 @@ class PublishRequest(BaseModel):
     #: person asking "did my ingest finish?" had to follow dataset names by eye.
     #:
     #: Carried through the catalog rather than stamped in the dataset because this is the ONLY hop
-    #: where the identity would otherwise be lost: the mover knows it, the next mover needs it, and
+    #: where the identity would otherwise be lost: the stage runner knows it, the next stage runner needs it, and
     #: the tag move in between is what wakes the next tier.
     cascade_id: str = Field(default="", max_length=128)
     #: THE PERSON THE BATCH IS FOR, when the caller is a service running on their behalf.
@@ -842,9 +842,9 @@ class PublishRequest(BaseModel):
     #: An untrusted CLAIM, exactly like `cascade_id`: it authorizes nothing here and nothing downstream
     #: — the notifications plane re-derives every recipient's visibility at delivery — so carrying it
     #: across the bus needs no new trust. It is a TARGETING hint, and the reason it must be a hint is
-    #: that the truthful actor cannot serve: a mover authenticates to this door as itself, so a cascade
-    #: publish names `service-<mover>` and a failed stage five minutes later addressed an inbox actor
-    #: named after a mover.
+    #: that the truthful actor cannot serve: a stage runner authenticates to this door as itself, so a cascade
+    #: publish names `service-<stage runner>` and a failed stage five minutes later addressed an inbox actor
+    #: named after a stage runner.
     #:
     #: Resolved, never echoed blindly — see `publication_originator`, which prefers this over the actor
     #: only when the actor is a SERVICE, and refuses anything that names no person.
@@ -944,7 +944,7 @@ class TransformSpecRequest(BaseModel):
 
     Field semantics — including why ``task`` must name a REGISTERED task rather than a program — live
     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
-    into and the one the mover reads. One definition, two services.
+    into and the one the stage runner reads. One definition, two services.
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)

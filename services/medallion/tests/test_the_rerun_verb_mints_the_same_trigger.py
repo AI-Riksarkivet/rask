@@ -2,12 +2,12 @@
 
 O2 (`open_lakehouse_diff_left.md`): *"No cascade reconciler and no re-run verb — a missed hop is
 undetectable and unrepairable."* The failure it names is a hop that NEVER RAN: `table_published` was
-published, the trigger was lost, no mover woke, and no workflow instance was ever created. That is why
+published, the trigger was lost, no stage runner woke, and no workflow instance was ever created. That is why
 the verb is addressed by the EDGE and not by an instance — there is no instance to address, nothing to
 load, and no `serialized_input` to replay.
 
 So the repair is to re-publish the trigger that went missing. Which makes the trigger's SHAPE the whole
-contract, and a second hand-written copy of it the obvious way to get this wrong: the mover
+contract, and a second hand-written copy of it the obvious way to get this wrong: the stage runner
 discriminates on `dataset` being the tier-qualified lane (`bronze$events`, the same string for every
 tenant), resolves the delta with `_row_created_at_version > from AND <= to`, and reads `from_uri` as
 the catalog's vended location rather than composing a path. A re-run whose trigger differed in any of
@@ -43,7 +43,7 @@ def _extra(**over: object) -> dict[str, object]:
 
 
 def test_the_lane_is_tier_qualified_not_tenant_qualified() -> None:
-    """The mover compares `dataset` against its raw `from_dataset`, so the tenant must travel in
+    """The stage runner compares `dataset` against its raw `from_dataset`, so the tenant must travel in
     `project` and NOT in the lane. Publishing the catalog identifier as the lane once made every
     tenant's publication DROP as another lane's."""
     trigger = build_stage_trigger(object_id=f"table:acme-bronze{DELIMITER}events", event_id="evt-1", extra=_extra())
@@ -62,7 +62,7 @@ def test_the_range_is_carried_verbatim_including_a_none_floor() -> None:
     assert trigger["to_version"] == 7
 
 
-def test_the_vended_location_is_carried_so_the_mover_composes_no_path() -> None:
+def test_the_vended_location_is_carried_so_the_stage_runner_composes_no_path() -> None:
     trigger = build_stage_trigger(object_id=f"table:acme-bronze{DELIMITER}events", event_id="evt-1", extra=_extra())
     assert trigger is not None
     assert trigger["from_uri"] == "s3://acme-bucket/aa3bed10_acme-bronze$events"
@@ -84,7 +84,7 @@ def test_the_batch_identity_and_the_human_cross_the_tier_boundary() -> None:
 @pytest.mark.parametrize("absent", ["project", "cascade_id"])
 def test_an_absent_field_is_OMITTED_never_blanked(absent: str) -> None:
     """`""` is not the same claim as absent, and the difference is load-bearing at both sites: the
-    mover reads a missing `project` as "no tenant" and would refuse `""` as garbage, and a blank
+    stage runner reads a missing `project` as "no tenant" and would refuse `""` as garbage, and a blank
     originator addresses an inbox actor literally named "" ."""
     extra = _extra()
     del extra[absent]

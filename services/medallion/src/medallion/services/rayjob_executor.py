@@ -16,7 +16,7 @@ It is also what makes Kueue possible (step 4): Kueue admits WORKLOADS, and a Job
 not one. A CR carrying `kueue.x-k8s.io/queue-name` is.
 
 **httpx against the k8s API, no client library.** `ray_submit` states the rule this follows — "uses
-only `httpx` … no `ray` package in the mover image" — and the same argument applies harder here: this
+only `httpx` … no `ray` package in the stage runner image" — and the same argument applies harder here: this
 module ships inside an image seven lance services share, so a dependency added for one of them is
 carried by all. The projected ServiceAccount token and the cluster CA are files every pod already has.
 
@@ -31,6 +31,7 @@ from typing import Any, Final
 
 import httpx
 
+from medallion.services import engine_names
 from service_kit.lakehouse.executor import Capability, RunFailure, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkOrder
@@ -38,7 +39,7 @@ from service_kit.lakehouse.work_order import WorkOrder
 
 log = logging.getLogger(__name__)
 
-RAY_ENGINE: Final = "ray"
+RAY_ENGINE: Final = engine_names.RAY_ENGINE
 
 #: Where every pod finds its own identity. Projected by the kubelet, rotated by it, and readable
 #: without any client library — which is the whole reason this module needs none.

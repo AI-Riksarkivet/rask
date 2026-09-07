@@ -52,7 +52,7 @@ lane_values() {
 		observability: {enabled: false}
 		frontend: {enabled: false}
 		# The medallion IS the cascade — its producer owns /bronze-arrival (the head that turns a
-		# bronze write into `medallion.bronze`), and its movers carry bronze->silver->gold. Disabled,
+		# bronze write into `medallion.bronze`), and its stage runners carry bronze->silver->gold. Disabled,
 		# the ingest lane passes every one of its own gates while nothing above bronze moves — which is
 		# exactly the gap that leaves. Its compute is the in-process fake-Ray path, so the cascade can
 		# be witnessed without a Ray cluster.

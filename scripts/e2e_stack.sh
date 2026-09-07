@@ -308,8 +308,8 @@ PYTHONPATH=services uv run pytest \
 
 # The two Ray-path suites (#53, test_ray_{train,batch}_e2e.py) are NOT run here on purpose. They need a
 # real KubeRay cluster AND medallion.ray/compute flipped on — and flipping ray-on rolls the medallion
-# movers into stage-compute-via-ray mode, which on a fresh CI stack races the OpenBao secret-store
-# readiness and hangs the movers (secret 500 + "waiting on port 8000"). Forcing that into the shared,
+# stage runners into stage-compute-via-ray mode, which on a fresh CI stack races the OpenBao secret-store
+# readiness and hangs the stage runners (secret 500 + "waiting on port 8000"). Forcing that into the shared,
 # ray-OFF core-suite job destabilises the whole run for no isolation benefit. Those suites are proven
 # live and kept green as dedicated targets — `make e2e-ray-train` / `make e2e-ray-batch` (deploy the ray
 # cluster first with `make ray-demo`). A dedicated ray-enabled CI job is the right home and a scoped

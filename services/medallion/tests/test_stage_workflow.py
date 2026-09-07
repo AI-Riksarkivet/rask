@@ -135,7 +135,7 @@ def test_the_publish_happens_ONLY_AFTER_a_terminal_read() -> None:
 
     `transform.py:333` submits and measures back to back, so the measure races the job. Here the
     downstream wake-up must appear after a terminal poll and never before one — if `publish_stage_ready`
-    could precede the last `poll_stage`, the mover would measure a dataset the job had not written.
+    could precede the last `poll_stage`, the stage runner would measure a dataset the job had not written.
     """
     ctx = _Ctx({"submit_stage": ["ray-silver-tok-1-abc"], "poll_stage": ["PENDING", "RUNNING", "SUCCEEDED"]})
 
@@ -159,11 +159,11 @@ def test_the_publish_happens_ONLY_AFTER_a_terminal_read() -> None:
     assert ctx.actions.count("call_activity(submit_stage)") == 1, "the job was submitted more than once across turns"
     publish_at = ctx.actions.index("call_activity(publish_stage_ready)")
     last_poll = len(ctx.actions) - 1 - ctx.actions[::-1].index("call_activity(poll_stage)")
-    assert publish_at > last_poll, "the mover was woken before the job's terminal state was read"
+    assert publish_at > last_poll, "the stage runner was woken before the job's terminal state was read"
 
 
-def test_a_job_that_never_finishes_does_NOT_wake_the_mover() -> None:
-    """The abandoned case. Waking the mover here would measure a dataset still being written.
+def test_a_job_that_never_finishes_does_NOT_wake_the_stage_runner() -> None:
+    """The abandoned case. Waking the stage runner here would measure a dataset still being written.
 
     Reported as `abandoned` rather than `failed` deliberately: the job may still land, and this estate's
     recurring defect is a state reported as something it is not.
@@ -179,8 +179,8 @@ def test_a_job_that_never_finishes_does_NOT_wake_the_mover() -> None:
 
 
 @pytest.mark.parametrize("terminal_bad", ["FAILED", "STOPPED"])
-def test_a_TERMINAL_BAD_job_does_NOT_wake_the_mover(terminal_bad: str) -> None:
-    """A failed job wrote nothing. Publishing would have the mover measure the PRIOR version and emit
+def test_a_TERMINAL_BAD_job_does_NOT_wake_the_stage_runner(terminal_bad: str) -> None:
+    """A failed job wrote nothing. Publishing would have the stage runner measure the PRIOR version and emit
     a COMPLETE for rows this job never produced — the silent-wrong branch of the original defect."""
     ctx = _Ctx({"submit_stage": ["ray-silver-tok-1-abc"], "poll_stage": [terminal_bad]})
 
@@ -464,7 +464,7 @@ def test_a_publish_that_EXHAUSTS_its_retries_still_reports() -> None:
     workflow's `publish_stage_ready`. It is called with a retry policy and — until this test — no
     error boundary: an exhausted publish raised into the workflow, the instance went terminal FAILED,
     and `report_stage_outcome` never ran. A Ray job that SUCCEEDED, wrote its data, and then could not
-    wake the mover left nothing anywhere. That is the same silence the FAILED-job fix closed, arriving
+    wake the stage runner left nothing anywhere. That is the same silence the FAILED-job fix closed, arriving
     by the other door.
 
     An activity failure DOES raise into the generator and can be caught (unlike the replay-mismatch
@@ -523,7 +523,7 @@ def test_submit_returns_THE_SAME_id_it_submitted_under(monkeypatch: pytest.Monke
 def test_submit_returns_the_posted_id_when_a_CODE_VERSION_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """The live defect, driven through the REAL submitter rather than a fake.
 
-    `MEDALLION_RAY_CODE_VERSION` is rendered on every mover (`chart/templates/medallion.yaml`, outside
+    `MEDALLION_RAY_CODE_VERSION` is rendered on every stage runner (`chart/templates/medallion.yaml`, outside
     the `medallion.ray` guard), so `code` is non-empty in every deployed estate — and a non-empty
     `code` appends a digest to the submission id. An activity that re-derives the id without it names
     a job that does not exist: the poll 404s, `job_status` answers `None`, and `stage_run` takes the
@@ -599,10 +599,10 @@ def test_poll_RAISES_on_transport_failure_rather_than_reporting_no_status(monkey
         poll_stage(cast("Any", None), PollInput(submission_id="sub"))
 
 
-def test_the_wakeup_carries_the_FLAG_and_goes_to_the_movers_OWN_topic(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_wakeup_carries_the_FLAG_and_goes_to_the_stage_runners_OWN_topic(monkeypatch: pytest.MonkeyPatch) -> None:
     """Three properties in one publish, each of which silently breaks the cascade if wrong.
 
-    `ray_job_done` absent -> the mover dispatches a SECOND watcher instead of measuring, forever.
+    `ray_job_done` absent -> the stage runner dispatches a SECOND watcher instead of measuring, forever.
     The wrong topic -> nothing consumes it and the run stops with data on disk.
     A bare `.publish_event` -> unbounded, so a wedged sidecar hangs the activity and the workflow
     never advances (the estate has an invariant test for that one).
@@ -637,9 +637,9 @@ def test_the_wakeup_carries_the_FLAG_and_goes_to_the_movers_OWN_topic(monkeypatc
 
     settings = get_settings()
     body = json.loads(sent["data"])
-    assert body["ray_job_done"] is True, "without the flag the mover dispatches another watcher instead of measuring"
+    assert body["ray_job_done"] is True, "without the flag the stage runner dispatches another watcher instead of measuring"
     assert body["ray_submission_id"] == "ray-silver-tok-1-abc"
-    assert sent["topic_name"] == settings.sub_topic, "the wake-up must reach the mover's OWN subscription"
+    assert sent["topic_name"] == settings.sub_topic, "the wake-up must reach the stage runner's OWN subscription"
     assert sent["timeout_seconds"] > 0, "an unbounded publish hangs the activity on a wedged sidecar"
 
 
@@ -745,20 +745,20 @@ def test_a_POLL_that_exhausts_its_retries_reports_ABANDONED() -> None:
 
     assert "call_activity(report_stage_outcome)" in ctx.actions, "a lost watch reported nothing"
     assert outcome["verdict"] == "abandoned"
-    assert "call_activity(publish_stage_ready)" not in ctx.actions, "an unwatched job must not wake the mover"
+    assert "call_activity(publish_stage_ready)" not in ctx.actions, "an unwatched job must not wake the stage runner"
 
 
 def test_a_stage_FAIL_names_the_human_the_cascade_is_running_for() -> None:
     """THE CASCADE'S TARGETING DEFECT.
 
-    A mover authors its events with a chart ROLE LITERAL (`MEDALLION_AUTHOR` — `data_eng`, `analyst`,
+    A stage runner authors its events with a chart ROLE LITERAL (`MEDALLION_AUTHOR` — `data_eng`, `analyst`,
     `htr`, `ray`), so the FAIL a failed Ray stage emits addressed an inbox actor named `data_eng`:
     nobody. The person whose ingest started the cascade was told nothing about the failure of their own
     run, and only someone who had explicitly opted into watching the project heard anything.
 
     The originator rides the TRIGGER — the same carrier as `token` and `project` — because by the time a
     stage runs, the request that started it is long gone; the cascade head is the last place the verified
-    subject exists. `author` is deliberately left alone: the mover really did run the stage, and
+    subject exists. `author` is deliberately left alone: the stage runner really did run the stage, and
     overwriting attribution to fix targeting trades one wrong answer for another.
     """
     from medallion.workflow import _build_stage_fail_event
@@ -768,7 +768,7 @@ def test_a_stage_FAIL_names_the_human_the_cascade_is_running_for() -> None:
     event = _build_stage_fail_event(spec, outcome, "the Ray stage job sub ended FAILED after 2 poll(s)")
 
     assert event["run"]["facets"]["lance"]["originator"] == "alice"
-    assert event["run"]["facets"]["author"]["sub"] != "alice", "attribution stays with the mover that ran it"
+    assert event["run"]["facets"]["author"]["sub"] != "alice", "attribution stays with the stage runner that ran it"
 
 
 def test_a_stage_FAIL_without_an_originator_is_unchanged() -> None:

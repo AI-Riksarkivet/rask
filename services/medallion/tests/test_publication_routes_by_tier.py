@@ -8,9 +8,9 @@
     table:acme-silver$features     -> medallion.bronze  bronze / bronze$features  (wrong)
     table:acme-gold$catalog        -> medallion.bronze  bronze / bronze$catalog   (wrong)
 
-A silver publication therefore fired a BRONZE trigger, which no mover's `from_dataset` matches, so it
+A silver publication therefore fired a BRONZE trigger, which no stage runner's `from_dataset` matches, so it
 was dropped as another lane's. Silently — which is safer than the loop it could have been, and still
-means the gold mover is never delivered to and `table_published` can never become the single cascade
+means the gold stage runner is never delivered to and `table_published` can never become the single cascade
 trigger the design wants.
 
 Routing on the SOURCE NAMESPACE only became sound when the catalog started stating the tenant
@@ -73,7 +73,7 @@ class TestEachTierWakesItsOwnLane:
 
     @pytest.mark.asyncio
     async def test_silver_wakes_the_SILVER_lane(self) -> None:
-        """The one that decides whether movers can ever publish their own output."""
+        """The one that decides whether stage runners can ever publish their own output."""
         routed = await _route("table:acme-silver$features")
         assert routed is not None
         topic, trigger = routed

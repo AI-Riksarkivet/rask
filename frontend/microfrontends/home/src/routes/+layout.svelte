@@ -29,7 +29,7 @@
 	// THE BOUND, and it is wider than it looks because no gate can see it. The rows below come from
 	// `GET /runs`, governed by DATASET visibility — every run whose outputs you can `can_get_metadata`,
 	// whoever ran it. The inbox is filled by AUTHORSHIP (D4's v1 targeting: `audience_for` is
-	// `(notice.author,)`) and only on terminal states. So a mover's FAILED run you can see but did not
+	// `(notice.author,)`) and only on terminal states. So a stage runner's FAILED run you can see but did not
 	// start has no pointer in your inbox: marking it read persists nothing and it is unread again after
 	// a reload, exactly as before S1. S3 is what closes that — it makes the panel render inbox rows
 	// instead of run rows, so the two sets stop being different sets.

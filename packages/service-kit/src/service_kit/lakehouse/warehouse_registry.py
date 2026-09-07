@@ -4,7 +4,7 @@ The catalog WRITES warehouse records (``services/catalog/services/warehouses.py`
 ``<control_root>/_warehouses/<id>.json`` with fields ``{id, bucket, root_uri, project, status, ...}``.
 This module is the shared READ half for services that must route by *project* without a catalog client
 (the established catalog↔compaction contract shape — see :mod:`service_kit.lakehouse.maintenance_policies`): the
-medallion movers/producer resolve a project-carrying trigger to that project's warehouse root and lay the
+medallion stage runners/producer resolve a project-carrying trigger to that project's warehouse root and lay the
 stages out as ``<root_uri>/medallion/<namespace>``.
 
 Records are immutable except ``status``, so resolution accepts short staleness through a per-process TTL
@@ -337,7 +337,7 @@ def _sole_root(matches: list[tuple[str, str, bool]], *, project: str, serving: s
     )
     raise AmbiguousProjectWarehouseError(
         f"project {project!r} has {len(matches)} active {serving or 'work'} warehouses and {detail}: {candidates}. "
-        f"Mark exactly one with \"primary\": true, or deactivate the rest — routing a tenant's data by "
+        f'Mark exactly one with "primary": true, or deactivate the rest — routing a tenant\'s data by '
         f"alphabetical accident is not a decision this resolver may make."
     )
 
@@ -383,7 +383,7 @@ def project_gold_root(
 
     The mirror of :func:`project_root` matching only records carrying ``"serving": "gold"`` (created via
     ``POST /v1/warehouses`` with the ``serving`` field — DECISIONS "Medallion tiers — hybrid physical
-    layout"): the silver→gold mover's tenant TARGET root when ``MEDALLION_GOLD_WAREHOUSE_ENABLED`` is on.
+    layout"): the silver→gold stage runner's tenant TARGET root when ``MEDALLION_GOLD_WAREHOUSE_ENABLED`` is on.
     Same lowest-id determinism, same positive-only TTL cache (partitioned by serving class, so a cached
     work root never answers a gold lookup). ``None`` means the project has no gold warehouse — the caller
     falls back to the work root, byte-identically to the pre-gold behavior. Blocking IO — threadpool it.

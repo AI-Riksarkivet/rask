@@ -175,7 +175,7 @@ def test_a13_no_completion_polling_survives() -> None:
 
     It was deleted from THREE places — ray-kit, ratch/core/jobs.py, and the medallion's ray_submit —
     and the medallion's stage path had to be re-cut to submit-and-ack, since it was the SURVIVING
-    mover rather than part of the retiring IIIF lane.
+    stage runner rather than part of the retiring IIIF lane.
 
     The deletion is not a performance tidy-up. Holding an ack across a job's runtime is what the ack
     contract forbids: ackWait expires and the broker redelivers forever. And the poll asked a

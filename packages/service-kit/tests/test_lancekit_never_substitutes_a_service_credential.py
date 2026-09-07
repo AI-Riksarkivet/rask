@@ -17,7 +17,7 @@ request-scoped annotator routes (save.py:78/119, tags.py:110/114, commit.py:88, 
 versions.py:75). The branch fired only for the case it must not serve.
 
 Owner ruling 2026-08-26: never substitute, and delete the dead config. The service-credential PATTERN
-is not wrong in general — the medallion's cascade movers use their own `MEDALLION_CATALOG_TOKEN` at
+is not wrong in general — the medallion's cascade stage runners use their own `MEDALLION_CATALOG_TOKEN` at
 `transform.py:505/821/871` and genuinely have no caller. It is wrong on a request path.
 """
 
@@ -81,11 +81,11 @@ def test_the_media_settings_no_longer_declare_a_credential_nothing_reads() -> No
 def test_the_MEDALLION_service_path_is_untouched() -> None:
     """The pattern is right where a caller genuinely does not exist — do not overcorrect.
 
-    The cascade movers run with no human behind them and carry their own credential. This test
+    The cascade stage runners run with no human behind them and carry their own credential. This test
     exists so a later sweep for `catalog_token` does not delete the legitimate half too.
     """
     from medallion.core.config import MedallionSettings
 
     assert "catalog_token" in MedallionSettings.model_fields, (
-        "MEDALLION_CATALOG_TOKEN was removed — the movers have no caller to forward and legitimately need a service credential"
+        "MEDALLION_CATALOG_TOKEN was removed — the stage runners have no caller to forward and legitimately need a service credential"
     )

@@ -4,7 +4,7 @@ The :class:`DaprApp` wrapper serves ``GET /dapr/subscribe`` (read by the sidecar
 deliveries of the shared lineage topic to :func:`handle_bronze_arrival`, which fires the cascade only for a
 write to the bronze dataset — the arrival of external raw INTO the first governed tier (R23) —
 loop-guarded. Authenticated by the Dapr app-api-token (``require_dapr_token``) so a forged event can't
-drive the pipeline — symmetric with the movers' ``/medallion-event`` route.
+drive the pipeline — symmetric with the stage runners' ``/medallion-event`` route.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
     #
     # The two heads mint incompatible tokens by design (this one from the control event's `event_id`,
     # the other from the bronze-write run's `lance.token` facet), so the deterministic-instance dedupe
-    # never engages between them, and there is no token de-duplication in the movers either — a
+    # never engages between them, and there is no token de-duplication in the stage runners either — a
     # comment here claimed one until 2026-08-08; `transform.py` only reads the token into logs and
     # lineage run-ids. That is the intended shape: the token distinguishes EVENTS, while
     # `stage_submission_id` distinguishes WORK, and merging the two questions is the defect.
@@ -88,8 +88,8 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
     # overwrite). What WOULD be a real duplicate is a future head publishing a trigger whose dataset
     # AND range match another's — and that one the instance_id correctly dedupes on its own.
     #
-    # Do NOT "restore" dedupe by scoping movers to the state store: an adversarial review found the
-    # key is not unique per legitimate message on a mover's own topic, so deploying it halts every
+    # Do NOT "restore" dedupe by scoping stage runners to the state store: an adversarial review found the
+    # key is not unique per legitimate message on a stage runner's own topic, so deploying it halts every
     # distributed cascade.
     if settings.control_pubsub:
 

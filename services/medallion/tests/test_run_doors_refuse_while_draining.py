@@ -120,8 +120,8 @@ class TestTheGateCannotGoVacuous:
         # would take the runaway-stopping lever away at exactly the moment an operator reaches for it,
         # since a rollout is when runaways are noticed. It is also idempotent against a pod that
         # leaves mid-call: the workflow is durable and the terminate is recorded by the sidecar.
-        # `mover_ops.py::terminate_stage` and `stage_ops.py::terminate_stage` join `terminate_train` in
-        # the third category: they STOP work. The mover-side one is additionally sidecar-unreachable —
+        # `stage_runner_ops.py::terminate_stage` and `stage_ops.py::terminate_stage` join `terminate_train` in
+        # the third category: they STOP work. The stage runner-side one is additionally sidecar-unreachable —
         # it is called by the producer over ClusterIP, not delivered by Dapr — so B6's admission
         # question does not even apply to it.
         # `dlq.py::on_dead_letter` PARKS a poison message; it starts no work. Refusing it while
@@ -129,9 +129,9 @@ class TestTheGateCannotGoVacuous:
         # so it is listed rather than gated, and this comment is why.
         assert ungated == [
             "dlq.py::on_dead_letter",
-            "mover_ops.py::terminate_stage",
             "promotions.py::decide",
             "stage_ops.py::terminate_stage",
+            "stage_runner_ops.py::terminate_stage",
             "train.py::terminate_train",
         ], (
             "a new POST door appeared that neither this gate lists nor refuses while draining: "

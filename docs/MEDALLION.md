@@ -14,7 +14,7 @@ and emits ONE OpenLineage event *announcing that write*. `medallion-producer` al
 lineage topic (`/bronze-arrival`) and — only for a write to the bronze dataset — publishes the first
 trigger `medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not
 the call; any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write event
-drives it. Loop-guarded: the movers' own silver/gold events on that same topic are ignored, so the head
+drives it. Loop-guarded: the stage runners' own silver/gold events on that same topic are ignored, so the head
 can't self-trigger. `bronze→silver` subscribes to `medallion.bronze` and derives silver:
 
 ```
@@ -35,9 +35,9 @@ can't self-trigger. `bronze→silver` subscribes to `medallion.bronze` and deriv
    resulting lineage DAG:   bronze$events ─▶ silver$features ─▶ gold$catalog
 ```
 
-`medallion-producer` produces bronze **directly** (R23 collapsed the old raw→bronze mover into the ingest head —
+`medallion-producer` produces bronze **directly** (R23 collapsed the old raw→bronze stage runner into the ingest head —
 its stage stamp lands at ingest; `source_rowid` roots at bronze, minted by the first derive); its
-`/bronze-arrival` subscription then *triggers* the `bronze→silver` mover. Because the head is a
+`/bronze-arrival` subscription then *triggers* the `bronze→silver` stage runner. Because the head is a
 subscriber like every other stage, the pipeline is event-driven end to end — nothing polls or waits on a
 timer (GOAL 4 B2).
 
@@ -54,11 +54,11 @@ timer (GOAL 4 B2).
 ### Does the cascade produce real data, or just lineage?
 
 Both modes, by a flag (`MEDALLION_COMPUTE_ENABLED`, chart toggle `medallion.compute`, **off by default**).
-Off: the producer + movers are pure **emitters** — they grow the lineage DAG but write no data (all the
+Off: the producer + stage runners are pure **emitters** — they grow the lineage DAG but write no data (all the
 event-driven *choreography* demo needs), so the graph asserts datasets that aren't on disk (`#23` reconcile
 would flag them `missing_on_storage`). **On** (`--set medallion.compute=true`): each stage runs the
 **fake-Ray compute** (`services/medallion/services/compute.py`) — a
-REAL in-process Lance write: `medallion-producer` seeds `bronze$events`, then each mover reads its upstream Lance
+REAL in-process Lance write: `medallion-producer` seeds `bronze$events`, then each stage runner reads its upstream Lance
 dataset, stamps a `stage` provenance column, and writes the downstream dataset — so the whole loop produces
 **actual versioned data** and the emitted OpenLineage carries the **real** Lance version (not a hardcoded
 `1`). This is the **lance-ray seam**: the exact `read → transform → write → version` contract a
@@ -69,7 +69,7 @@ bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 > **The real Ray seam** (`docs/RAY.md`, `make ray-demo`): a genuine Ray cluster in kind + `ray job submit`
 > runs a distributed `lance_ray` job proving Lance's distributed **write** (fragment-parallel + one commit),
 > **indexing**, data **evolution** (`add_columns` + version pinning), and **compaction** against RustFS —
-> the production shape this in-process `transform_stage` stands in for. Wiring the movers to submit Ray jobs
+> the production shape this in-process `transform_stage` stands in for. Wiring the stage runners to submit Ray jobs
 > (and the KubeRay operator) is the rask-merge step.
 
 > **Compute + OpenBao:** compute-on writes to RustFS with the plaintext S3 secret, so it **requires OpenBao
@@ -82,29 +82,29 @@ bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 | Service | App-id | Module | Subscribes | Publishes |
 | ------- | ------ | ------ | ---------- | --------- |
 | **medallion-producer** (producer) | `medallion-producer` | `medallion.producer:app` | `lineage.events.v1` (bronze filter, `/bronze-arrival`) + `POST /produce` | bronze-write lineage → then `medallion.bronze` on a bronze arrival |
-| **bronze→silver** | `bronze-to-silver` | `medallion.mover:app` | `medallion.bronze` | `medallion.silver` + lineage |
-| **silver→gold** | `silver-to-gold` | `medallion.mover:app` | `medallion.silver` | — (terminal) + lineage |
+| **bronze→silver** | `bronze-to-silver` | `medallion.stage_runner:app` | `medallion.bronze` | `medallion.silver` + lineage |
+| **silver→gold** | `silver-to-gold` | `medallion.stage_runner:app` | `medallion.silver` | — (terminal) + lineage |
 | **medallion-producer** (media head) | `medallion-producer` | `medallion.producer:app` | `POST /ingest-media` | bronze-media write lineage + `medallion.media` |
-| **media→silver** (media lane) | `media-to-silver` | `medallion.mover:app` | `medallion.media` | — (terminal) + lineage |
+| **media→silver** (media lane) | `media-to-silver` | `medallion.stage_runner:app` | `medallion.media` | — (terminal) + lineage |
 
 **Both ingest heads register before they write.** `/produce` and `/ingest-media` each attach their bronze
 tier through the catalog's `register_table` door BEFORE the first row, so the head tiers are governed
-`table:` objects exactly like the silver and gold the movers ask the catalog for — the maintenance
+`table:` objects exactly like the silver and gold the stage runners ask the catalog for — the maintenance
 policy, the protection record and every FGA grant key off that object. It is fail-closed and precedes
 every effect: a catalog refusal is a **503 + Retry-After** with nothing written, emitted or triggered,
 never a silent ungoverned write. Skipped only where there is no catalog to govern with (an empty
 `MEDALLION_CATALOG_URL`, the ungoverned dev shape) or, for `/produce`, where compute-off means no dataset
 is written at all.
 
-The 3 movers are the **same module**, differing only by `MEDALLION_*` env (from/to dataset, sub/pub
-topic, operation, author) — see `chart/values.yaml` `medallion.movers`. Triggers ride a dedicated
+The 3 stage runners are the **same module**, differing only by `MEDALLION_*` env (from/to dataset, sub/pub
+topic, operation, author) — see `chart/values.yaml` `medallion.stageRunners`. Triggers ride a dedicated
 `MEDALLION` JetStream stream (`medallion.>`); the OpenLineage events ride the existing `LINEAGE` stream.
 
 **The MEDIA lane (multimodal §9).** `POST /ingest-media` on medallion-producer (token-guarded like `/produce`;
 compute-on only — 409 otherwise) REGISTERS `bronze-media$objects` with the catalog, then lands external
 media as a bronze **blob-v2** table at format 2.2 (one lineage input per source URI) and publishes
 `medallion.media`; the
-`media-to-silver` mover — the SAME generic mover binary, zero media config — carries the blob forward
+`media-to-silver` stage runner — the SAME generic stage runner binary, zero media config — carries the blob forward
 and derives whatever the blob **content** supports (`medallion/services/derivers.py`: image →
 inline `thumbnail` + `embedding`; unrecognised media carries through untouched; tabular datasets are a
 no-op), writing `silver-media$features`. Undecodable-after-probe payloads are deterministic bad data:
@@ -133,7 +133,7 @@ the lowest warehouse id) with every lineage/FGA identity **project-qualified** (
 `<p>-silver$features`, …). The trigger's auth is per-project (`can_administer` on `project:<p>`); `/train`
 deliberately declares **no** project parameter and stays pinned to `medallion.produceAdminProject`.
 
-The qualified namespaces inherit **nothing** from the estate seed, so out of the box the movers are
+The qualified namespaces inherit **nothing** from the estate seed, so out of the box the stage runners are
 denied on `namespace:<p>-bronze` and the trigger is dead-lettered — fail-closed by design (live-proven
 2026-07-23: sidecar `DROP`, DLQ parking, no fallback into another tenant's roots). Enabling a tenant is
 one idempotent command once its zone warehouse exists:
@@ -144,8 +144,8 @@ OPENFGA_API_URL=http://localhost:8081 scripts/seed_medallion_fga.sh <project> <z
 ```
 
 which writes the three tuple groups: stage-namespace parents under the zone warehouse (project
-admins/readers inherit visibility over their zone data), the mover service rungs on the qualified target
-stages, and the table→namespace parent links (movers write Lance directly; nothing else seeds tables).
+admins/readers inherit visibility over their zone data), the stage runner service rungs on the qualified target
+stages, and the table→namespace parent links (stage runners write Lance directly; nothing else seeds tables).
 After the seed the runs appear in `/runs` for the project's members — before it they exist but are
 governance-hidden, which is the same fail-closed lens, not data loss. Media lanes stay estate-only.
 
@@ -156,8 +156,8 @@ the distinction between a *registered validator that gates movement* and the *ev
 
 | Gate | Flag | Question | Mechanism | Fail action |
 | ---- | ---- | -------- | --------- | ----------- |
-| **Authorization** | `RASK_FGA_ENABLED` | *May this identity promote?* | the mover CHECKs OpenFGA as its **own service identity** — silver→gold needs `can_promote` (validator rung), the others `can_create_table` (writer) | `DROP` (redelivery won't grant the role) + `medallion.stage.denied` |
-| **Data quality** | `MEDALLION_QUALITY_ENABLED` (chart `medallion.quality`) | *Is the produced data good enough?* | after the compute writes the downstream dataset, the mover runs cheap, exact assertions on it (`row_count_positive`, `not_null` on the key column) via `services/medallion/services/quality.py` | `DROP` (deterministically bad) + `medallion.stage.quality_blocked`; the failed run + its `dataQualityAssertions` facet are **still emitted** so the bad batch is auditable in lineage |
+| **Authorization** | `RASK_FGA_ENABLED` | *May this identity promote?* | the stage runner CHECKs OpenFGA as its **own service identity** — silver→gold needs `can_promote` (validator rung), the others `can_create_table` (writer) | `DROP` (redelivery won't grant the role) + `medallion.stage.denied` |
+| **Data quality** | `MEDALLION_QUALITY_ENABLED` (chart `medallion.quality`) | *Is the produced data good enough?* | after the compute writes the downstream dataset, the stage runner runs cheap, exact assertions on it (`row_count_positive`, `not_null` on the key column) via `services/medallion/services/quality.py` | `DROP` (deterministically bad) + `medallion.stage.quality_blocked`; the failed run + its `dataQualityAssertions` facet are **still emitted** so the bad batch is auditable in lineage |
 
 Both gate the **same act** (promotion) from different angles, and both compose: a stage promotes only when
 it is *authorized* **and** the data *passes quality*. The quality gate requires compute (there is no data to

@@ -1,7 +1,7 @@
 """The catalog SERVICE client — the swap that lets a commit be seen by anything but this process.
 
 `LocalCatalog` records versions in a Python list. In a cluster that means the run lands its data and
-nothing downstream learns of it: the event that wakes a mover is the CATALOG's publication of a new
+nothing downstream learns of it: the event that wakes a stage runner is the CATALOG's publication of a new
 version, so a locally-recorded commit is a commit the cascade cannot ride.
 
 These pin the wire contract against `respx`, which intercepts at the httpx transport rather than by

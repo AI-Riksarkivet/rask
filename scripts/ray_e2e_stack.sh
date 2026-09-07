@@ -5,8 +5,8 @@
 # regress.
 #
 # WHY A SEPARATE JOB (not folded into e2e_stack.sh): the train head shares MEDALLION_RAY_ENABLED with
-# the movers, so enabling it flips the whole cascade into stage-compute-via-ray. Flipping that ON mid-run
-# against the openbao-ON core stack races the OpenBao secret store and hangs the movers (secret 500 →
+# the stage runners, so enabling it flips the whole cascade into stage-compute-via-ray. Flipping that ON mid-run
+# against the openbao-ON core stack races the OpenBao secret store and hangs the stage runners (secret 500 →
 # "waiting on port 8000"). This job instead deploys the Ray-ON recipe FROM THE START, and uses the
 # governed-union recipe that is proven to work with ray on: openbao OFF (plaintext env secrets, so no
 # secret race) + compute + ray + quality + auth + fga. Observability stays OFF to fit a 2-core/7 GB
@@ -33,9 +33,9 @@ cleanup() {
       echo "--- NOT READY: $p"; kubectl describe pod "$p" 2>/dev/null | sed -n '/Events:/,$p' | head -15 || true
       kubectl logs "$p" --all-containers --tail=40 2>/dev/null | head -40 || true
     done
-    # Cascade state: on a fixture timeout the movers stay Running (so the loop above misses them), yet the
+    # Cascade state: on a fixture timeout the stage runners stay Running (so the loop above misses them), yet the
     # cascade may have stalled at a Ray stage job. Dump the ignition + stage-submit trail + head job list.
-    echo "--- cascade trail (medallion-producer ignition + movers' ray stage jobs) ---"
+    echo "--- cascade trail (medallion-producer ignition + stage runners' ray stage jobs) ---"
     for c in medallion-producer bronze-to-silver silver-to-gold; do
       echo "  [$c]"
       kubectl logs -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$c" \

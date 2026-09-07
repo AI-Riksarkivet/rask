@@ -2503,7 +2503,7 @@ export interface paths {
          *     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
          *
          *     Training-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``
-         *     record the version-pinned upstream this merge DERIVED FROM (a mover's merge from ``source@N`` — the
+         *     record the version-pinned upstream this merge DERIVED FROM (a stage runner's merge from ``source@N`` — the
          *     reproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries
          *     producer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.
          *
@@ -8269,7 +8269,7 @@ export interface components {
          *
          *     Field semantics — including why ``task`` must name a REGISTERED task rather than a program — live
          *     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
-         *     into and the one the mover reads. One definition, two services.
+         *     into and the one the stage runner reads. One definition, two services.
          */
         TransformSpecRequest: {
             /**

@@ -446,7 +446,7 @@ class LineageRepository:
         For a training run this is *which feature versions produced this model* — #115 D1's
         reproducibility claim, previously reachable only by Cypher. Ungoverned here (name+version only);
         the endpoint drops inputs the caller can't see. ``e.version`` is ``""``/absent → ``None`` (an
-        unpinned floating read, e.g. a mover reading its upstream stage without a pin)."""
+        unpinned floating read, e.g. a stage runner reading its upstream stage without a pin)."""
         rows = await fetch(self._pool, self._graph, cy.RUN_INPUTS, {"rid": run_id}, columns=2)
         return RunInputs(
             run_id=run_id,

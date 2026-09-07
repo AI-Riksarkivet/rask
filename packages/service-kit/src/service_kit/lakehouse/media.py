@@ -3,7 +3,7 @@
 The heavy original image stays a referenced blob in bronze; a downstream (silver) stage derives small
 artifacts from it that are cheap to store *inline*: a thumbnail (downscaled PNG) and a fixed-size embedding
 (deterministic pixel features — no ML model). This is the realistic per-stage transform the generic cascade
-mover leaves to a distributed job (see ``compute.py``); here it runs in-process so the medallion demo shows
+stage runner leaves to a distributed job (see ``compute.py``); here it runs in-process so the medallion demo shows
 a real multimodal pipeline end to end.
 
 **WHY THIS IS IN service-kit AND NOT THE MEDALLION SERVICE (B14).** The same three derivers were

@@ -8,10 +8,10 @@ any, so the door has only ever run two assertions. Measured on a table missing a
     no required_columns : 2 assertions  [row_count_positive, not_null]        -> PASSES
     declared            : 5 assertions  [.., column_declared x3]              -> REFUSED on `thumbnail`
 
-This matters most for a change not yet made. The medallion movers carry `requiredColumns` in the chart
-and run the identical assertions locally today; the design deletes that local gate once movers publish,
+This matters most for a change not yet made. The medallion stage runners carry `requiredColumns` in the chart
+and run the identical assertions locally today; the design deletes that local gate once stage runners publish,
 on the grounds that the catalog runs "the identical assertions at the identical seam". It does not —
-not without this — and deleting the mover's gate first would retire the detector silently and turn
+not without this — and deleting the stage runner's gate first would retire the detector silently and turn
 `requiredColumns` into dead config.
 """
 

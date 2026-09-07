@@ -16,7 +16,7 @@ Two rules, and they are different kinds of thing:
   a follow-up in a file this change does not own; ``test_medallion_trigger_guards.py`` pins the
   relation between the grammars meanwhile, so neither can drift unnoticed.)
 * :func:`uri_within` is a SECURITY boundary. A trigger may NAME the upstream it wants read (I2 —
-  resolve the location through the catalog, never compose a path), but the mover opens that name with
+  resolve the location through the catalog, never compose a path), but the stage runner opens that name with
   its OWN object-store credentials, so it is honoured only inside the storage root the stage already
   resolved. Unbounded, the field is a read primitive for everything that credential can reach.
 """
@@ -84,7 +84,7 @@ def uri_within(base: str, candidate: str) -> bool:
 
 
 class StageTrigger(BaseModel):
-    """One medallion stage trigger (DATA-CONTRACT §7.2) as a mover is willing to read it.
+    """One medallion stage trigger (DATA-CONTRACT §7.2) as a stage runner is willing to read it.
 
     ``extra="ignore"`` is the additive-only evolution rule (§7.4): a publisher may add optional fields
     — ``from_version``/``to_version`` already ride this payload — and an older consumer must tolerate
@@ -127,17 +127,17 @@ class StageTrigger(BaseModel):
     from_uri: str | None = None
 
     #: S1: the Ray stage job for this trigger reached SUCCEEDED, so the destination is written and the
-    #: mover may measure it. Set ONLY by `medallion.workflow.publish_stage_ready`, after a terminal
+    #: stage runner may measure it. Set ONLY by `medallion.workflow.publish_stage_ready`, after a terminal
     #: status read — never by an upstream producer, which has no way to know.
     #:
     #: This is a CLAIM like every other field on this model, and it is deliberately not treated as
     #: privileged: the re-published trigger re-enters through this same guard, and the worst a forged
-    #: `ray_job_done` can do is make the mover measure a destination early — precisely the pre-S1
+    #: `ray_job_done` can do is make the stage runner measure a destination early — precisely the pre-S1
     #: behaviour, not an escalation. What it must NOT do is skip the submit silently, which is why the
     #: handler logs the branch it took.
     ray_job_done: bool = False
     #: Rows the DESTINATION held before the Ray job was dispatched — pass 1's answer to a question
-    #: pass 2 can no longer ask. The Ray job writes out-of-process, so by the time the mover measures,
+    #: pass 2 can no longer ask. The Ray job writes out-of-process, so by the time the stage runner measures,
     #: the predecessor is gone and `WriteResult.previous_row_count` is None; the band then reads that
     #: as FIRST_PROMOTION and asks about EVERY Ray promotion, forever. Carried here for the same
     #: reason `event_time` is (R26): pass 1 owns a fact pass 2 needs and hands it forward.

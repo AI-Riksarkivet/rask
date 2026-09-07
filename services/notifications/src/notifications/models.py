@@ -70,10 +70,10 @@ class NotificationReason(StrEnum):
     #: ingress — `NotificationDelivery` refuses an unknown reason at the door — and reachable only when
     #: reading back state a NEWER build stored. See `InboxPointer._tolerate_a_newer_vocabulary`.
     UNKNOWN = "unknown"
-    #: v5 — the human whose work a SERVICE-authored run is doing. The medallion's movers author with a
+    #: v5 — the human whose work a SERVICE-authored run is doing. The medallion's stage runners author with a
     #: chart role literal (`data_eng`/`analyst`/`htr`/`ray`), which is a truthful statement about who ran
     #: the stage and a useless inbox address — so a failed cascade reached nobody. Distinct from AUTHOR
-    #: rather than a substitution: the mover really did run it, and overwriting attribution to fix
+    #: rather than a substitution: the stage runner really did run it, and overwriting attribution to fix
     #: targeting would trade one wrong answer for another.
     ORIGINATOR = "originator"
     #: v4 — annotation work. Same targeting rule as the grant pair (the event NAMES its subject), one

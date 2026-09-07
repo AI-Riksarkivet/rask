@@ -72,10 +72,10 @@ EXTERNAL_KIND = 3
 #: The stamp still answers for a dataset written before this landed, and must: a pointer that cannot
 #: be resolved is a blob that cannot be read. A scanned descriptor's `blob_uri` is BASE-RELATIVE, and
 #: carrying one into another dataset verbatim is refused with "outside registered external bases", so
-#: a mover cannot forward a pointer it cannot resolve.
+#: a stage runner cannot forward a pointer it cannot resolve.
 #:
 #: Stamped into the SCHEMA rather than kept in config for the same reason #21 puts the lineage
-#: coordinates there: the data becomes self-describing, and a mover that has never met the service
+#: coordinates there: the data becomes self-describing, and a stage runner that has never met the service
 #: that wrote it can still resolve the pointer from the dataset alone. Verified to survive both
 #: `create` and `append`.
 EXTERNAL_BASE_KEY = b"rask.blob.external_base"
@@ -107,7 +107,7 @@ def _registered_bases(ds: lance.LanceDataset) -> dict[int, object] | None:
     Reached through `_ds` because pylance exposes no public wrapper — the same private tier
     `service_kit.lakehouse.features` already relies on for `serialized_manifest()`. Guarded rather
     than assumed: a pylance upgrade that renames or removes it must degrade to the stamp, not break
-    every blob-carrying mover.
+    every blob-carrying stage runner.
     """
     accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
     if accessor is None:
@@ -169,7 +169,7 @@ def read_aligned_table(
     return 2 payloads — so pairing their output positionally against a second scan of the tabular columns
     is length-mismatched the moment ONE payload is null. That is precisely the medallion's own
     "a failed harvest, a skipped page" case, and it turned a single null page into an opaque
-    ``ArrowInvalid: Column 1 named payload expected length 3 but got length 2`` that the movers route as a
+    ``ArrowInvalid: Column 1 named payload expected length 3 but got length 2`` that the stage runners route as a
     TRANSIENT failure (RETRY storm → DLQ) even though redelivery can never fix it.
 
     ``blob_handling="all_binary"`` is the read path that preserves logical cardinality (measured: 5 rows in,

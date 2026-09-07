@@ -7,7 +7,7 @@
      destroyed as poison rather than relayed. (The catalog now refuses to boot with the two prefixes
      equal, for exactly that reason.)
 
-     What that cost: `table_published` is the ONLY thing that wakes silver->gold — the mover does not
+     What that cost: `table_published` is the ONLY thing that wakes silver->gold — the stage runner does not
      fire the next topic and the medallion plane runs no cron, so nothing re-reads the `published` tag.
      One lost publish ended the cascade with the tag advanced, the route 200 and every pod green.
 

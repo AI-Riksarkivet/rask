@@ -192,7 +192,7 @@ first two ride the same `WROTE` edge as `version`/`schema`; the third rides the 
   measured write; a dummy emit omits it, so we never claim numbers we didn't measure. Surfaced as
   `ProducerInfo.{row_count,size_bytes}`.
 - **`dataQualityAssertions`** (GOAL 2) — the **validator gate**'s checks on the produced data
-  (`row_count_positive`, `not_null` on the key column). The medallion mover emits this when
+  (`row_count_positive`, `not_null` on the key column). The medallion stage runner emits this when
   `MEDALLION_QUALITY_ENABLED`, and a *failed* assertion **blocks promotion** (the next stage is not
   triggered) — so a `quality_passed=false` edge *with a real version* is the durable, auditable record of a
   batch the gate stopped. This composes with the OpenFGA gate: **FGA decides who may promote, quality
@@ -215,8 +215,8 @@ visible verbatim in the `GET /events` feed — the graph promotes the headline f
 ## Closing the loop: gold embeds its lineage as JSONB (demo driver only)
 
 > **Scope:** this is done by the **demo driver** (`scripts/medallion_demo.py: write_gold`), NOT by the
-> deployed event-driven cascade — the `silver→gold` mover emits provenance to the graph but does not (yet)
-> embed the JSONB column. Making the mover embed it when `medallion.compute` is on is a tracked follow-up.
+> deployed event-driven cascade — the `silver→gold` stage runner emits provenance to the graph but does not (yet)
+> embed the JSONB column. Making the stage runner embed it when `medallion.compute` is on is a tracked follow-up.
 
 The final `aggregate_gold` step writes the **whole upstream provenance** **into the gold Lance file
 itself** as a JSONB `lineage` column (Lance's `pa.json_()` / `lance.json` extension type — stored as

@@ -769,7 +769,7 @@ def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
 
 def test_the_catalog_DOOR_accepts_a_declared_cardinality() -> None:
     """The last link. `TransformSpecRequest` is a separate `extra="forbid"` model, so a cardinality
-    the mover honours and the spec validates is still unreachable until the DOOR accepts it — and a
+    the stage runner honours and the spec validates is still unreachable until the DOOR accepts it — and a
     forbidden extra is a 422, so the caller is told the field does not exist."""
     from catalog.schemas import TransformSpecRequest, TransformSpecResponse
 

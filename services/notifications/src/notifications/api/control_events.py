@@ -164,7 +164,7 @@ def _review_instance(event: CatalogControlEvent) -> str | None:
     if event.action != _REVIEW_ACTION:
         return None
     token = event.extra.get("token") if isinstance(event.extra, dict) else None
-    # The mover derives the instance the same way (`medallion.api.promotions.instance_for`). Recomputed
+    # The stage runner derives the instance the same way (`medallion.api.promotions.instance_for`). Recomputed
     # rather than shared: the two services publish across a bus and must not import each other, and the
     # shape is pinned on both sides by tests.
     return f"promotion-{token}" if isinstance(token, str) and token.strip() else None

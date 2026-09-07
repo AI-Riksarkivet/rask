@@ -100,17 +100,17 @@ RAY-LANCE ALL OK
 
 ## Event-driven cascade integration (wired, not just a demo)
 
-The medallion movers can run their stage compute as a real `ray job submit` **in response to their Dapr/NATS
+The medallion stage runners can run their stage compute as a real `ray job submit` **in response to their Dapr/NATS
 cascade trigger** — gated behind `medallion.ray` (default off; requires `medallion.compute` + a running Ray
 cluster). Fake-Ray in-process stays the default.
 
 - **Flag:** `MEDALLION_RAY_ENABLED` (+ `MEDALLION_RAY_ADDRESS`, default `http://ray-lance-head:8265`),
   chart value `medallion.ray`.
-- **Submit path:** `services/medallion/services/ray_submit.py` — the mover POSTs to the **Ray Jobs REST API**
-  (`/api/jobs/`) with `httpx` (no `ray` package in the mover image), passing `FROM_URI/TO_URI/STAGE` + S3
+- **Submit path:** `services/medallion/services/ray_submit.py` — the stage runner POSTs to the **Ray Jobs REST API**
+  (`/api/jobs/`) with `httpx` (no `ray` package in the stage runner image), passing `FROM_URI/TO_URI/STAGE` + S3
   creds as `runtime_env` env-vars, then polls `GET /api/jobs/{id}` under an `asyncio.timeout`. On success the
-  mover `measure()`s the written dataset so the OpenLineage WROTE edge is **identical** to the in-process
-  path; on failure/timeout it raises → the mover returns RETRY and Dapr redelivers (the job is
+  stage runner `measure()`s the written dataset so the OpenLineage WROTE edge is **identical** to the in-process
+  path; on failure/timeout it raises → the stage runner returns RETRY and Dapr redelivers (the job is
   overwrite-idempotent).
 - **The job:** `scripts/ray_stage_job.py` (baked in the image) has **two paths**, chosen by whether the
   upstream carries a blob-v2 column:
@@ -145,8 +145,8 @@ cardinality-preserving route — `service_kit.lakehouse.blobs.read_aligned_table
 `scanner(blob_handling="all_binary")` — for the same reason.
 
 **Live-proven on kind (pre-R23 shape, kept as history):** (tabular) `/produce` → the then raw-to-bronze
-mover (ray on) submitted a Ray job that produced `bronze` (`stage=bronze`, 2.2, `stable_row_ids=True`)
-with real measured stats — that mover has since collapsed into the producer's bronze ingest head (R23:
+stage runner (ray on) submitted a Ray job that produced `bronze` (`stage=bronze`, 2.2, `stable_row_ids=True`)
+with real measured stats — that stage runner has since collapsed into the producer's bronze ingest head (R23:
 the cascade's first Ray-backed hop is now bronze→silver). (media, 2026-07-13) `/ingest-media` (ray on) → the media stage ran
 **as a Ray job** (no more `medallion_ray_blob_fallback`) and `silver-media` came back with `payload` still a
 blob-v2 column **plus** derived `thumbnail` + `embedding`. With the flag off, `make e2e-medallion`
@@ -157,5 +157,5 @@ blob-v2 column **plus** derived `thumbnail` + `embedding`. With the flag off, `m
 This is the production shape of the `compute.py` seam: `read → transform → write → version` becomes a real
 `ray job submit` instead of an in-process call. It also directly answers the "cascade doesn't parallelize"
 limitation — Lance *does* parallelize writes (fragment-parallel + single commit); our in-process
-`mode="overwrite"` was the placeholder, not a Lance limit. The mover-submits-Ray-jobs wiring above is done;
+`mode="overwrite"` was the placeholder, not a Lance limit. The stage runner-submits-Ray-jobs wiring above is done;
 the **KubeRay operator** (a `RayCluster` CR) replacing the raw Ray head is the rask-merge step.

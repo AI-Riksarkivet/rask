@@ -10,18 +10,18 @@ nothing else:
   * an unsafe `project` — a tenant id shaped like a path traversal, which is the same
     someone-is-publishing-what-they-should-not signal `unconfined_uri` exists to raise;
   * a tenant trigger arriving with registry resolution switched off — a DEPLOYMENT gap that
-    permanently halts every tenant cascade on this mover while nothing is red;
+    permanently halts every tenant cascade on this stage runner while nothing is red;
   * a lane whose identity cannot be resolved — an operator's declaration mistake, likewise permanent.
 
 WHY A COUNTER AND NOT A LINEAGE EVENT. Ruled 2026-08-16 (`docs/DECISIONS.md`, "Lineage records what
 happened to DATA; an authorization denial is not a data event"), against a proposal to emit an
 OpenLineage FAIL from exactly these branches: nothing is read and nothing is written, so a FAIL would
-mint provenance for a run that never ran, and a permanently misconfigured mover would emit one on
+mint provenance for a run that never ran, and a permanently misconfigured stage runner would emit one on
 every trigger forever. "A repeating operational condition is a METRIC, not an event." This is that
 metric, with the closed reason vocabulary the counter already requires.
 
 AND ONE OF THE SIX WAS NOT A DROP AT ALL. `resolve_transform_async` — the first thing the handler
-calls after the shape guard — raises `UndeclaredTransformError` for a mover that names a transform
+calls after the shape guard — raises `UndeclaredTransformError` for a stage runner that names a transform
 the catalog has no declaration for, or that cannot be looked up at all (no control root). That call
 sits outside every `try`, so the exception escapes into the subscription route: precisely the
 "a raising handler poisons the subscription" failure DATA-CONTRACT §7.3 and this module's own
@@ -81,7 +81,7 @@ async def test_an_unsafe_project_is_counted_not_only_logged(refusals: list[tuple
 @pytest.mark.asyncio
 async def test_a_tenant_trigger_with_routing_OFF_is_counted(refusals: list[tuple[str, str]], tmp_path: Path) -> None:
     """Fail-closed is correct and PERMANENT: redelivery cannot configure a registry, so every tenant
-    cascade on this mover stops here until an operator acts — which they cannot do unprompted."""
+    cascade on this stage runner stops here until an operator acts — which they cannot do unprompted."""
     status = await transform.handle_stage(cast(Any, _Dapr()), _settings(tmp_path), {"data": {"token": "t", "project": "acme"}})
 
     assert status == {"status": "DROP"}
@@ -111,14 +111,14 @@ async def test_a_declared_lane_with_no_namespace_is_counted(refusals: list[tuple
     status = await transform.handle_stage(cast(Any, _Dapr()), settings, {"data": {"token": "t", "project": "acme"}})
 
     assert status == {"status": "DROP"}
-    assert refusals == [("bronze->silver", "unresolvable_lane")], f"an undeclared-shaped lane halted the mover silently: {refusals}"
+    assert refusals == [("bronze->silver", "unresolvable_lane")], f"an undeclared-shaped lane halted the stage runner silently: {refusals}"
 
 
 @pytest.mark.asyncio
 async def test_an_UNDECLARED_transform_DROPS_rather_than_poisoning_the_subscription(refusals: list[tuple[str, str]], tmp_path: Path) -> None:
     """The one that was not a drop.
 
-    A mover naming a transform it cannot resolve raises `UndeclaredTransformError` out of
+    A stage runner naming a transform it cannot resolve raises `UndeclaredTransformError` out of
     `handle_stage`. Nothing in the handler catches it, so the subscription route answers 500 and the
     broker redelivers into the identical refusal forever — a deterministic condition being retried,
     which is the failure mode the validate-or-DROP rule exists to prevent. It is also the loudest

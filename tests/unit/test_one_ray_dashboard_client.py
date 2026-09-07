@@ -11,7 +11,7 @@ pool in `ray_submit` was created for:
 Those three run inside durable workflow ACTIVITIES: `poll_stage_job` and `poll_train_job` are called
 on every polling tick of every running stage, so the cost is one TCP connect, one TLS handshake and
 one pool teardown per tick, on the hottest path the cascade has — and it is paid beside a pooled
-client for the same host that the mover's lifespan already opens and closes.
+client for the same host that the stage runner's lifespan already opens and closes.
 
 `ray_submit.ray_client()` is that pool, and it is not merely "build once": it is keyed on the
 configured address, so a repointed `MEDALLION_RAY_ADDRESS` rebuilds rather than silently answering

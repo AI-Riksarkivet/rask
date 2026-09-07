@@ -12,7 +12,7 @@ a named person's inbox. Setting `author` would therefore be silently discarded w
 
 **A non-personal principal is dropped rather than carried.** A role literal (`ray`, `data_eng`) or a
 wildcard is not an address: carrying it writes into an inbox actor literally named `ray`. That is the
-live defect in the medallion movers, and this lane must not reproduce it. Dropping the field loses
+live defect in the medallion stage runners, and this lane must not reproduce it. Dropping the field loses
 nothing — the event still records the run for the graph, it simply targets nobody, which is the
 honest outcome for a run no person asked for.
 

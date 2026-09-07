@@ -91,7 +91,7 @@ def test_a_healthy_app_is_untouched() -> None:
 #: app that got its handlers from a factory — so it is now driven through the real apps.
 DRAINING_APPS = [
     ("medallion-producer", "medallion.producer"),
-    ("medallion-mover", "medallion.mover"),
+    ("medallion-stage runner", "medallion.stage_runner"),
     ("lineage", "lineage.main"),
     ("maintenance", "maintenance.service"),
     ("catalog", "catalog.main"),

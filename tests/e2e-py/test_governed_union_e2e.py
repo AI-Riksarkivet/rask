@@ -1,6 +1,6 @@
 """Governed FULL-UNION e2e — the shipped combination, driven live (§7's last coverage hole).
 
-Every flag at once: **OIDC auth ON + OpenFGA ON (catalog, lineage reads, movers) + compute ON +
+Every flag at once: **OIDC auth ON + OpenFGA ON (catalog, lineage reads, stage runners) + compute ON +
 quality gate ON**, against the real kind stack (Dapr/NATS/AGE/RustFS/Dex/OpenFGA). The recurring bug
 class here is the never-driven union — each feature green in isolation while the composition breaks —
 so this suite asserts, live:
@@ -54,17 +54,17 @@ DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 FGA = os.environ.get("LANCE_E2E_FGA", "")
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
-# The bronze→silver mover, for the quality-block direct drive (movers have no k8s Service — the make
+# The bronze→silver stage runner, for the quality-block direct drive (stage runners have no k8s Service — the make
 # target port-forwards the deployment) + its app token (the same guard its sidecar delivery carries).
-MOVER_URL = os.environ.get("LANCE_E2E_MOVER_URL", "")
-MOVER_TOKEN = os.environ.get("LANCE_E2E_MOVER_TOKEN", "")
+STAGE_RUNNER_URL = os.environ.get("LANCE_E2E_STAGE_RUNNER_URL", "")
+STAGE_RUNNER_TOKEN = os.environ.get("LANCE_E2E_STAGE_RUNNER_TOKEN", "")
 S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
 S3_BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "")
 S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "")
 #: The governed catalog — the only thing that knows where a tier physically lives (rule I2). The
 #: quality-block leg used to COMPOSE `s3://<bucket>/medallion/bronze`, which is the SINGLE-TENANT
-#: path; on a project estate the mover reads the project's own warehouse root, so the leg corrupted a
+#: path; on a project estate the stage runner reads the project's own warehouse root, so the leg corrupted a
 #: dataset nothing in the cascade opens and then waited for a verdict on a batch nobody processed.
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 
@@ -75,7 +75,7 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 #: read `warehouse:lakehouse-wh` for ANY project estate; the runner discovers the project's real
 #: warehouse (`acme-bucket` here) and exports it as `LANCE_E2E_WAREHOUSE`. Naming the wrong one is not
 #: a near-miss: `_owner_tuples` revokes `owner` on it, and OpenFGA fails the whole delete BATCH when a
-#: listed tuple does not exist — so test 2 revoked NOTHING, the mover kept `owner` on the warehouse it
+#: listed tuple does not exist — so test 2 revoked NOTHING, the stage runner kept `owner` on the warehouse it
 #: really holds, owner outranked the writer rung, and the "denied" drive completed. The +12s negative
 #: passed anyway because the Ray stage had not finished yet; only the post-redelivery re-check saw it.
 #: `LANCE_E2E_FGA_WAREHOUSE` stays the explicit override for an estate whose FGA warehouse differs.
@@ -84,14 +84,14 @@ WAREHOUSE = (
     or (f"warehouse:{os.environ['LANCE_E2E_WAREHOUSE']}" if os.environ.get("LANCE_E2E_WAREHOUSE") else "")
     or ("warehouse:lakehouse-wh" if os.environ.get("LANCE_E2E_PROJECT") else "warehouse:lance_catalog")
 )
-#: the silver→gold mover's validator rung, on the tier the drive actually targets (can_promote).
+#: the silver→gold stage runner's validator rung, on the tier the drive actually targets (can_promote).
 GOLD_VALIDATOR = {
     "user": "user:service-silver-to-gold",
     "relation": "validator",
     "object": "namespace:{}".format(f"{os.environ.get('LANCE_E2E_PROJECT')}-gold" if os.environ.get("LANCE_E2E_PROJECT") else "gold"),
 }
-#: the bronze→silver mover's writer rung — revoked in test 2's writer-gate sub-phase (can_create_table).
-#: On a tenant drive this is the NAMESPACE rung, not the warehouse one: the mover also holds
+#: the bronze→silver stage runner's writer rung — revoked in test 2's writer-gate sub-phase (can_create_table).
+#: On a tenant drive this is the NAMESPACE rung, not the warehouse one: the stage runner also holds
 #: `owner` on the warehouse from `seed_ownership`, so revoking a warehouse-level writer denies nothing.
 SILVER_WRITER = (
     {
@@ -106,7 +106,7 @@ SILVER_WRITER = (
 
 #: THE OWNER TUPLES `seed_ownership` WRITES, which a single-rung revoke cannot see past.
 #:
-#: A mover that CREATED a table is its owner, and owner outranks the rung the deny is aiming at.
+#: A stage runner that CREATED a table is its owner, and owner outranks the rung the deny is aiming at.
 #: Measured live 2026-08-25 with GOLD_VALIDATOR deleted:
 #:     warehouse:lakehouse-wh        user:service-silver-to-gold  owner
 #:     table:lakehouse-gold$catalog  user:service-silver-to-gold  owner
@@ -129,7 +129,7 @@ def _owner_tuples(user: str, namespace: str, table: str) -> list[dict[str, str]]
 
         user:service-bronze-to-silver -- owner --> namespace:acme-silver
 
-    so the revoke left the mover fully privileged and the leg reported "gate NOT enforcing" about a
+    so the revoke left the stage runner fully privileged and the leg reported "gate NOT enforcing" about a
     cascade nothing had denied. It was omitted because OpenFGA fails a whole delete BATCH when any
     listed tuple is absent, which made a speculative entry cost every other revoke in the call. That
     hazard is gone: `_tuples` now sends one tuple per request, so a tuple this estate happens not to
@@ -235,7 +235,9 @@ def _tuples(fga_store: tuple[str, str], *, writes: list[dict] | None = None, del
         if resp.status_code == 200:
             return
         message = resp.json().get("message", "") if resp.status_code == 400 else ""
-        assert "already exists" in message or "did not exist" in message or "does not exist" in message, f"OpenFGA write failed ({resp.status_code}): {resp.text}"
+        assert "already exists" in message or "did not exist" in message or "does not exist" in message, (
+            f"OpenFGA write failed ({resp.status_code}): {resp.text}"
+        )
 
     # ONE TUPLE PER CALL, and that is the whole point. OpenFGA fails the WHOLE batch when any listed
     # tuple is absent, and the idempotency tolerance above cannot tell that apart from "the one tuple I
@@ -339,7 +341,7 @@ def _gold_runs(lineage: str, headers: dict[str, str]) -> set[str]:
     if resp.status_code != 200:
         return set()
     produced = {p["run_id"] for p in resp.json().get("producers", [])}
-    # COMPLETED runs only. With mover-side FGA on, a denied stage EMITS a FAIL run rather than
+    # COMPLETED runs only. With stage runner-side FGA on, a denied stage EMITS a FAIL run rather than
     # vanishing — auditable in lineage, the same rule the quality gate follows — so counting every run
     # that touched gold makes a correctly-denied promotion look like a leak. The property both halves
     # of the deny/regrant argument need is whether gold was SUCCESSFULLY produced.
@@ -385,7 +387,7 @@ def _producer_for(lineage: str, headers: dict[str, str], dataset: str, run_id: s
 
 #: The tenant this drive runs for. NOT optional on a publish-driven estate: with
 #: `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
-#: carries a project because the mover cannot resolve its tiers without one. A PROJECTLESS produce
+#: carries a project because the stage runner cannot resolve its tiers without one. A PROJECTLESS produce
 #: therefore publishes silver and GOLD NEVER FIRES — measured here 2026-08-25 as
 #: {'lance_ray_ingest': 'COMPLETE', 'embed_features': 'COMPLETE', 'aggregate_gold': None}, which the
 #: bare message reported as a broken cascade against a cascade working perfectly for a tenant. The
@@ -509,7 +511,7 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
     assert silver is not None
     assert silver["row_count"], f"no measured rows — is medallion.compute on? {silver}"
     assert silver["quality_passed"] is True, silver
-    # Batch 21 (DATA-CONTRACT.md declared-columns clause): the demo movers DECLARE consumer
+    # Batch 21 (DATA-CONTRACT.md declared-columns clause): the demo stage runners DECLARE consumer
     # dependencies (requiredColumns: id on the tabular stages), so the silver run carries a
     # column_declared verdict per declared column alongside the compute-quality pair.
     assert {a["assertion"] for a in silver["quality_assertions"]} == {
@@ -541,8 +543,8 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
 def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], alice: dict[str, str], fga_store: tuple[str, str]) -> None:
     lance_ray, lineage = stack
 
-    # -- sub-phase A: WRITER-gate deny — revoke the bronze→silver mover's writer rung. The cascade must
-    # land bronze (the producer's own ingest, ungated by the mover rung — R23) and stop there: silver's
+    # -- sub-phase A: WRITER-gate deny — revoke the bronze→silver stage runner's writer rung. The cascade must
+    # land bronze (the producer's own ingest, ungated by the stage runner rung — R23) and stop there: silver's
     # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
     # ever proven.
     silver_owner = _owner_tuples("user:service-bronze-to-silver", _ds("silver"), _ds("silver$features"))
@@ -567,7 +569,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
         # First look at the negative (the definitive still-absent re-check comes after the positive
         # control below, once the redelivery window has MEASURABLY elapsed).
         time.sleep(12)
-        # NOT COMPLETE, rather than absent. With mover-side FGA on (`medallion.fgaEnabled`, this
+        # NOT COMPLETE, rather than absent. With stage runner-side FGA on (`medallion.fgaEnabled`, this
         # suite's own documented precondition) a denied stage EMITS a FAIL run instead of vanishing —
         # the same rule the quality gate follows, "the failed run is still emitted, auditable in
         # lineage". Measured 2026-08-25: state FAIL where this asserted None. The property the deny
@@ -581,8 +583,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     gold_owner = _owner_tuples("user:service-silver-to-gold", _ds("gold"), _ds("gold$catalog"))
     _tuples(fga_store, deletes=[GOLD_VALIDATOR, *gold_owner])
     assert not _check(fga_store, "user:service-silver-to-gold", "can_promote", f"namespace:{_ds('gold')}"), (
-        "the validator revoke did not take: service-silver-to-gold still holds can_promote on "
-        f"namespace:{_ds('gold')}"
+        f"the validator revoke did not take: service-silver-to-gold still holds can_promote on namespace:{_ds('gold')}"
     )
     try:
         gold_before = _quiesced_gold(lineage, alice)
@@ -597,7 +598,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
         )
         # The gold trigger publishes at silver COMPLETE — the second redelivery clock starts here.
         gold_denied_at = time.monotonic()
-        # … and the silver→gold mover, denied can_promote, DROPs BEFORE any emit: NO new gold run lands.
+        # … and the silver→gold stage runner, denied can_promote, DROPs BEFORE any emit: NO new gold run lands.
         time.sleep(12)
         assert _gold_runs(lineage, alice) == gold_before, (
             f"a new gold run appeared despite the revoked validator tuple — gate NOT enforcing (new: {_gold_runs(lineage, alice) - gold_before})"
@@ -649,8 +650,8 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
 
 
 def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str], alice: dict[str, str]) -> None:
-    if not (MOVER_URL and S3_ENDPOINT and S3_ACCESS_KEY and S3_SECRET_KEY):
-        pytest.skip("set LANCE_E2E_MOVER_URL + LANCE_E2E_S3_* for the quality-block drive")
+    if not (STAGE_RUNNER_URL and S3_ENDPOINT and S3_ACCESS_KEY and S3_SECRET_KEY):
+        pytest.skip("set LANCE_E2E_STAGE_RUNNER_URL + LANCE_E2E_S3_* for the quality-block drive")
     import lance
     import pyarrow as pa
 
@@ -695,15 +696,15 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     # Deliver the stage trigger exactly as the sidecar would (same route, same app-token guard).
     token = uuid.uuid4().hex[:12]
     resp = requests.post(
-        f"{MOVER_URL.rstrip('/')}/medallion-event",
+        f"{STAGE_RUNNER_URL.rstrip('/')}/medallion-event",
         # BARE ids PLUS `project`, which is the shape `publication_trigger` actually publishes:
-        # `accepted_input_names` compares `dataset` against the mover's own `MEDALLION_FROM_DATASET`
+        # `accepted_input_names` compares `dataset` against the stage runner's own `MEDALLION_FROM_DATASET`
         # (`bronze$events`, unqualified), and `_qualified` re-applies the project at RUNTIME from the
-        # separate field. Sent qualified and project-less, the mover answered `medallion_stage_other_lane`
+        # separate field. Sent qualified and project-less, the stage runner answered `medallion_stage_other_lane`
         # — a ROUTING drop, which `_DROP` renders identically to a governance block, so the assertion
         # below passed on a trigger that never reached the quality gate at all.
         # `from_uri` NAMES THE UPSTREAM, which is rule I2 and what `publication_trigger` really sends.
-        # Without it the mover COMPOSES `{project root}/medallion/bronze`, while the catalog vends the
+        # Without it the stage runner COMPOSES `{project root}/medallion/bronze`, while the catalog vends the
         # flat `{project root}/<hash>_<ns>$<name>` this leg just corrupted — two different datasets, so
         # the gate read clean rows and answered SUCCESS on a batch the suite believed it had poisoned.
         # `_confine_from_uri` accepts it because the vended location sits inside the project's own
@@ -717,13 +718,13 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
                 "from_uri": bronze_uri,
             }
         },
-        headers={"dapr-api-token": MOVER_TOKEN},
+        headers={"dapr-api-token": STAGE_RUNNER_TOKEN},
         timeout=180,
     )
     # THIS ACK CANNOT CARRY THE VERDICT ON THE RAY LANE, which is the lane the estate runs. Pass 1
     # only DISPATCHES to the stage workflow and answers SUCCESS; the gate runs at pass 2, when the
-    # workflow wakes the mover after the Ray job goes terminal, and that pass answers the SIDECAR.
-    # Measured 2026-09-06: the direct drive returned SUCCESS while the mover logged
+    # workflow wakes the stage runner after the Ray job goes terminal, and that pass answers the SIDECAR.
+    # Measured 2026-09-06: the direct drive returned SUCCESS while the stage runner logged
     # `medallion_quality_blocked` twenty seconds later, for this very token.
     #
     # DROP is still the right answer on the in-process lane, where the gate runs inside this call. So
@@ -789,7 +790,7 @@ def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict
     token = resp.json()["token"]
 
     # project="" — the media lane is estate-only, not project-qualified. `seed_medallion_fga.sh` says
-    # so outright ("media lanes stay estate-only — #84 scope") and the deployed mover targets
+    # so outright ("media lanes stay estate-only — #84 scope") and the deployed stage runner targets
     # `silver-media$features` verbatim, so its runs carry no project to seed with.
     ingest_rid = _run_id_for("ingest_media", token, project="")
     derive_rid = _run_id_for("derive_media", token, project="")

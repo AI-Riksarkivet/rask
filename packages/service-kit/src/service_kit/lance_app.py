@@ -8,7 +8,7 @@ Three factories, three planes, and the split is deliberate rather than accidenta
   mount at the root; config is ``MediaSettings``; CORS must expose the Range headers a browser needs
   to seek video.
 * this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
-  ``/produce``, ``/movers/...``), config is each service's own ``*Settings``, and the middleware order
+  ``/produce``, ``/stage runners/...``), config is each service's own ``*Settings``, and the middleware order
   is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
   the others do not.
 
@@ -32,7 +32,7 @@ identical in all of them:
 4. ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
    ``setup_logging``'s filter reads — so a caller can quote an id from a failed request and an
    operator can grep for it. PURE ASGI, so it passes streaming bodies through untouched, which is what
-   makes it safe on a plane that serves Arrow IPC. The medallion MOVER had no request-id layer at all
+   makes it safe on a plane that serves Arrow IPC. The medallion STAGE RUNNER had no request-id layer at all
    before this factory; that is the drift five copies produced.
 5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
 

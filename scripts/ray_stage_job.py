@@ -1,12 +1,12 @@
 """Ray Data stage-transform job for the EVENT-DRIVEN medallion cascade.
 
-A medallion mover submits this via the Ray Jobs REST API (services/medallion/services/ray_submit.py) IN
+A medallion stage runner submits this via the Ray Jobs REST API (services/medallion/services/ray_submit.py) IN
 RESPONSE TO its Dapr cascade trigger — the production-shape replacement for the in-process fake-Ray
 ``compute.transform_stage``. It reads the upstream Lance dataset, stamps a ``stage`` provenance column across
 Ray workers, threads the row-level ``source_rowid`` provenance column (minted at the head from ``_rowid``,
 carried forward — parity with the in-process path), and writes the downstream dataset at file format 2.2 with
 stable row ids (create the target with
-stable ids, then distributed-append — lance_ray.write_lance has no stable-row-ids param). The mover then reads
+stable ids, then distributed-append — lance_ray.write_lance has no stable-row-ids param). The stage runner then reads
 the written version + statistics for the OpenLineage WROTE edge, exactly as the in-process path does.
 
 TWO paths, chosen by whether the upstream carries a blob-v2 column:
@@ -20,7 +20,7 @@ TWO paths, chosen by whether the upstream carries a blob-v2 column:
   drift-pinned (B14 — the pin was the wrong fix, and this docstring described it long after the copies
   were gone). Closes the Phase-3 gap that forced media stages onto the in-process fallback.
 
-Consume-layer provenance (R26): the submitting mover hands over this run's ``LineageDoc`` as
+Consume-layer provenance (R26): the submitting stage runner hands over this run's ``LineageDoc`` as
 ``LINEAGE_JSON``, and every path below writes it as the ``lineage`` column (Arrow JSON → Lance JSONB) in
 the SAME commit as the data — a governed row must never be readable without its provenance, and the
 distributed path must not produce a dataset the in-process path would have stamped. Any upstream
@@ -29,7 +29,7 @@ distributed path must not produce a dataset the in-process path would have stamp
 
 Env: FROM_URI TO_URI STAGE [LINEAGE_JSON]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
      [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
-     when the submitting mover injected its span + OTLP config, the job runs under one root span
+     when the submitting stage runner injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
 """
 # TOKEN-AUTHED CLUSTER (gate 7 / R3): with RAY_AUTH_MODE=token on the head, export
@@ -393,12 +393,12 @@ def main() -> None:
     # Blank means a full run — a first stage has no boundary to be incremental against.
     raw_base = os.environ.get("BASE_VERSION", "").strip()
     base_version = int(raw_base) if raw_base else None
-    # The lane's declared row cardinality. Absent means 1:1, which is what every default mover is and
+    # The lane's declared row cardinality. Absent means 1:1, which is what every default stage runner is and
     # what the old unconditional assertion enforced — so an un-migrated lane behaves exactly as before.
     cardinality = os.environ.get("STAGE_CARDINALITY", "").strip() or ONE_TO_ONE
 
-    # Continue the submitting mover's trace (P3): the whole stage transform runs as one child span of
-    # the mover's medallion.transform span; without a handed-over context it runs exactly as before.
+    # Continue the submitting stage runner's trace (P3): the whole stage transform runs as one child span of
+    # the stage runner's medallion.transform span; without a handed-over context it runs exactly as before.
     with _traced_root("ray.stage_job", {"lance.medallion.stage": stage}):
         _run_stage(from_uri, to_uri, stage, so, lineage=lineage, base_version=base_version, cardinality=cardinality)
 

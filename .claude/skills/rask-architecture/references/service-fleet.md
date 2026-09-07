@@ -21,9 +21,9 @@ though it does call `service_kit.setup_otel` directly, so it is on the shared te
 even while it is off the shared app-factory path.
 
 THE OTHER SEVEN ALSO COME OUT OF A FACTORY NOW, and this paragraph used to say they did not —
-that they "build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`mover.py`". They did, all
+that they "build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`stage_runner.py`". They did, all
 seven, each repeating the same five-step boot in copied comments (docs/DECISIONS.md "The Python estate audit" DUP-12), until
-the mover was found to have lost its request-id layer in the copying. Today: `viewer`, `search` and
+the stage runner was found to have lost its request-id layer in the copying. Today: `viewer`, `search` and
 `annotator` build through `service_kit.media.app.build_media_app` over one shared
 `service_kit.media.lifespan`; `catalog`, `lineage`, the two `medallion` apps and `maintenance` build
 through `service_kit.lance_app.build_lance_service_app`. Both still read their own
@@ -58,21 +58,21 @@ rather than 404** — naming a backend as broken instead of the path as absent. 
 doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all root-mounted and
 token-guarded — that rule bounds what may LAND data, and adding a protocol-specific fourth would make
 that protocol privileged. It does not bound the router surface, which is six: those three plus
-`promotions` (the quality gate's third answer), `mover_ops` (`/movers/*`, workflow terminate) and
-`movers/stages/rerun` (the cascade's edge-addressed repair verb, 2026-09-04). Those three are human
-control rather than ingest, which is why they do not weaken the rule. A workload's stages run as event-triggered movers on the unified
+`promotions` (the quality gate's third answer), `stage_runner_ops` (`/stage runners/*`, workflow terminate) and
+`stage runners/stages/rerun` (the cascade's edge-addressed repair verb, 2026-09-04). Those three are human
+control rather than ingest, which is why they do not weaken the rule. A workload's stages run as event-triggered stage runners on the unified
 Ray cluster (P7b) — the cascade is modality-blind, so this is the same shape for every runner.
 
-**Both bronze lanes converge on one topic, so movers must discriminate.** The events
+**Both bronze lanes converge on one topic, so stage runners must discriminate.** The events
 lane (the producer's `/produce` → `bronze$events`) and the page lane (the ingest
 plane's lander → `bronze$pages`, committed through the catalog) both end in a lineage
-COMPLETE that `/bronze-arrival` turns into `medallion.bronze`, so every mover
+COMPLETE that `/bronze-arrival` turns into `medallion.bronze`, so every stage runner
 subscribed to it sees both arrivals. The trigger carries the `dataset` that was
 actually written (`ingest_trigger._bronze_write_dataset`) and `handle_stage` DROPs a
 name that is not its own `from_dataset` — compared against the RAW setting, never the
 project-qualified one, since the trigger is unqualified for every tenant. An ABSENT
 `dataset` makes no claim and proceeds. Without that check a page arrival drove the
-events mover to completion: a real write plus a COMPLETE attributed to the other lane's
+events stage runner to completion: a real write plus a COMPLETE attributed to the other lane's
 token.
 
 ## Why the fleet services never grow heavy deps

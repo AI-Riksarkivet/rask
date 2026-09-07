@@ -293,7 +293,7 @@ def _http_probed_containers() -> list[tuple[str, dict]]:
     about the HTTP fleet, and widening to them would be a different claim from a different boot
     profile smuggled in under this one.
 
-    The lakehouse plane (`lance.appProbes`: catalog, lineage, maintenance, the producer, the movers)
+    The lakehouse plane (`lance.appProbes`: catalog, lineage, maintenance, the producer, the stage runners)
     is excluded for the same reason and is the finding's own EXEMPLAR — it is what already carries a
     startupProbe. It does keep k8s's 1s probe timeout, which the #136 measurement argues against for
     any pod under memory pressure; that is a separate observation, recorded rather than fixed here.

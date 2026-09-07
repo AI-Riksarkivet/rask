@@ -154,7 +154,7 @@ spec:
               # Its OWN stream rather than a subject space on MEDALLION, because MEDALLION carries tier
               # PUBLICATION events (medallion.<tier>.<dataset>) whose retention and consumer model are
               # unrelated: ingest units are work-queue traffic consumed exactly once, tier events are a
-              # doorbell every mover may read. Dead-lettered units park on `dlq.ingest.tasks`, already
+              # doorbell every stage runner may read. Dead-lettered units park on `dlq.ingest.tasks`, already
               # covered by the DLQ stream above.
               #
               # DELIBERATELY NOT in the durable-drift reconcile loop below — the same structural reason
@@ -210,7 +210,7 @@ spec:
               # stale durables' max_deliver/backoff still match EXP. Before the fix a park was
               # double-counted but visible; after an upgrade WITHOUT this migration it is invisible.
               # Filter-based, not name-based, so it is idempotent and touches nothing current: no
-              # post-rename consumer filters on dlq.medallion.* (new mover DLQs are dlq.<appId>;
+              # post-rename consumer filters on dlq.medallion.* (new stage runner DLQs are dlq.<appId>;
               # lineage's is dlq.lineage.events). deliverPolicy=new skips dead letters published
               # inside the delete->recreate window — the same accepted trade as the drift loop.
               for c in $(nats --server "$S" consumer ls DLQ --names 2>/dev/null | grep -- '-durable$'); do

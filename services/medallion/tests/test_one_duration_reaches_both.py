@@ -3,7 +3,7 @@
 `docs/architecture/batch-processing-invariants.md` B10: "Monotonic clocks; the same number lands in the lineage facet." The
 clocks are monotonic. The same number does not land.
 
-On the RAY lane the mover runs twice. Pass 1 submits and returns; the stage then runs on the cluster
+On the RAY lane the stage runner runs twice. Pass 1 submits and returns; the stage then runs on the cluster
 for minutes-to-hours; the watcher polls it to a terminal state and re-publishes the trigger carrying
 `ray_duration_seconds`, its own measured span. Pass 2 wakes up, measures, emits, and cascades.
 

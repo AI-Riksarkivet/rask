@@ -429,7 +429,7 @@ def test_build_write_event_default_has_no_inputs() -> None:
 
 
 def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() -> None:
-    # Phase 2: a mover's merge from source@N emits training-shaped OpenLineage — a version-PINNED INPUT
+    # Phase 2: a stage runner's merge from source@N emits training-shaped OpenLineage — a version-PINNED INPUT
     # (the standard DatasetVersionDatasetFacet, i.e. the reproducibility pin the lineage service reads via
     # input_version) plus a caller-supplied run facet the catalog carries VERBATIM (un-opinionated: it only
     # stamps it spec-legal, it does not interpret the payload).

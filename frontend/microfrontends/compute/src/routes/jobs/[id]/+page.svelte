@@ -272,7 +272,7 @@
 				     not the entrypoint and params the run was actually executing, so a person watching a
 				     job had no path to the record that governs it.
 
-				     ABSENT is a real state, not a gap to paper over: a mover with no MEDALLION_LANE runs
+				     ABSENT is a real state, not a gap to paper over: a stage runner with no MEDALLION_LANE runs
 				     the chart's settings and there IS no record to link to. The row is omitted rather than
 				     rendering a transform named nothing. -->
 				{#if transformName}

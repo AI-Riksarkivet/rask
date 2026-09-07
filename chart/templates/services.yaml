@@ -196,10 +196,10 @@ spec:
                    medallion's `RegisterError -> _RETRY` redelivers forever. Measured on the live
                    cluster: the allowlist held `service-ingest` and nothing had put it there.
 
-                   DERIVED from the same `medallion.movers[]` declarations the FGA seeds use, so a
-                   new mover cannot be added with an identity the door never learned. */}}
+                   DERIVED from the same `medallion.stageRunners[]` declarations the FGA seeds use, so a
+                   new stage runner cannot be added with an identity the door never learned. */}}
             {{- $catalogSubjects := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity }}
-            {{- range .Values.medallion.movers }}
+            {{- range .Values.medallion.stageRunners }}
               {{- $catalogSubjects = append $catalogSubjects .serviceIdentity }}
             {{- end }}
             {{- /* The maintenance plane is NOT under `.Values.services` — it has its own top-level
@@ -223,17 +223,17 @@ spec:
                    $catalogSubjects: that list exists so a service may SPEAK to the catalog and includes
                    read-only identities like the web BFF, which must never hold owner on a tenant's data.
                    Only the identities that actually move data between tiers appear here — the producer
-                   (which resumes a human-approved promotion, so it publishes too) and the movers.
+                   (which resumes a human-approved promotion, so it publishes too) and the stage runners.
 
                    Without this a tenant is created, its tiers are created, rows land in bronze, lineage
-                   records the run — and the promotion is refused with `403 can_update_tag` in a mover log
+                   records the run — and the promotion is refused with `403 can_update_tag` in a stage runner log
                    nobody is watching. Measured five times on the live estate, once AFTER a person had
                    already approved it. */}}
             {{- $cascadeWriters := list .Values.medallion.producer.serviceIdentity }}
-            {{- range .Values.medallion.movers }}
+            {{- range .Values.medallion.stageRunners }}
               {{- $cascadeWriters = append $cascadeWriters .serviceIdentity }}
             {{- end }}
-            {{- range (.Values.medallion.mediaMovers | default list) }}
+            {{- range (.Values.medallion.mediaStageRunners | default list) }}
               {{- $cascadeWriters = append $cascadeWriters .serviceIdentity }}
             {{- end }}
             {{- $prefixed := list }}
@@ -258,8 +258,8 @@ spec:
                    refusal rather than a silent downgrade to the shared token. */}}
             {{- $privileged := append (compact $cascadeWriters | uniq) .Values.medallion.train.trainerIdentity }}
             {{- /* NOT RENDERED YET — deliberately. Measured 2026-08-26: switching this on refuses every
-                   mover, because the server-side expectation is only HALF the control. The catalog then
-                   demands `service-token-<identity>` for a privileged subject, but the movers still
+                   stage runner, because the server-side expectation is only HALF the control. The catalog then
+                   demands `service-token-<identity>` for a privileged subject, but the stage runners still
                    PRESENT the shared APP_API_TOKEN, so every catalog call 401s and the cascade stops
                    (`POST /v1/table/acme-silver$features/describe -> 401`, repeating). Turning it on
                    needs the CLIENT half too: each privileged service must read its own dedicated token
@@ -427,13 +427,13 @@ spec:
             {{- end }}
             {{- if .Values.medallion.enabled }}
             {{- $declared := dict }}
-            {{- range .Values.medallion.movers }}
+            {{- range .Values.medallion.stageRunners }}
             {{- if .requiredColumns }}
             {{- $_ := set $declared .toDataset (splitList "," .requiredColumns) }}
             {{- end }}
             {{- end }}
             {{- if $declared }}
-            # Declared-columns patrol (Batch 23): DERIVED from the movers' requiredColumns — one
+            # Declared-columns patrol (Batch 23): DERIVED from the stage runners' requiredColumns — one
             # declaration source (values), two enforcement points (the gate at promotion, this sweep
             # after) — so the gate and the patrol can never disagree on what consumers declared.
             - { name: LINEAGE_DECLARED_COLUMNS, value: {{ $declared | toJson | quote }} }
@@ -571,8 +571,8 @@ spec:
                    order. Same inputs, same result, and `test_the_two_doors_agree_on_who_is_privileged`
                    compares the two rendered strings rather than trusting that. */}}
             {{- $lineageWriters := list .Values.medallion.producer.serviceIdentity }}
-            {{- range .Values.medallion.movers }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
-            {{- range (.Values.medallion.mediaMovers | default list) }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
+            {{- range .Values.medallion.stageRunners }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
+            {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
             {{- /* The web BFF joins the privileged set: it is the widest holder of the shared bearer
                    (seven zone pods) and needs no client half, since it already reads its token from
                    env. `service-ingest` and `notifications` remain on the shared token — each needs a

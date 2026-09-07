@@ -25,7 +25,7 @@ import pyarrow as pa
 import pytest
 from dapr.aio.clients import DaprClient
 
-import medallion.services.transform as mover
+import medallion.services.transform as stage_runner
 from lineage.models import Dataset
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
@@ -201,7 +201,7 @@ class _FakeDapr:
         self.published.append({"topic": topic_name, "data": json.loads(data)})
 
 
-def _mover_settings(bronze: str, silver: str) -> MedallionSettings:
+def _stage_runner_settings(bronze: str, silver: str) -> MedallionSettings:
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
@@ -221,7 +221,7 @@ def test_handle_stage_emits_identity_column_edges(tmp_path: Any) -> None:
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
     dapr = _FakeDapr()
-    settings = _mover_settings(bronze, silver)
+    settings = _stage_runner_settings(bronze, silver)
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
     assert result == {"status": "SUCCESS"}
@@ -278,7 +278,7 @@ def test_transform_stage_derives_artifact_column_edges(tmp_path: Any) -> None:
 def _ray_job_write(from_uri: str, to_uri: str, stage: str, lineage: str = "") -> None:
     """Stand in for ``scripts/ray_stage_job.py``: write the downstream dataset the way the Ray job does.
 
-    The point is that the mover process never sees this table — the real job runs on the Ray cluster, so a
+    The point is that the stage runner process never sees this table — the real job runs on the Ray cluster, so a
     test that fakes the SUBMIT but leaves the write in-process would not exercise the reconstruction at all.
     ``lineage`` mirrors the job's R26 stamp: the consume-layer document lands in the job's OWN commit.
     """
@@ -300,7 +300,7 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     Ray cluster, so handle_stage must still emit real columnLineage — parsed back out by the consumer."""
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
-    settings = _mover_settings(bronze, silver).model_copy(update={"ray_enabled": True})
+    settings = _stage_runner_settings(bronze, silver).model_copy(update={"ray_enabled": True})
 
     # S1: the handler DISPATCHES a watcher, and the Ray job runs out-of-process. The fake stands in for
     # the whole of that — the workflow submitting, the cluster writing, the poll reading SUCCEEDED —
@@ -322,12 +322,12 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
         run_id: str = "",
     ) -> str:
         # The identity the real dispatch hands the job (`from_id`/`to_id`/`run_id`) is accepted and
-        # unused here: this test is about the column edges the MOVER reconstructs after the job, and
+        # unused here: this test is about the column edges the STAGE RUNNER reconstructs after the job, and
         # `test_the_job_is_told_which_tables_it_moves.py` is where that handover is asserted.
         _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_json)
         return "stage-ray-silver-t1-abc"
 
-    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
+    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
 
     dispatch_only = _FakeDapr()
     assert asyncio.run(handle_stage(cast(DaprClient, dispatch_only), settings, {"data": {"token": "t1"}})) == {"status": "SUCCESS"}

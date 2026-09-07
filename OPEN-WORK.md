@@ -591,7 +591,7 @@ re-deriving the backlog entry that cited it. That page now carries a correction 
 What actually ships (`services/medallion/src/medallion/services/compute.py:43-50`):
 
 - `_LINEAGE_COLUMN = "lineage"`, written as Lance JSON.
-- **Every** mover stage stamps it, not gold alone — it is in `_RESTAMPED_COLUMNS`, so each stage
+- **Every** stage stamps it, not gold alone — it is in `_RESTAMPED_COLUMNS`, so each stage
   prepends its own hop to the chain it read off its upstream's cell rather than inheriting the
   parent's provenance verbatim.
 - `UpstreamFacts.chain` therefore reaches **back to bronze with no graph query** — the consume-layer
@@ -631,7 +631,7 @@ compliance deploy must raise it manually (`API.md` records the caveat).
 | **Settings surface** *(was #112)* — break out auth / authz / audit | Owner: *"keep it as is"* |
 | **NATS HA / nack operator + GitOps; query engine** *(was #20)* | Owner-parked. The merge plan's PROPOSED decision 5 holds it parked too, noting rask's JetStream is on but streamless and lance-ns's stream-job is its first real consumer |
 | **Models registry MLflow parity** *(was #101)* | Deprioritized until after the product pass |
-| **Annotator residuals** *(was #100)* — export serializers (COCO / YOLO / CSV / HF) + managed label taxonomy | Owner to schedule. ⚠️ **The export half is the same service as the merge plan's P7c `exporter`** (ALTO 4.4 first, owner-ruled R4: serialization is a separate microservice, never inside the lakehouse or the movers). COCO/YOLO/CSV/HF become additional projections from gold — new functions in that service, not a second export path. Do not build these twice |
+| **Annotator residuals** *(was #100)* — export serializers (COCO / YOLO / CSV / HF) + managed label taxonomy | Owner to schedule. ⚠️ **The export half is the same service as the merge plan's P7c `exporter`** (ALTO 4.4 first, owner-ruled R4: serialization is a separate microservice, never inside the lakehouse or the stage runners). COCO/YOLO/CSV/HF become additional projections from gold — new functions in that service, not a second export path. Do not build these twice |
 | **Storybook** | Struck for now — rask keeps its own (plan P2 step 3); adopt rask's rather than re-deciding |
 | `/lakehouse/data` scaffold, `/lakehouse/admin` orphan | Product decisions, not defects with one right answer |
 
@@ -685,10 +685,10 @@ authz once FGA fronts the browser). Recorded, deliberately not widened in the R6
 
 **What.** `runners/htr` still carries `prefetch_pipeline`/`PrefetchActor`, the S3-diff resumability, and
 the `PageLoaderActor`/`AltoWriterActor` endcaps — flagged-D, runner READ-only this gate. The seam they're
-replaced by is pinned: mover `stageJob` values knob (`MEDALLION_RAY_ENTRYPOINT`), the gold contract
+replaced by is pinned: stage runner `stageJob` values knob (`MEDALLION_RAY_ENTRYPOINT`), the gold contract
 (`medallion/schemas/htr.py::GOLD_CONTRACT_COLUMNS` + its unit pin), and the `/ingest-iiif` head.
 **What closes it.** The P7b gate: the runner CLI grows a `stage` subcommand; layout/lines + transcribe
-run as `medallion.bronze`/`medallion.silver` movers; the HTR-cascade e2e (IIIF → bronze → silver →
+run as `medallion.bronze`/`medallion.silver` stage runners; the HTR-cascade e2e (IIIF → bronze → silver →
 gold with lineage populated) goes green. *(R23 re-tiered the head: the IIIF harvest lands bronze
 directly — there is no raw tier.)*
 
@@ -720,14 +720,14 @@ output=bronze through the same `/bronze-arrival` seam, with the double-fire pin 
 
 ### D2g · The bronze ingest head's own FGA write gate *(new, 2026-07-28 — R23 collapse residue)*
 
-**What.** The retired raw→bronze mover carried the FGA `can_create_table` self-check for producing
+**What.** The retired raw→bronze stage runner carried the FGA `can_create_table` self-check for producing
 bronze. With the collapse, the bronze write happens in the producer, whose ingest routes are door-gated
 (app-token / admin OIDC) but do not self-check a writer rung before the Lance write.
 `scripts/seed_medallion_fga.sh` now grants `writer` to `user:service-lance-ray` (the producer identity),
 so the model DESCRIBES the intended rung.
 **What closes it.** The ingest heads (`/produce`, `/ingest-iiif`, `/ingest-media`) check
 `can_create_table` on `namespace:bronze` as `service-lance-ray` when `RASK_FGA_ENABLED` — the same
-enforce-not-describe posture the movers keep.
+enforce-not-describe posture the stage runners keep.
 
 ## E. Latent — surfaced by the pre-copy docs audit (2026-07-27), adversarially verified open
 
@@ -1105,7 +1105,7 @@ fixing the first without the second converts a latency problem into an OOM-kill 
 dataset instance — "create a single table and share it across your application", or share a session
 across opens. The fleet does the opposite on every path: `lance.dataset(uri)` is opened fresh per
 request/operation in the viewer's blob-serving hot path
-(`services/viewer/src/viewer/api/v1/endpoints/pages.py:90`), the medallion movers
+(`services/viewer/src/viewer/api/v1/endpoints/pages.py:90`), the medallion stage runners
 (`services/medallion/src/medallion/services/compute.py`), lineage reconcile
 (`services/lineage/src/lineage/core/reconcile.py`), and the catalog's own open helper
 (`services/catalog/src/catalog/core/namespace.py:48`). Every call pays cold manifest fetches and
@@ -1192,8 +1192,8 @@ work).
    the run's lineage carries the models at RESOLVED shas + the build commit). Residuals folded from
    `open_htr_governance.md` at its retirement: the **P7b re-cut** (the owner's direction — the
    runner's stage job reads bronze Lance and emits gold rows directly, reusing the lane's
-   parser/register/facet seams); the bronze→silver **geometry movers**; the raw **ALTO S3 sink
-   stays** as P7c's export format; the in-dataset `lineage` column rides when the mover supplies
+   parser/register/facet seams); the bronze→silver **geometry stage runners**; the raw **ALTO S3 sink
+   stays** as P7c's export format; the in-dataset `lineage` column rides when the stage runner supplies
    the LineageDoc.
 2. ~~**#96 cascade files NO trash records**~~ **CLOSED 2026-08-05**, driven live over HTTP: with a
    grace period a CASCADE now DETACHES the subtree (tables deregistered — bytes stay — namespaces
@@ -1357,7 +1357,7 @@ no provenance defect, and idempotent replay.
 
 **What now works.** The medallion is in the lane slice (`scripts/ingest-lane.sh`), and an ingest run
 DOES reach the cascade head: `POST /bronze-arrival 200` on the producer, and on the first run into a
-table `POST /medallion-event 200` on the bronze-to-silver mover. The trigger is the CATALOG's own
+table `POST /medallion-event 200` on the bronze-to-silver stage runner. The trigger is the CATALOG's own
 write lineage (`lance-catalog/create_table.bronze$events`, eventType COMPLETE, outputs
 `[bronze$events]`) — which is exactly what `/bronze-arrival` filters on, and is the right shape: the
 governed WRITER announces the tier, once per commit, with the catalog's authority.
@@ -1378,9 +1378,9 @@ nothing keeps in agreement.
   from the create's, or the head's filter matches only one of them — read
   `catalog/services/lineage_deps.emit_measured_write` against `ingest_trigger._bronze_write_dataset`
   before changing anything.
-* **The movers move no DATA in this slice.** `MEDALLION_FROM_URI`/`TO_URI` are unset and no project
+* **The stage runners move no DATA in this slice.** `MEDALLION_FROM_URI`/`TO_URI` are unset and no project
   routing is configured, so `handle_stage` skips its compute path entirely (`transform.py:210` —
-  `if settings.compute_enabled and from_uri and to_uri`). The mover wakes, emits, and writes nothing.
+  `if settings.compute_enabled and from_uri and to_uri`). The stage runner wakes, emits, and writes nothing.
   Configuring the tier URIs (or the per-project warehouse registry) is what turns the proven TRIGGER
   chain into a proven DATA chain.
 
@@ -1388,12 +1388,12 @@ nothing keeps in agreement.
 
 `runners/dummy` proves bronze→silver→gold **as tests**, not as a running lane: nothing in-cluster
 subscribes to the catalog's publication event and moves a bronze commit into silver, and no quality
-gate decides promote-vs-hold into gold on a deployed dataset. The mover's mechanics are real and
+gate decides promote-vs-hold into gold on a deployed dataset. The stage runner's mechanics are real and
 covered (CDF delta read, merge-on-write convergence, `source_rowid` carried not copied, an E5 replay
 that reproduces silver byte for byte); what is missing is the subscription, the Ray job submission,
 and the gate wired to `medallion.services.quality.assert_quality_on_batch` on a live tier.
 
-**Why it is not "nearly done":** the publication event that should wake a mover is the catalog's, and
+**Why it is not "nearly done":** the publication event that should wake a stage runner is the catalog's, and
 the ingest plane currently registers commits through `ingest.catalog.LocalCatalog` — see 2.
 
 ### 2. ~~`LocalCatalog` still stands in for the catalog service~~ **CLOSED 2026-08-04**
@@ -1408,7 +1408,7 @@ workers write where the catalog was not looking.
 
 So item 1 is no longer blocked: a commit is now registered somewhere the rest of the estate can see
 it. What remains for the cascade is the SUBSCRIPTION — something that hears the catalog's
-publication and submits the mover.
+publication and submits the stage runner.
 
 ### 3. A15–A18 are unwritten
 
@@ -1417,14 +1417,14 @@ publication and submits the mover.
   that happen to agree today.
 - **A16** — index maintenance and compaction as owned lanes: `optimize_indices` delta-maintenance
   runs and is observable; indexed search returns rows added by the latest published delta.
-- **A17** — the mover contract (E1–E3): a stale event is acked without work; a redelivered event for
+- **A17** — the stage runner contract (E1–E3): a stale event is acked without work; a redelivered event for
   already-produced output is a no-op with a deterministic run id; two replicas on one dataset never
   transform concurrently; a submission failure returns RETRY → backoff → maxDeliver → DLQ + FAIL run.
 - **A18** — publication behaviour: gate FAIL → no tag advance, no event, FAIL lineage run, downstream
   provably never woken; gate PASS → the emitted event's version equals the commit RESPONSE value; a
   rollback fires exactly one event and idempotency absorbs it.
 
-A17 and A18 both need 1, since they are assertions about a mover and a publication that do not run.
+A17 and A18 both need 1, since they are assertions about a stage runner and a publication that do not run.
 
 ### 4. ~~`packages/tracker` has zero consumers and should probably die~~ — DELETED 2026-08-30
 
@@ -1759,7 +1759,7 @@ header): *gold embeds its whole upstream provenance as a JSONB `lineage` column 
 
 | Question | Answer |
 | --- | --- |
-| Does the **product** gold write embed lineage today? | **No.** The cascade's silver→gold mover writes `id, payload, source_rowid, stage` and nothing else. |
+| Does the **product** gold write embed lineage today? | **No.** The cascade's silver→gold stage runner writes `id, payload, source_rowid, stage` and nothing else. |
 | Where does the JSONB embedding actually live? | Only in `scripts/medallion_demo.py::write_gold` (the demo driver) and in `services/lineage/seed.py`'s *synthetic* schema facet. Its reader, `GET /demo/datasets`, is **off** on the cluster (`LINEAGE_DEMO_DATA_ENABLED=false`). |
 | Is the JSONB-in-Lance representation still what Lance recommends? | **Yes** — `pa.json_()` is the current recommendation and it is a *stronger* choice than we knew: it is indexable. Our demo code already writes `pa.json_()`, so there is no migration debt. |
 | Does gold lie about its provenance? | **No.** It says nothing, and what the lineage graph says about it matches storage exactly (below). |
@@ -1794,15 +1794,15 @@ The gold writer is `medallion.services.compute.transform_stage`, called from
 `medallion.services.transform.handle_stage`. It carries upstream columns forward, mints/carries
 `source_rowid`, stamps `stage`, and writes `mode="overwrite"`, `data_storage_version="2.2"`,
 `enable_stable_row_ids=True`. There is **no** lineage column anywhere in that path — provenance leaves the
-mover as an OpenLineage `RunEvent` (`medallion.schemas.events.build_run_event`), not as data.
+stage runner as an OpenLineage `RunEvent` (`medallion.schemas.events.build_run_event`), not as data.
 
-Live proof. The terminal mover's own settings name the tenant gold table
+Live proof. The terminal stage runner's own settings name the tenant gold table
 (`MEDALLION_TO_DATASET=gold$catalog`, `MEDALLION_GOLD_WAREHOUSE_ENABLED=true`), which resolves to the
 project's gold serving warehouse — bucket `acme-gold`:
 
 ```
-$ kubectl exec deploy/lance-ns-silver-to-gold -c mover -- python -c '<open the dataset with the
-  mover's own settings + OpenBao secret>'
+$ kubectl exec deploy/lance-ns-silver-to-gold -c stage runner -- python -c '<open the dataset with the
+  stage runner's own settings + OpenBao secret>'
 === s3://acme-gold/medallion/gold v 1 rows 8
 id: int64
 payload: string
@@ -1926,7 +1926,7 @@ MATCH (r:Run {run_id:'9e5d933a-...'})-[:READ]->(i:Dataset)      -> "acme-silver$
 MATCH (d:Dataset {name:'acme-gold$catalog'})-[:DERIVED_FROM]->(u) -> "acme-silver$features"
 ```
 
-Storage, measured with the mover's own `compute.measure`:
+Storage, measured with the stage runner's own `compute.measure`:
 
 ```
 version 1 rows 8 bytes 284
@@ -1934,7 +1934,7 @@ fields: id:int64, payload:string, source_rowid:uint64, stage:string
 ```
 
 Version, row count, byte count and the full schema all match the `WROTE` edge; the single input matches
-the mover's configured `MEDALLION_FROM_DATASET` chain (`acme-silver$features` → `acme-gold$catalog`).
+the stage runner's configured `MEDALLION_FROM_DATASET` chain (`acme-silver$features` → `acme-gold$catalog`).
 **No divergence.**
 
 One structural caveat for whoever revives the embedding: in `scripts/medallion_demo.py` the Lance write
@@ -1953,8 +1953,8 @@ written into the document. The DAG direction the demo appends is correct:
 export PATH="$PATH:$PWD/.localbin"
 POD=$(kubectl get pod -l app.kubernetes.io/component=silver-to-gold -o jsonpath='{.items[0].metadata.name}')
 
-## gold's real schema + one row (uses the mover's own settings + OpenBao secret)
-kubectl exec "$POD" -c mover -- python -c "
+## gold's real schema + one row (uses the stage runner's own settings + OpenBao secret)
+kubectl exec "$POD" -c stage runner -- python -c "
 from medallion.core.config import MedallionSettings, apply_dapr_secrets
 import lance
 s = MedallionSettings(); apply_dapr_secrets(s)
@@ -1985,7 +1985,7 @@ and what to drop. Grounded in rask's actual chart (`rask/chart/`) + this repo's 
 - The **lakehouse catalog** (`services/catalog`, a thin REST adapter over native pylance `DirectoryNamespace`) + the in-process `dataplane`.
 - The **lineage estate** (`services/lineage` → Apache AGE graph; OpenLineage; `/reconcile`; column-level + the gold whole-history JSONB). **rask has ZERO lineage** — this is the single biggest net-new capability we add.
 - The **OpenFGA WIRING** (`packages/service-kit/src/service_kit/governed/auth/model.fga` + `services/catalog/api/fga_deps.py` + credential vending). **rask provisions OpenFGA but never wires it into any service** — we bring the actual ReBAC enforcement.
-- The **event-driven medallion estate** (`services/medallion` producer + movers, `services/compaction`) on Dapr pub/sub over NATS JetStream.
+- The **event-driven medallion estate** (`services/medallion` producer + stage runners, `services/compaction`) on Dapr pub/sub over NATS JetStream.
 
 **rask supplies (use, do NOT rebuild):**
 - **CloudNativePG** — the Postgres `Cluster` (`<release>-postgres`).
@@ -2034,7 +2034,7 @@ and nothing else notices — `tests/unit/test_invariants.py` pins the agreement.
   The CSI-mount leg needs K8s 1.33+. No Lance-native-graph rewrite is required.
 
 #### 2. lance-ray → a real Ray Data job (the one in-scope gap)
-Today `services/medallion/producer.py` + the movers are **dummy Ray jobs** — pure lineage emitters by
+Today `services/medallion/producer.py` + the stage runners are **dummy Ray jobs** — pure lineage emitters by
 default, but with `medallion.compute=true` (the B1 toggle) each stage does a real in-process Lance
 read→transform→write, so the cascade already produces versioned data, not just provenance. On rask
 they become **real Ray Data jobs on KubeRay** (Kueue-admitted, `ray-kit`/orchestrator-submitted). The seam
@@ -2093,7 +2093,7 @@ two things, and only the second travels:
 `scripts/verify_live_stream_timeout.mjs` takes `HOLD_S`; run it past 255 against rask's ingress to confirm.
 
 ### lance-ray seam contract (so the real job drops in)
-The dummy producer/movers define the contract the real Ray Data jobs must reproduce **exactly**:
+The dummy producer/stage runners define the contract the real Ray Data jobs must reproduce **exactly**:
 
 - **Producer (head):** write the BRONZE Lance dataset directly (R23 — raw is the external world; bronze
   is the first governed tier), then **publish ONE OpenLineage run event** to the Dapr pubsub
@@ -2104,11 +2104,11 @@ The dummy producer/movers define the contract the real Ray Data jobs must reprod
   to the lineage topic (`/bronze-arrival`) and publishes the first `medallion.bronze` trigger when it
   sees a bronze write. A job that also published `medallion.bronze` would **double-fire the cascade**.
   The head is event-driven: emit the bronze-write event; the arrival subscription does the triggering.
-- **Each mover:** subscribe to its upstream trigger → transform (read the from-stage Lance version-range as a
+- **Each stage runner:** subscribe to its upstream trigger → transform (read the from-stage Lance version-range as a
   CDF, write the to-stage) → emit the **`DERIVED_FROM`** OpenLineage edge → publish the next trigger.
-- **Gold mover (terminal):** write the gold dataset **with the embedded `lineage` JSONB column** (per
+- **Gold stage runner (terminal):** write the gold dataset **with the embedded `lineage` JSONB column** (per
   `scripts/medallion_demo.py: write_gold`) → no next trigger. This is the durable, exportable artifact.
-- **Authz:** when `RASK_FGA_ENABLED`, the mover checks `can_create_table` (writer) / `can_promote`
+- **Authz:** when `RASK_FGA_ENABLED`, the stage runner checks `can_create_table` (writer) / `can_promote`
   (validator, silver→gold) as its **service identity** before emitting; unauthorized → `DROP`.
 - **Creds:** the job authenticates with **workload identity** (KubeRay projected SA / OIDC token) and vends
   short-TTL, table-scoped creds via the catalog `POST /v1/table/{id}/credentials` (web_identity flow). **No
@@ -2205,11 +2205,11 @@ What is already genuinely good: render fails closed on every placeholder prod se
 
 13. **`deployment.environment.name=kind` ships in the prod render** — values-prod never overrides `observability.environment`; every OTel resource attr will claim prod telemetry is kind. **Unnoticed.** One line.
 
-14. **Manual out-of-band install-order footguns** — values-prod itself warns: flip `medallion.fgaEnabled` without first running `scripts/seed_medallion_fga.sh` and the movers fail closed / pipeline stalls; OpenBao needs manual init+unseal; the namespace PSA label is a manual kubectl step. There is no prod install runbook — DEPLOY.md is kind-framed ("how it all works on kind"), OPERATORS.md is strategy. Fix: a PROD-RUNBOOK.md (ordered: secrets → seed FGA → unseal → flip governance → verify), plus consider a seed Job/hook for the FGA grants.
+14. **Manual out-of-band install-order footguns** — values-prod itself warns: flip `medallion.fgaEnabled` without first running `scripts/seed_medallion_fga.sh` and the stage runners fail closed / pipeline stalls; OpenBao needs manual init+unseal; the namespace PSA label is a manual kubectl step. There is no prod install runbook — DEPLOY.md is kind-framed ("how it all works on kind"), OPERATORS.md is strategy. Fix: a PROD-RUNBOOK.md (ordered: secrets → seed FGA → unseal → flip governance → verify), plus consider a seed Job/hook for the FGA grants.
 
 ### NICE
 
-15. `moverReplicas: 1` throughput/availability ceiling — **documented deferral** (process-local single-flight lock; raise after a cross-pod lock ships). Fine as-is; NATS redelivery + idempotence bound the damage.
+15. `stageRunnerReplicas: 1` throughput/availability ceiling — **documented deferral** (process-local single-flight lock; raise after a cross-pod lock ships). Fine as-is; NATS redelivery + idempotence bound the damage.
 16. nats-box debug shell Deployment ships in the prod render — set the nats subchart's `natsBox.enabled=false` in values-prod.
 17. Dapr scheduler STS: 3×16Gi PVCs for actors/workflows/jobs the stack doesn't use — shrink the PVC size via subchart values.
 18. Retention odds: `runRetentionDays: 0` (Run nodes grow forever — prod has the reconcile pruner deployed but the knob off), `compaction.lineageEmit: false` (the compaction FAILURE lineage surface stays dark in prod), `freshnessBudgetHours: 0`. Audit-stream retention sharing the 14d observability TTL is a **documented deferral** — note 14d is short for a compliance trail.
@@ -2217,7 +2217,7 @@ What is already genuinely good: render fails closed on every placeholder prod se
 20. values-prod header's claim that the externalize stanzas "do nothing without follow-up hooks" is stale — verified `age.externalHost` rewires lineage DSN, openfga DSN, wait-init and pg_dump correctly. Fix the comment so operators trust the mechanism.
 
 ### Deferred vs unnoticed — the roll-up
-- **Written deferrals (don't re-litigate, schedule):** NATS HA/externalization (#20 parked), stateful HA via rask operators (CNPG/rustfs-operator), OpenBao auto-unseal via ESO/bank-vaults (OPERATORS.md §5), audit retention = observability TTL, PSA restricted enforce (OTel Collector hostPath), L3 default-deny known un-flipped (§7a runbook), moverReplicas=1, mode_b vending.
+- **Written deferrals (don't re-litigate, schedule):** NATS HA/externalization (#20 parked), stateful HA via rask operators (CNPG/rustfs-operator), OpenBao auto-unseal via ESO/bank-vaults (OPERATORS.md §5), audit retention = observability TTL, PSA restricted enforce (OTel Collector hostPath), L3 default-deny known un-flipped (§7a runbook), stageRunnerReplicas=1, mode_b vending.
 - **Genuinely unnoticed:** Dex demo-IdP posture in prod, no alerting engine, backup fate-sharing/retention/restore, no registry/imagePullSecrets plumbing, unbounded infra resources, no anti-affinity, dapr.global.ha unflipped, values-prod omitting the live-proven SA/infraContexts/sidecarRestricted switches, environment=kind attr, no edge TLS, no prod install runbook.
 
 
@@ -3340,7 +3340,7 @@ row delta via `_row_created_at_version` without a bookmark. Proven in-cluster.
 
 What is still open, most consequential first:
 
-### The movers COMPOSE a dataset path; the catalog VENDS one
+### The stage runners COMPOSE a dataset path; the catalog VENDS one
 
 **The READ half is FIXED.** The trigger carries the catalog-vended `from_uri`, and the whole cascade
 was proven end to end for a tenant that shares no name with any tier:
@@ -3364,7 +3364,7 @@ while the silver and gold datasets above held real rows:
 Nothing downstream can discover a silver or gold table through the catalog — no governance, no
 grants, no `published` tag, and no vended location for the NEXT consumer, which is the same problem
 this section was originally written about, one tier further down. I2 ("resolve the location through
-the CATALOG, never compose a path") on the other side of the mover. It is a change to a service
+the CATALOG, never compose a path") on the other side of the stage runner. It is a change to a service
 outside the ingest plane and wants its own review.
 
 ### `/api/ingest-iiif` — RETIRED
@@ -3378,14 +3378,14 @@ with the assertion inverted to the direction the bug now runs.
 
 ### `/bronze-arrival` still exists alongside `/publication-arrival`
 
-Both publish the same `medallion.bronze` trigger, and the movers' token de-duplication is what stops
+Both publish the same `medallion.bronze` trigger, and the stage runners' token de-duplication is what stops
 a table emitting both signals from cascading twice.
 
 **The stated retirement condition is not reachable as written.** "Once every writer publishes"
-requires writers that CAN publish, and none of the remaining ones can: the movers compose their
+requires writers that CAN publish, and none of the remaining ones can: the stage runners compose their
 targets and never register them, so they have no catalog table to publish; `/produce` and
 `/ingest-media` write bronze with no catalog involvement at all. Prerequisite order is therefore:
-movers register (the write-half residual above) → `/produce` and `/ingest-media` become
+stage runners register (the write-half residual above) → `/produce` and `/ingest-media` become
 catalog-mediated → only then is the lineage head genuinely redundant. Disabling either head today
 strands a real lane in each direction.
 
@@ -3505,7 +3505,7 @@ the clearest argument there is for one definition over three copies.
 
 A rendered chart with `auth.enabled=true` already gave SIX deployments a user door (catalog, viewer,
 search, annotator, lineage, the medallion producer). The genuine gap was **ingest alone**, now 7 of 7.
-The movers and maintenance correctly have none: every one of their routes is sidecar-delivered and
+The stage runners and maintenance correctly have none: every one of their routes is sidecar-delivered and
 guarded by `require_dapr_token`, so a user door there would gate nothing.
 
 Keyed on a per-service `governedAuth` flag, NOT `frontDoor` — being routed by the gateway and having

@@ -1,13 +1,13 @@
 """Can a blob column cross datasets as a DESCRIPTOR, without re-wrapping the bytes?
 
-`docs/architecture/medallion-data-flow.md` section 9(a). Spec change 1 -- stop materialising blobs in the mover --
+`docs/architecture/medallion-data-flow.md` section 9(a). Spec change 1 -- stop materialising blobs in the stage runner --
 depends on the answer, and no Lance source states it.
 
 The finding that shapes this probe: the READ shape and the WRITE shape are NOT symmetric.
 A scan hands back ``struct<kind, position, size, blob_id, blob_uri>``; a write demands the
 "prepared" form ``struct<kind, data, uri, blob_id, blob_size, position>`` (blob.rs:166). So a
 descriptor cannot be round-tripped as-is -- but the mapping between them is pure metadata and
-moves no bytes, which is exactly what a mover needs.
+moves no bytes, which is exactly what a stage runner needs.
 """
 
 import pathlib

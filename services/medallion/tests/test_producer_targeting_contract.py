@@ -6,7 +6,7 @@ SUCCESS ack — so a producer that drops a field fails silently and is reported 
 
 1. TRAP 3 — `lance.project`. `fanout.py:88` skips the watcher loop entirely when `project` is None,
    and the run is still delivered to its AUTHOR, so the event looks completely healthy and simply
-   reaches fewer people. Measured 2026-08-22: deleting the mover's stamp left 4,853 tests passing.
+   reaches fewer people. Measured 2026-08-22: deleting the stage runner's stamp left 4,853 tests passing.
 2. The `/produce` 503 tail. The route's own docstring makes it load-bearing — the bronze-write emit is
    the cascade head, so "a publish failure surfaces as 503 (not the 202 that would hide it)". Line
    coverage reported the whole branch missing: the `publish_failed` check, the problem+json body and
@@ -179,18 +179,18 @@ async def test_a_successful_produce_still_answers_the_202_body(monkeypatch: pyte
 
 
 def test_every_published_lineage_emit_stamps_originator() -> None:
-    """Trap 2, at the producer — and the mover is the case the trap was written for.
+    """Trap 2, at the producer — and the stage runner is the case the trap was written for.
 
     `rask-notifications` states it plainly: a service token SUBSTITUTES the author, so
     `enforce_author` overwrites the facet with the service's own sub and "your human is gone".
-    The medallion movers author with a chart ROLE LITERAL (`MEDALLION_AUTHOR` = `data_eng` /
+    The medallion stage runners author with a chart ROLE LITERAL (`MEDALLION_AUTHOR` = `data_eng` /
     `analyst` / `ray`), so `author_subject()` addresses an inbox actor named `data_eng` — nobody. The
     literal is *correct* as the author; what makes a failed cascade reachable by the person who
     started it is `lance.originator` riding beside it, carried from `/produce`'s verified sub through
     `/bronze-arrival` and down every hop.
 
     So this is the only field that can reach that human, and until 2026-08-22 nothing held it:
-    deleting one of the mover's stamps left **217 medallion tests passing**. That is the shape the
+    deleting one of the stage runner's stamps left **217 medallion tests passing**. That is the shape the
     skill warns about — the plane acks an event it cannot target with SUCCESS, so the loss is reported
     by nothing, at the producer or anywhere downstream.
     """
@@ -199,7 +199,7 @@ def test_every_published_lineage_emit_stamps_originator() -> None:
 
     unstamped = sorted({site.file for site in sites if not site.originator})
     assert unstamped == sorted(_ORIGINATORLESS_EMITS), (
-        f"these medallion emit sites do not stamp `lance.originator`: {unstamped}. The mover authors "
+        f"these medallion emit sites do not stamp `lance.originator`: {unstamped}. The stage runner authors "
         "with a chart role literal, so without it a failed cascade run reaches an inbox actor named "
         "after a ROLE and never reaches the person who started it. Stamp it, or justify the omission "
         "in _ORIGINATORLESS_EMITS."
@@ -207,9 +207,9 @@ def test_every_published_lineage_emit_stamps_originator() -> None:
 
 
 def _emit_fail_run_calls() -> list[tuple[int, set[str]]]:
-    """Every `_emit_fail_run(` call in the mover, with the kwargs it stamps.
+    """Every `_emit_fail_run(` call in the stage runner, with the kwargs it stamps.
 
-    The mover's four stage-outcome FAIL emits (project-unresolvable, media-underivable, stage-failed,
+    The stage runner's four stage-outcome FAIL emits (project-unresolvable, media-underivable, stage-failed,
     promotion-held) route through one `_emit_fail_run` helper (MED-005), so `_emit_sites()` — which
     walks `build_run_event(` calls — no longer sees them as four sites; it sees the helper's single
     call. The per-outcome REACH guarantee therefore moves to the call sites, checked here.
@@ -228,7 +228,7 @@ def test_the_targeting_scan_sees_every_hop_of_the_cascade() -> None:
     Both gates above are exemption-list shaped, and an exemption list is only as honest as the scan
     that feeds it: a walk that stopped resolving files would report zero unstamped sites and read as a
     fully-targeted estate. So this pins that the scan still reaches the three modules the cascade
-    actually flows through — the head, the movers and the workflow — rather than a bare total.
+    actually flows through — the head, the stage runners and the workflow — rather than a bare total.
     """
     sites = _emit_sites()
     files = {site.file for site in sites}
@@ -236,10 +236,10 @@ def test_the_targeting_scan_sees_every_hop_of_the_cascade() -> None:
     assert len(sites) >= 6, f"only {len(sites)} emit sites found — the cascade has more hops than that"
     for expected in ("services/produce.py", "services/transform.py", "workflow.py"):
         assert expected in files, f"the scan no longer reaches {expected} — it is a cascade hop with emits"
-    # The mover carries the COMPLETE emit plus the shared FAIL emit (`_emit_fail_run`'s own
+    # The stage runner carries the COMPLETE emit plus the shared FAIL emit (`_emit_fail_run`'s own
     # `build_run_event`); its four stage-outcome FAILs are checked at their call sites below.
     assert sum(1 for s in sites if s.file == "services/transform.py") >= 2, (
-        "the mover module should carry the COMPLETE emit and the shared FAIL emit; the scan is seeing too few"
+        "the stage runner module should carry the COMPLETE emit and the shared FAIL emit; the scan is seeing too few"
     )
 
 
@@ -251,7 +251,7 @@ def test_every_stage_outcome_reaches_the_person_through_the_fail_helper() -> Non
     (which walks that helper) proves the emit CAN name the person, but not that every stage outcome
     passes the person down to it. That is what these call sites carry: drop the person at any one of
     them and that stage's failed run reaches an inbox actor named after a chart role, exactly the
-    silent loss the sibling gate was written for. The mover has four failure exits (project
+    silent loss the sibling gate was written for. The stage runner has four failure exits (project
     unresolvable, media underivable, stage failed, promotion held), so four call sites.
 
     MED-004 added ONE more level between them: the four sites now call `_emit_stage_failure`, which
@@ -261,7 +261,7 @@ def test_every_stage_outcome_reaches_the_person_through_the_fail_helper() -> Non
     both onto the event. Neither half is sufficient alone.
     """
     calls = _emit_fail_run_calls()
-    assert len(calls) >= 5, f"the mover should route all four stage-outcome FAILs through the shared FAIL emit; found {len(calls)}"
+    assert len(calls) >= 5, f"the stage runner should route all four stage-outcome FAILs through the shared FAIL emit; found {len(calls)}"
 
     forwarding = [(line, stamped) for line, stamped in calls if "originator" not in stamped]
     assert len(forwarding) >= 4, f"expected the four stage-outcome call sites to forward through `_emit_stage_failure`; found {len(forwarding)}"

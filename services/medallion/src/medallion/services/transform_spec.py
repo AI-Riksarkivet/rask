@@ -1,7 +1,7 @@
-"""Resolve the DECLARED transform a mover runs — the read half of the transform-spec contract.
+"""Resolve the DECLARED transform a stage runner runs — the read half of the transform-spec contract.
 
 The catalog writes a :class:`~service_kit.lakehouse.transform_specs.TransformSpec` through an
-admin-gated door; this is where a mover reads one back. Object-store-backed, so a mover pod that has
+admin-gated door; this is where a stage runner reads one back. Object-store-backed, so a stage runner pod that has
 never met the catalog resolves the record with nothing but the control root — no catalog client on
 the submit path, which is the same reason the maintenance sweep reads policies directly.
 
@@ -11,9 +11,9 @@ estate that has declared nothing is unchanged rather than quietly running under 
 stance ``ray_code_version`` already takes.
 
 **A named-but-undeclared transform REFUSES.** It must never fall back to the chart's own program, because
-that is precisely the failure the record exists to eliminate: the mover would run the OLD program
+that is precisely the failure the record exists to eliminate: the stage runner would run the OLD program
 while an operator believes the declaration governs it, and nothing anywhere would be red. The
-refusal is the mover's form of the door's 422 — same sentence, same named key.
+refusal is the stage runner's form of the door's 422 — same sentence, same named key.
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ log = logging.getLogger(__name__)
 
 
 class UndeclaredTransformError(RuntimeError):
-    """A mover is configured for a transform the catalog has no declaration for.
+    """A stage runner is configured for a transform the catalog has no declaration for.
 
     Distinct from a submit failure so the caller can tell "the cluster refused my job" from "nobody
-    declared what this mover should run" — the second is an operator action, not a retryable fault of
+    declared what this stage runner should run" — the second is an operator action, not a retryable fault of
     the run.
     """
 
@@ -50,11 +50,11 @@ class _TransformSettings(Protocol):
 
 
 def resolve_transform(settings: _TransformSettings, *, project: str) -> TransformSpec | None:
-    """The declared spec for this mover's transform, or ``None`` when none is configured.
+    """The declared spec for this stage runner's transform, or ``None`` when none is configured.
 
     Raises :class:`UndeclaredTransformError` when a transform IS named but cannot be resolved — including when
     the control root is unconfigured, because "not declared" and "cannot look" need opposite answers
-    and a reader that conflated them would report a misconfigured mover as an undeclared transform.
+    and a reader that conflated them would report a misconfigured stage runner as an undeclared transform.
     """
     name = getattr(settings, "transform", "")
     if not name:
@@ -90,7 +90,7 @@ async def resolve_transform_async(settings: _TransformSettings, *, project: str)
 class UnrunnableTaskError(UndeclaredTransformError):
     """The transform is declared, but names a task THIS executor cannot run.
 
-    A subclass rather than a sibling so the mover's existing handler keeps its answer: both mean an
+    A subclass rather than a sibling so the stage runner's existing handler keeps its answer: both mean an
     operator must act and a redelivery changes nothing, which is a DROP with a trace, never a RETRY.
     The distinct type is what lets a caller that cares tell "nobody declared the transform" from
     "the transform names a task no engine here registered".

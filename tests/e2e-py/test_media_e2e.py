@@ -1,7 +1,7 @@
 """End-to-end test for the MEDIA lane of the event-driven cascade (§9 — the multimodal goal, live).
 
 ONE call to medallion-producer's ``/ingest-media`` must land external media as bronze-media blobs, trigger the
-media mover over Dapr pub/sub, and end with the lineage graph showing ``silver-media$features`` derived
+media stage runner over Dapr pub/sub, and end with the lineage graph showing ``silver-media$features`` derived
 from ``bronze-media$objects`` WITH the derived artifact columns (thumbnail + embedding) in its per-version
 schema. This is the regression guard for "the deployed combination actually derives media" — the gap the
 strategic audit found (derivation used to exist only in manual scripts).
@@ -42,7 +42,7 @@ _LINEAGE_HEADERS = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN els
 
 #: NOT project-qualified, and that is the media lane's actual contract rather than an omission.
 #: `seed_medallion_fga.sh` says it outright — "media lanes stay estate-only (the media pipeline is not
-#: project-qualified — #84 scope)" — and the deployed mover agrees: it targets `silver-media$features`
+#: project-qualified — #84 scope)" — and the deployed stage runner agrees: it targets `silver-media$features`
 #: verbatim. Qualifying these names made the suite look for `<project>-silver-media$features`, a table
 #: nothing writes.
 SILVER = "silver-media$features"
@@ -81,7 +81,7 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
     headers = {**headers, "Idempotency-Key": f"e2e-media-{uuid.uuid4().hex[:16]}"}
     resp = requests.post(f"{lance_ray}/ingest-media", headers=headers, timeout=60)
     if resp.status_code == 409:
-        # The baseline demo stack runs the cascade compute-off (dummy lineage-only movers) — the media
+        # The baseline demo stack runs the cascade compute-off (dummy lineage-only stage runners) — the media
         # head is then deliberately unconfigured. The lane is exercised on the compute-on combo:
         #   helm upgrade ... --set medallion.compute=true --set openbao.enabled=false
         pytest.skip("media head not configured (medallion.compute off on this stack)")

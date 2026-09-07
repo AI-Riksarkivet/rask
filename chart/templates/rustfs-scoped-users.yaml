@@ -100,7 +100,7 @@ spec:
 
                 MEASURED 2026-09-04, and it is the quiet failure in both directions: a re-run of project
                 `acme`'s bronze->silver edge submitted a Ray job that died `AccessDenied` listing
-                `acme-bucket?prefix=medallion/_versions/` — reported by the mover as a failed job, by nothing
+                `acme-bucket?prefix=medallion/_versions/` — reported by the stage runner as a failed job, by nothing
                 as a missing grant — while on the sweep side `compact_one` records AccessDenied per dataset
                 as an `open:` error, which reads as a broken dataset and is acked SUCCESS.
 
@@ -288,7 +288,7 @@ spec:
               {{- end }}
 
               {{- if $medallion }}
-              # --- MEDALLION: the producer and the three movers. -------------------------------------
+              # --- MEDALLION: the producer and the three stage runners. -------------------------------------
               cat >/tmp/medallion.json <<'POLICY'
               {
                 "Version": "2012-10-17",
@@ -337,7 +337,7 @@ spec:
               # medallion reaches control records directly over S3, not through the catalog door.
               # Measured 2026-09-07: `transform_spec.resolve_task` / `resolve_transform`, `gate_specs`
               # and `project_root` READ `_tasks/`, `_transforms/`, `_gates/` and the warehouse registry,
-              # so a total deny leaves every mover unable to resolve which transform to run.
+              # so a total deny leaves every stage runner unable to resolve which transform to run.
               #
               # `_tasks/` IS ABSENT FROM THE DENY, and that is the carve-out this policy exists to make.
               # `task_register.register_ray_tasks` writes `_tasks/<hash>.json` at boot and
@@ -347,7 +347,7 @@ spec:
               # run nothing, with the policy looking correct.
               #
               # Everything else is write-deny, like maintenance's and for the same reason: the reads are
-              # load-bearing and the writes are not ones this plane ever makes. A mover that can rewrite
+              # load-bearing and the writes are not ones this plane ever makes. A stage runner that can rewrite
               # `_transforms/` re-points what it runs; one that can rewrite `_gates/` admits its own
               # blocked output; one that can delete `_trash/` strands bytes behind an undrop that can no
               # longer find them.

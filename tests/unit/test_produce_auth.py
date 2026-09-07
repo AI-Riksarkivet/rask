@@ -507,7 +507,7 @@ def test_the_human_path_returns_the_verified_subject(monkeypatch: pytest.MonkeyP
     """The door is the LAST place the cascade's originator exists.
 
     It returned nothing, so a bronze->silver->gold run could never name the person who started it: by
-    the time a later stage fails the request is gone and the mover authors as a chart role literal. The
+    the time a later stage fails the request is gone and the stage runner authors as a chart role literal. The
     value is a TARGETING hint only — it rides `lance.originator` into the notifications plane, which
     re-derives every recipient's visibility at delivery — so returning it widens no authorization."""
     assert _run(monkeypatch, app_token="secret", authz="Bearer t", verifier=_Verifier("alice")) == "alice"

@@ -42,7 +42,7 @@ def _bronze_media(tmp_path: Path, payloads: list[bytes]) -> str:
 
 
 def test_image_blobs_derive_artifacts_through_the_generic_stage(tmp_path: Path) -> None:
-    """The media lane needs NO special mover: the generic stage derives from image content."""
+    """The media lane needs NO special stage runner: the generic stage derives from image content."""
     bronze = _bronze_media(tmp_path, [_png((200, 40, 40)), _png((40, 40, 200))])
     silver = str(tmp_path / "silver_media")
 

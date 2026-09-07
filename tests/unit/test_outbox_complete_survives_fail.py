@@ -6,7 +6,7 @@ is the crash window working as designed.
 
 The hazard: `stage_event` keys the staged file on `run_id` alone (`<outbox_uri>/<run_id>.json`,
 truncating overwrite) and `build_run_event` seeds `run_id` from `(project, operation, token)` with
-`event_type` **excluded**. So a COMPLETE and a FAIL for one run share a key. If the mover's error
+`event_type` **excluded**. So a COMPLETE and a FAIL for one run share a key. If the stage runner's error
 path stages a FAIL after the COMPLETE publish failed, it destroys the COMPLETE — on a run whose Lance
 write already committed, i.e. a run that SUCCEEDED.
 
@@ -25,7 +25,7 @@ from typing import Any, cast
 
 import pytest
 
-import medallion.services.transform as mover
+import medallion.services.transform as stage_runner
 from medallion.core.config import MedallionSettings
 from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
@@ -66,7 +66,7 @@ def _staged(outbox_dir: Path) -> dict[str, dict[str, Any]]:
 
 def _fake_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fake the read and the write: these tests exercise the EMIT path, not Lance."""
-    monkeypatch.setattr(mover, "read_upstream", lambda uri, _so: UpstreamFacts(uri=uri, version=1))
+    monkeypatch.setattr(stage_runner, "read_upstream", lambda uri, _so: UpstreamFacts(uri=uri, version=1))
     monkeypatch.setattr(inprocess_executor, "transform_stage", lambda *_a, **_k: WriteResult(version=1, row_count=1, size_bytes=1))
 
 
@@ -81,7 +81,7 @@ def test_a_failed_complete_publish_does_not_get_overwritten_by_a_fail(tmp_path: 
     dapr = _DaprFailingEveryPublish()
     settings = _settings(tmp_path)
 
-    asyncio.run(mover.handle_stage(cast(Any, dapr), settings, {"data": {"token": "tok"}}))
+    asyncio.run(stage_runner.handle_stage(cast(Any, dapr), settings, {"data": {"token": "tok"}}))
 
     staged = _staged(tmp_path)
     assert staged, "nothing staged — the outbox did not run at all"
@@ -99,7 +99,7 @@ def test_the_complete_is_still_staged_at_all_after_its_publish_fails(tmp_path: P
     _fake_stage(monkeypatch)
     dapr = _DaprFailingEveryPublish()
 
-    asyncio.run(mover.handle_stage(cast(Any, dapr), _settings(tmp_path), {"data": {"token": "tok"}}))
+    asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _settings(tmp_path), {"data": {"token": "tok"}}))
 
     assert _staged(tmp_path), "the crash window is gone — a publish failure now loses the event"
     assert dapr.attempts, "no publish was attempted"

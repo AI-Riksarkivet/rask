@@ -1,4 +1,4 @@
-"""A mover opens the upstream the CATALOG vends, not the path its chart composed.
+"""A stage runner opens the upstream the CATALOG vends, not the path its chart composed.
 
 The other half of rule I2, and the half without which the media head's fix strands the lane. The head
 now asks the catalog where `bronze-media$objects` lives and writes there
@@ -6,14 +6,14 @@ now asks the catalog where `bronze-media$objects` lives and writes there
 `medallion.media` trigger. `_confine_from_uri` honours a trigger-supplied upstream only INSIDE
 `read_root`, and for a project-less trigger `read_root` was `MEDALLION_FROM_URI` — a composed
 `{root}/medallion/{namespace}` in the reserved platform bucket. The vended location lives in the
-warehouse the namespace is BOUND to, i.e. a different bucket, so the mover would have refused the
+warehouse the namespace is BOUND to, i.e. a different bucket, so the stage runner would have refused the
 head's own answer as unconfined and DROPped every media arrival.
 
 `_confine_from_uri` names this limit outright — "Making it WORK single-tenant means resolving a real
 storage root here — the catalog's connection root is the candidate, and it is not free". This takes
 the tighter option than that candidate: not a connection root, not a bucket, but the location the
 catalog states for THIS stage's own upstream table. That NARROWS what a trigger may name (a specific
-dataset URI rather than everything under a root), so it cannot widen what this mover's credentials
+dataset URI rather than everything under a root), so it cannot widen what this stage runner's credentials
 will open.
 
 Three answers, three behaviours, and the difference between them is the point:
@@ -39,7 +39,7 @@ from medallion.services.trigger_guards import StageTrigger
 
 CATALOG = "http://catalog.test"
 ROOT = "s3://lance-catalog"
-#: What `chart/templates/medallion.yaml` renders for the media mover.
+#: What `chart/templates/medallion.yaml` renders for the media stage runner.
 COMPOSED_FROM = f"{ROOT}/medallion/bronze-media"
 #: What the catalog vends, because `bronze-media` is bound to a warehouse. Different BUCKET.
 VENDED_FROM = "s3://lakehouse-wh/medallion/bronze-media"
@@ -88,7 +88,7 @@ async def test_the_vended_location_becomes_the_upstream_and_the_confinement_root
     _describe(VENDED_FROM)
     roots = await _resolve_roots(_settings(), project="", from_dataset=FROM_DATASET)
 
-    assert roots.from_uri == VENDED_FROM, f"the mover would open {roots.from_uri}, which no catalog vends"
+    assert roots.from_uri == VENDED_FROM, f"the stage runner would open {roots.from_uri}, which no catalog vends"
     assert roots.read_root == VENDED_FROM, "the confinement root still names the composed path"
     assert _confined(VENDED_FROM, roots) == VENDED_FROM, "the head's own trigger was refused as unconfined"
 
@@ -109,7 +109,7 @@ async def test_a_table_the_catalog_does_not_govern_keeps_the_composed_path() -> 
 @pytest.mark.asyncio
 async def test_a_catalog_that_cannot_be_ASKED_raises_rather_than_composing() -> None:
     """A 5xx is not "no such table". Collapsing the two would let an outage read as a governance
-    answer and send this mover at a path that may not be the governed copy — the exact class of
+    answer and send this stage runner at a path that may not be the governed copy — the exact class of
     silent divergence that made `/ingest-media` 503 for days."""
     _describe("", status=503)
 
@@ -120,7 +120,7 @@ async def test_a_catalog_that_cannot_be_ASKED_raises_rather_than_composing() -> 
 @respx.mock
 @pytest.mark.asyncio
 async def test_no_catalog_url_is_the_ungoverned_dev_shape() -> None:
-    """The movers' standing escape hatch: nothing to ask, so the deployment contract is the answer."""
+    """The stage runners' standing escape hatch: nothing to ask, so the deployment contract is the answer."""
     roots = await _resolve_roots(_settings(MEDALLION_CATALOG_URL=""), project="", from_dataset=FROM_DATASET)
 
     assert roots.from_uri == COMPOSED_FROM
@@ -131,7 +131,7 @@ async def test_no_catalog_url_is_the_ungoverned_dev_shape() -> None:
 @pytest.mark.asyncio
 async def test_a_trigger_naming_somewhere_ELSE_is_still_refused() -> None:
     """Narrowing, not widening. The confinement is what stops a topic anything in the mesh can publish
-    to from becoming a read primitive for every bucket this mover's credentials can reach."""
+    to from becoming a read primitive for every bucket this stage runner's credentials can reach."""
     _describe(VENDED_FROM)
     roots = await _resolve_roots(_settings(), project="", from_dataset=FROM_DATASET)
 

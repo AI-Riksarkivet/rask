@@ -9,7 +9,7 @@ consequence here is not cosmetic: the lineage service MERGEs on this id, so two 
 same seed land on ONE ``(:Run)`` node and their lineage cross-wires.
 
 WHY THE PAIR BELOW IS THE HONEST ONE. The obvious collision needs two different ``operation`` values,
-which is not reachable: ``operation`` is per-mover env config (``MEDALLION_OPERATION``,
+which is not reachable: ``operation`` is per-stage runner env config (``MEDALLION_OPERATION``,
 ``medallion.core.config``), fixed for a deployment. The pair used here holds ``operation`` CONSTANT and
 varies only ``project`` and ``token``, the two fields a caller supplies — so it is reachable by a
 caller, which is what makes this a defect rather than a curiosity.

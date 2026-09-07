@@ -4,7 +4,7 @@ the retired plan `open_medallion_workflow.md` (its rulings now live in `docs/arc
 then fails to register — today that leaves gold rows with no catalog record."
 
 That state is no longer reachable, and NOT because a saga was built. It was closed by REORDERING: the
-mover now asks the catalog where the table lives BEFORE writing (rule I2, applied to the write side),
+stage runner now asks the catalog where the table lives BEFORE writing (rule I2, applied to the write side),
 and asking creates the table, which registers it. Registration therefore strictly precedes the first
 row. There is no window in which rows exist unregistered, so there is nothing for a compensating
 transaction to undo.

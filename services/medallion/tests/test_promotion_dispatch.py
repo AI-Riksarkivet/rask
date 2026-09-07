@@ -1,10 +1,10 @@
-"""The mover's half: a HOLD becomes a question on the bus, or stays a verdict.
+"""The stage runner's half: a HOLD becomes a question on the bus, or stays a verdict.
 
 `_QUALITY_BLOCKED` is a permanent DROP, and it is the right answer for a corrupt blob pointer. It is
 the wrong answer for a promotion that is merely UNUSUAL — a batch that legitimately shipped zero rows,
 a declared column a consumer agreed to drop. Those are decisions, and a service cannot make them.
 
-What a mover must NOT do is decide which it is. It publishes what it saw; the review workflow — which
+What a stage runner must NOT do is decide which it is. It publishes what it saw; the review workflow — which
 runs in the producer, beside the door a person can reach — splits corrupt from unusual.
 """
 
@@ -80,7 +80,7 @@ class TestWhatTheHoldCarries:
         assert spec.approver == "CiQwOGE4"
 
     def test_it_carries_the_DOWNSTREAM_topic_so_an_approval_can_resume_the_cascade(self) -> None:
-        """The approval happens in the producer, which has no idea what this mover's next hop is. If
+        """The approval happens in the producer, which has no idea what this stage runner's next hop is. If
         the topic does not ride along, a yes records a decision and promotes nothing."""
         spec = hold_spec(
             _settings(MEDALLION_PUB_TOPIC="medallion.gold"),
@@ -164,7 +164,7 @@ class TestReviewIsOptIn:
 
     def test_review_on_with_NO_approver_is_still_dispatched(self) -> None:
         """Deliberate: the workflow answers 'no reachable approver' in the outcome and in lineage. A
-        mover that silently swallowed it would leave the operator with the same unexplained DROP the
+        stage runner that silently swallowed it would leave the operator with the same unexplained DROP the
         review exists to replace."""
         from medallion.services.promotion_hold import review_enabled
 

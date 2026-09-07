@@ -42,7 +42,7 @@ class _Settings:
     transform_routes: dict[str, str] = {}
     lane_destinations: dict[str, str] = {"bronze": "silver", "bronze-media": "silver-media"}
     #: The SOURCE and DESTINATION tables of each lane, project-unqualified — the shape
-    #: `chart/templates/medallion.yaml` derives from `movers[].fromDataset` / `.toDataset`.
+    #: `chart/templates/medallion.yaml` derives from `stage runners[].fromDataset` / `.toDataset`.
     lane_sources: dict[str, str] = {"bronze": "bronze$events", "bronze-media": "bronze-media$objects"}
     lane_destination_datasets: dict[str, str] = {"bronze": "silver$features", "bronze-media": "silver-media$features"}
     lag_projects: list[str] = []
@@ -114,7 +114,7 @@ def test_the_published_reader_asks_for_a_TABLE_THAT_EXISTS(monkeypatch: pytest.M
     create, so `/v1/table/acme-bronze` can name no table that has ever existed: every tick 404'd, the
     reader mapped that to "nothing published", and a cascade that had never run once reported lag 0.
 
-    The name comes from the mover's own `fromDataset` declaration, project-qualified by the same helper
+    The name comes from the stage runner's own `fromDataset` declaration, project-qualified by the same helper
     the rest of the estate uses, so a renamed lane cannot half-move.
     """
     seen = _capture(monkeypatch, {"tags": {"published": {"version": 7}}})
@@ -141,11 +141,13 @@ def test_the_consumed_reader_MATCHES_ONE_TENANT_not_every_lookalike(monkeypatch:
     """
     _capture(
         monkeypatch,
-        {"runs": [
-            {"outputs": ["acme-silver$features"], "consumed_from_version": None, "consumed_to_version": 3},
-            {"outputs": ["beta-silver$features"], "consumed_from_version": None, "consumed_to_version": 9},
-            {"outputs": ["acme-silver-media$features"], "consumed_from_version": None, "consumed_to_version": 42},
-        ]},
+        {
+            "runs": [
+                {"outputs": ["acme-silver$features"], "consumed_from_version": None, "consumed_to_version": 3},
+                {"outputs": ["beta-silver$features"], "consumed_from_version": None, "consumed_to_version": 9},
+                {"outputs": ["acme-silver-media$features"], "consumed_from_version": None, "consumed_to_version": 42},
+            ]
+        },
     )
     assert consumed_reader(_Settings())("bronze->silver", "acme") == [ConsumedRange(from_version=None, to_version=3)]
 
@@ -155,10 +157,12 @@ def test_the_consumed_reader_returns_EVERY_range_not_just_the_ceiling(monkeypatc
     evidence of it before the detector ever saw the numbers."""
     _capture(
         monkeypatch,
-        {"runs": [
-            {"outputs": ["acme-silver$features"], "consumed_from_version": None, "consumed_to_version": 3},
-            {"outputs": ["acme-silver$features"], "consumed_from_version": 5, "consumed_to_version": 8},
-        ]},
+        {
+            "runs": [
+                {"outputs": ["acme-silver$features"], "consumed_from_version": None, "consumed_to_version": 3},
+                {"outputs": ["acme-silver$features"], "consumed_from_version": 5, "consumed_to_version": 8},
+            ]
+        },
     )
     assert consumed_reader(_Settings())("bronze->silver", "acme") == [
         ConsumedRange(from_version=None, to_version=3),

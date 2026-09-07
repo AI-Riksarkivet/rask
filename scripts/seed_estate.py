@@ -239,10 +239,10 @@ DEMO_ESTATE = Estate(
         # `POST /v1/table/acme-silver$features/publish` answered 403 three times and the trigger parked
         # in the DLQ, so the run reported nothing and gold never existed.
         #
-        # The mover already had `writer` — the create seeds that — and writer is deliberately not
+        # The stage runner already had `writer` — the create seeds that — and writer is deliberately not
         # enough: publishing is an owner-tier act, and the model's whole point is that "a plain writer
         # can write within a stage but cannot promote INTO a gated one" (publication.py). Correct rule,
-        # and nothing granted the movers the rung that satisfies it, because this seed grants PEOPLE.
+        # and nothing granted the stage runners the rung that satisfies it, because this seed grants PEOPLE.
         #
         # A tenant whose tiers exist but whose cascade cannot publish into them is exactly the
         # half-made state this script exists to prevent — the authz half of a ghost. The estate is not
@@ -251,7 +251,7 @@ DEMO_ESTATE = Estate(
         # convenience: `design-create-on-parent.md` — "creation permissions should usually live on the
         # parent or container object, not on the leaf resource being created", because a grant whose
         # object does not exist yet "forces the application to invent an object identifier before
-        # authorization". The mover CREATES `<tier>$<table>`, so the table cannot be the object here;
+        # authorization". The stage runner CREATES `<tier>$<table>`, so the table cannot be the object here;
         # `table` defines `owner from parent` for exactly this reason.
         #
         # And the failure itself is the one `core-tuples.md` names: "the model only defines what is
@@ -275,7 +275,7 @@ DEMO_ESTATE = Estate(
         # is resumed by `publish_promotion`, which runs in the PRODUCER's process (the workflow instance
         # and the approve door must share an app-id for `raise_workflow_event` to resolve it). So the
         # publish that completes a human-approved hold is made by `service-medallion-producer`, not by
-        # the mover that raised it — and without this grant the whole review path ends in
+        # the stage runner that raised it — and without this grant the whole review path ends in
         # `403 can_update_tag`, AFTER a person has already said yes. Measured 2026-08-23: the
         # orchestration reported FAILED with exactly that, and the approval was silently worthless.
         Grant("user:service-bronze-to-silver", "owner", "namespace:acme-silver"),

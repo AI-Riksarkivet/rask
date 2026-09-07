@@ -135,7 +135,7 @@ def check_cdf(root: Path) -> CheckResult:
     delta_ids: list[int] | str
     try:
         # get_inserted_rows() hands back a pyarrow RecordBatchReader (a STREAM), not a Table —
-        # read_all() is what materialises it. Worth pinning: the mover reads deltas this way, and
+        # read_all() is what materialises it. Worth pinning: the stage runner reads deltas this way, and
         # treating the reader as a Table is an easy, silent mistake.
         inserted = ds2.delta(base).get_inserted_rows().read_all()
         delta_ids = sorted(inserted.column("id").to_pylist())

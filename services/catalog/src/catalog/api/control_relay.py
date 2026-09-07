@@ -5,7 +5,7 @@ publishes and drops it only on ack, so a NATS blip leaves the event durable rath
 the other half: the thing that reads that prefix and delivers what it finds.
 
 **Why it matters more than "a refresh hint".** Most control events are exactly that — a console ring
-buffer or a tag-polling reader loses a redraw. ``table_published`` is not: the mover does not fire the
+buffer or a tag-polling reader loses a redraw. ``table_published`` is not: the stage runner does not fire the
 next stage's topic, and ``/publication-arrival`` receiving this event is the ONLY thing that WAKES
 silver->gold. The medallion's cascade-lag cron re-reads the ``published`` tag since
 `docs/DECISIONS.md "Cascade repair"` C3, and that does not weaken this argument by a word: it MEASURES how far a
@@ -117,7 +117,7 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
     ``event_id`` survives -> ``/publication-arrival`` mints its stage ``token`` from it
     (`publication_trigger.py`) -> ``stage_submission_id(stage, token, from_uri, to_uri)`` hashes that
     into the workflow's deterministic ``instance_id`` (`medallion/services/transform.py`) ->
-    ``schedule_new_workflow`` for a live instance errors, and the mover reports that as the RE-ATTACH it
+    ``schedule_new_workflow`` for a live instance errors, and the stage runner reports that as the RE-ATTACH it
     is. So a duplicate delivery attaches to the run already in flight rather than starting a second.
 
     Every other subscriber on this topic keys on the same id: the catalog's own ring buffer dedupes on

@@ -3,7 +3,7 @@
 The ingest plane superseded the medallion's IIIF head without inheriting #92's fixity column — and
 nothing failed, because no test related the two schemas. That is the same failure class as the
 `stage` postmortem in `ingest/runtime.py`: a column difference between writers is only cheap until
-something projects it (the viewer's `_PAGE_COLUMNS`, the movers' carry-forward, a fixity audit).
+something projects it (the viewer's `_PAGE_COLUMNS`, the stage runners' carry-forward, a fixity audit).
 This suite pins the relationship: every column the two writers SHARE agrees on type, and the
 governed core — id, source_uri, payload, sha256, stage — is present in both, so a row's provenance
 story reads the same whichever head landed it.

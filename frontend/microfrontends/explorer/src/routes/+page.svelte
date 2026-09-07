@@ -602,7 +602,7 @@
 	 * Deliberately NOT `runSearch(spec)`. That function resets paging, clears the map selection,
 	 * empties `mapHits` and leaves voice mode, all of which are correct for a NEW search and
 	 * destructive for a background refresh: a lasso someone spent a minute drawing would vanish
-	 * because a mover run finished somewhere else in the estate. Same ruling the annotator's half of
+	 * because a stage runner run finished somewhere else in the estate. Same ruling the annotator's half of
 	 * this task already made — a change you did not make must never discard work you did.
 	 *
 	 * It also YIELDS to the user: `searchSeq` is read, never bumped, so a search or `loadMore` the

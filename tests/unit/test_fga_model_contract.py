@@ -211,7 +211,7 @@ _OTHER_SERVICE_PAIRS: dict[tuple[str, str], str] = {
     ("table", "can_write_data"): "catalog/api/v1/endpoints/credentials.py (write-tier vend)",
     ("table", "can_get_metadata"): "lineage fga_deps.py + viewer datasets.py/pages.py (#90 page LISTING)",
     ("namespace", "can_create_table"): "medallion/services/train.py + transform.py default",
-    ("namespace", "can_promote"): "medallion silver->gold mover (chart requiredAction)",
+    ("namespace", "can_promote"): "medallion silver->gold stage runner (chart requiredAction)",
     ("table", "can_promote"): "catalog require_can_promote (#17 model promotion endpoint)",
     ("project", "can_create_warehouse"): "catalog fga_deps.require_can_create_warehouse (#3-A)",
     ("project", "can_administer"): "catalog/api/v1/endpoints/policies.py (#84 project policy routes)",
@@ -248,8 +248,8 @@ def test_every_relation_other_services_check_exists_in_the_model() -> None:
 
 
 def test_chart_medallion_required_actions_exist_on_namespace() -> None:
-    """CONTRACT: every ``requiredAction`` the chart configures for a medallion mover is a real
-    ``namespace`` relation (the mover checks it on ``namespace:<toNamespace>``). A typo here would
+    """CONTRACT: every ``requiredAction`` the chart configures for a medallion stage runner is a real
+    ``namespace`` relation (the stage runner checks it on ``namespace:<toNamespace>``). A typo here would
     503 the whole cascade at the FGA gate, not deny it."""
     namespace_relations = _model_relations()["namespace"]
     actions = {

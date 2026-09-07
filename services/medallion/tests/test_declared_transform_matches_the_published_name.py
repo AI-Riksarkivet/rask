@@ -16,14 +16,14 @@ they use:
 two never meet and every arrival for a declared lane is DROPped as another lane's.
 
 WHY IT SURVIVED: the miss is silent in both directions. `medallion_publication_not_a_lane` logs at
-DEBUG and acks; the mover's drop logs at INFO and acks. A lane that can NEVER fire is
+DEBUG and acks; the stage runner's drop logs at INFO and acks. A lane that can NEVER fire is
 indistinguishable from one that simply has no data -- the same failure shape as MEDALLION_LANE being
 rendered by no chart template (`706c8ce3`) and the lineage link that denied its own run
 (`78812a5b`).
 
 MEASURED, same lane, same ingest, one field changed:
 
-    from_id = acme-bronze$agnostic  ->  mover logs NOTHING, cascade dead
+    from_id = acme-bronze$agnostic  ->  stage runner logs NOTHING, cascade dead
     from_id = bronze$agnostic       ->  publish 200, quality_blocked, held_for_review
 
 THE FIX IS ONE CONVENTION, not a widened guard. A trigger's ``dataset`` is a LANE KEY -- tenant-free,

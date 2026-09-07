@@ -312,7 +312,7 @@ data:
       #
       # THE AGE METRIC READS HISTORY ROWS ONLY, and that filter is load-bearing rather than tidy. A
       # workflow's `metadata` row keeps its original insertdate across `continue_as_new`, so a
-      # long-running recurring workflow — which this estate has, in the movers' watch loops — would
+      # long-running recurring workflow — which this estate has, in the stage runners' watch loops — would
       # look arbitrarily old forever and the alert would fire on a perfectly healthy store. History
       # rows are rewritten per turn, so their age is the property the retention policy actually
       # governs.

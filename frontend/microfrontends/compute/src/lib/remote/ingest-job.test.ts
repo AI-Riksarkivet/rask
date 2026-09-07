@@ -35,7 +35,7 @@ describe('isIngestJob', () => {
 
 	it('does NOT match the other jobs that share this estate-wide feed', () => {
 		// Real values from the same graph: the board is estate-wide and carries catalog operations,
-		// movers and training runs, so the filter is what makes it an INGEST board.
+		// stage runners and training runs, so the filter is what makes it an INGEST board.
 		expect(isIngestJob('lance-catalog/create_table.bind86-bronze$pages-e2e')).toBe(false);
 		expect(isIngestJob('lance-catalog/drop_table.undropns$demo2')).toBe(false);
 	});

@@ -7,7 +7,7 @@ catalog's published OpenAPI — and no second engine can be declared at all.
 
 THE ALIAS IS A MIGRATION MECHANISM, NOT POLITENESS, for the reason this module already records for the
 `lane`->`name` rename: the model is `extra="forbid"`, so an un-aliased rename REFUSES an old record —
-and a refused declaration means a mover runs the chart's program while an operator believes the record
+and a refused declaration means a stage runner runs the chart's program while an operator believes the record
 governs it. Reading an old record must keep working; writing must produce the new name.
 
 WHAT REPLACES THE PATH CHECK is not "nothing". The registry check is STRICTER — it can ask "registered

@@ -48,7 +48,7 @@ are validated and task-filtered on the way back.
 ## The label is a PURPOSE DISCRIMINATOR, not just a config carrier
 
 Ray Serve is shared platform infrastructure. One cluster will host apps that have nothing to do
-with annotation — a batch scorer a mover calls, an embedding endpoint, a workload's own model
+with annotation — a batch scorer a stage runner calls, an embedding endpoint, a workload's own model
 service — and **the annotator must be able to tell which apps are its business**. That decision
 cannot come from the app's name, its route prefix, or its replica shape; all three are the
 deployer's free choice and none is a contract. It comes from the label, and the rule is one line:

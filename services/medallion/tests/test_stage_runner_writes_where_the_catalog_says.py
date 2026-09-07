@@ -1,6 +1,6 @@
-"""The mover writes to the location the catalog vends, not to one it composed.
+"""The stage runner writes to the location the catalog vends, not to one it composed.
 
-This is rule I2 finally applied to the write side. The mover used to build
+This is rule I2 finally applied to the write side. The stage runner used to build
 `{root}/medallion/{tier}` — a layout the catalog has never produced — write there, and then tell the
 catalog that was the table's home. Measured live: the catalog's own binding said
 `s3://bind86-wh/medallion/silver`, so the publish that followed opened the catalog's answer, found no
@@ -77,7 +77,7 @@ def wrote_to(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
         "ensure_stage_output",
         lambda **k: str(upstream / VENDED),
     )
-    # The mover asks the catalog TWICE: where to WRITE (above) and where its UPSTREAM lives. `None` is
+    # The stage runner asks the catalog TWICE: where to WRITE (above) and where its UPSTREAM lives. `None` is
     # the catalog's "I govern no such table", which keeps this suite on its composed upstream — the
     # subject here is the WRITE location, and a vended upstream would change what is read, not where.
     monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
@@ -85,11 +85,11 @@ def wrote_to(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
 
 
 class TestTheVendedLocationWins:
-    def test_the_mover_writes_where_the_catalog_says(self, wrote_to: list[str], upstream: Path) -> None:
+    def test_the_stage_runner_writes_where_the_catalog_says(self, wrote_to: list[str], upstream: Path) -> None:
         asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream), _event()))
 
         assert wrote_to, "the compute step never ran"
-        assert wrote_to[0] == str(upstream / VENDED), f"the mover wrote to a composed path ({wrote_to[0]!r}) instead of the vended one"
+        assert wrote_to[0] == str(upstream / VENDED), f"the stage runner wrote to a composed path ({wrote_to[0]!r}) instead of the vended one"
 
     def test_the_composed_URI_is_not_used_when_the_catalog_governs_the_lane(self, wrote_to: list[str], upstream: Path) -> None:
         """`MEDALLION_TO_URI` is the single-tenant fallback for an ungoverned deployment. With a
@@ -124,17 +124,17 @@ class TestThereIsNothingLeftToRegister:
     so the call raised AFTER the Lance write had committed — ungoverned bytes plus a poison retry no
     redelivery could clear.
 
-    THE ASSERTION IS NOW STRUCTURAL. That door has been deleted, so the mover cannot make the call
+    THE ASSERTION IS NOW STRUCTURAL. That door has been deleted, so the stage runner cannot make the call
     even by mistake, and a test that stubbed it would be stubbing nothing. What is left worth pinning
     is the property the deletion bought: resolving the location is the LAST catalog call before the
     write, and no second call re-states where the table lives.
     """
 
-    def test_the_mover_makes_no_catalog_call_that_RE_STATES_the_location(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
+    def test_the_stage_runner_makes_no_catalog_call_that_RE_STATES_the_location(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
         from medallion.services import catalog_register
 
         assert not hasattr(catalog_register, "register_stage_output"), (
-            "the telling-after-the-fact door is back; a mover that both asks and tells has two answers for where its table lives"
+            "the telling-after-the-fact door is back; a stage runner that both asks and tells has two answers for where its table lives"
         )
 
         asked: list[dict[str, Any]] = []

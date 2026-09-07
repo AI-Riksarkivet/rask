@@ -247,7 +247,7 @@ def build_run_event(
         lance_fields["from_version"] = from_version
     if to_version is not None:
         lance_fields["to_version"] = to_version
-    # The HUMAN this run is running for, when `author` is a service. A mover authors with a chart role
+    # The HUMAN this run is running for, when `author` is a service. A stage runner authors with a chart role
     # literal, which is true and unaddressable; the notifications plane reads this to reach the person
     # whose cascade it is. Carried, never substituted for `author` — see `NotificationReason.ORIGINATOR`.
     if originator:
@@ -278,7 +278,7 @@ def build_run_event(
     run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
     if models:
         # Model identity on the RUN, parsed from the run's own output artefact by the transform,
-        # never from a mover's config: a config states a request, the artefact states what loaded.
+        # never from a stage runner's config: a config states a request, the artefact states what loaded.
         # Absent models render NO facet (the FAIL/synthetic byte-parity below stays intact), and an
         # absent sha is omitted rather than nulled — the serializers' silence-is-honest rule.
         model_fields: dict[str, Any] = {"models": models}
@@ -305,7 +305,7 @@ def build_run_event(
     # is `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` and SAFE_TOKEN_PATTERN (`medallion.services.trigger_guards`)
     # is `[A-Za-z0-9._-]{1,64}`, so a `-` join is FORGEABLE out of the fields it separates — and this
     # id is the MERGE key for the (:Run) node in AGE, so a forged one lands another tenant's run on
-    # yours. It is reachable with a single `operation` (which is per-mover env config, not caller
+    # yours. It is reachable with a single `operation` (which is per-stage runner env config, not caller
     # input): ("acme", "embed_features", "evil-embed_features-tok1") and
     # ("acme-embed_features-evil", "embed_features", "tok1") both rendered
     # `acme-embed_features-evil-embed_features-tok1`. Same fix, same reason as `ingest.runs.run_id_for`
@@ -315,7 +315,7 @@ def build_run_event(
     # single-tenant run already in the graph derives from, and with `operation` fixed per deployment it
     # carries no caller-controlled second field to forge with. STATED SCOPE-CUT — that branch stays
     # non-injective in (operation, token), reachable only by an operator setting MEDALLION_OPERATION to
-    # a prefix of another mover's operation+token. Closing it too would re-derive every single-tenant
+    # a prefix of another stage runner's operation+token. Closing it too would re-derive every single-tenant
     # id in the graph, which is a migration and not a bug fix. The two families cannot collide with
     # each other: a NUL-bearing seed is unreachable from the `-`-joined one.
     if token:

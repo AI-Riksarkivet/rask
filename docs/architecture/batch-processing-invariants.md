@@ -21,9 +21,9 @@ reads as decided regardless of what the prose around it says.
 | **B6** | Refuse new runs while draining | `service_kit.draining` + `services/medallion/tests/test_run_doors_refuse_while_draining.py`, which sweeps every `@router.post` so a new door cannot be added ungated |
 | **B10** | Monotonic clocks; the same number lands in the lineage facet | `services/medallion/tests/test_one_duration_reaches_both.py` |
 | **B12** | Randomise iteration order | `tests/unit/test_batch_invariants_are_actually_guarded.py` — both the dataset list and the failure-retry list |
-| **B13** | Single-flight claims get chart gates | the same file, binding the mover's `asyncio.Lock` to `moverReplicas: 1` in both values files |
+| **B13** | Single-flight claims get chart gates | the same file, binding the stage runner's `asyncio.Lock` to `stageRunnerReplicas: 1` in both values files |
 
-**B10 was the only live defect among them.** On the Ray lane the mover runs twice — submit, then a
+**B10 was the only live defect among them.** On the Ray lane the stage runner runs twice — submit, then a
 wake-up hours later to measure and emit — and the metric used the watcher's measured span while the
 lineage facet used the wake-up's own wall time. The graph recorded seconds for stages that ran hours,
 and the wrong number was the one in the durable audit trail. The correct value already existed; it
@@ -31,7 +31,7 @@ was computed after the event that needed it.
 
 **B12, B13 and B3 are the more interesting class**: all three WORKED, and nothing would have noticed
 losing them. Deleting `random.shuffle(uris)` passed every test, which would silently restore the
-starvation the shuffle was written for. `moverReplicas` could be scaled past 1 with nothing
+starvation the shuffle was written for. `stageRunnerReplicas` could be scaled past 1 with nothing
 objecting, though single-flight there is an `asyncio.Lock` and therefore process-local. A guard that
 guards nothing is this estate's signature defect, and closing it is worth more than the features
 filed beside it — a silently-lost invariant costs the incident it was written to prevent, twice.

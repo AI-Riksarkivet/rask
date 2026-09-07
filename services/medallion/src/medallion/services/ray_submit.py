@@ -1,13 +1,13 @@
 """Submit a stage-transform Ray job to the ray-lance cluster via the Ray Jobs REST API.
 
-The event-driven real-Ray path (``MEDALLION_RAY_ENABLED``): a mover submits ``scripts/ray_stage_job.py``
+The event-driven real-Ray path (``MEDALLION_RAY_ENABLED``): a stage runner submits ``scripts/ray_stage_job.py``
 (baked into the ray-lance image) to the Ray cluster IN RESPONSE TO its Dapr cascade trigger, instead of the
 in-process fake-Ray ``compute.transform_stage``. Uses only ``httpx`` against the Ray Jobs REST API — no
-``ray`` package in the mover image.
+``ray`` package in the stage runner image.
 
 Idempotent under at-least-once redelivery: the submission id is DETERMINISTIC per (stage, token), so a
 redelivered trigger RE-ATTACHES to the same job rather than starting a second concurrent job that would
-race the write. A submit failure raises so the mover returns RETRY and the sidecar redelivers.
+race the write. A submit failure raises so the stage runner returns RETRY and the sidecar redelivers.
 
 EVERY path is submit-and-ack since A13 (2026-08-03). The stage path used to block until the
 job finished, which made the ack contract a race — a job outliving the redelivery window exhausted it —
@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 #: MODULE-LEVEL rather than lifespan-owned, and that is the honest shape rather than a shortcut: a
 #: workflow ACTIVITY has no `Request` and no reachable `app.state`, so the reference's literal
 #: prescription cannot apply. The client gets the WORKER's lifetime instead, and `close_ray_client()`
-#: is called from the mover's shutdown — a module-level client nothing closes trades a per-call
+#: is called from the stage runner's shutdown — a module-level client nothing closes trades a per-call
 #: teardown for a permanent leak plus an "Unclosed client session" on every stop.
 #:
 #: Guarded by a lock: two activities starting concurrently would otherwise both see `None` and build
@@ -83,7 +83,7 @@ async def ray_client() -> httpx.AsyncClient:
 async def close_ray_client() -> None:
     """Close the pooled client. Idempotent, so a double shutdown is not an error."""
     global _client, _client_address
-    # TOLERANT ON PURPOSE, for the same reason the mover's teardown suppresses: a shutdown that raises
+    # TOLERANT ON PURPOSE, for the same reason the stage runner's teardown suppresses: a shutdown that raises
     # on an already-broken (or substituted) client must not stop the rest of the teardown. The refs are
     # dropped either way, so a failed close cannot leave a stale client answering later callers.
     if _client is not None:
@@ -152,7 +152,7 @@ async def submit_stage_job(
     the FGA objects are keyed by, while a storage URI is a location. The job emits its own OpenLineage
     (no Dapr sidecar on Ray pods), so without these it names its output by the URI's stem — a node no
     grant matches, which hides the run from every recipient while the job acks SUCCESS — and mints its
-    own run id, which cannot MERGE onto the run the mover emitted for the same hop. Empty is the
+    own run id, which cannot MERGE onto the run the stage runner emitted for the same hop. Empty is the
     UNWIRED case and omits the variable, leaving the runner's documented stem fallback in place.
     """
     # A named-but-undeclared lane RAISES rather than falling back: a fallback would run the chart's
@@ -206,8 +206,8 @@ async def submit_stage_job(
         # alone gave every job `SignatureDoesNotMatch`, measured twice on the live estate.
         "S3_REGION": settings.s3_region,
         # Forward this pod's OTLP config (the train path below already does) so the job can export the
-        # span it parents on the handed-over trace context. The service name is the mover's own — the
-        # job executes that mover's stage transform, so its span belongs to the same logical service.
+        # span it parents on the handed-over trace context. The service name is the stage runner's own — the
+        # job executes that stage runner's stage transform, so its span belongs to the same logical service.
         # Empty endpoint (observability off) → the job runs untraced.
         "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
         "OTEL_EXPORTER_OTLP_PROTOCOL": os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", ""),
@@ -217,13 +217,13 @@ async def submit_stage_job(
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""),
         "OTEL_SERVICE_NAME": os.environ.get("OTEL_SERVICE_NAME", ""),
         "OTEL_RESOURCE_ATTRIBUTES": os.environ.get("OTEL_RESOURCE_ATTRIBUTES", ""),
-        # Trace continuity (prod-readiness P3): the mover's active span rides the runtime_env as
+        # Trace continuity (prod-readiness P3): the stage runner's active span rides the runtime_env as
         # TRACEPARENT, and the job starts its root span as a child of it — the cascade's distributed
         # trace no longer goes dark at `ray job submit`. Empty when no span is active.
         **rk.trace_env(),
         # THE WORKLOAD'S OWN PARAMETERS, namespaced. Everything above is the PLATFORM's half of the
         # contract — where to read, where to write, who to trace as, what provenance to stamp. This is
-        # the other half, and it is the reason a mover row can name a `stageJob` at all: without it the
+        # the other half, and it is the reason a stage runner row can name a `stageJob` at all: without it the
         # env dict was fixed, so a second workload either reused the first one's variables or forced a
         # platform edit.
         #

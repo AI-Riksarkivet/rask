@@ -45,13 +45,13 @@ explorer:
 # THE RAY THE CASCADE ACTUALLY REACHES. The chart derives `http://<release>-ray-head-svc:8265` from the
 # RayService it renders — and it renders that ONLY under `singleTenant.enabled`, which is off here. So
 # on this estate that name resolves to nothing, every stage dies
-# `RayJobError: [Errno -3] Temporary failure in name resolution`, and the mover reports a FAILED stage
+# `RayJobError: [Errno -3] Temporary failure in name resolution`, and the stage runner reports a FAILED stage
 # with nothing naming DNS as the cause.
 #
 # This lived as a `--set` for one afternoon and was silently dropped by the next `helm upgrade -f`,
 # exactly as this file's header describes happening to the corpus PVC: `--set` values do not survive
 # into `helm get values`, so an upgrade that reuses the live values loses them. Measured 2026-08-25 —
-# two upgrades later the movers were back on `rask-ray-head-svc` and the cascade was dead again.
+# two upgrades later the stage runners were back on `rask-ray-head-svc` and the cascade was dead again.
 medallion:
   rayAddress: http://ray-lance-head:8265
 
@@ -88,7 +88,7 @@ docs:
 #
 # The hook runs POST-upgrade, so on the one upgrade that first names an identity the pods read the
 # derived secret from OpenBao before RustFS has been told about it. Expect a brief window of failed
-# S3 calls there; the movers are idempotent and retry.
+# S3 calls there; the stage runners are idempotent and retry.
 rustfs:
   maintenanceAccessKey: rask-maintenance
   medallionAccessKey: rask-medallion

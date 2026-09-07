@@ -71,7 +71,7 @@ class TestAnAdditiveRerunDoesNotRewriteTheTier:
         transform_stage(bronze, silver, {}, stage="silver")
 
         before = set(lance.dataset(silver).schema.names)
-        lance.dataset(silver).add_columns({"extra": "'x'"})  # a column the mover will not produce
+        lance.dataset(silver).add_columns({"extra": "'x'"})  # a column the stage runner will not produce
         after = lance.dataset(silver).to_table()
 
         assert "extra" in after.column_names
@@ -83,7 +83,7 @@ class TestAnAdditiveRerunDoesNotRewriteTheTier:
 class TestARedeliveredTriggerWritesNothing:
     """The most common path, and the one that used to cost the most.
 
-    Dapr delivers at least once, so a mover re-runs a stage it has already completed as a matter of
+    Dapr delivers at least once, so a stage runner re-runs a stage it has already completed as a matter of
     routine. That re-run produced exactly the columns already on disk — and then rewrote the entire
     tier to put them there again, and dropped the JSON index on the way so it had to be rebuilt.
     """

@@ -163,7 +163,7 @@
 		busy = false;
 		report(
 			result,
-			`Declared “${transform.trim()}” — a mover set to MEDALLION_LANE=${transform.trim()} now resolves this record instead of its Deployment env.`,
+			`Declared “${transform.trim()}” — a stage runner set to MEDALLION_LANE=${transform.trim()} now resolves this record instead of its Deployment env.`,
 		);
 	}
 
@@ -175,7 +175,7 @@
 		busy = false;
 		report(
 			result,
-			`Deleted “${name}”. A mover still naming it will now REFUSE at the submit seam rather than silently fall back to its env.`,
+			`Deleted “${name}”. A stage runner still naming it will now REFUSE at the submit seam rather than silently fall back to its env.`,
 		);
 	}
 </script>
@@ -220,7 +220,7 @@
 
 			{#if rows.length === 0}
 				<p class="text-muted-foreground text-sm">
-					No transform is declared. Every mover is still running whatever its Deployment env names —
+					No transform is declared. Every stage runner is still running whatever its Deployment env names —
 					which nothing here can enumerate, review or gate.
 				</p>
 			{:else}
@@ -277,7 +277,7 @@
 		</div>
 		<p class="text-muted-foreground text-sm">
 			Decides whether a stage's output may publish. Until this door existed every value here was env
-			on a mover pod, so moving a threshold meant a values-file edit and a redeploy.
+			on a stage runner pod, so moving a threshold meant a values-file edit and a redeploy.
 			{#if !declared}
 				Nothing is declared, so this project runs on its deployment's own settings — the values
 				below are what would be saved, not what is in force.

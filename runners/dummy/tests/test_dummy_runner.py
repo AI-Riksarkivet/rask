@@ -136,7 +136,7 @@ def test_an_empty_delta_is_a_no_op_not_an_empty_version(tmp_path: Path) -> None:
     """A redelivered event whose rows were already processed must not fire a publication.
 
     Writing an empty version would emit an arrival event for data nobody added, and every downstream
-    mover would wake for nothing.
+    stage runner would wake for nothing.
     """
     uri = _bronze(tmp_path, [1])
     latest = lance.dataset(uri).version
@@ -170,7 +170,7 @@ def test_a19_the_delta_is_asserted_at_ROW_ID_level_not_just_by_count(tmp_path: P
 
     Counting is not enough. A delta predicate that was off by one version, or that silently rescanned
     the tier and happened to return the right NUMBER of rows, passes a count assertion while feeding
-    the mover the wrong rows entirely. The stable row id is the identity that makes the claim
+    the stage runner the wrong rows entirely. The stable row id is the identity that makes the claim
     checkable, which is also why the creation flag that produces it is gated (A14).
     """
     uri = _bronze(tmp_path, [1, 2, 3])
@@ -226,7 +226,7 @@ def test_a19_a_full_E5_replay_converges_to_identical_CONTENT(tmp_path: Path) -> 
 def test_a19_a_delta_bounded_by_a_STALE_version_does_not_silently_skip(tmp_path: Path) -> None:
     """The boundary comes from the publication event, never from a fresh DescribeTable read.
 
-    A mover that read the version itself could observe a version NEWER than the one it was woken for
+    A stage runner that read the version itself could observe a version NEWER than the one it was woken for
     — another writer having committed in between — and would then skip every row in the gap. The rows
     are lost with no error anywhere: the hop reports success having processed nothing. Bounding by an
     older version must OVER-deliver (idempotency absorbs it), never under-deliver.

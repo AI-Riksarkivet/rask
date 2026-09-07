@@ -50,7 +50,7 @@ def setup_logging() -> None:
       single line immediately AFTER ``log.error("lineage_event_invalid")``, so the branch demonstrably
       ran — and produced no log line at all. After this fix the identical request logs
       ``ERROR lineage.services.consumer — lineage_event_invalid``;
-    * the medallion mover's ``ray_stage_job_submitted`` and ``medallion_stage_workflow_reattach`` were
+    * the medallion stage runner's ``ray_stage_job_submitted`` and ``medallion_stage_workflow_reattach`` were
       equally invisible, which is why a running cascade read as an idle one and its Dapr Workflow had
       to be found by querying the sidecar rather than by reading a log.
 
@@ -101,7 +101,7 @@ def build_settings() -> Settings:
 # THE DAPR CLIENT SEAM IS DELETED. It built `DaprClient("http://127.0.0.1:3500")`
 # — the sidecar's HTTP port handed to a gRPC client, which talks 50001 — and a test pinned that wrong
 # constant as if it were the contract. Two re-verifications found the same thing: NOTHING called it.
-# Every service that actually publishes builds its own client (`medallion.mover` / `medallion.producer`
+# Every service that actually publishes builds its own client (`medallion.stage_runner` / `medallion.producer`
 # construct `dapr.aio.clients.DaprClient` in their own lifespans, with their own `get_dapr` and
 # `DaprClientDep` in `medallion.api.dependencies`), and the four `make_service_app` services never
 # touched `app.state.dapr` at all.

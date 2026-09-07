@@ -145,7 +145,7 @@ owner decision; until then notifications stays at 1 replica and the constraint i
 
 ## Sidecar map — who can call Dapr APIs at all
 
-Sidecars are injected for the fleet + lakehouse services and movers (`rask.daprAnnotations`; the
+Sidecars are injected for the fleet + lakehouse services and stage runners (`rask.daprAnnotations`; the
 injector webhook is fail-closed via the paired label — a pod with the annotation but no label is the
 silent no-sidecar failure). **No sidecar:** the 7 web zones, Ray head/workers, and every runner.
 Anything running there gets its secrets by other means — today the Ray lane's are injected by the

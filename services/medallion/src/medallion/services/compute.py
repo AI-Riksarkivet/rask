@@ -1,8 +1,8 @@
 """The fake-Ray in-process Lance compute for the medallion cascade (the medallion-producer seam, #25 / P1 #6).
 
-Default OFF (``MEDALLION_COMPUTE_ENABLED``): the movers/producer stay dummy-emitters (lineage, no data).
+Default OFF (``MEDALLION_COMPUTE_ENABLED``): the stage runners/producer stay dummy-emitters (lineage, no data).
 When on, each stage does a **real** Lance write — the producer seeds ``bronze$events`` (the first governed
-tier, R23); each mover reads its upstream Lance dataset, applies a stage transform, and writes the
+tier, R23); each stage runner reads its upstream Lance dataset, applies a stage transform, and writes the
 downstream one — so the emitted lineage carries the **real** Lance version and the whole event-driven loop
 produces actual versioned data, not just provenance.
 
@@ -12,7 +12,7 @@ end-to-end testable without a Ray cluster. The compute operates on LANCE TYPES o
 rows forward — tabular columns as tabular, vectors as vectors, blob columns of any media kind
 re-materialised safely — and stamps a ``stage`` provenance column; what a stage derives from blob
 payloads is dispatched on CONTENT by :mod:`medallion.services.derivers` (image → thumbnail+embedding;
-unrecognised → untouched; tabular → no-op), so the same deployed mover binary serves every lane with
+unrecognised → untouched; tabular → no-op), so the same deployed stage runner binary serves every lane with
 zero media config. Heavier per-stage ML (real encoders, captioning) is the distributed job's job at
 rask. Blocking Lance/S3 IO; callers run it in the threadpool.
 """
@@ -38,7 +38,7 @@ _STAGE_COLUMN = "stage"
 #: carrying the :class:`~lineage_kit.consume.LineageDoc` of the run that wrote the row — run id, job,
 #: author, operation, event time, the upstream datasets with their versions + URIs, and the
 #: ``DERIVED_FROM`` chain back to bronze. Written in the SAME commit as the data, never bolted on after,
-#: so a reader can never see a governed row without its provenance. Every mover stage stamps it (not
+#: so a reader can never see a governed row without its provenance. Every stage stamps it (not
 #: gold alone): silver's copy is what lets gold's chain reach bronze with no graph query — each stage
 #: prepends its own hop to the chain it read off its upstream's cell.
 _LINEAGE_COLUMN = "lineage"
@@ -162,7 +162,7 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
     is IDENTITY, an artifact column that does not is TRANSFORMATION from the blob column the deriver
     dispatches on. Schema-only — no payload is re-read.
 
-    The Ray job writes the ``lineage`` JSONB column itself (the mover hands it the document as
+    The Ray job writes the ``lineage`` JSONB column itself (the stage runner hands it the document as
     ``LINEAGE_JSON``), so provenance lands in the job's own commit exactly as in-process; what does NOT
     survive the DISTRIBUTED write is the JSON scalar index, which is (re)built here — the one step that
     must happen after that write and can only be done by whoever measures it. The in-process stages became
@@ -212,7 +212,7 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
     """Seed a small synthetic ``bronze$events`` dataset — the fake medallion-producer ingest at the head of the
     cascade (R23: the producer writes the first governed tier directly; there is no raw dataset).
 
-    Carries the ``stage`` stamp the retired raw→bronze mover used to apply (merged into the bronze ingest
+    Carries the ``stage`` stamp the retired raw→bronze stage runner used to apply (merged into the bronze ingest
     head). Overwrites any existing dataset (idempotent re-seed) and returns the resulting Lance version +
     the measured output statistics (rows + on-disk bytes) the emit records as an ``outputStatistics`` facet.
     """
@@ -245,9 +245,7 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
         # dropping id=3 deletes it while id=1 keeps `_rowid` 0. Same semantics, surviving identity.
         lance.dataset(uri, storage_options=storage_options).merge_insert(
             "id"
-        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(
-            _with_declared_id(table, dataset_id)
-        )
+        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(_with_declared_id(table, dataset_id))
     else:
         lance.write_dataset(
             _with_declared_id(table, dataset_id),
@@ -384,9 +382,7 @@ def transform_stage(
     if _dataset_exists(to_uri, storage_options):
         lance.dataset(to_uri, storage_options=storage_options).merge_insert(
             "id"
-        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(
-            _with_declared_id(out, dataset_id)
-        )
+        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(_with_declared_id(out, dataset_id))
     else:
         lance.write_dataset(
             _with_declared_id(out, dataset_id),
@@ -401,7 +397,7 @@ def transform_stage(
         _index_lineage(to_uri, storage_options)
     result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
     # Declare the input→output column edges for the columnLineage facet (#1) — blob_payloads' keys ARE this
-    # stage's blob columns (the deriver source). The mover attaches the single upstream dataset identity.
+    # stage's blob columns (the deriver source). The stage runner attaches the single upstream dataset identity.
     result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
     return result
 

@@ -30,6 +30,7 @@ from typing import Final, Protocol
 
 from fastapi.concurrency import run_in_threadpool
 
+from medallion.services import engine_names
 from medallion.services.transform_spec import UnrunnableTaskError, _TransformSettings
 from service_kit.lakehouse import task_registry
 from service_kit.lakehouse.task_registry import TaskRegistration
@@ -39,11 +40,11 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 log = logging.getLogger(__name__)
 
 #: The engine that submits to the Ray cluster (`ray_submit`).
-RAY_ENGINE: Final = "ray"
+RAY_ENGINE: Final = engine_names.RAY_ENGINE
 #: The engine that reads, transforms and writes inside this process (`compute.transform_stage`).
 #: A real second engine, not a fallback: it is what an estate without a Ray cluster runs on, and it
 #: is the cheapest proof the contract is engine-plural.
-IN_PROCESS_ENGINE: Final = "inprocess"
+IN_PROCESS_ENGINE: Final = engine_names.IN_PROCESS_ENGINE
 
 #: What THIS deployment can run. A third engine is added by hosting it and registering tasks for it —
 #: never by editing a branch, which is the shape that made the estate single-engine in the first
@@ -61,7 +62,7 @@ class _EngineSettings(_TransformSettings, Protocol):
 def engine_for(settings: _EngineSettings, *, spec: TransformSpec | None) -> str:
     """The engine this stage runs on.
 
-    ``spec`` is the resolved declaration, or ``None`` when this mover declares no transform — the
+    ``spec`` is the resolved declaration, or ``None`` when this stage runner declares no transform — the
     caller has already resolved it (and already refused an undeclared one), so this asks no second
     question of the object store beyond the task's own registration.
 

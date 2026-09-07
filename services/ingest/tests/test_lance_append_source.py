@@ -3,7 +3,7 @@
 1b was deferred with its guards, on the reasoning that "a guard for a kind that does not exist is
 unreachable code". The kind exists now, so the guards are reachable and are asserted here:
 
-* **refuse a source that resolves to a catalog table**, naming the medallion mover — copying between
+* **refuse a source that resolves to a catalog table**, naming the medallion stage runner — copying between
   governed tiers is the cascade's job, and doing it through ingest would fabricate a second, unlineaged
   path between two tiers the cascade already owns;
 * **refuse at ACCEPT rather than hanging** — an unreadable dataset must fail while the caller still
@@ -60,7 +60,7 @@ def test_a_dataset_outside_the_root_is_refused(dataset: str, tmp_path: Path, mon
         build_source(spec)
 
 
-def test_a_governed_table_is_refused_and_names_the_mover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_governed_table_is_refused_and_names_the_stage_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Guard 1. The refusal must say WHERE the operation belongs, not merely that it is denied."""
     governed = tmp_path / "warehouse"
     uri = str(governed / "acme-silver" / "features.lance")

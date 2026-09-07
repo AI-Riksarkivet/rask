@@ -168,7 +168,7 @@ def _gate(monkeypatch: pytest.MonkeyPatch, allowed: dict[str, bool]) -> None:
     review 2026-07-11), the models-namespace rung through fga.check."""
 
     async def check(_client: Any, *, user: str, relation: str, obj: str) -> bool:
-        assert user == "service-trainer"  # the trainer's OWN identity, never the mover rung (D5)
+        assert user == "service-trainer"  # the trainer's OWN identity, never the stage runner rung (D5)
         return allowed[f"{relation}:{obj}"]
 
     async def batch(_client: Any, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:

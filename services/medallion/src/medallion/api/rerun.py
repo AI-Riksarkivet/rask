@@ -5,8 +5,8 @@ REPAIR none: the only remedy was re-publishing the upstream table, which re-driv
 it rather than the one edge that failed. This is the edge-addressed remedy.
 
 **IT LIVES ON THE PRODUCER, and mints the trigger itself.** The first draft had it forward to the
-mover, exactly as `terminate` does, for one reason: a Ray-liveness check needs `to_uri` and
-`MEDALLION_RAY_CODE_VERSION`, which only the mover holds. That check is gone (R2a), so the reason is
+stage runner, exactly as `terminate` does, for one reason: a Ray-liveness check needs `to_uri` and
+`MEDALLION_RAY_CODE_VERSION`, which only the stage runner holds. That check is gone (R2a), so the reason is
 gone with it — and the producer already mints stage triggers, in `publication_trigger`'s
 `table_published` subscription. `build_stage_trigger` was written for exactly two callers and this is
 the second; a hand-maintained second copy of that shape is what its docstring forbids.
@@ -16,7 +16,7 @@ the second; a hand-maintained second copy of that shape is what its docstring fo
 retains — so this verb cannot re-mint one, and a design that required it would be unimplementable.
 
 * **supplied** (an operator has it from the DLQ line, which carries it) — the trigger is verbatim, so
-  the mover derives the same deterministic instance id and `submit_or_reattach` REATTACHES to a
+  the stage runner derives the same deterministic instance id and `submit_or_reattach` REATTACHES to a
   running or succeeded job instead of starting a second. This is the ideal repair, and it costs no
   extra call: a duplicate id whose job is RUNNING already answers `"reattached"`;
 * **absent** — a fresh token, a full recompute, a second lineage run node. Honest, and the common case
@@ -30,9 +30,9 @@ request handler is the pattern this estate has just spent a release removing. Th
 fresh-token re-run reaches a correct final state and wastes only compute. The response SAYS SO
 rather than implying a guarantee the listing could not make.
 
-**The rung is the MOVER's own (R4).** Not `/produce`'s `can_administer`, which `promotions.py` records
+**The rung is the STAGE RUNNER's own (R4).** Not `/produce`'s `can_administer`, which `promotions.py` records
 as "coarser AND different, and would lock out exactly the non-admin validator the rung exists for".
-A silver->gold re-run asks `can_promote` on `namespace:<project>-gold`, exactly as the mover asks when
+A silver->gold re-run asks `can_promote` on `namespace:<project>-gold`, exactly as the stage runner asks when
 it runs the hop itself. Its sibling `terminate` sits on `authorize_produce` — two verbs on this plane,
 two rungs — which is defensible because stopping is not re-driving, and is written down rather than
 discovered.
@@ -52,7 +52,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import authenticate_subject
-from medallion.core.config import MedallionSettings, MoverGate, dedicated_token_for
+from medallion.core.config import MedallionSettings, StageRunnerGate, dedicated_token_for
 from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
 from service_kit import dapr_publish
@@ -63,7 +63,7 @@ from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(tags=["movers"])
+router = APIRouter(tags=["stage-runners"])
 
 #: What the verb predicts it will do, never what it observed. The path is decided inside
 #: `submit_stage` AFTER this returns (R3), and two further horizons make even the prediction
@@ -80,12 +80,12 @@ class RerunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     #: The PUBLISHED table, as the control event named it — `table:acme-silver$features` or the bare
-    #: identifier. Its namespace IS the edge's source, which is why the verb needs no mover name.
+    #: identifier. Its namespace IS the edge's source, which is why the verb needs no stage runner name.
     object_id: str = Field(min_length=1)
     project: str = Field(min_length=1)
     #: The delta this hop should consume. `from_version` absent means "everything up to `to_version`",
     #: carried as-is rather than coerced to 0 — "no prior publication" and "published from version 0"
-    #: are different claims, and the mover reads them differently.
+    #: are different claims, and the stage runner reads them differently.
     to_version: int
     from_version: int | None = None
     #: The original `table_published` event id. Supplied → the cheap repair; absent → a full
@@ -113,8 +113,8 @@ class RerunAccepted(BaseModel):
     note: str = ""
 
 
-async def _require_edge_rung(fga_client: Any, *, subject: str, project: str, gate: MoverGate) -> None:  # noqa: ANN401 — OpenFgaClient
-    """The mover's own rung on the tier this edge writes, audited like every other authz decision.
+async def _require_edge_rung(fga_client: Any, *, subject: str, project: str, gate: StageRunnerGate) -> None:  # noqa: ANN401 — OpenFgaClient
+    """The stage runner's own rung on the tier this edge writes, audited like every other authz decision.
 
     Fails CLOSED on an authz outage, and audits that separately from a denial: "we could not ask" and
     "we asked and the answer was no" are different operator problems, and collapsing them is how an
@@ -131,28 +131,28 @@ async def _require_edge_rung(fga_client: Any, *, subject: str, project: str, gat
         raise PermissionDeniedError(f"re-running this edge needs {gate.required_action} on {obj}")
 
 
-def _edge(settings: MedallionSettings, namespace: str) -> tuple[MoverGate, str]:
+def _edge(settings: MedallionSettings, namespace: str) -> tuple[StageRunnerGate, str]:
     """This edge's gate and its trigger topic, or a refusal naming what IS configured.
 
     BOTH are resolved before anything is published, and both are keyed on the same source namespace —
     a deployment that declared one and not the other would either publish an unauthorized trigger or
     authorize one that goes nowhere.
     """
-    gate = (settings.mover_gates or {}).get(namespace)
+    gate = (settings.stage_runner_gates or {}).get(namespace)
     topic = (settings.transform_routes or {}).get(namespace)
     if gate is None or not topic:
-        known = sorted(set(settings.mover_gates or {}) & set(settings.transform_routes or {}))
+        known = sorted(set(settings.stage_runner_gates or {}) & set(settings.transform_routes or {}))
         raise PermissionDeniedError(f"{namespace!r} is not a cascade edge this deployment drives; edges: {known}")
     return gate, topic
 
 
 async def _vended_location(settings: MedallionSettings, object_id: str) -> str | None:
-    """Where the CATALOG says the published table lives, or ``None`` to let the mover compose a path.
+    """Where the CATALOG says the published table lives, or ``None`` to let the stage runner compose a path.
 
     I2 ON THE REPAIR VERB, and the third head to need it. `_confine_from_uri` honours a trigger's
     `from_uri` and otherwise falls back to `_resolve_roots`' composed ``{root}/medallion/{namespace}``
     — a path `transform.py` calls "a path no catalog-written table has ever occupied", because the
-    catalog vends ``{root}/{hash}_{ns}${name}``. A re-run without this woke the mover, opened the wrong
+    catalog vends ``{root}/{hash}_{ns}${name}``. A re-run without this woke the stage runner, opened the wrong
     location and found none of the rows it was sent to re-drive: the repair reported success and
     repaired nothing. `publication_trigger` reads the location off the control event and
     `ingest_trigger._vended_upstream` asks the catalog; this is the same question on the operator's door.
@@ -160,7 +160,7 @@ async def _vended_location(settings: MedallionSettings, object_id: str) -> str |
     ADVISORY, and every way of not getting an answer degrades to ``None``. A table this catalog does
     not govern is real and supported — an external OpenLineage producer writing its own dataset — and
     the composed path is the correct upstream there. An unreachable catalog is logged and does not
-    block the repair: an operator with a missed hop needs the verb to work, and the mover confines
+    block the repair: an operator with a missed hop needs the verb to work, and the stage runner confines
     whatever is named to the root it resolves, so this is a claim on an untrusted-by-default field
     rather than a read primitive.
     """
@@ -184,11 +184,11 @@ async def _vended_location(settings: MedallionSettings, object_id: str) -> str |
         return None
 
 
-# B6: a draining pod must not START work. The re-run publishes a trigger that a mover then executes,
-# so what is at risk is not the mover's work but this publish — the sidecar goes down with the pod, and
+# B6: a draining pod must not START work. The re-run publishes a trigger that a stage runner then executes,
+# so what is at risk is not the stage runner's work but this publish — the sidecar goes down with the pod, and
 # a trigger lost mid-flight is a repair an operator believes happened. 503 + Retry-After, exactly as
 # `/produce` and `/train` answer, rather than a 202 for a hop nothing will run.
-@router.post("/movers/stages/rerun", status_code=202, dependencies=[Depends(refuse_when_draining)])
+@router.post("/stage runners/stages/rerun", status_code=202, dependencies=[Depends(refuse_when_draining)])
 async def rerun_stage(
     body: RerunRequest,
     request: Request,
@@ -198,7 +198,7 @@ async def rerun_stage(
 ) -> RerunAccepted:
     """Re-drive one cascade edge. 202, because the hop runs on the bus like every other one.
 
-    `authenticate_subject` rather than `authorize_produce`, because the rung is the mover's (R4) and
+    `authenticate_subject` rather than `authorize_produce`, because the rung is the stage runner's (R4) and
     the produce gate would fuse the two into "admin AND validator" — locking out the validator the
     rung exists for. There is NO dev-open path here for the same reason the promotion decision has
     none: a re-run is an act with a responsible party, and an anonymous one is not an act anyone made.

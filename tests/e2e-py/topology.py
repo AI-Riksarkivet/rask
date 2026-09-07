@@ -72,6 +72,5 @@ def assert_parent_exists(response: requests.Response, name: str) -> None:
     is the normal case and the reason `adopt_existing` is set.
     """
     assert response.status_code in (200, 201, 409), (
-        f"could not create the top-level namespace {name!r} this suite nests under: "
-        f"{response.status_code} {response.text[:400]}"
+        f"could not create the top-level namespace {name!r} this suite nests under: {response.status_code} {response.text[:400]}"
     )

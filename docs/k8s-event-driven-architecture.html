@@ -117,7 +117,7 @@
           <tr><td>Frontend (web)</td><td class="s-ok">✓ running, proxies to lineage</td></tr>
           <tr><td>Dex (OIDC) + OpenFGA (authz)</td><td class="s-warn">deployed; auth OFF, openfga server init-races pg</td></tr>
           <tr><td>S3 storage</td><td class="s-warn">MinIO (not RustFS)</td></tr>
-          <tr><td>lance-ray producer + 3 medallion stage movers</td><td class="s-ok">✓ built — event-driven (Dapr pub/sub, FGA gates, one distributed trace); fake-Ray in-process compute writes real Lance data (gated)</td></tr>
+          <tr><td>lance-ray producer + 3 medallion stage runners</td><td class="s-ok">✓ built — event-driven (Dapr pub/sub, FGA gates, one distributed trace); fake-Ray in-process compute writes real Lance data (gated)</td></tr>
           <tr><td>Real Lance table-create through deployed catalog</td><td class="s-warn">catalog is real pylance; flow tested with a synthetic event</td></tr>
         </table>
       </div>
@@ -131,7 +131,7 @@
         </table>
         <h3 style="margin-top: 14px">The medallion (now event-driven)</h3>
         <p style="color: var(--mut); font-size: 12px; margin: 0">
-          The <b>lance-ray</b> producer + the raw→bronze / bronze→silver / silver→gold movers <b>are</b>
+          The <b>lance-ray</b> producer + the raw→bronze / bronze→silver / silver→gold stage runners <b>are</b>
           event-driven services (<span class="mono">services/medallion/</span>): each subscribes to its
           upstream trigger over Dapr pub/sub, emits OpenLineage (the DERIVED_FROM edge), and fires the next
           trigger — one distributed trace raw→gold, with FGA gating per hop. The <b>fake-Ray compute</b>

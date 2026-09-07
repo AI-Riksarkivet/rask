@@ -106,7 +106,7 @@ def _zone_env(rendered: str, zone: str) -> set[str]:
 
 def test_the_CATALOG_FAMILY_honours_the_estate_image_contract_too() -> None:
     """Eleven containers run the catalog image with different entrypoints (catalog, lineage, the
-    medallion movers, maintenance, explorer, the bootstrap job), and `lance.catalogImage` used to
+    medallion stage runners, maintenance, explorer, the bootstrap job), and `lance.catalogImage` used to
     render `repository:tag` on its OWN — honouring neither the registry prefix, nor the digest, nor
     localImages. So a chart configured with a registry still emitted the bare `lance-rest-catalog:dev`
     (i.e. Docker Hub) for all eleven, which is why every deploy needed `kubectl set image` fix-ups and

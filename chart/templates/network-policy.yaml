@@ -110,7 +110,7 @@ spec:
 ---
 # (3b) openbao:8200 — THE crown jewel (the audit's headline: "reachable by any pod"). Only the
 # secret-consuming app pods' daprd sidecars may connect: catalog, lineage, compaction, the
-# medallion producer (medallion-producer), every mover, and (DAPRIFY 2026-07-27) the state-store-scoped
+# medallion producer (medallion-producer), every stage runner, and (DAPRIFY 2026-07-27) the state-store-scoped
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
 # same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
@@ -136,7 +136,7 @@ spec:
                      pods — media.yaml keys them identically), so this list and the secret-store
                      component's scope (dapr-component.yaml) cannot drift. */}}
                 {{- $openbaoClients := list "catalog" "lineage" "compaction" "medallion-producer" }}
-                {{- range .Values.medallion.movers }}
+                {{- range .Values.medallion.stageRunners }}
                 {{- $openbaoClients = append $openbaoClients .name }}
                 {{- end }}
                 {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
@@ -240,7 +240,7 @@ spec:
                   # absent from this list they are SILENTLY dropped (green pods, empty corpus).
                   - search
                   - annotator
-                  {{- range .Values.medallion.movers }}
+                  {{- range .Values.medallion.stageRunners }}
                   - {{ .name }}
                   {{- end }}
         - podSelector:
@@ -313,7 +313,7 @@ spec:
 ---
 # (3f) nats:4222 — the client port. Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
-# (gateway, catalog, lineage, compaction, medallion-producer, each medallion mover) plus the nats-box hook Jobs
+# (gateway, catalog, lineage, compaction, medallion-producer, each medallion stage runner) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a

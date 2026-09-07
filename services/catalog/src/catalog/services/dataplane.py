@@ -858,7 +858,9 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
         # malformed and nothing about the policy is. What is absent is the DATA, which is what code 3
         # says — the same answer `rename_table` gives a source that resolves to nothing, so one client
         # branch serves both.
-        raise TableNotFoundError(f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}") from exc
+        raise TableNotFoundError(
+            f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}"
+        ) from exc
     plan = lance_optimize.Compaction.plan(dataset, cast(Any, options))
     return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
 

@@ -5,7 +5,7 @@ them again into silver and again into gold. Measured on a real corpus that is 10
 three copies of the bytes to express three readiness states of one thing.
 
 External placement stores the URI instead. The bytes never move, and the descriptor still resolves
-after being carried into a second dataset — which is what lets changes 3 and 4 stop the mover
+after being carried into a second dataset — which is what lets changes 3 and 4 stop the stage runner
 copying at all.
 
 **The two halves cannot be tested apart, which is why they are one file.** `initial_bases` is

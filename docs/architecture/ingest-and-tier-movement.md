@@ -63,7 +63,7 @@ invented one drifts from the tuples that actually decide. So the rule is express
 
 * grant human principals `writer` on `namespace:<proj>-bronze` — they push there and nowhere else;
 * services keep `can_create_table` / `can_promote` on the silver and gold namespaces, which is what
-  the movers already check as their own identity.
+  the stage runners already check as their own identity.
 
 **Status, stated plainly: no seeding path in this repo grants that.** `scripts/seed_estate.py` drives
 the real doors in hierarchy order but seeds no human bronze writer, so the policy is currently

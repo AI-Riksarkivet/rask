@@ -130,7 +130,7 @@ async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage
     `runtime_env.env_vars` OVER the worker's process env, so a key sent here BEATS the one the pod
     mounts — which gave the credential two owners. Repointing the Ray pod at a scoped RustFS user
     produced `SignatureDoesNotMatch` on every job (its new secret paired with the submission's old
-    key), and repointing the mover instead took the MOVER down: it does its own S3 work
+    key), and repointing the stage runner instead took the STAGE RUNNER down: it does its own S3 work
     (`outbox.stage_event` → `create_dir` → HeadBucket), which needs an unconditioned `s3:ListBucket`
     that a prefix-scoped policy correctly refuses. Both measured on the live estate 2026-08-30.
 

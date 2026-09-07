@@ -3,7 +3,7 @@ HA for the stateless request-serving services — the lakehouse pair AND the fle
 `.Values.services` rather than named, plus controlplane from its own values block. Off by default
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
 (AGE/RustFS) get HA from their operators in rask (CNPG / rustfs-operator), NOT from here. The
-event-driven movers/producer are intentionally excluded — eviction is safe there (Dapr redelivers, and
+event-driven stage runners/producer are intentionally excluded — eviction is safe there (Dapr redelivers, and
 the medallion ingest path is idempotent).
 
 ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 1` PDB over a SINGLE
@@ -74,7 +74,7 @@ spec:
 {{- end }}
 {{- if .Values.openfga.enabled }}
 ---
-# OpenFGA is the authz chokepoint — every governed catalog write, lineage read, and mover WRITE fails
+# OpenFGA is the authz chokepoint — every governed catalog write, lineage read, and stage runner WRITE fails
 # CLOSED through it, so a drain that evicts the quorum 503s the whole estate. Separate block: the subchart's
 # pods carry name/instance labels, not our component label. (prod-readiness P2)
 apiVersion: policy/v1

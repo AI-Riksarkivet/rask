@@ -118,7 +118,7 @@ def build_event(
     inputs = [
         {
             # The consumer only forwards validated `stage$name` datasets, so this matches the stage
-            # namespace the medallion movers stamp on the SAME graph nodes (never a whole bare name).
+            # namespace the medallion stage runners stamp on the SAME graph nodes (never a whole bare name).
             "namespace": feature["dataset"].split("$", 1)[0],
             "name": feature["dataset"],
             "facets": {

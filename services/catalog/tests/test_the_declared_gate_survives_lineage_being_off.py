@@ -9,7 +9,7 @@ Measured by flipping exactly that one variable on one catalog: the declared reco
 by `gate/describe`, and the publish it governs ran under the request's own weaker terms.
 
 Why this is worse than a missing feature: the declaration exists precisely so an external writer — the
-party trusted least — cannot hand itself a weaker gate than a mover gets. Routing that policy through
+party trusted least — cannot hand itself a weaker gate than a stage runner gets. Routing that policy through
 an OBSERVABILITY switch means turning off telemetry silently turns off a governance control, and the
 two have no reason to be connected.
 

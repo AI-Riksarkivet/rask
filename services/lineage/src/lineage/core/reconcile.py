@@ -243,7 +243,7 @@ async def reconcile_all(
             age = await read_age(uri)
             status.stale = age is not None and age > freshness_budget_hours
         # Declared-columns patrol (Batch 23): re-check the gate's column_declared assertion against
-        # the CURRENT storage schema — a write that bypassed the mover skipped the gate; this doesn't.
+        # the CURRENT storage schema — a write that bypassed the stage runner skipped the gate; this doesn't.
         # Only declared datasets pay the schema read; a failed read reports nothing (the version
         # check already classifies unreadable storage; a phantom violation would cry wolf).
         wanted = (declared or {}).get(summary.name)

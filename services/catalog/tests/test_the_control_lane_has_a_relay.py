@@ -129,7 +129,7 @@ async def test_the_relay_republishes_the_STAGED_BYTES_so_the_cascade_dedupes(tmp
 
     delivered = json.loads(recorder.published[0]["data"])
     assert delivered["event_id"] == event.event_id, "the re-published event carries a different id — the cascade cannot dedupe it"
-    assert delivered["extra"] == {"project": "acme", "from_version": 3, "to_version": 4}, "the range the mover reads did not survive the relay"
+    assert delivered["extra"] == {"project": "acme", "from_version": 3, "to_version": 4}, "the range the stage runner reads did not survive the relay"
 
 
 @pytest.mark.asyncio

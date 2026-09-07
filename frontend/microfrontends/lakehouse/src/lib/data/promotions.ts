@@ -2,7 +2,7 @@
  * A HELD PROMOTION — the shapes, kept out of `promotions.remote.ts` because a remote file may
  * export only remote functions.
  *
- * WHAT THIS IS. When a stage's quality gate finds a promotion unusual rather than broken, the mover
+ * WHAT THIS IS. When a stage's quality gate finds a promotion unusual rather than broken, the stage runner
  * does not drop it: it parks a durable Dapr workflow on `wait_for_external_event('promotion_decision')`
  * raced against a 72-hour timer, and a validator answers it. Until this surface existed the answer
  * could only be given with `curl` — the estate could hold a promotion for three days and offer nobody

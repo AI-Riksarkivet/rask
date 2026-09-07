@@ -138,14 +138,17 @@ def test_client_direct_commit_lands_with_zero_byte_ingress(catalog: str) -> None
     assert r.status_code == 200, r.text
     cred = r.json()
     location, read_version = cred["location"], cred["read_version"]
-    so = _reachable((cred.get("credentials") or {}).get("storage_options") or {
-        "endpoint": S3,
-        "access_key_id": "rustfsadmin",
-        "secret_access_key": "rustfsadmin",
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-        "region": "us-east-1",
-    })
+    so = _reachable(
+        (cred.get("credentials") or {}).get("storage_options")
+        or {
+            "endpoint": S3,
+            "access_key_id": "rustfsadmin",
+            "secret_access_key": "rustfsadmin",
+            "allow_http": "true",
+            "virtual_hosted_style_request": "false",
+            "region": "us-east-1",
+        }
+    )
 
     # CLIENT-DIRECT: the row data goes straight to RustFS from here — never through the catalog.
     new_rows = pa.table({"id": [3, 4, 5], "v": ["c", "d", "e"]}, schema=_schema())

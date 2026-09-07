@@ -1,6 +1,6 @@
-"""The mover's stage-transform business logic — one DAG edge, infra-free + testable.
+"""The stage runner's stage-transform business logic — one DAG edge, infra-free + testable.
 
-:func:`handle_stage` is the heart of a medallion mover: given one upstream stage trigger it emits the
+:func:`handle_stage` is the heart of a medallion stage runner: given one upstream stage trigger it emits the
 transform's OpenLineage event (``inputs=[from_dataset]`` -> ``outputs=[to_dataset]`` — the ``DERIVED_FROM``
 edge) and publishes the next stage's trigger, so a single producer event cascades bronze->silver->gold
 (R23: the producer ingests external raw straight into bronze; there is no raw tier).
@@ -11,9 +11,9 @@ reads it, and a payload that fails is DROPped (DATA-CONTRACT §7.3 — never rep
 Idempotent + best-effort: with ``compute_enabled`` the transform does a REAL in-process Lance write (the
 fake-Ray compute) and the emit carries the real version; off, it's a pure lineage emit (version 1). The
 graph MERGEs on run_id, and a compute/publish outage returns ``RETRY`` so the Dapr sidecar redelivers.
-When the FGA gate is on, the mover
+When the FGA gate is on, the stage runner
 CHECKS it is authorized to produce the target stage as its own service identity before emitting — an
-unauthorized mover returns ``DROP`` (redelivery won't grant the role), so the cascade enforces the ReBAC.
+unauthorized stage runner returns ``DROP`` (redelivery won't grant the role), so the cascade enforces the ReBAC.
 """
 
 from __future__ import annotations
@@ -80,13 +80,13 @@ log = logging.getLogger(__name__)
 # span makes the step that dominates wall-clock time visible inside the cascade's distributed trace.
 tracer = trace.get_tracer(__name__)
 
-# Single-flight guard for the stage WRITE. Each mover process moves exactly ONE target dataset, so a
+# Single-flight guard for the stage WRITE. Each stage runner process moves exactly ONE target dataset, so a
 # process-wide lock serializes concurrent handler invocations for that target — a redelivered trigger racing
 # the original, or two overlapping ticks — preventing two `write_dataset(mode="overwrite")` (or two Ray jobs
-# writing the same to_uri) from committing concurrently. With moverReplicas=1 (the default) this is
+# writing the same to_uri) from committing concurrently. With stageRunnerReplicas=1 (the default) this is
 # maxConcurrency=1 for the stage cluster-wide; the write stays overwrite-idempotent so scaling replicas is
 # still safe (last-writer-wins on identical deterministic content), the lock just removes the concurrent
-# commit contention. Module-level: one lock per mover process, created without binding a loop (py3.10+).
+# commit contention. Module-level: one lock per stage runner process, created without binding a loop (py3.10+).
 _write_lock = asyncio.Lock()
 
 _SUCCESS = {"status": "SUCCESS"}
@@ -124,7 +124,7 @@ def _dispatch_stage_workflow(
     instance is still watching, and that is the correct outcome, not a failure to dispatch.
 
     `from_id`/`to_id`/`run_id` are what the JOB emits its own provenance under — the catalog
-    identifiers this hop moves and the run the mover already minted for it. They are handed over here
+    identifiers this hop moves and the run the stage runner already minted for it. They are handed over here
     because this is the only layer that holds them: `resolve_stage_identity` runs in the handler, and
     the trigger the workflow round-trips has never carried either. Defaulted empty so the seam stays
     callable without them, which is also the runner's documented unwired case.
@@ -199,7 +199,7 @@ def resolve_stage_identity(settings: Any, *, spec: Any, project: str) -> StageId
     """What this run reads and writes: the DECLARED record when there is one, else the env.
 
     The `stage_run` workflow is already parameterised by `from_uri`/`to_uri`, so this is the only
-    place a mover was pinned to a single edge. With a record, a mover becomes a worker for whatever
+    place a stage runner was pinned to a single edge. With a record, a stage runner becomes a worker for whatever
     that record declares; without one it behaves byte-for-byte as it always did.
 
     Taken WHOLE, never merged: `from_id` carries its own namespace, so both halves come from the same
@@ -221,7 +221,7 @@ def resolve_stage_identity(settings: Any, *, spec: Any, project: str) -> StageId
 
 
 def accepted_input_names(*, env_from_dataset: str, declared: Any | None) -> set[str]:
-    """The LANE KEYS this mover accepts. One kind of thing, compared against one kind of thing.
+    """The LANE KEYS this stage runner accepts. One kind of thing, compared against one kind of thing.
 
     A stage trigger's `dataset` is a lane key: tenant-free, identical for every tenant, with the
     tenant carried separately on `trigger.project`. `settings.from_dataset` is already one. A
@@ -294,7 +294,7 @@ class StagePreflight(BaseModel):
     """What the pre-flight guards established, before a byte of the lakehouse was touched.
 
     Every field is a decision that took its own DROP path to reach: the trigger parsed and
-    shape-checked, the lane confirmed to be this mover's, the tenant validated and its routing
+    shape-checked, the lane confirmed to be this stage runner's, the tenant validated and its routing
     proven configured, and the four names this run reads and writes resolved from the declaration
     or the environment. A handler that reaches this object has passed all of them.
     """
@@ -304,7 +304,7 @@ class StagePreflight(BaseModel):
     trigger: StageTrigger
     project: str
     identity: StageIdentity
-    #: The resolved declaration, or ``None`` when this mover declares no transform.
+    #: The resolved declaration, or ``None`` when this stage runner declares no transform.
     #:
     #: CARRIED rather than re-resolved downstream, and the reason is the one this class exists for:
     #: pre-flight already read it, already refused an undeclared one, and a second read could answer
@@ -321,12 +321,12 @@ async def _authorize(
     transition: str,
     token: str | None,
 ) -> dict[str, str] | None:
-    """May this mover produce the target stage, as its own service identity?
+    """May this stage runner produce the target stage, as its own service identity?
 
-    When ``fga_client`` is set (RASK_FGA_ENABLED), the mover CHECKS it is authorized to produce
-    the target stage — ``can_promote`` for the silver->gold mover, ``can_create_table`` for the others
+    When ``fga_client`` is set (RASK_FGA_ENABLED), the stage runner CHECKS it is authorized to produce
+    the target stage — ``can_promote`` for the silver->gold stage runner, ``can_create_table`` for the others
     — as its own service identity. Unauthorized -> ``DROP`` (redelivery won't grant the role): the
-    cascade enforces the ReBAC, so a mover lacking the validator role genuinely cannot promote to gold.
+    cascade enforces the ReBAC, so a stage runner lacking the validator role genuinely cannot promote to gold.
 
     Answers ``None`` when it may (including when authorization is off), and otherwise the verdict the
     subscription must ack with — ``RETRY`` for an FGA outage, ``DROP`` for a denial, and the
@@ -355,14 +355,14 @@ async def _authorize(
             # PRE-FLIGHT halt above and below it — a malformed payload, an unsafe project, an
             # unresolvable lane, a `from_uri` outside the root: nothing is read and nothing is
             # written, so a FAIL run would mint provenance for a run that never ran, and a
-            # permanently un-granted mover would emit one on every trigger forever. `record_denied`
-            # is the right instrument; `test_mover_denied_when_not_authorized` pins the silence.
+            # permanently un-granted stage runner would emit one on every trigger forever. `record_denied`
+            # is the right instrument; `test_stage_runner_denied_when_not_authorized` pins the silence.
             #
             # THE RESIDUE, so it is not re-derived as this defect: the person whose cascade stopped is
             # still told nothing. That belongs on the CONTROL lane (a `NAMED_ACTIONS` action carrying
             # `extra.subject` = `trigger.originator`), which needs a `ControlAction`, a
             # `NAMED_ACTIONS` member and a `NotificationReason` — three files in two other components,
-            # and a stored-reason compatibility surface. Not a mover-local change.
+            # and a stored-reason compatibility surface. Not a stage runner-local change.
             record_denied(transition)
             log.warning(
                 "medallion_stage_denied",
@@ -392,13 +392,13 @@ async def _preflight(
     that a refusal here is DETERMINISTIC, so it DROPs rather than retrying — redelivery cannot repair
     a malformed payload, an unsafe tenant, an undeclared lane or a missing role.
 
-    A mover configured for a declared TRANSFORM resolves that record first, and a record it cannot
+    A stage runner configured for a declared TRANSFORM resolves that record first, and a record it cannot
     read — undeclared, or unreadable because no control root is configured — is DROPped and counted
     like every other deterministic refusal. It used to RAISE out of the handler, which the
     subscription answers 500 to and the broker redelivers into forever.
 
     ``dataset`` on the trigger names the lane that fired (bronze$events vs a page lane's
-    bronze$pages, which share the ``medallion.bronze`` topic). A name that is not this mover's input is
+    bronze$pages, which share the ``medallion.bronze`` topic). A name that is not this stage runner's input is
     the other lane's and is DROPped; an ABSENT name makes no claim and proceeds.
 
     ``project`` on the trigger (#84 per-tenant routing, opt-in) project-qualifies every lineage
@@ -424,9 +424,9 @@ async def _preflight(
     token = trigger.token
 
     # LANE DISCRIMINATION. Two ingest lanes — bronze$events and the page lane bronze$pages —
-    # publish to the SAME medallion.bronze topic, so every mover subscribed to it sees both. The trigger
+    # publish to the SAME medallion.bronze topic, so every stage runner subscribed to it sees both. The trigger
     # already names the dataset that was actually written (ingest_trigger._bronze_write_dataset: "the
-    # trigger tells the mover which lane fired"); a name that is not THIS mover's input belongs to the
+    # trigger tells the stage runner which lane fired"); a name that is not THIS stage runner's input belongs to the
     # other lane, and running anyway transforms the wrong dataset while emitting real-looking lineage
     # attributed to the other lane's token.
     #
@@ -437,8 +437,8 @@ async def _preflight(
     # Absent → no claim → proceed. The field is a discriminator, not a requirement: an external bronze
     # writer may omit it, and triggers queued before this field existed must still drain at rollout.
     arrived = trigger.dataset
-    # THE DECLARED LANE IS ALSO THIS MOVER'S INPUT. The guard used to compare only against the raw
-    # env `from_dataset`, so a mover pointed at a declared lane dropped its own arrivals: the head
+    # THE DECLARED LANE IS ALSO THIS STAGE RUNNER'S INPUT. The guard used to compare only against the raw
+    # env `from_dataset`, so a stage runner pointed at a declared lane dropped its own arrivals: the head
     # published `acme-bronze$agnostic`, the env still said `bronze$events`, and the two never matched.
     # Resolved here rather than after, because a DROP decided on stale identity is indistinguishable
     # from a correct one — it acks, and the work simply ceases to exist.
@@ -448,7 +448,7 @@ async def _preflight(
     try:
         declared_lane = await resolve_transform_async(settings, project=trigger.project or "") if settings.transform else None
     except UndeclaredTransformError as exc:
-        # DROP, never RAISE. This call sat outside every `try`, so a mover naming a transform the
+        # DROP, never RAISE. This call sat outside every `try`, so a stage runner naming a transform the
         # catalog has no declaration for — or one it cannot look up at all, which is what an empty
         # control root and a project-less trigger both are — threw out of the handler and into the
         # subscription route: a 500 per delivery, redelivered until maxDeliver, for a condition no
@@ -465,7 +465,7 @@ async def _preflight(
     if arrived is not None and arrived not in accepted:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
         # dead-letters, so if the app records nothing the event simply ceases to exist. Before this
-        # guard, a bronze$pages arrival drove this mover into a deterministic FAIL — and that FAIL is
+        # guard, a bronze$pages arrival drove this stage runner into a deterministic FAIL — and that FAIL is
         # what live-proof-2026-07-28.md used as evidence the page lane had no consumer. A silent fix
         # would have removed the symptom AND the only way to notice the lane is still unlanded.
         # (INFO is not noisy: the trigger is published once per bronze WRITE by handle_bronze_arrival,
@@ -475,7 +475,7 @@ async def _preflight(
             "medallion_stage_other_lane",
             extra={"transition": transition, "token": token, "arrived": arrived, "expects": settings.from_dataset},
         )
-        return _DROP  # deterministic — redelivery cannot make this the right mover
+        return _DROP  # deterministic — redelivery cannot make this the right stage runner
 
     raw_project = trigger.project
     project = ""
@@ -483,7 +483,7 @@ async def _preflight(
         if not is_safe_project(raw_project):
             # Deterministic garbage (would become an S3 prefix / lineage name) — DROP, never repair.
             # COUNTED as well as logged, for `unconfined_uri`'s reason: a tenant id shaped like a
-            # traversal is the same evidence that someone is publishing triggers this mover must not
+            # traversal is the same evidence that someone is publishing triggers this stage runner must not
             # honour, and a DROP is an ack — without a series there is nothing to alert on. The
             # offending value stays on the log line; the counter carries only the closed reason.
             log.warning("medallion_stage_bad_project", extra={"transition": transition, "token": token})
@@ -497,14 +497,14 @@ async def _preflight(
             "medallion_stage_project_routing_disabled",
             extra={"transition": transition, "token": token, "project": project},
         )
-        # A DEPLOYMENT gap, and therefore permanent: every tenant trigger this mover ever receives
+        # A DEPLOYMENT gap, and therefore permanent: every tenant trigger this stage runner ever receives
         # halts here until an operator sets the registry root, and an operator is not prompted by a
         # log line nobody is reading. A counted, alertable steady state is the instrument
         # `docs/DECISIONS.md` names for exactly this (a repeating operational condition is a metric).
         record_refused(transition, "routing_disabled")
         return _DROP
     # WHAT THIS RUN READS AND WRITES — the declared lane record when there is one, else the env,
-    # project-qualified exactly as before. This is the line that decided a mover served one edge:
+    # project-qualified exactly as before. This is the line that decided a stage runner served one edge:
     # `stage_run` has always been parameterised by from_uri/to_uri, so the pinning lived here and
     # nowhere else. Everything below — the FGA object, the lineage identities, both URIs — reads
     # these four names, so they follow the declaration automatically.
@@ -571,7 +571,7 @@ async def _resolve_roots(settings: MedallionSettings, *, project: str, from_data
     from_uri, to_uri = settings.from_uri, settings.to_uri
     # The storage domain this stage is entitled to READ — the tenant's resolved warehouse root, or
     # the env-configured upstream when single-tenant. A trigger-supplied `from_uri` is confined to
-    # it below; nothing else defines what this mover's credentials are allowed to open.
+    # it below; nothing else defines what this stage runner's credentials are allowed to open.
     read_root = settings.from_uri
     if project:
         root = await run_in_threadpool(project_root, settings.control_root, settings.storage_options(), project)
@@ -583,7 +583,7 @@ async def _resolve_roots(settings: MedallionSettings, *, project: str, from_data
 
     if project and settings.gold_warehouse_enabled:
         # Gold tier (DECISIONS "Medallion tiers"): the chart sets this env ONLY on the terminal
-        # silver→gold mover, whose tenant TARGET root becomes the project's gold SERVING
+        # silver→gold stage runner, whose tenant TARGET root becomes the project's gold SERVING
         # warehouse (the serving=="gold" registry record) when one exists. The upstream READ
         # stays in the work warehouse; no gold warehouse → fall through to the work root above,
         # byte-identically. Lineage/FGA identities are untouched — only the physical root moves.
@@ -625,7 +625,7 @@ def _confine_from_uri(
     Answers ``None`` when the trigger named a location outside the root — the caller DROPs.
 
     ``from_uri`` on the trigger names the upstream the catalog actually vended (I2), and is honoured
-    only inside the root this stage resolved: the mover opens it with its own object-store
+    only inside the root this stage resolved: the stage runner opens it with its own object-store
     credentials, so an unconfined value reads whatever those credentials can reach. That root is the
     TENANT'S WAREHOUSE for a project trigger, which is what makes I2 work — the vended
     ``<root>/<hash>_<ns>$<name>`` sits directly under it. With NO project the root is
@@ -633,7 +633,7 @@ def _confine_from_uri(
     beneath it can be named, and I2 is effectively project-only.
 
     THAT LIMIT IS NOW REACHABLE, and it is a stated cost rather than an accident. Both heads name an
-    upstream: ``publication_trigger`` always carries the project (the mover cannot resolve its tiers
+    upstream: ``publication_trigger`` always carries the project (the stage runner cannot resolve its tiers
     without one), but ``ingest_trigger`` fires for a single-tenant estate too. There the vended
     ``<catalog root>/<hash>_<ns>$<name>`` is OUTSIDE ``MEDALLION_FROM_URI`` unless the two happen to
     coincide — which they do for a produce-first estate, where the chart renders the head's write URI
@@ -648,9 +648,9 @@ def _confine_from_uri(
     # `{root}/medallion/{namespace}`, a path no catalog-written table has ever occupied — so the
     # cascade fired correctly, woke, and found nothing, for every ingest-written table. I2
     # ("resolve the location through the CATALOG, never compose a path") read from the consuming
-    # end. Only the READ side: the mover still owns where it WRITES.
+    # end. Only the READ side: the stage runner still owns where it WRITES.
     #
-    # CONFINED to `read_root`, because the name is honoured by OPENING it with this mover's own
+    # CONFINED to `read_root`, because the name is honoured by OPENING it with this stage runner's own
     # object-store credentials: unbounded, the field is a read primitive for every bucket that
     # credential can reach, and the trigger arrives off a topic anything in the mesh can publish to.
     # The catalog's vended location (`<root>/<hash>_<ns>$<name>`) sits inside the same root the
@@ -666,7 +666,7 @@ def _confine_from_uri(
                 extra={"transition": transition, "token": token, "project": project, "supplied": supplied[:200], "root": read_root},
             )
             # On a counter as well as the log: this is the one refusal that means someone is
-            # publishing triggers this mover must not honour, and a DROP is an ack — without a
+            # publishing triggers this stage runner must not honour, and a DROP is an ack — without a
             # series there is nothing for an alert to fire on. The offending URI stays on the log
             # line; the counter carries only the closed reason vocabulary.
             record_refused(transition, "unconfined_uri")
@@ -746,7 +746,7 @@ async def _run_in_process(
     this engine advertises no such capability. A port that could not express a SYNCHRONOUS engine
     would be a Ray-shaped interface wearing a neutral name.
 
-    A failure is RAISED, so the mover's own RETRY path owns it exactly as it did when the writer was
+    A failure is RAISED, so the stage runner's own RETRY path owns it exactly as it did when the writer was
     called directly. The port classifies the error; it does not change who handles it.
 
     The result is read back through the adapter rather than measured a second time. `result()` is
@@ -884,7 +884,7 @@ async def _write_stage(
     # and need its own bolt-on, which is backwards for an agnostic platform.
     #
     # Failure PROPAGATES (RegisterError): a write the catalog cannot govern must not
-    # report success, and the mover retries.
+    # report success, and the stage runner retries.
     if to_dataset:
         if settings.catalog_url:
             # NOTHING LEFT TO REGISTER. `ensure_stage_output` above created the table,
@@ -897,7 +897,7 @@ async def _write_stage(
             span.set_attribute("lance.catalog.registered", to_dataset)
         else:
             # AN UNGOVERNED WRITE IS LOUD, NEVER SILENT. Without a catalog URL this
-            # mover cannot register, so the bytes land outside governance — which is
+            # stage runner cannot register, so the bytes land outside governance — which is
             # exactly the state the estate was found in on 2026-08-17, and the reason
             # it went unnoticed for so long is that nothing said so. It warns rather
             # than raising because an unset URL is a DEPLOYMENT gap, not bad data:
@@ -938,7 +938,7 @@ async def _run_compute(
     emitted lineage carries the actual version + measured output statistics (rows + on-disk bytes),
     and the cascade produces data, not just provenance. Blocking Lance/S3 IO → threadpool. Off →
     version 1, no stats (dummy emit). A compute failure propagates to the caller's RETRY path. With
-    the quality gate on, the mover then ASSERTS quality on the dataset it just wrote (the produced
+    the quality gate on, the stage runner then ASSERTS quality on the dataset it just wrote (the produced
     data is what's validated).
     """
     from_namespace = identity.from_namespace
@@ -1036,7 +1036,7 @@ async def _run_compute(
                 if result is None:
                     # S1 — the job is on the cluster and the workflow owns the rest of this run.
                     return StageWrite(dispatched=True, to_uri=to_uri)
-            # THE MOVER MEASURES; IT DOES NOT RULE. Under one door the catalog decides whether a
+            # THE STAGE RUNNER MEASURES; IT DOES NOT RULE. Under one door the catalog decides whether a
             # version may be promoted, so these assertions no longer gate anything — see
             # `failed_assertions` below, which is deliberately not derived from them.
             #
@@ -1167,7 +1167,7 @@ async def _review_reasons(
     gate = gate_svc.effective_gate(settings, await gate_svc.resolve_gate_async(settings, project=project))
     # THE GATE'S OWN VALUE, not the chart flag. This read `promotion_hold.review_enabled(settings)`
     # while the log below emitted `gate.review_enabled` — so a project that declared a review saw
-    # `review_enabled: true` in the mover's structured log and never had a promotion held. An operator
+    # `review_enabled: true` in the stage runner's structured log and never had a promotion held. An operator
     # checking whether the declaration took effect was shown exactly what they declared.
     #
     # `effective_gate` composes this already: the declared record WHOLE or the chart's settings WHOLE,
@@ -1229,7 +1229,7 @@ async def _review_reasons(
     # one call, byte-identical to before. The second scan is bought only where it decides
     # something: separating "unusual" from "corrupt", which is precisely the distinction the review
     # cannot make on its own.
-    # NOT derived from `assertions` above. That was the mover ruling on its own write — the
+    # NOT derived from `assertions` above. That was the stage runner ruling on its own write — the
     # second enforcement point `publication.py` exists to prevent — and it let a stage BLOCK a
     # promotion the catalog had never been asked about. The catalog is the only source of a
     # verdict now, and it speaks in exactly two places: the `gate_only` probe below (bought only
@@ -1277,7 +1277,7 @@ class PromotionVerdict(BaseModel):
     """Whether this run may promote, and — when it may not — WHICH outcome refused and why.
 
     ``blocked_by`` is not decoration: a corrupt batch (BLOCK), an unusual-but-valid one (HOLD), a
-    catalog refusal (PUBLISH) and a mover that cannot promote at all (MISCONFIGURED) have different
+    catalog refusal (PUBLISH) and a stage runner that cannot promote at all (MISCONFIGURED) have different
     remedies, and collapsing them into one boolean is what produced a single hardcoded
     'quality gate HELD' sentence for all four.
     """
@@ -1314,7 +1314,7 @@ async def _evaluate_promotion(
         has_target=bool(to_dataset) and result is not None,
         # PUBLISHING NEEDS A CATALOG. `publish_stage_output` raises on an empty URL, and this
         # precondition used to ride on MEDALLION_CASCADE_VIA_PUBLISH's validator; deleting the
-        # flag deleted the guard, and every ungoverned mover answered RETRY forever.
+        # flag deleted the guard, and every ungoverned stage runner answered RETRY forever.
         has_catalog=bool(settings.catalog_url),
         has_pub_topic=bool(settings.pub_topic),
     )
@@ -1352,9 +1352,9 @@ async def _evaluate_promotion(
             dedicated_token=dedicated_token_for(settings),
             timeout_seconds=settings.publish_timeout_seconds,
             # Carried so the NEXT tier inherits them: the catalog echoes both onto
-            # `table_published`, which is what wakes the next mover. This publish is the ONLY hop
-            # where either would be lost — the mover authenticates as itself, so without the
-            # originator here the next tier's failures address a mover, not the person whose
+            # `table_published`, which is what wakes the next stage runner. This publish is the ONLY hop
+            # where either would be lost — the stage runner authenticates as itself, so without the
+            # originator here the next tier's failures address a stage runner, not the person whose
             # batch it is.
             cascade_id=trigger.cascade_id or "",
             originator=trigger.originator or "",
@@ -1498,7 +1498,7 @@ async def _report_hold(
         error_message=refusal_message(verdict.blocked_by, settings.to_dataset),
         promotion_status=promotion_status_for(verdict.blocked_by),
     )
-    # S3/S4: with review on, the hold becomes a QUESTION rather than a verdict. The mover does
+    # S3/S4: with review on, the hold becomes a QUESTION rather than a verdict. The stage runner does
     # not decide which kind of hold this is — it publishes what the gate saw, and the review
     # workflow (hosted by the producer, beside the door a person can answer on) splits corrupt
     # from unusual. A publish that does not land degrades to the permanent BLOCK below, which is

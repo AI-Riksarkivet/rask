@@ -1,4 +1,4 @@
-"""End-to-end test for the event-driven medallion cascade (medallion-producer → 2 movers → lineage DAG).
+"""End-to-end test for the event-driven medallion cascade (medallion-producer → 2 stage runners → lineage DAG).
 
 ONE call to medallion-producer's ``/produce`` must cascade the whole pipeline — bronze → silver → gold (R23:
 the producer ingests straight into bronze; raw is the external world) — purely through Dapr pub/sub,
@@ -41,7 +41,7 @@ ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 #: The tenant to drive, and on a publish-driven estate it is REQUIRED rather than optional.
 #:
 #: With `medallion.cascadeViaPublish` on, the cascade is triggered by `publication_trigger`, and that
-#: publisher ALWAYS carries a project — `transform.py` says why: "the mover cannot resolve its tiers
+#: publisher ALWAYS carries a project — `transform.py` says why: "the stage runner cannot resolve its tiers
 #: without it". So a projectless produce publishes silver and gold never fires, and this test failed
 #: with `runs 131->133, expected >= 134` against a cascade that was working perfectly for a tenant.
 #: The shape asserted here has to be the shape the estate runs.
@@ -98,7 +98,7 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
 
     # Snapshot the run count FIRST. gold's upstream set may already exist from earlier produces, so
     # set-membership alone can't prove THIS trigger did anything — the graph would look identical if the
-    # cascade silently no-op'd. A fresh produce mints a new run per stage (producer + 2 movers = +3), so a
+    # cascade silently no-op'd. A fresh produce mints a new run per stage (producer + 2 stage runners = +3), so a
     # strictly rising run count is the real "the cascade fired just now" signal.
     before = _run_count(lineage)
 
@@ -126,7 +126,7 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     run_token = produced.json().get("token", "")
 
     # ASSERT — the cascade reached gold (its transitive upstream is the full chain) AND it did so from THIS
-    # produce: all three stages emitted a fresh run, so the count grew by the producer + 2 movers.
+    # produce: all three stages emitted a fresh run, so the count grew by the producer + 2 stage runners.
     gold = _qualified("gold", "catalog")
     chain = {_qualified("bronze", "events"), _qualified("silver", "features")}
     # 150s, not 60. NOT a weakened assertion — every condition below is unchanged; this is the WAIT
@@ -171,7 +171,7 @@ def _projectless_diagnosis(lineage: str, upstream: list[str]) -> str:
     only one that is not about the estate at all — it is about how the test was invoked.
 
     With `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
-    carries a project because "the mover cannot resolve its tiers without it". So a PROJECTLESS produce
+    carries a project because "the stage runner cannot resolve its tiers without it". So a PROJECTLESS produce
     against a publish-driven estate publishes silver and gold never fires — and the bare run-count
     message reports that as a broken cascade, which is what it did on the drive that produced
     `runs 131->133, expected >= 134` against a cascade working perfectly for a tenant.

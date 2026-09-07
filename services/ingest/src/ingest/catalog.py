@@ -51,7 +51,7 @@ class CommittingCatalog(Protocol):
     """A catalog that folds client-written fragments into a version ITSELF.
 
     The distinguishing capability of the deployed plane: a commit the catalog makes is one the
-    cascade can ride, because the event that wakes a mover is the catalog's publication of a version.
+    cascade can ride, because the event that wakes a stage runner is the catalog's publication of a version.
     A catalog without this operation can only record versions where nothing downstream will see them.
     """
 
@@ -245,7 +245,7 @@ def assert_creation_contract(uri: str) -> None:
 
     Checked rather than documented, because "silent no-op if late" means the mistake has NO symptom
     when it is made. The dataset works, the run is green, and the defect surfaces months later as a
-    mover duplicating rows or a `source_rowid` resolving to the wrong page. A14 moves that discovery
+    stage runner duplicating rows or a `source_rowid` resolving to the wrong page. A14 moves that discovery
     to the one moment it is still cheap.
     """
     import lance

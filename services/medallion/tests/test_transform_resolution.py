@@ -1,7 +1,7 @@
-"""A mover runs the lane that was DECLARED, not the one baked into its Deployment.
+"""A stage runner runs the lane that was DECLARED, not the one baked into its Deployment.
 
 The declaration only means something if the submit path reads it. Otherwise `TransformSpec` is a
-record an admin edits and a mover ignores — two sources of truth for what runs, with the governed one
+record an admin edits and a stage runner ignores — two sources of truth for what runs, with the governed one
 losing, which is worse than having only the ungoverned one because it looks governed.
 
 Three behaviours, and the default matters as much as the feature:
@@ -12,7 +12,7 @@ Three behaviours, and the default matters as much as the feature:
 * **Lane declared** — the record's entrypoint, params and code version WIN. That is the whole point:
   an admin changes what a lane runs through the audited door, not by editing a Deployment.
 * **Lane named but UNDECLARED** — refuse. Never fall back to the chart entrypoint, because a silent
-  fallback is exactly the failure the record exists to eliminate: the mover would run the OLD program
+  fallback is exactly the failure the record exists to eliminate: the stage runner would run the OLD program
   while the operator believes the declaration governs it.
 """
 

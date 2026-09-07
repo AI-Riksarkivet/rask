@@ -8,7 +8,7 @@ Two of its fields used to be read straight off the wire with no shape check at a
   `ray-<stage>-<token>-<digest>` and then replaces every character outside `[A-Za-z0-9_-]` with `-`,
   so the hazard there is not injection but COLLISION: two different tokens land on one id, and
   `submit_or_reattach` reads that as a successful re-attach — the second stage's work never runs;
-* **`from_uri`** — which becomes the URI the mover OPENS with its own object-store credentials
+* **`from_uri`** — which becomes the URI the stage runner OPENS with its own object-store credentials
   (`compute.read_upstream` → `lance.dataset(uri, storage_options=settings.storage_options())`), and
   which is also forwarded into a Ray job's `runtime_env` as `FROM_URI`.
 
@@ -32,7 +32,7 @@ from typing import Any, cast
 import pytest
 from dapr.aio.clients import DaprClient
 
-import medallion.services.transform as mover
+import medallion.services.transform as stage_runner
 from medallion.core.config import MedallionSettings
 from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
@@ -65,7 +65,7 @@ class _FakeDapr:
 
 
 class _Reads:
-    """Every URI the mover actually opened. The claim under test is about reads, so this is the witness."""
+    """Every URI the stage runner actually opened. The claim under test is about reads, so this is the witness."""
 
     def __init__(self) -> None:
         self.opened: list[str] = []
@@ -80,7 +80,7 @@ def reads(monkeypatch: pytest.MonkeyPatch) -> _Reads:
         recorder.opened.append(uri)
         return UpstreamFacts(uri=uri, version=1)
 
-    monkeypatch.setattr(mover, "read_upstream", _read_upstream)
+    monkeypatch.setattr(stage_runner, "read_upstream", _read_upstream)
     monkeypatch.setattr(inprocess_executor, "transform_stage", lambda *_a, **_k: WriteResult(version=1, row_count=1, size_bytes=1))
     return recorder
 
@@ -92,8 +92,8 @@ def _provision(control: Path, project: str, root: Path) -> None:
     (registry / "wh1.json").write_text(json.dumps({"id": "wh1", "project": project, "root_uri": str(root), "status": "active"}))
 
 
-def _mover(**extra: Any) -> MedallionSettings:
-    """The bronze→silver mover, compute ON (the path that actually opens `from_uri`)."""
+def _stage_runner(**extra: Any) -> MedallionSettings:
+    """The bronze→silver stage_runner, compute ON (the path that actually opens `from_uri`)."""
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
@@ -112,30 +112,30 @@ def _mover(**extra: Any) -> MedallionSettings:
 
 
 def test_a_from_uri_outside_the_resolved_root_is_refused_and_never_opened(tmp_path: Path, reads: _Reads) -> None:
-    """THE SECURITY GUARD. A trigger naming a location the mover has no business reading is DROPped.
+    """THE SECURITY GUARD. A trigger naming a location the stage runner has no business reading is DROPped.
 
     Before the confinement the handler did `from_uri = str(supplied)` and handed it to
     `read_upstream`, so anything that could publish onto the stage topic could name any dataset the
-    mover's S3 credential can open — a different tenant's warehouse included — and the resulting rows
+    stage runner's S3 credential can open — a different tenant's warehouse included — and the resulting rows
     would then be written into THIS stage's target under real-looking lineage.
     """
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "decoy-bronze"), to_uri=str(tmp_path / "decoy-silver"), control_root=str(control))
+    settings = _stage_runner(from_uri=str(tmp_path / "decoy-bronze"), to_uri=str(tmp_path / "decoy-silver"), control_root=str(control))
 
     trigger = {"data": {"token": "t", "project": "acme", "from_uri": "s3://someone-elses-warehouse/medallion/bronze"}}
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
 
     assert status == _DROP
-    assert reads.opened == [], f"the mover opened a location outside its own root: {reads.opened}"
+    assert reads.opened == [], f"the stage_runner opened a location outside its own root: {reads.opened}"
     assert dapr.published == [], "a refused trigger must leave no lineage and no downstream trigger"
 
 
 def test_the_catalogs_vended_location_inside_the_root_is_still_honoured(tmp_path: Path, reads: _Reads) -> None:
     """The other half: confinement must not break I2.
 
-    The catalog vends `<root>/<hash>_<ns>$<name>`, a path the mover's composed
+    The catalog vends `<root>/<hash>_<ns>$<name>`, a path the stage runner's composed
     `<root>/medallion/<namespace>` never equals — reading the composed path is why the cascade woke
     and found nothing. That vended location lives inside the SAME root the registry resolved, so it
     passes containment and is still what gets opened.
@@ -144,7 +144,7 @@ def test_the_catalogs_vended_location_inside_the_root_is_still_honoured(tmp_path
     _provision(control, "acme", wh)
     vended = f"{wh}/abc123_bronze$events"
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "decoy-bronze"), to_uri=str(tmp_path / "decoy-silver"), control_root=str(control))
+    settings = _stage_runner(from_uri=str(tmp_path / "decoy-bronze"), to_uri=str(tmp_path / "decoy-silver"), control_root=str(control))
 
     trigger = {"data": {"token": "t", "project": "acme", "from_uri": vended}}
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
@@ -158,7 +158,7 @@ def test_a_traversal_segment_cannot_climb_back_out_of_the_root(tmp_path: Path, r
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "decoy-bronze"), to_uri=str(tmp_path / "decoy-silver"), control_root=str(control))
+    settings = _stage_runner(from_uri=str(tmp_path / "decoy-bronze"), to_uri=str(tmp_path / "decoy-silver"), control_root=str(control))
 
     trigger = {"data": {"token": "t", "project": "acme", "from_uri": f"{wh}/../globex-wh/medallion/bronze"}}
 
@@ -170,7 +170,7 @@ def test_a_from_uri_is_refused_when_the_stage_has_no_root_to_confine_it_to(tmp_p
     """Fail closed. With no project and no configured upstream there is no storage domain, and
     "everything the credential can reach" is the wrong default for the empty case."""
     dapr = _FakeDapr()
-    settings = _mover(from_uri="", to_uri=str(tmp_path / "silver"))  # MEDALLION_FROM_URI unset — the default
+    settings = _stage_runner(from_uri="", to_uri=str(tmp_path / "silver"))  # MEDALLION_FROM_URI unset — the default
 
     trigger = {"data": {"token": "t", "from_uri": str(tmp_path / "somebody-elses" / "bronze")}}
 
@@ -181,7 +181,7 @@ def test_a_from_uri_is_refused_when_the_stage_has_no_root_to_confine_it_to(tmp_p
 def test_a_non_string_from_uri_is_refused_rather_than_coerced(tmp_path: Path, reads: _Reads) -> None:
     """`str(supplied)` accepted ANY json value and stringified it into a URI; a wrong type is malformed."""
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
     trigger = {"data": {"token": "t", "from_uri": {"bucket": "elsewhere"}}}
 
@@ -190,9 +190,9 @@ def test_a_non_string_from_uri_is_refused_rather_than_coerced(tmp_path: Path, re
 
 
 def test_no_from_uri_still_uses_the_configured_upstream(tmp_path: Path, reads: _Reads) -> None:
-    """The default path stays exactly as it was: absent `from_uri` → the mover's own configured URI."""
+    """The default path stays exactly as it was: absent `from_uri` → the stage runner's own configured URI."""
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
 
@@ -221,7 +221,7 @@ def test_a_token_outside_the_shape_is_dropped(tmp_path: Path, reads: _Reads, tok
     into the graph, and folds into the Ray submission id — where characters outside `[A-Za-z0-9_-]` are
     replaced, so two unshaped tokens can COLLIDE onto one id and the second stage's work never runs."""
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}})) == _DROP
     assert reads.opened == [] and dapr.published == []
@@ -240,11 +240,11 @@ def test_a_token_outside_the_shape_is_dropped(tmp_path: Path, reads: _Reads, tok
 def test_every_token_the_estates_own_heads_can_mint_is_accepted(tmp_path: Path, reads: _Reads, token: str) -> None:
     """A consumer stricter than the head that feeds it is not safety, it is a silent DROP of a cascade
     the head already 202'd. `/produce`, `/ingest-media` and `/train` all pin `Idempotency-Key` to
-    `^[A-Za-z0-9._-]+$` (max 64) and thread it through as the cascade token, so the mover honours
+    `^[A-Za-z0-9._-]+$` (max 64) and thread it through as the cascade token, so the stage_runner honours
     exactly that shape — nothing narrower.
     """
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}})) == _SUCCESS
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
@@ -255,7 +255,7 @@ def test_an_absent_token_still_proceeds(tmp_path: Path, reads: _Reads) -> None:
     """Over-tightening guard: absent makes no claim (the estate's rule for every optional trigger
     field), and `submission_id` already has a `notoken` branch for exactly this case."""
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {}})) == _SUCCESS
 
@@ -268,11 +268,11 @@ def test_an_unparseable_envelope_is_dropped_instead_of_transformed(tmp_path: Pat
     """A payload that is not a trigger must not run a stage.
 
     Every field guard used to be an independent `if isinstance(data, dict)`, so an envelope carrying
-    no readable payload at all fell through with every field `None` and the mover did a full
+    no readable payload at all fell through with every field `None` and the stage runner did a full
     transform + emit on the strength of its own env config — a run nothing asked for.
     """
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, event)) == _DROP
     assert reads.opened == [] and dapr.published == []
@@ -282,7 +282,7 @@ def test_unknown_fields_are_tolerated(tmp_path: Path, reads: _Reads) -> None:
     """DATA-CONTRACT §7.4 is additive-only: a publisher may add optional fields and an older consumer
     must keep working. `from_version`/`to_version` already ride this payload and nothing reads them here."""
     dapr = _FakeDapr()
-    settings = _mover(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
     trigger = {"data": {"token": "t", "namespace": "bronze", "from_version": 3, "to_version": 4, "invented_later": True}}
 
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger)) == _SUCCESS
@@ -330,7 +330,7 @@ def test_the_token_grammar_is_a_strict_superset_of_the_training_consumers() -> N
     """
     accepted_by_train = ["ok", "Ok-1_2", "a" * 64, "0f1c2d3e4f5a", "8e1c9b7a-2f3d-4c5b-9a01-1234567890ab"]
     assert all(_train_safe_name(s) for s in accepted_by_train)
-    assert all(safe_token(s) for s in accepted_by_train), "the mover must not DROP a token the trainer accepts"
+    assert all(safe_token(s) for s in accepted_by_train), "the stage_runner must not DROP a token the trainer accepts"
 
     dangerous = ["", "has space", "has/slash", "has$dollar", "..", "a/../b", "a\nb", "tok\t", "a" * 65]
     assert not any(_train_safe_name(s) for s in dangerous)

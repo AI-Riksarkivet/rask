@@ -7,9 +7,9 @@ a silently-lost invariant costs the incident it was written to prevent, twice.
 
 * **B12** — the sweep shuffles its dataset list so a persistently-failing dataset early in listing
   order cannot starve the ones behind it. Delete `random.shuffle(uris)` and every test still passes.
-* **B13** — the mover's single-flight `_write_lock` is an `asyncio.Lock`, which is PROCESS-local. It
-  is only a lock at all while `moverReplicas` is 1. Nothing ties the two together, so scaling the
-  mover would silently turn overlapping `write_dataset(mode="overwrite")` calls back on.
+* **B13** — the stage runner's single-flight `_write_lock` is an `asyncio.Lock`, which is PROCESS-local. It
+  is only a lock at all while `stageRunnerReplicas` is 1. Nothing ties the two together, so scaling the
+  stage runner would silently turn overlapping `write_dataset(mode="overwrite")` calls back on.
 * **B3** — `MEDALLION_RAY_CODE_VERSION` is the second axis of the submission id, which is what stops a
   rolling deploy re-attaching to the previous build's Ray job. It is fed by ONE chart line, pinned by
   no rendered-chart test; delete the line and the id silently returns to its pre-B3 form, green.
@@ -65,15 +65,15 @@ class TestB13SingleFlightHoldsONLYAtOneReplica:
         )
 
     @pytest.mark.parametrize("values", ["chart/values.yaml", "chart/values-prod.yaml"])
-    def test_the_chart_keeps_the_mover_at_one_replica(self, values: str) -> None:
-        """An `asyncio.Lock` serialises coroutines in ONE process. At two replicas the mover's
+    def test_the_chart_keeps_the_stage_runner_at_one_replica(self, values: str) -> None:
+        """An `asyncio.Lock` serialises coroutines in ONE process. At two replicas the stage runner's
         overlapping `write_dataset(mode="overwrite")` calls race again, and the lock's own comment
         says that is what it exists to prevent. The coupling is invisible in either file alone."""
         text = (REPO / values).read_text()
-        match = re.search(r"^\s*moverReplicas:\s*(\d+)", text, re.MULTILINE)
-        assert match, f"moverReplicas disappeared from {values} — the single-flight guarantee is unbound"
+        match = re.search(r"^\s*stageRunnerReplicas:\s*(\d+)", text, re.MULTILINE)
+        assert match, f"stageRunnerReplicas disappeared from {values} — the single-flight guarantee is unbound"
         assert match.group(1) == "1", (
-            f"{values} scales the mover to {match.group(1)} replicas while single-flight is an "
+            f"{values} scales the stage runner to {match.group(1)} replicas while single-flight is an "
             f"asyncio.Lock, which is process-local — two replicas overwrite the same dataset "
             f"concurrently. Make the claim distributed before scaling this."
         )
@@ -102,7 +102,7 @@ class TestB3TheDeployAxisIsFedByTheChart:
         assert proc.returncode == 0, proc.stderr
         return proc.stdout
 
-    def test_every_mover_receives_the_code_version(self) -> None:
+    def test_every_stage_runner_receives_the_code_version(self) -> None:
         """The id's second axis. Without it `code` resolves to "" and the submission id returns to
         its pre-B3 form — which re-attaches a rolling deploy to the PREVIOUS build's job, so the new
         pod reports success over the old build's output. `test_an_unset_code_version_reproduces_the_
@@ -113,7 +113,7 @@ class TestB3TheDeployAxisIsFedByTheChart:
         )
 
     def test_it_is_rendered_outside_the_ray_toggle(self) -> None:
-        """Rendered on every mover, not only a ray-enabled one: the id is derived wherever a stage is
+        """Rendered on every stage runner, not only a ray-enabled one: the id is derived wherever a stage is
         submitted, so gating the value on a toggle would make the axis present only sometimes."""
         assert "MEDALLION_RAY_CODE_VERSION" in self._render()
 

@@ -2,7 +2,7 @@
  * Quality-gate contracts — the wire shapes of the catalog's gate door.
  *
  * The gate decides whether a stage's output may publish. Until 38758a3f every one of these values
- * lived only as env on a mover Deployment, so moving a threshold meant a values-file edit and a
+ * lived only as env on a stage runner Deployment, so moving a threshold meant a values-file edit and a
  * `helm upgrade` — an operation nobody could enumerate, review, or be gated on.
  *
  * NULL IS A STATE, NOT A MISSING VALUE. `describe` answers `null` when nothing is declared, and the

@@ -1,11 +1,11 @@
-"""The lane record decides WHAT a mover reads and writes — not its Deployment env.
+"""The lane record decides WHAT a stage runner reads and writes — not its Deployment env.
 
-A `TransformSpec` has always declared `from_id` and `to_id`, and the mover has always ignored both,
+A `TransformSpec` has always declared `from_id` and `to_id`, and the stage runner has always ignored both,
 taking its input from `MEDALLION_FROM_DATASET` instead. That is two sources of truth for one lane
 with the governed one losing — worse than having only the ungoverned one, because it LOOKS governed:
-an admin edits `from_id` through an audited door and the mover keeps reading the old table.
+an admin edits `from_id` through an audited door and the stage runner keeps reading the old table.
 
-It is also why one mover serves exactly one edge. The `stage_run` workflow is already fully
+It is also why one stage runner serves exactly one edge. The `stage_run` workflow is already fully
 parameterised (`StageJobSpec` carries `from_uri`/`to_uri`), so the daemon was never the workflow —
 it was the handful of lines that computed those URIs from env before scheduling it.
 
@@ -87,7 +87,7 @@ def test_an_id_without_a_namespace_is_refused_rather_than_guessed() -> None:
 
 
 def test_the_env_dataset_is_still_accepted_alongside_a_declaration() -> None:
-    """A mover pointed at a declared lane must not stop serving its configured edge.
+    """A stage runner pointed at a declared lane must not stop serving its configured edge.
 
     The guard accepts BOTH: the env `from_dataset` an estate has always used, and the declared
     lane's `from_id`. Replacing rather than adding would silently retire a working lane the moment

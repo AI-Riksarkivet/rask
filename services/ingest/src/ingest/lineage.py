@@ -151,7 +151,7 @@ def _emitter() -> Any:  # noqa: ANN401 — Emitter
       eventType COMPLETE, outputs `[bronze$events]` — which is exactly what the medallion's
       `/bronze-arrival` filters on. Verified in-cluster: an ingest run produced
       `POST /bronze-arrival 200` on the producer and `POST /medallion-event 200` on the
-      bronze-to-silver mover, with no event from this module involved at all.
+      bronze-to-silver stage runner, with no event from this module involved at all.
 
     That is the right shape, not a lucky accident. The governed WRITER announces the tier, so the
     announcement carries the catalog's authority and happens exactly once per commit. An ingest-side

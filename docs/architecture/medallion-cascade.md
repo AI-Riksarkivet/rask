@@ -8,7 +8,7 @@ recur and the answers are expensive to re-derive.
 **What the plan delivered, for anyone tracing the history.** Its slices S1–S4 (the submit/poll/verify
 workflow, `continue_as_new`, the automatic quality split, and the human approval) and §9.1's review
 band are implemented and pinned by tests under `services/medallion/tests`. S5 and S6 were audited and
-owe no code — S5's defect was closed by reordering rather than by a saga, and S6 is a `movers[]`
+owe no code — S5's defect was closed by reordering rather than by a saga, and S6 is a `stage runners[]`
 declaration rather than a feature; both properties are pinned by
 `test_no_rows_without_a_catalog_record.py` and `test_a_same_tier_lane_is_legal.py`, which carry the
 full reasoning. §9.2's `lance-ray` rename is an ops scheduling item with no design work owed: it needs
@@ -48,9 +48,9 @@ would therefore do the opposite of fixing something: it would collide two legiti
 dropping one of two pieces of work that must both happen. It would also conflate two distinct cascades
 in tracing, which is what the token exists to keep apart.
 
-**Explicitly NOT the fix: token de-duplication at the movers.** An adversarial review found that key is
-not unique per legitimate message on the mover's own topic — deploying it halts every distributed
-cascade, because the mover deliberately receives more than one message per token.
+**Explicitly NOT the fix: token de-duplication at the stage runners.** An adversarial review found that key is
+not unique per legitimate message on the stage runner's own topic — deploying it halts every distributed
+cascade, because the stage runner deliberately receives more than one message per token.
 
 **What would change this.** If a future head publishes a trigger whose `dataset` AND range are identical
 to another's, that IS a duplicate and the instance_id will correctly dedupe it. The property to preserve
@@ -118,7 +118,7 @@ usually fail this review are absent for reasons this doc already argued:
 hold.** The sign-off below justifies having no workflow management surface with *"its three exits are
 already distinguished (`succeeded` / `abandoned` / `unnotified`)"*. In any deployed estate **only
 `abandoned` ever fired**: `submit_stage` re-derived the submission id without `code`, while
-`submit_stage_job` posted it with `code` (`MEDALLION_RAY_CODE_VERSION` is rendered on every mover,
+`submit_stage_job` posted it with `code` (`MEDALLION_RAY_CODE_VERSION` is rendered on every stage runner,
 `chart/templates/medallion.yaml:383`, outside the `medallion.ray` guard). The poll 404'd, `job_status`
 answered `None`, and `stage_run` took the `abandoned` branch on its FIRST poll — a fabricated FAIL over
 a job that was writing its data correctly.

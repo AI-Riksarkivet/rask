@@ -21,7 +21,7 @@ THE MECHANISM. `emit_promotion_outcome` runs in the PRODUCER, because the produc
 
 and the producer sets neither `MEDALLION_OPERATION` nor `MEDALLION_AUTHOR` (verified on the live
 Deployment), so both fall to the code defaults in `core/config.py` -- `"embed_features"` and
-`"data_eng"`. Those defaults are the bronze->silver mover's real values, which is exactly why this
+`"data_eng"`. Those defaults are the bronze->silver stage runner's real values, which is exactly why this
 hid: on a bronze->silver promotion the emit is ACCIDENTALLY correct, and only a second lane exposes it.
 
 `PromotionSpec` already carries `from_dataset`/`to_dataset`/`version` -- which is why the inputs and
@@ -29,7 +29,7 @@ outputs on the same event ARE right -- but not the operation or the author, so t
 knows which stage was held cannot say so.
 
 WHY THIS IS THE SAME BUG THE FILE ALREADY FIXED ONCE. `hold_spec`'s docstring says `pub_topic`
-"matters most -- the producer hosting the review has no idea what this mover's next hop is, so
+"matters most -- the producer hosting the review has no idea what this stage runner's next hop is, so
 without it an approval records a decision and promotes nothing." Identical reasoning, identical
 carrier, and the operation/author/version were left behind.
 
@@ -109,7 +109,7 @@ def test_the_approved_promotion_names_the_stage_that_was_held(captured: list[dic
     assert event["operation"] == "aggregate_gold", (
         f"the gold promotion was recorded as job {event['operation']!r} -- lineage now says the silver stage produced acme-gold$catalog"
     )
-    assert event["author"] == "analyst", f"the gold promotion was authored by {event['author']!r}, the bronze->silver mover's literal"
+    assert event["author"] == "analyst", f"the gold promotion was authored by {event['author']!r}, the bronze->silver stage runner's literal"
     assert event.get("version") == 48, (
         f"the promotion recorded version {event.get('version')!r}; the hold was taken on v48, and "
         "build_run_event's default of 1 claims a version the table never had at that point"

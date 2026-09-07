@@ -1,12 +1,12 @@
 """A new warehouse grants the cascade's own identities, or its tenant cannot reach gold.
 
 Measured five separate times on the live estate before this existed: a tenant is created, its tiers
-are created, a cascade runs — and dies at `403 can_update_tag` in a mover log nobody is watching.
+are created, a cascade runs — and dies at `403 can_update_tag` in a stage runner log nobody is watching.
 The estate looks healthy the whole time. Rows land in bronze, lineage records the run, the UI shows
 the table; only the publish is refused, and only the log says so.
 
 The cause is that the seed grants PEOPLE. Every service that actually moves data between tiers had to
-be discovered by watching it fail: the bronze->silver mover, the silver->gold mover, the PRODUCER
+be discovered by watching it fail: the bronze->silver stage runner, the silver->gold stage runner, the PRODUCER
 (which is what resumes a human-approved promotion, so an approval 403'd AFTER someone said yes), and
 `service-web` (which reads lineage back).
 
@@ -141,7 +141,7 @@ def test_the_rung_is_owner() -> None:
     """`publish` is guarded by `can_update_tag`, and the model defines `can_update_tag: owner`.
 
     `validator` is the near-miss and was tried first on the live estate: it buys `can_promote`, which
-    is the OTHER door on that route (the accept-assertions override), and a mover holding only it
+    is the OTHER door on that route (the accept-assertions override), and a stage runner holding only it
     fails identically. Pinned so the rung cannot be quietly lowered to something that looks adjacent.
     """
     source = inspect.getsource(fga_deps.seed_warehouse)

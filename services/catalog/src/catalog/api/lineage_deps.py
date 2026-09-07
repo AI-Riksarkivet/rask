@@ -53,7 +53,7 @@ async def emit_measured_write(
     its own version sequence and its own schema, so reading a branch write back off main pins the WROTE edge
     to a version that never carried the change.
 
-    ``inputs`` names the version-pinned source dataset(s) this write DERIVED FROM (a mover's merge from
+    ``inputs`` names the version-pinned source dataset(s) this write DERIVED FROM (a stage runner's merge from
     ``source@N``); ``extra_run_facets`` rides caller-supplied run facets (e.g. training ``params``) —
     both threaded verbatim to :func:`emit_write_event`, so the catalog stays un-opinionated about them.
     """

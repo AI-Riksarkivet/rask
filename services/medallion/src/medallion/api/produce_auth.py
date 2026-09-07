@@ -70,7 +70,7 @@ async def authorize_produce(
     RETURNS the verified subject on the human path, or ``None`` when the caller is a service (or dev-open).
     It used to return nothing, which is why a cascade this person started could never name them: this door
     is the LAST place their identity exists — by the time a silver or gold stage fails, the request is
-    gone and the mover authors as a role. The value is only ever a TARGETING hint (it rides
+    gone and the stage runner authors as a role. The value is only ever a TARGETING hint (it rides
     ``lance.originator`` into the notifications plane, which re-derives visibility per recipient at
     delivery); it authorizes nothing, and every authorization decision above is unchanged.
 

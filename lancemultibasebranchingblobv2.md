@@ -170,12 +170,14 @@ dataset = lance.write_dataset(
         DatasetBasePath("s3://bucket-2", name="bucket2"),
         DatasetBasePath("s3://bucket-3", name="bucket3"),
     ],
-    target_bases=["bucket2"],          # write this batch to bucket2
+    target_bases=["bucket2"],  # write this batch to bucket2
 )
 
 more_data = pd.DataFrame({"id": range(1000, 2000), "value": range(1000, 2000)})
 dataset = lance.write_dataset(
-    more_data, dataset, mode="append",
+    more_data,
+    dataset,
+    mode="append",
     target_bases=["bucket2", "bucket3"],
 )
 
@@ -186,7 +188,7 @@ dataset = lance.write_dataset(new_data, dataset, mode="append", target_bases=["b
 
 # Reading is transparent
 dataset = lance.dataset("s3://bucket-1/my_dataset")
-print(dataset.to_table())   # all 3000 rows, from all buckets
+print(dataset.to_table())  # all 3000 rows, from all buckets
 ```
 
 `target_bases` controls where new data files go. With multiple bases and no target, **all bases are
@@ -452,7 +454,7 @@ print(ds.tags.list())
 #  'training-v1': {'version': 2, 'branch': None, ...}}
 
 ds_baseline = ds.checkout_version("baseline")
-print(len(ds_baseline.to_table()))   # 1000 rows
+print(len(ds_baseline.to_table()))  # 1000 rows
 ```
 
 **Branches**
@@ -461,17 +463,19 @@ print(len(ds_baseline.to_table()))   # 1000 rows
 ds = lance.dataset("s3://bucket/my-dataset")
 
 experiment = ds.create_branch("feature-experiment")
-print(experiment.version)             # branch-local version (e.g. 1)
-print(len(experiment.to_table()))     # 2000 rows (same as main)
+print(experiment.version)  # branch-local version (e.g. 1)
+print(len(experiment.to_table()))  # 2000 rows (same as main)
 
-experimental_data = pa.table({
-    "id": range(2000, 3000),
-    "feature": [x * 2 for x in range(1000)],
-})
+experimental_data = pa.table(
+    {
+        "id": range(2000, 3000),
+        "feature": [x * 2 for x in range(1000)],
+    }
+)
 experiment = lance.write_dataset(experimental_data, experiment, mode="append")
 
-print(len(experiment.to_table()))     # 3000
-print(len(ds.to_table()))             # still 2000
+print(len(experiment.to_table()))  # 3000
+print(len(ds.to_table()))  # still 2000
 
 # nested branches for A/B testing
 variant_a = experiment.create_branch("variant-a")
@@ -486,10 +490,11 @@ print(ds.branches.list())
 ds_variant_a = ds.checkout_version(("variant-a", None))
 ds_variant_a = lance.write_dataset(
     pa.table({"id": range(3000, 4000), "feature": [x * 3 for x in range(1000)]}),
-    ds_variant_a, mode="append",
+    ds_variant_a,
+    mode="append",
 )
-print(len(ds_variant_a.to_table()))   # 4000
-print(len(ds.to_table()))             # still 2000 on main
+print(len(ds_variant_a.to_table()))  # 4000
+print(len(ds.to_table()))  # still 2000 on main
 ```
 
 **Shallow clone**
@@ -612,17 +617,19 @@ import pyarrow as pa
 values = pa.array([b"image_bytes_1", b"image_bytes_2", b"image_bytes_3"], pa.large_binary())
 table = pa.table(
     [values, pa.array([0, 1, 2])],
-    schema=pa.schema([
-        pa.field("image", pa.large_binary(), metadata={"lance-encoding:blob": "true"}),
-        pa.field("id", pa.uint64()),
-    ])
+    schema=pa.schema(
+        [
+            pa.field("image", pa.large_binary(), metadata={"lance-encoding:blob": "true"}),
+            pa.field("id", pa.uint64()),
+        ]
+    ),
 )
 ds = lance.write_dataset(table, "/tmp/images.lance")
 
 blobs = ds.take_blobs("image", indices=[0, 1, 2])
 for blob in blobs:
     with blob as f:
-        data = f.read()   # file-like interface with seek support
+        data = f.read()  # file-like interface with seek support
 ```
 
 V1 wins on training performance (blobs co-located with metadata into GPU memory), minimizes file count,
@@ -739,10 +746,10 @@ import pyarrow as pa
 from lance import Blob
 
 # 1) mixed blob values — each lands in a different storage semantic
-small_bytes   = b"tiny-inline-data"             # → Inline (≤64 KB)
-medium_bytes  = b"x" * 100_000                  # → Packed (64 KB – 4 MB)
-large_bytes   = b"y" * 5_000_000                # → Dedicated (> 4 MB)
-external_uri  = "/path/to/existing/video.mp4"   # → External (URI reference)
+small_bytes = b"tiny-inline-data"  # → Inline (≤64 KB)
+medium_bytes = b"x" * 100_000  # → Packed (64 KB – 4 MB)
+large_bytes = b"y" * 5_000_000  # → Dedicated (> 4 MB)
+external_uri = "/path/to/existing/video.mp4"  # → External (URI reference)
 
 values = [
     small_bytes,

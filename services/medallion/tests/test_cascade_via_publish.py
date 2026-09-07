@@ -1,15 +1,15 @@
-"""With the catalog gating, the mover publishes and stops — the tag move is the trigger.
+"""With the catalog gating, the stage runner publishes and stops — the tag move is the trigger.
 
 Two gates ran identical assertions in two places with different consequences. The catalog's withholds
-the `published` TAG; the mover's withheld only the next TRIGGER, so a refused batch was already
+the `published` TAG; the stage runner's withheld only the next TRIGGER, so a refused batch was already
 committed into silver or gold and visible to anyone reading `latest` (`assert_quality_on_batch`
 documents that hole itself). Only the tag is a boundary.
 
-So the mover stops firing the next stage and asks the catalog to publish instead. The tag move emits
+So the stage runner stops firing the next stage and asks the catalog to publish instead. The tag move emits
 `table_published`, the publication head routes it to the lane that owns the source namespace, and the
 cascade has ONE trigger and ONE gate.
 
-OPT-IN. It needs a catalog the mover can reach and authenticate to, and declared lane routes; an
+OPT-IN. It needs a catalog the stage runner can reach and authenticate to, and declared lane routes; an
 estate missing either would simply stop cascading. A migration seam is honest where a silent fallback
 would not be.
 """
@@ -78,7 +78,7 @@ def published(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
         return PublishOutcome(published=True, from_version=1, to_version=2)
 
     monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _publish)
-    # The mover now ASKS the catalog where to write before writing. Without this the fixture's
+    # The stage runner now ASKS the catalog where to write before writing. Without this the fixture's
     # catalog URL would make a real HTTP call; the stub hands back a path under tmp_path so the
     # compute still lands somewhere writable.
     monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(tmp_path / "vended.lance"))
@@ -87,14 +87,14 @@ def published(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
 
 
 class TestTheTagMoveIsTheTrigger:
-    def test_the_mover_publishes_instead_of_firing_the_next_stage(self, published: list[dict[str, Any]], upstream: Path) -> None:
+    def test_the_stage_runner_publishes_instead_of_firing_the_next_stage(self, published: list[dict[str, Any]], upstream: Path) -> None:
         dapr = _Dapr()
 
         asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream), _event()))
 
         assert len(published) == 1, "the output was never offered to the catalog"
         assert "medallion.silver" not in dapr.topics, (
-            "the mover fired the next-stage trigger AND published — two ignitions for one hop, which is the duplicate cascade this replaces"
+            "the stage runner fired the next-stage trigger AND published — two ignitions for one hop, which is the duplicate cascade this replaces"
         )
 
     def test_lineage_is_still_emitted(self, published: list[dict[str, Any]], upstream: Path) -> None:
@@ -125,7 +125,7 @@ class TestARefusalBecomesTheHold:
             lambda **_: PublishOutcome(published=False, failed_assertions=["row_count_positive"]),
         )
         # THE GATE ANSWERS THIS NOW, not a standalone predicate. Stubbing the resolved gate rather than
-        # `promotion_hold.review_enabled` is what keeps this test honest: the mover asks the gate that
+        # `promotion_hold.review_enabled` is what keeps this test honest: the stage runner asks the gate that
         # governs the run, so a declared record and the chart's settings reach the decision through one
         # path. Stubbing the old predicate would pass while the real code consulted something else.
         monkeypatch.setattr(
@@ -154,7 +154,7 @@ class TestTheDefaultIsUntouched:
     def test_there_is_no_flag_and_no_second_door(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
         """THE MIGRATION IS OVER, so the seam is gone.
 
-        This asserted the opposite: with MEDALLION_CASCADE_VIA_PUBLISH unset the mover fired
+        This asserted the opposite: with MEDALLION_CASCADE_VIA_PUBLISH unset the stage runner fired
         `medallion.silver` itself and never called the catalog. That was honest as a MIGRATION SEAM,
         which is how this module's header describes it -- but it made the DEFAULT deployment promote
         through the door `publication.py` says must not exist, and left two enforcement points for one
@@ -172,4 +172,4 @@ class TestTheDefaultIsUntouched:
         asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream, MEDALLION_CASCADE_VIA_PUBLISH="false"), _event()))
 
         assert called, "the catalog must be asked to publish even with the retired flag set to false"
-        assert "medallion.silver" not in dapr.topics, "the mover must never fire the next stage itself"
+        assert "medallion.silver" not in dapr.topics, "the stage runner must never fire the next stage itself"

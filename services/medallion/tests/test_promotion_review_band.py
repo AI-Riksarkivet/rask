@@ -158,14 +158,14 @@ class TestTheKnobIsReachable:
         field = MedallionSettings.model_fields["promotion_review_band"]
         assert field.alias == "MEDALLION_PROMOTION_REVIEW_BAND"
 
-    def test_the_MOVER_gets_it_rendered(self) -> None:
-        """The MOVER, specifically. The band is evaluated at dispatch, where the write just happened —
+    def test_the_STAGE_RUNNER_gets_it_rendered(self) -> None:
+        """The STAGE RUNNER, specifically. The band is evaluated at dispatch, where the write just happened —
         rendering it only onto the producer would be a value the deciding process never sees."""
         rendered = _render("medallion.quality=true", "medallion.qualityReview=true")
         assert "MEDALLION_PROMOTION_REVIEW_BAND" in rendered, "the band is not rendered under quality+qualityReview — the setting exists and no pod receives it"
 
     def test_it_is_not_rendered_when_review_is_off(self) -> None:
-        """Not cosmetic: with review off there is nobody to ask, so the mover must not compute a
+        """Not cosmetic: with review off there is nobody to ask, so the stage runner must not compute a
         band at all. Rendering it anyway would advertise a policy the deployment cannot honour."""
         rendered = _render("medallion.quality=true", "medallion.qualityReview=false")
         assert "MEDALLION_PROMOTION_REVIEW_BAND" not in rendered

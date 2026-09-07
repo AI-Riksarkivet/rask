@@ -87,7 +87,7 @@ def _retracted(text: str, phrase: str, *, window: int = 700) -> bool:
 
 
 def test_the_catalog_skill_does_not_call_the_cascade_tiers_ungoverned() -> None:
-    """Silver and gold ARE governed at HEAD — every mover asks the catalog where to write.
+    """Silver and gold ARE governed at HEAD — every stage runner asks the catalog where to write.
 
     `transform.py` calls `catalog_register.ensure_stage_output` before the write (creating the table
     when absent, so the tier IS a `table:` object) and `publish_stage_output` after it. The skill's
@@ -100,7 +100,7 @@ def test_the_catalog_skill_does_not_call_the_cascade_tiers_ungoverned() -> None:
     skill = _read(SKILL)
     for stale in ("the medallion tiers are DATA WITHOUT GOVERNANCE", "those tiers simply were never registered"):
         assert _retracted(skill, stale), (
-            f"SKILL.md still claims {stale!r}, but `transform.py` registers and publishes every mover's "
+            f"SKILL.md still claims {stale!r}, but `transform.py` registers and publishes every stage runner's "
             "output tier through the catalog. Silver/gold are governed; the PRODUCER's bronze seed is the "
             "ungoverned one."
         )
@@ -112,7 +112,7 @@ def test_the_catalog_skill_names_the_registration_seam_that_exists() -> None:
     assert "def ensure_stage_output(" in source
     assert "ensure_stage_output" in _read(SKILL), (
         "SKILL.md names `register_table` / `register_stage_output` as the cascade's governance seam. The "
-        "seam the movers call is `catalog_register.ensure_stage_output` (describe → create-if-absent → "
+        "seam the stage runners call is `catalog_register.ensure_stage_output` (describe → create-if-absent → "
         "take the catalog's own location)."
     )
 
@@ -242,7 +242,7 @@ def test_the_catalog_skill_does_not_claim_every_tier_uri_layout_resolves() -> No
 def test_claude_md_counts_the_producers_routers() -> None:
     """The producer mounts SIX routers, not "three plus GET /authorize"."""
     mounted = re.findall(r"app\.include_router\((\w+)\)", _read(PRODUCER))
-    assert {"promotions_router", "mover_ops_router"} <= set(mounted), mounted
+    assert {"promotions_router", "stage_runner_ops_router"} <= set(mounted), mounted
 
     claude = _read(CLAUDE_MD)
     assert "Those three plus `GET /authorize` are the whole router surface" not in claude, (
@@ -277,11 +277,11 @@ def test_claude_md_describes_the_storage_package_the_fleet_actually_imports() ->
 def test_the_catalog_register_docstring_does_not_deny_the_create_it_performs() -> None:
     """`ensure_stage_output` creates the table and takes the catalog's location — it does not only register."""
     source = _read(CATALOG_REGISTER)
-    assert "/create" in source and "THE MOVER ASKS INSTEAD OF TELLING" in source
+    assert "/create" in source and "THE STAGE RUNNER ASKS INSTEAD OF TELLING" in source
 
-    assert "Register — not create-through-the-catalog. The mover owns where it WRITES" not in _module_docstring(CATALOG_REGISTER), (
+    assert "Register — not create-through-the-catalog. The stage runner owns where it WRITES" not in _module_docstring(CATALOG_REGISTER), (
         "the module docstring denies both halves of what the module now does: it CREATES through the "
-        "catalog's own door, and the mover asks the catalog where to write before writing."
+        "catalog's own door, and the stage runner asks the catalog where to write before writing."
     )
 
 

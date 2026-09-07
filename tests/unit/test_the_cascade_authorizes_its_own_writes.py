@@ -8,13 +8,13 @@ that actually moves a tenant's bytes answers to nothing.
 WHAT THIS GATE BUYS, AND WHAT IT DOES NOT. It does not put a scoped credential in the job's hands —
 `LANCE_VENDING_MODE=mode_b` vends nothing (`ModeBVendor.vend` returns None), so the bytes still move
 under the pod credential and the byte path is deliberately UNCHANGED. What it does buy is the two
-things that were missing entirely: the mover must hold `can_write_data` on the table it is about to
+things that were missing entirely: the stage runner must hold `can_write_data` on the table it is about to
 write, checked at the catalog's own door, and the decision — allow or deny — lands in the audit
 stream keyed to the table and the tier.
 
 That is the whole reason the call is made for its SIDE EFFECT and its answer discarded. Measured on
 the live estate before this shipped: `POST /v1/table/bind86-gold$catalog/credentials?tier=write` with
-the mover's dedicated credential answers `200 {"mode":"server_mediated"}` — the rung passes and no
+the stage runner's dedicated credential answers `200 {"mode":"server_mediated"}` — the rung passes and no
 credential is issued, so a cascade cannot break on it today. The day vending becomes real, this is
 already the call that would carry it.
 """
@@ -27,11 +27,11 @@ from medallion.services import catalog_register, transform
 
 
 def test_the_module_offers_a_write_authorization_call() -> None:
-    """A named seam, not an inline request: the mover already reaches this catalog through
+    """A named seam, not an inline request: the stage runner already reaches this catalog through
     `catalog_register`, and a second HTTP shape in `transform.py` is how the credential plumbing
     (dedicated token, service identity, timeout) drifts between two callers of one door."""
     assert hasattr(catalog_register, "authorize_stage_write"), (
-        "the cascade has no way to prove it may write its destination — the Ray job authorizes nothing and the mover never asks"
+        "the cascade has no way to prove it may write its destination — the Ray job authorizes nothing and the stage runner never asks"
     )
 
 
@@ -61,7 +61,7 @@ def test_the_dispatch_path_ASKS_before_it_submits() -> None:
         if name and name not in called:
             called[name] = node.lineno
 
-    assert "authorize_stage_write" in called, "the mover dispatches a stage job without authorizing the write"
+    assert "authorize_stage_write" in called, "the stage runner dispatches a stage job without authorizing the write"
     assert "_write_stage" in called, "this test no longer sees the dispatch it is ordering against"
     assert called["authorize_stage_write"] < called["_write_stage"], (
         f"the authorization is asked after the dispatch — it has to gate it, not follow it "
@@ -78,7 +78,7 @@ def test_it_asks_for_the_WRITE_tier() -> None:
 
 
 def test_a_refusal_is_RAISED_not_swallowed() -> None:
-    """A 403 here means the mover may not write the table it is about to write. Swallowing it would
+    """A 403 here means the stage runner may not write the table it is about to write. Swallowing it would
     make the check decorative — the failure mode of every authorization added for tidiness."""
     source = inspect.getsource(catalog_register.authorize_stage_write)
     assert "RegisterError" in source, "a refused authorization must stop the stage, not be logged and passed"

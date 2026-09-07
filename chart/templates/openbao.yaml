@@ -126,10 +126,10 @@ spec:
 {{- if .Values.openbao.devMode }}
 # Seed a demo secret so the Dapr secret store has something to serve (proves the wiring end-to-end).
 #
-# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. The medallion movers resolve their S3 credentials
+# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. The medallion stage runners resolve their S3 credentials
 # through the Dapr secret store at boot, so an unseeded OpenBao keeps them un-Ready (secret 500 →
 # "waiting on port 8000"); as a post-install hook the seed ran only AFTER --wait had already given up
-# on exactly those pods. In the ordinary wave it races them instead, and the movers' own retry wins.
+# on exactly those pods. In the ordinary wave it races them instead, and the stage runners' own retry wins.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -176,15 +176,15 @@ spec:
                        on every warehouse. The control existed and was tested; nothing rendered it, and
                        nothing seeded the secret it needs, so it was inert in every deployment.
                        Derived from the same medallion declarations as LANCE_FGA_CASCADE_WRITERS, so a
-                       new mover cannot be added with an identity that has no credential of its own. */}}
+                       new stage runner cannot be added with an identity that has no credential of its own. */}}
                 {{- /* `frontend.serviceIdentity` is here for the widest holder rather than the most
                        privileged one: SEVEN zone Deployments mount the shared bearer, and the privileged
                        block's own note records what that buys — "Reading one web pod's environment was
                        the whole attack." It needs no client half, because the BFF already reads
                        `LINEAGE_SERVICE_TOKEN` from env. */}}
                 {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity .Values.frontend.serviceIdentity }}
-                {{- range .Values.medallion.movers }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
-                {{- range (.Values.medallion.mediaMovers | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
+                {{- range .Values.medallion.stageRunners }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
+                {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
                 service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) }} \
                 {{- end }}

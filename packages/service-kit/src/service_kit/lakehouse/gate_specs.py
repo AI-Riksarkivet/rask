@@ -3,7 +3,7 @@
 The gate decides whether a stage's output may publish: which column identifies a row
 (``key_column``), which columns a consumer depends on (``required_columns``), and how far a row
 count may move before a promotion needs a human (``review_band``). Every one of those lived ONLY as
-environment on a mover pod, so changing a threshold meant editing a values file and running
+environment on a stage runner pod, so changing a threshold meant editing a values file and running
 ``helm upgrade`` — and nothing could enumerate the gates, review one, or gate who changed it. That
 is the same defect ``transform_specs`` was written to end for lanes.
 

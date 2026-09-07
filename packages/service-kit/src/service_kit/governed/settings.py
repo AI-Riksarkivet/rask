@@ -17,7 +17,7 @@ because the failure it replaces — half an estate authenticating and half not �
 THREE CLASSES, because the estate really does have three postures:
 
 * `FgaSettings` — the OpenFGA client alone. A service that authorizes as its OWN service identity and
-  has no human door (`maintenance`'s reconciler; medallion's movers) needs the client and no verifier.
+  has no human door (`maintenance`'s reconciler; medallion's stage runners) needs the client and no verifier.
 * `OidcSettings` — the bearer-token verifier alone, with the invariant that a knowable
   misconfiguration must not become a runtime 401.
 * `GovernedAuthSettings` — both, plus the coupling: FGA answers "may THIS subject do it", so a service

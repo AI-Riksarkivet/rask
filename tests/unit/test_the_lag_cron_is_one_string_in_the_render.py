@@ -43,7 +43,7 @@ def test_the_component_and_the_env_var_carry_the_SAME_name() -> None:
 
 def test_only_the_PRODUCER_is_told() -> None:
     """The door lives on the producer — it is the only service holding `transform_routes`, and so the
-    only one that can see a first-ever hop. A mover carrying the name would advertise a route its own
+    only one that can see a first-ever hop. A stage runner carrying the name would advertise a route its own
     sidecar has no Component for."""
     docs = _render()
     carriers = [

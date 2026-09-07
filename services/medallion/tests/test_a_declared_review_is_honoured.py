@@ -4,7 +4,7 @@ THE DEFECT, and it is worse than the feature being inert. `_review_reasons` gate
 evaluation on `promotion_hold.review_enabled(settings)` — the CHART-WIDE flag — while the same
 function LOGS `gate.review_enabled`, the value the declaration supplied. So an admin declares "hold
 unusual promotions for a person" through the catalog's admin-gated, audited door, the door answers
-200, `gate/describe` reads the record back, the mover emits `review_enabled: true` in its structured
+200, `gate/describe` reads the record back, the stage runner emits `review_enabled: true` in its structured
 log, and not one promotion is ever held.
 
 An operator checking whether their declaration took effect sees exactly what they declared. The log

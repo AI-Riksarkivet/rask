@@ -99,7 +99,7 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # fixed to bronze, which is what let a silver publication fire a bronze trigger.
     ("services/medallion/src/medallion/services/publication_trigger.py", "topic"): "trigger",
     # The re-run verb, and a TRIGGER for the same reason its subscription sibling is: it instructs a
-    # mover to re-drive one edge and describes no committed write. Both mint through
+    # stage runner to re-drive one edge and describes no committed write. Both mint through
     # `build_stage_trigger`, so the two publishes carry the identical shape.
     ("services/medallion/src/medallion/api/rerun.py", "topic"): "trigger",
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
@@ -121,7 +121,7 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # rewritten, and carries a protection verdict computed against an estate that no longer exists.
     # Staging these would make maintenance durable in exactly the way it must not be.
     ("services/maintenance/src/maintenance/services/work_queue.py", "topic"): "trigger",
-    # `transform.py` (settings.pub_topic) IS DELIBERATELY ABSENT. The mover fired the next stage's
+    # `transform.py` (settings.pub_topic) IS DELIBERATELY ABSENT. The stage runner fired the next stage's
     # topic itself — a SECOND enforcement point beside the catalog's tag move, and the DEFAULT one
     # because MEDALLION_CASCADE_VIA_PUBLISH shipped False. Deleted with `GateOutcome.TRIGGER`; the
     # cascade advances only through `publication_trigger.py` above. This registry's stale-entry check
@@ -134,7 +134,7 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # lineage — the hold's own lineage FAIL already records what happened to the data; this records
     # what is being asked of a person, and a lost one costs a re-read rather than a committed fact.
     ("services/medallion/src/medallion/workflow.py", "CONTROL_TOPIC"): "control",
-    # The HOLD, handed from the mover that made it to the app that can host the review. A TRIGGER:
+    # The HOLD, handed from the stage runner that made it to the app that can host the review. A TRIGGER:
     # it instructs the producer to start a `promotion_review` instance, and losing one leaves the
     # promotion blocked — the same stalled-cascade failure every other trigger has, and the same
     # answer (the transform's caller-retry token). Distinct from the CONTROL row above, which is the
@@ -667,7 +667,7 @@ _UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
     "LANCE_MODEL_ARTIFACTS_ROOT": "empty derives the artifact tree from LANCE_MODELS_REGISTRY_ROOT",
     # OVERRIDE, and the weaker door of the two. The catalog verifies OIDC JWTs, so a static bearer is
     # not an identity there; the estate's answer is the service door, and the chart renders
-    # `MEDALLION_CATALOG_SERVICE_IDENTITY` for the producer and every mover (medallion.yaml).
+    # `MEDALLION_CATALOG_SERVICE_IDENTITY` for the producer and every stage runner (medallion.yaml).
     "MEDALLION_CATALOG_TOKEN": "superseded by the service-identity door, which the chart does render",
     # DERIVE. `catalog_table_id` falls back to the dataset id, which is the identifier the annotation
     # tables are already addressed by.
@@ -1041,7 +1041,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
     update drops in-flight requests while kube-proxy is still routing to the terminating pod.
 
     IT NO LONGER NAMES ITS OWN SUBJECTS. This carried a hand-written tuple of ten name fragments —
-    gateway, catalog, lineage, compaction, medallion-producer, the three movers, web, notifications —
+    gateway, catalog, lineage, compaction, medallion-producer, the three stage runners, web, notifications —
     which omitted controlplane, compute, flows, ingest, maintenance, viewer, search and annotator. So a
     gate whose docstring argues that "an every claim in prose is worth nothing" made exactly that kind
     of claim with a literal list, and controlplane shipped with no preStop at all: a first-party
@@ -1814,7 +1814,7 @@ def _job_by_component(rendered: str, component: str) -> str | None:
 
 #: The bootstrap Jobs that other release resources must wait for IN ORDER TO BECOME READY: the OpenFGA
 #: schema migration (the server crash-loops against an unmigrated datastore), the OpenBao seed (the
-#: medallion movers resolve S3 creds through the Dapr secret store at boot), the JetStream provisioner
+#: medallion stage runners resolve S3 creds through the Dapr secret store at boot), the JetStream provisioner
 #: (a daprd sidecar subscribes at startup) and the bucket-init (the lakehouse apps' object store).
 _BOOTSTRAP_JOBS = ["openfga-migrate", "openbao-seed", "nats-stream", "rustfs-mkbucket"]
 
@@ -3348,7 +3348,7 @@ def test_the_ray_lane_is_ON_now_that_the_cluster_and_the_job_CONTRACT_both_exist
 
     **Blocker 2 — the job env contract — is the one that actually gated this, and it is closed.**
     A capable image is necessary and not sufficient: `ray_submit.py` shipped a FIXED `env_vars` dict,
-    so a mover could reach a working cluster and still not describe its own work — a second workload
+    so a stage runner could reach a working cluster and still not describe its own work — a second workload
     either reused the first one's variable names or forced a platform edit. `submit_stage_job` now
     resolves `entrypoint`, `params` and `code_version` from the LANE DECLARATION
     (`services/lane.py::resolve_lane_async`, which REFUSES a named-but-undeclared lane rather than
@@ -3359,27 +3359,27 @@ def test_the_ray_lane_is_ON_now_that_the_cluster_and_the_job_CONTRACT_both_exist
     **And the whole path was driven, not reasoned about.** 2026-08-24, against the live release with
     the lane on: `stage-ray-silver-3beb0dd2fcbd44a0b5e356dc2aeaaa39-e4b061d30061` ran as a Dapr
     Workflow, the watcher polled `rask-ray-head-svc:8265/api/jobs/<id>` 200, the orchestration reported
-    `COMPLETED`, and the mover logged `medallion_stage_moved`.
+    `COMPLETED`, and the stage runner logged `medallion_stage_moved`.
 
     `compute` stays ON and is still asserted: the settings validator refuses `ray` without it, and it
     is what the in-process lane needs.
 
     NOT asserted here, and deliberately: that an OFF->ON *upgrade* is safe. It is not, on its own —
-    daprd caches the actor state store at sidecar start, so movers enabled in the same upgrade that
+    daprd caches the actor state store at sidecar start, so stage runners enabled in the same upgrade that
     adds them to `lance-statestore`'s scopes come up against the old list. That is an operational
     ordering property of a live release, not a property of the rendered manifest, so it lives in the
     values comment where the operator reads it. A FRESH install renders both together and is fine.
     """
     docs = _rendered_docs()
-    movers = [
+    stage_runners = [
         c
         for doc in docs
         if doc.get("kind") == "Deployment"
         for c in doc["spec"]["template"]["spec"]["containers"]
         if any(e.get("name") == "MEDALLION_FROM_URI" for e in (c.get("env") or []))
     ]
-    assert movers, "no medallion movers rendered — the fixture cannot prove anything"
-    for container in movers:
+    assert stage_runners, "no medallion stage_runners rendered — the fixture cannot prove anything"
+    for container in stage_runners:
         env = {e["name"]: e.get("value") for e in container["env"]}
         assert env.get("MEDALLION_COMPUTE_ENABLED") == "true", "ray without compute fails the settings validator at boot"
         assert env.get("MEDALLION_RAY_ENABLED") == "true", (
@@ -3393,7 +3393,7 @@ def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
     """`ray-lance-head` was the hardcoded default and does not exist in a KubeRay deployment.
 
     Measured 2026-08-15 from inside a pod: `ray-lance-head` fails DNS, `rask-ray-head-svc` answers
-    `/api/version` with ray 2.56.1. The old value was the on-kind demo's raw head, and every mover
+    `/api/version` with ray 2.56.1. The old value was the on-kind demo's raw head, and every stage runner
     would have submitted into a hostname that does not resolve — a failure that surfaces only when a
     trigger arrives.
 
@@ -3416,7 +3416,7 @@ def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
         for e in (c.get("env") or [])
         if e.get("name") == "MEDALLION_RAY_ADDRESS"
     }
-    assert addresses, "no mover declares MEDALLION_RAY_ADDRESS"
+    assert addresses, "no stage runner declares MEDALLION_RAY_ADDRESS"
     for address in addresses:
         host = str(address).removeprefix("http://").split(":")[0]
         assert host.endswith("-ray-head-svc"), f"{address} does not name KubeRay's stable head service"
@@ -3427,11 +3427,11 @@ def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
             assert host in services, f"{host} is not a Service this chart creates"
 
 
-def test_every_mover_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() -> None:
+def test_every_stage_runner_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() -> None:
     """The general property the notifications test above only covers one instance of.
 
-    S1 put a Dapr Workflow inside `mover.py`, so with the Ray lane on EVERY mover hosts a workflow —
-    and each has its own `daprAppId` from `medallion.movers[]` (`bronze-to-silver`, `silver-to-gold`,
+    S1 put a Dapr Workflow inside `stage_runner.py`, so with the Ray lane on EVERY stage runner hosts a workflow —
+    and each has its own `daprAppId` from `medallion.stageRunners[]` (`bronze-to-silver`, `silver-to-gold`,
     …). There is no `medallion` app-id anywhere in the estate, and a hand-written scope entry for one
     was inert while looking entirely correct in review.
 
@@ -3445,8 +3445,8 @@ def test_every_mover_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() 
     then fails on every delivery. After scoping, the first line is gone and the sidecar reports
     "Connected to placement service" instead.
 
-    Asserted against the RENDERED movers rather than a hardcoded list, so adding a mover to
-    `medallion.movers` cannot produce one that silently fails to dispatch.
+    Asserted against the RENDERED stage runners rather than a hardcoded list, so adding a stage runner to
+    `medallion.stageRunners` cannot produce one that silently fails to dispatch.
     """
     docs = _rendered_docs("medallion.ray=true")
     stores = [
@@ -3460,17 +3460,17 @@ def test_every_mover_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() 
 
     # Filtered rather than `- {None}`: subtracting the sentinel does not narrow the ELEMENT type, so
     # the set stays `str | None` and `sorted` has nothing to compare. Narrow at the comprehension.
-    movers = {
+    stage_runners = {
         app_id
         for doc in docs
         if doc.get("kind") == "Deployment" and "-to-" in ((doc.get("metadata") or {}).get("name") or "")
         if (app_id := (doc["spec"]["template"]["metadata"].get("annotations") or {}).get("dapr.io/app-id")) is not None
     }
-    assert movers, "no movers rendered with medallion.ray=true — the fixture cannot prove anything"
+    assert stage_runners, "no stage_runners rendered with medallion.ray=true — the fixture cannot prove anything"
 
-    missing = sorted(movers - scopes)
+    missing = sorted(stage_runners - scopes)
     assert not missing, (
-        f"these movers host a workflow but are not scoped to the actor state store: {missing}. "
+        f"these stage runners host a workflow but are not scoped to the actor state store: {missing}. "
         f"Their sidecars will log 'Workflow engine started' and disable actor hosting, so every "
         f"dispatch fails on a pod that reports itself healthy."
     )
@@ -4033,8 +4033,8 @@ def test_notifications_stays_single_replica_while_its_single_flight_lock_is_proc
     cursor, and both walk the same rows: double the FGA and actor load exactly when lineage or the
     sidecar is already the slow thing. Nothing fails loudly; it just costs twice.
 
-    The estate has already ruled on this exact shape, for the medallion movers — `values-prod.yaml`
-    pins `moverReplicas: 1` with "the mover single-flight lock is PROCESS-LOCAL … Raise only after a
+    The estate has already ruled on this exact shape, for the medallion stage runners — `values-prod.yaml`
+    pins `stageRunnerReplicas: 1` with "the stage runner single-flight lock is PROCESS-LOCAL … Raise only after a
     cross-pod lock ships." That constraint is written down and enforced by a value. This one was only
     ever true by accident, so this test is the missing half.
 
@@ -4210,7 +4210,7 @@ def test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name() -
 
     The trap is that the two halves live in different files and neither imports the other: a default in
     `medallion/core/config.py` and a COPY in a dockerfile. `medallion.ray` defaulting ON (2026-08-15)
-    made that latent mismatch load-bearing, since the movers now point at the chart's unified cluster
+    made that latent mismatch load-bearing, since the stage runners now point at the chart's unified cluster
     rather than the separate `ray-lance` demo the lane was first written against.
     """
     import re
@@ -4265,20 +4265,20 @@ def test_every_ray_job_script_is_BAKED_INTO_SOME_image() -> None:
     )
 
 
-def test_what_the_producer_PUBLISHES_is_what_a_mover_ACCEPTS() -> None:
+def test_what_the_producer_PUBLISHES_is_what_a_stage_runner_ACCEPTS() -> None:
     """A lane whose two halves disagree fails with a 200 OK and no log line anywhere.
 
     The producer stamps `bronzeDataset` / `bronzeNamespace` on the trigger it publishes to
-    `bronzeTopic`. The mover subscribed to that topic compares the claim against its own
+    `bronzeTopic`. The stage runner subscribed to that topic compares the claim against its own
     `fromDataset` / `fromNamespace` and, on a mismatch, returns DROP — which is a SUCCESS ack. The
     wire looks healthy end to end:
 
-        mover      POST /medallion-event  200 OK      <- the app accepted the delivery
-        mover      POST /dlq-event        200 OK      <- and immediately dead-lettered it
+        stage runner      POST /medallion-event  200 OK      <- the app accepted the delivery
+        stage runner      POST /dlq-event        200 OK      <- and immediately dead-lettered it
         daprd      "DROP status returned from app while processing pub/sub event ..."
 
-    and the mover's own log says NOTHING. Measured 2026-08-25, after the tiers were nested: the
-    producer still published `bronze$events` while every mover had moved to `lakehouse$bronze$events`,
+    and the stage runner's own log says NOTHING. Measured 2026-08-25, after the tiers were nested: the
+    producer still published `bronze$events` while every stage runner had moved to `lakehouse$bronze$events`,
     so the cascade died at the first hop and the only evidence was one warning in a SIDECAR log.
 
     Pairing them here because they are rendered from different values by different templates and
@@ -4289,49 +4289,49 @@ def test_what_the_producer_PUBLISHES_is_what_a_mover_ACCEPTS() -> None:
     values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
     medallion = values.get("medallion") or {}
     producer = medallion.get("producer") or {}
-    movers = medallion.get("movers") or []
-    assert movers, "no movers declared — this gate is now blind"
+    stage_runners = medallion.get("stageRunners") or []
+    assert stage_runners, "no stage_runners declared — this gate is now blind"
 
     topic = producer.get("bronzeTopic")
     assert topic, "the producer declares no bronzeTopic, so nothing can consume its writes"
 
-    consumers = [m for m in movers if m.get("subTopic") == topic]
+    consumers = [m for m in stage_runners if m.get("subTopic") == topic]
     assert consumers, (
-        f"the producer publishes to {topic!r} and no mover subscribes to it — the head writes bronze "
+        f"the producer publishes to {topic!r} and no stage runner subscribes to it — the head writes bronze "
         f"and the cascade never starts, with every hop reporting success."
     )
 
     mismatched = []
-    for mover in consumers:
-        for producer_key, mover_key in (("bronzeDataset", "fromDataset"), ("bronzeNamespace", "fromNamespace")):
-            want, got = producer.get(producer_key), mover.get(mover_key)
+    for stage_runner in consumers:
+        for producer_key, stage_runner_key in (("bronzeDataset", "fromDataset"), ("bronzeNamespace", "fromNamespace")):
+            want, got = producer.get(producer_key), stage_runner.get(stage_runner_key)
             if want != got:
-                mismatched.append(f"  {mover.get('name')}: producer.{producer_key}={want!r} but mover.{mover_key}={got!r}")
+                mismatched.append(f"  {stage_runner.get('name')}: producer.{producer_key}={want!r} but stage_runner.{stage_runner_key}={got!r}")
 
     assert not mismatched, (
-        f"the producer publishes a lane no mover on {topic!r} accepts:\n" + "\n".join(mismatched) + "\n\n"
-        "The mover DROPs a trigger whose lane claim does not match its own, and DROP acks as success — "
-        "so this fails with 200 OK on every hop and no error in the mover's log. Rename BOTH halves or "
+        f"the producer publishes a lane no stage_runner on {topic!r} accepts:\n" + "\n".join(mismatched) + "\n\n"
+        "The stage runner DROPs a trigger whose lane claim does not match its own, and DROP acks as success — "
+        "so this fails with 200 OK on every hop and no error in the stage runner's log. Rename BOTH halves or "
         "neither."
     )
 
     # The media chain is the same contract through a different pair of values, and it drifted the same
-    # way for the same reason: the URI was a literal in the template while the mover's had moved.
+    # way for the same reason: the URI was a literal in the template while the stage runner's had moved.
     media_ns = medallion.get("mediaBronzeNamespace")
-    media_consumers = [m for m in movers if m.get("operation") == "derive_media"]
-    for mover in media_consumers:
-        assert media_ns == mover.get("fromNamespace"), (
-            f"medallion.mediaBronzeNamespace={media_ns!r} but the media mover reads "
-            f"{mover.get('fromNamespace')!r} — the head lands blobs where nothing is listening, and the "
+    media_consumers = [m for m in stage_runners if m.get("operation") == "derive_media"]
+    for stage_runner in media_consumers:
+        assert media_ns == stage_runner.get("fromNamespace"), (
+            f"medallion.mediaBronzeNamespace={media_ns!r} but the media stage_runner reads "
+            f"{stage_runner.get('fromNamespace')!r} — the head lands blobs where nothing is listening, and the "
             f"trigger is DROPped with a 200 OK."
         )
         # The DATASET is the half that actually gets compared, and it is the half the chart forgot:
         # MEDALLION_MEDIA_BRONZE_DATASET was rendered nowhere, so the head fell back to the flat code
-        # default `bronze-media$objects` while the mover had moved. The template derives it as
+        # default `bronze-media$objects` while the stage runner had moved. The template derives it as
         # `<namespace>$objects`; assert the same derivation rather than trusting it.
-        assert f"{media_ns}$objects" == mover.get("fromDataset"), (
-            f"the media head stamps dataset {media_ns}$objects but the mover accepts "
-            f"{mover.get('fromDataset')!r} — a lane mismatch DROPs with a 200 OK and logs nothing."
+        assert f"{media_ns}$objects" == stage_runner.get("fromDataset"), (
+            f"the media head stamps dataset {media_ns}$objects but the stage runner accepts "
+            f"{stage_runner.get('fromDataset')!r} — a lane mismatch DROPs with a 200 OK and logs nothing."
         )
 
 
@@ -4357,7 +4357,7 @@ def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
 
         POST /v1/table/lakehouse-lakehouse$gold$catalog/create -> 403
 
-    Every silver→gold hop failed on a table id that can never exist, and the mover reported only
+    Every silver→gold hop failed on a table id that can never exist, and the stage runner reported only
     `medallion_stage_failed`. So with projects ON the declaration must stay UNQUALIFIED and unnested —
     the runtime owns the qualification, and pre-empting it doubles it.
     """
@@ -4373,10 +4373,10 @@ def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
     head = (medallion.get("producer") or {}).get("bronzeNamespace")
     if head:
         declared.append(head)
-    for mover in medallion.get("movers") or []:
+    for stage_runner in medallion.get("stageRunners") or []:
         for key in ("fromNamespace", "toNamespace"):
-            if mover.get(key) and mover[key] not in declared:
-                declared.append(mover[key])
+            if stage_runner.get(key) and stage_runner[key] not in declared:
+                declared.append(stage_runner[key])
     assert declared, "no medallion namespaces declared — this gate is now blind"
 
     if projects_on:
@@ -4388,7 +4388,7 @@ def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
             "these namespaces are already nested, and a nested name does not start with `<project>-`, so "
             "it gets qualified ANYWAY:\n  " + "\n  ".join(doubled) + "\n\n"
             "The result is `<project>-<parent>$<tier>`, a table id nothing can create — every hop 403s and "
-            "the mover logs only `medallion_stage_failed`. Declare the bare tier name and let the runtime "
+            "the stage runner logs only `medallion_stage_failed`. Declare the bare tier name and let the runtime "
             "qualify it."
         )
         return
@@ -5943,8 +5943,8 @@ def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
     a one-line edit away, and neither is visible in review.
 
     RENDERED WITH THE FLAG ON, because the flag is OFF by default and for a measured reason: turning
-    it on refuses every mover, since the server-side expectation is only half the control. The catalog
-    demands `service-token-<identity>` while the movers still PRESENT the shared APP_API_TOKEN, so
+    it on refuses every stage runner, since the server-side expectation is only half the control. The catalog
+    demands `service-token-<identity>` while the stage runners still PRESENT the shared APP_API_TOKEN, so
     every catalog call 401s and the cascade stops — driven live 2026-08-26 and rolled back. The
     remaining work is the CLIENT half: each privileged service reading its own token from the secret
     store and sending that. This invariant guards the halves that DO exist, so they cannot drift
@@ -6297,9 +6297,9 @@ def test_the_producer_can_reach_the_catalog_regardless_of_the_quality_review_fla
     tuple, `policy/set` 404, no `_protection/` record reachable, no grant able to name it. Nothing went
     red, which is the whole problem.
 
-    This is the second instance of the shape. The first is recorded on the mover env block in the same
+    This is the second instance of the shape. The first is recorded on the stage runner env block in the same
     file ("Governance belongs to the cascade, so the catalog's address does too: unconditional, on every
-    mover") — and the producer, which is the cascade's head, was left behind. Gating a service's ability
+    stage runner") — and the producer, which is the cascade's head, was left behind. Gating a service's ability
     to register what it writes on an unrelated feature flag is how a tier becomes ungovernable while
     every gate stays green.
     """
@@ -6418,7 +6418,7 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
     THE FAILURE THIS PINS. `dapr.sidecars=false` is a documented, supported toggle, and
     `services.yaml`'s own fail message tells an operator to pair it with `catalog.controlEmit=false`.
     That pair rendered cleanly — and left THIRTEEN Deployments (all seven zones, maintenance, the
-    producer, three movers and lineage) carrying a reference to `-dapr-app-token`, which is gated on
+    producer, three stage runners and lineage) carrying a reference to `-dapr-app-token`, which is gated on
     `dapr.sidecars` and therefore absent. Each fails with CreateContainerConfigError; nothing in the
     render says why.
 
@@ -6483,7 +6483,7 @@ def test_the_MAINTENANCE_service_stages_its_lineage_the_same_way_the_catalog_doe
     that actually rewrote bytes, and the graph then shows a dataset whose files changed with nothing
     saying what changed them.
 
-    Same prefix as the catalog and the movers, for the same reason: `lineage/api/reconcile_cron.py` is
+    Same prefix as the catalog and the stage runners, for the same reason: `lineage/api/reconcile_cron.py` is
     the only thing that drains it. Found because the agent that wired the catalog said plainly that it
     had left this one — an honest `left_undone` is what turned a second silent hole into a test.
     """

@@ -146,7 +146,7 @@ app.kubernetes.io/component: {{ $component }}
 
 {{/* Dapr sidecar pod annotations (no-op unless dapr.sidecars) — the ONE annotation surface for the whole
      estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
-     medallion.yaml producer/movers, compaction.yaml, media.yaml viewer/search/annotator) all render
+     medallion.yaml producer/stage runners, compaction.yaml, media.yaml viewer/search/annotator) all render
      THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
        - enabled / app-id / app-port / log-level (the original rask surface)
        - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
@@ -211,7 +211,7 @@ dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
 {{- /* THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
        shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
        and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
-       app had begun draining. A mover mid-handler finished its Lance write and then published the
+       app had begun draining. A stage runner mid-handler finished its Lance write and then published the
        next stage's trigger at a sidecar that had already stopped: the write landed, the cascade did
        not, and that is indistinguishable from a stage with no successor.
        Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
@@ -465,7 +465,7 @@ dapr.io/config: "lance-tracing"
        age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecars,sidecarRestricted,
        sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,serviceIdentity,
        idleTimeoutSeconds,oidc.*} · gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
-       medallion.{enabled,port,buckets,producer.daprAppId,movers} · nats.{enabled,externalUrl} ·
+       medallion.{enabled,port,buckets,producer.daprAppId,stage runners} · nats.{enabled,externalUrl} ·
        observability.{enabled,dbName,tracePipeline,greptimePort,environment,externalOtlpEndpoint,
        otelCollector.{enabled,externalEndpoint}} · openbao.{enabled,port,externalAddr} · pubsub.name ·
        resources.{default,<component>} · rustfs.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
@@ -528,7 +528,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.openbaoHost" -}}{{ .Release.Name }}-openbao{{- end -}}
 {{- define "lance.greptimeHost" -}}{{ .Release.Name }}-greptimedb-standalone{{- end -}}
 
-{{/* The catalog-family image (catalog, lineage, medallion movers, maintenance, explorer, the bootstrap
+{{/* The catalog-family image (catalog, lineage, medallion stage runners, maintenance, explorer, the bootstrap
 job) — every one of them runs the SAME image with a different entrypoint.
 
 It DELEGATES to `rask.image`, which is the estate's one image contract: registry prefix, digest
@@ -580,15 +580,15 @@ on its own component, so its group must be live on the DLQ stream whenever resil
 {{- end }}
 {{- if .Values.medallion.enabled }}
 {{- $expected = append $expected (printf "LINEAGE:%s" .Values.medallion.producer.daprAppId) }}
-{{- range .Values.medallion.movers }}
+{{- range .Values.medallion.stageRunners }}
 {{- $expected = append $expected (printf "MEDALLION:%s" .daprAppId) }}
 {{- end }}
 {{- $expected = append $expected (printf "TRAINING:%s" .Values.medallion.producer.daprAppId) }}
 {{- if .Values.dapr.resiliency.enabled }}
 {{/* DLQ parking subscriptions (medallion.yaml MEDALLION_DLQ_TOPIC, same resiliency gate): the producer
-parks on dlq.medallion-producer, each mover on dlq.<subTopic> — all queue-grouped by app-id on the DLQ stream. */}}
+parks on dlq.medallion-producer, each stage runner on dlq.<subTopic> — all queue-grouped by app-id on the DLQ stream. */}}
 {{- $expected = append $expected (printf "DLQ:%s" .Values.medallion.producer.daprAppId) }}
-{{- range .Values.medallion.movers }}
+{{- range .Values.medallion.stageRunners }}
 {{- $expected = append $expected (printf "DLQ:%s" .daprAppId) }}
 {{- end }}
 {{- end }}
@@ -859,7 +859,7 @@ which is why the fleet carries it too. */}}
 
 TWO INDEPENDENT lineage paths exist and they are easy to confuse:
 
-  1. Dapr pub/sub — what the medallion producer/movers, compaction and the catalog use TODAY
+  1. Dapr pub/sub — what the medallion producer/stage runners, compaction and the catalog use TODAY
      (<APP>_LINEAGE_TOPIC → NATS → the lineage service's subscriber). Wired separately.
   2. lineage-kit's `LineageRun` / `@stage` / actor machinery — the DECORATABLE seam meant for the Ray
      Data pipeline (P7b). It resolves its transport through `LineageRun.emitter` → `default_emitter()`
@@ -904,7 +904,7 @@ lifecycle:
       command: ["sh", "-c", "sleep {{ .Values.lifecycle.preStopSeconds }}"]
 {{- end -}}
 
-{{/* HTTP health probes for the FastAPI app workloads (catalog/lineage/producer/movers/compaction). Two
+{{/* HTTP health probes for the FastAPI app workloads (catalog/lineage/producer/stage runners/compaction). Two
 distinct signals: readiness (/readyz) is dependency-aware (503 until the pool/namespace is up AND again once
 draining) so k8s only routes traffic to a truly-ready pod; liveness (/livez) is process-up only (never
 checks a backend — a slow dependency must NOT trigger a restart loop). Liveness runs slower + more tolerant
@@ -1040,7 +1040,7 @@ livenessProbe:
   failureThreshold: 3
 {{- end -}}
 
-{{/* Container hardening applied to every APP container (our images: catalog/lineage/web/movers/compaction).
+{{/* Container hardening applied to every APP container (our images: catalog/lineage/web/stage runners/compaction).
 runAsNonRoot enforces the image's non-root USER (catalog uid 10001, web `bun`) at admission — a manifest that
 regressed to root fails to start instead of running privileged. drop ALL caps + no privilege escalation +
 the RuntimeDefault seccomp profile = the restricted PodSecurity baseline. readOnlyRootFilesystem is on by

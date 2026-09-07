@@ -3,11 +3,11 @@
 medallion-producer subscribes to the shared lineage topic (the same events the catalog + producer already emit on a
 write) and, **only** for a write to the bronze namespace/dataset (R23: bronze is the FIRST governed tier —
 raw is the external world the producer harvests from), publishes the bronze stage trigger
-(``medallion.bronze``) that the bronze->silver movers consume. So the cascade HEAD is driven by the
+(``medallion.bronze``) that the bronze->silver stage runners consume. So the cascade HEAD is driven by the
 arrival of external raw INTO bronze — every stage, the head included, reacts to an event on the bus we
 already run.
 
-**Loop-guarded**: the lineage topic also carries the movers' own silver/gold writes; those are acked and
+**Loop-guarded**: the lineage topic also carries the stage runners' own silver/gold writes; those are acked and
 ignored (their output namespace isn't bronze), so publishing the trigger can never re-fire the head. The
 second guard is by OPERATION rather than by namespace: the catalog publishes its own markers here, and an
 attach/detach/declare names the bronze table on a ``COMPLETE`` event without a byte having moved — so
@@ -18,7 +18,7 @@ Best-effort with ``RETRY`` so a sidecar/broker outage is redelivered rather than
 :func:`_vended_upstream`. The arrived table's location is a question only the catalog can answer,
 because more than one writer creates bronze: ``POST /produce`` attaches its deployment-contract URI
 through ``register_table``, while ``ingest`` creates through the catalog's own door and takes the
-vended ``{root}/{hash}_{ns}${name}``. Without the field the mover composed ``{root}/medallion/{ns}``
+vended ``{root}/{hash}_{ns}${name}``. Without the field the stage runner composed ``{root}/medallion/{ns}``
 and the cascade's first leg read whatever the OTHER writer's layout left there.
 """
 
@@ -78,7 +78,7 @@ class BronzeWrite(BaseModel):
     """One matched bronze arrival: the LANE the trigger names, and the CATALOG ID it was written as.
 
     The two are different strings and both are needed. ``lane`` is tenant-free (``bronze$events``) —
-    the same value for every tenant, which is what makes a mover's discriminator work with the tenant
+    the same value for every tenant, which is what makes a stage runner's discriminator work with the tenant
     travelling separately on ``trigger.project``. ``table_id`` is the catalog's own identifier
     (``acme-bronze$events``), and it is the only thing the catalog will answer a `describe` for.
 
@@ -102,12 +102,12 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
     Only a terminal-success bronze write is a real arrival — and an ATTACH is not a write, which is what
     :data:`_BYTE_FREE_CATALOG_OPERATIONS` excludes. TWO ingest lanes share the head: the events
     lane (``bronze_dataset``) — the returned name is
-    the one actually written, so the trigger tells the mover which lane fired.
+    the one actually written, so the trigger tells the stage runner which lane fired.
 
     With a ``project`` (#84, from the event's ``lance.project`` facet) the expected pair is the
     project-QUALIFIED one (``acme-bronze`` / ``acme-bronze$events``) — a per-project bronze write fires
     the head for exactly its own tenant. Empty project keeps the fixed single-tenant pair byte-identically,
-    and the loop guard holds either way: a mover's output namespace (``[<project>-]silver/gold``) never
+    and the loop guard holds either way: a stage runner's output namespace (``[<project>-]silver/gold``) never
     equals the (equally qualified) bronze namespace.
     """
     if str(event.get("eventType", "")).upper() != "COMPLETE":
@@ -125,18 +125,18 @@ def _bronze_write(event: dict[str, Any], settings: MedallionSettings, project: s
             return BronzeWrite(lane=expected[name], table_id=name)
         # THE DECLARATION IS THE OPT-IN. Before this, the head recognised exactly one hard-coded
         # dataset and acked everything else without publishing — so a table created from the UI
-        # produced NO trigger at all, the mover's guard was never reached, and an agnostic platform
+        # produced NO trigger at all, the stage runner's guard was never reached, and an agnostic platform
         # behaved as a fixed pipeline needing a values edit per table.
         #
         # A table a lane DECLARES is now a cascade head too. Deliberately not "publish everything and
-        # let movers filter": that spends delivery on work nobody declared, and leaves "why didn't my
+        # let stage runners filter": that spends delivery on work nobody declared, and leaves "why didn't my
         # table cascade" with no visible answer. With this, the answer is "no lane declares it", and
         # there is an audited door to change that.
         #
         # Returned as a LANE KEY, tenant-free, exactly like the configured branch above.
         #
         # This used to return the declared `from_id` VERBATIM (a catalog id), on the reasoning that
-        # the mover resolves its identity from the same record so both sides read one string. That
+        # the stage runner resolves its identity from the same record so both sides read one string. That
         # reasoning is sound for IDENTITY and wrong for the TRIGGER: a trigger's `dataset` is a lane
         # key -- the same string for every tenant, with the tenant travelling separately on
         # `trigger.project`. `publication_trigger` learned that the hard way (it published the
@@ -209,7 +209,7 @@ def _cascade_originator(event: dict[str, Any]) -> str:
     """The HUMAN whose request produced this bronze write — the ``lance.originator`` run facet, or ``""``.
 
     The cascade head is the last place a verified subject exists: by the time a silver or gold stage
-    fails, the HTTP request that started it is long gone and the mover authors as a role. Reading it here
+    fails, the HTTP request that started it is long gone and the stage runner authors as a role. Reading it here
     and putting it on the trigger is what lets a failure five stages later still name the person whose
     work it was.
     """
@@ -218,28 +218,28 @@ def _cascade_originator(event: dict[str, Any]) -> str:
 
 
 async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
-    """Where the CATALOG says the arrived bronze table lives, or ``""`` to let the mover compose a path.
+    """Where the CATALOG says the arrived bronze table lives, or ``""`` to let the stage runner compose a path.
 
     I2 ON THE HEAD, and it is what makes the cascade's first leg independent of WHICH SERVICE CREATED
-    THE TABLE. Without it the mover falls through to `_resolve_roots`' `{root}/medallion/{namespace}`,
+    THE TABLE. Without it the stage runner falls through to `_resolve_roots`' `{root}/medallion/{namespace}`,
     a path only `produce.py` writes — so a bronze table that `ingest` created through the catalog's own
-    door lives at the vended `{root}/{hash}_{ns}${name}`, the mover opens the composed path, and the
+    door lives at the vended `{root}/{hash}_{ns}${name}`, the stage runner opens the composed path, and the
     cascade fires correctly, wakes, finds none of those rows, and acks 200. `/publication-arrival` has
     carried the vended location since I2; this is the same field on the other head.
 
     THE ANSWER IS ADVISORY, and every way of not getting one degrades to ``""`` — the composed-path
     fallback, which is the CORRECT upstream for a produce-first estate (the chart renders
-    `MEDALLION_BRONZE_URI` and the mover's `MEDALLION_FROM_URI` from one expression, so the composed
+    `MEDALLION_BRONZE_URI` and the stage runner's `MEDALLION_FROM_URI` from one expression, so the composed
     path is where those bytes are). The same shape and the same reasoning as `_has_declared_lane`
     above: a catalog that cannot be read must not stop the head from firing, and a head that answered
     RETRY to a describe outage would halt a cascade that works. Logged, because an unreachable catalog
     is a real fault.
 
-    The mover confines whatever is named here to the storage root it resolves (`_confine_from_uri`),
+    The stage runner confines whatever is named here to the storage root it resolves (`_confine_from_uri`),
     so this is a claim on an untrusted-by-default field, not a read primitive.
     """
     if not settings.catalog_url:
-        return ""  # the ungoverned dev shape — the same escape hatch `produce.py` and the movers keep
+        return ""  # the ungoverned dev shape — the same escape hatch `produce.py` and the stage runners keep
     try:
         location = await run_in_threadpool(
             partial(
@@ -268,7 +268,7 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
     ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guards); its
     ``data`` is the OpenLineage run event. Only a write to ``bronze_namespace``/``bronze_dataset`` (or the
     page lane) publishes the ``medallion.bronze`` trigger — a downstream
-    mover's event (silver/gold) is acked and skipped, so the head never self-triggers (loop guard). A
+    stage runner's event (silver/gold) is acked and skipped, so the head never self-triggers (loop guard). A
     publish outage returns ``RETRY`` for redelivery.
     """
     data = event.get("data") if isinstance(event, dict) else None
@@ -296,8 +296,8 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
     if project:  # #84: PROPAGATE the tenant onto the stage trigger; omitted (byte-identical) when unset
         trigger["project"] = project
     # THE UPSTREAM THE CATALOG VENDED (I2) — the same field `/publication-arrival` puts on its trigger,
-    # so both heads name where the mover should read. OMITTED rather than blank when unresolved: `""` is
-    # not a location, and the mover reads an ABSENT `from_uri` as "compose the path", which is what
+    # so both heads name where the stage runner should read. OMITTED rather than blank when unresolved: `""` is
+    # not a location, and the stage runner reads an ABSENT `from_uri` as "compose the path", which is what
     # keeps an in-flight trigger from a pre-rollout head — and any external publisher that names no
     # upstream — working unchanged.
     from_uri = await _vended_upstream(settings, write.table_id)

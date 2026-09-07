@@ -1,7 +1,7 @@
 """Every namespaced env the chart renders onto a Python service binds to a settings field.
 
 Q17-20's general form. An env var that binds to no setting is indistinguishable from a control when
-read: three live movers carried `MEDALLION_RAY_S3_ACCESS_KEY_ID=rask-ray-compute`, and that one
+read: three live stage runners carried `MEDALLION_RAY_S3_ACCESS_KEY_ID=rask-ray-compute`, and that one
 string was the evidence quoted by `open_goal.md`, by the backlog's own zero-trust row, and by
 `test_the_medallion_runs_as_its_own_storage_identity`'s docstring, for the claim that the Ray lane
 ran on a scoped storage identity. No service read it and no template rendered it — it was residue

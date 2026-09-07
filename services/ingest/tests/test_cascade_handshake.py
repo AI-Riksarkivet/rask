@@ -86,7 +86,7 @@ def test_a_FAILED_run_does_NOT_fire_the_cascade() -> None:
 
 
 def test_one_tenant_cannot_fire_ANOTHER_tenants_head() -> None:
-    """The isolation #84 exists for. `acme`'s write must not wake `bind86`'s movers.
+    """The isolation #84 exists for. `acme`'s write must not wake `bind86`'s stage runners.
 
     Qualification is what provides this: the two writes land on distinct graph nodes and distinct
     expected pairs. Emitting a shared `bronze` namespace for every tenant would have collided them

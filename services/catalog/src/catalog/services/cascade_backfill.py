@@ -1,9 +1,9 @@
 """Re-assert the cascade's grants over every warehouse that already exists.
 
 WHY THIS EXISTS. `seed_warehouse` writes the cascade-writer tuples exactly once, when a warehouse is
-created, from `LANCE_FGA_CASCADE_WRITERS` — a value that CHANGES. Adding a mover to
-`medallion.movers` extends that list, and every warehouse created before the change is missing the
-new subject. The model makes `can_update_tag: owner`, so the new mover cannot promote into any
+created, from `LANCE_FGA_CASCADE_WRITERS` — a value that CHANGES. Adding a stage runner to
+`medallion.stageRunners` extends that list, and every warehouse created before the change is missing the
+new subject. The model makes `can_update_tag: owner`, so the new stage runner cannot promote into any
 existing tenant: rows land, lineage records the run, and the promotion is refused 403 in a log nobody
 reads. Measured on the k3s estate 2026-08-23 — `user:service-silver-to-gold` held `owner` on neither
 `warehouse:acme-bucket` nor `warehouse:research-bucket`, both created before the setting existed.
@@ -64,7 +64,7 @@ async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
         log.info("cascade_backfill_skipped", extra={"reason": "fga_disabled"})
         return (0, 0, [])
     if not settings.fga_cascade_writers:
-        # Not an error: an estate with no movers configured has nothing to grant. Logged because a
+        # Not an error: an estate with no stage runners configured has nothing to grant. Logged because a
         # silent zero is the same shape as a broken run.
         log.info("cascade_backfill_skipped", extra={"reason": "no_cascade_writers"})
         return (0, 0, [])

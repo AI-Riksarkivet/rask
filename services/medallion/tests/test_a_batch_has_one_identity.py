@@ -9,7 +9,7 @@ That is CORRECT for an idempotency key — each hop is its own unit of redeliver
 silver trigger must collide with the previous silver trigger and not with bronze's. It is useless as
 a batch identity, which is why both fields exist rather than one being made to serve twice.
 
-**The boundary is the catalog.** A mover cannot hand the next mover anything directly — the tag move
+**The boundary is the catalog.** A stage runner cannot hand the next stage runner anything directly — the tag move
 is what wakes the next tier — so the identity rides `publish` -> `table_published` -> the next
 trigger. Each hop of that path is asserted below, because a break in any one of them is invisible:
 the cascade still runs, the graph still fills, and only the join silently returns nothing.

@@ -12,7 +12,7 @@ WHY THIS SUBJECT AND NOT THE OTHER THREE. `service-ingest`, `service-maintenance
 also still share it, and each needs a service change first: none of them reads a dedicated token
 (measured 2026-09-07, 0 `dedicated_token` references in all three), and adding a subject to the
 privileged list WITHOUT its client half breaks it immediately — the measured 2026-08-26 lesson the
-chart records, where rendering the server-side expectation alone 401'd every mover call until it was
+chart records, where rendering the server-side expectation alone 401'd every stage runner call until it was
 reverted. The BFF is different: it already reads `env.LINEAGE_SERVICE_TOKEN` and stamps
 `x-lance-service-identity` (`bff.ts:195,369`), so CHANGING WHICH SECRET FILLS THAT ENV *is* the client
 half. No frontend code moves.
@@ -76,11 +76,7 @@ def test_the_web_identity_is_privileged_at_the_lineage_door() -> None:
 
 def test_no_web_pod_mounts_the_SHARED_bearer() -> None:
     """The defect: seven Deployments holding the token that authenticates every other service."""
-    shared = {
-        name: ref
-        for name, ref in _web_token_refs(ON).items()
-        if "web" in name and str(ref.get("name", "")).endswith("-dapr-app-token")
-    }
+    shared = {name: ref for name, ref in _web_token_refs(ON).items() if "web" in name and str(ref.get("name", "")).endswith("-dapr-app-token")}
     assert not shared, f"these web pods still mount the estate's shared service bearer: {sorted(shared)}"
 
 
@@ -96,9 +92,7 @@ def test_every_web_pod_takes_its_own_credential_off_infra_credentials() -> None:
 
 def test_infra_credentials_carries_the_key_the_web_pods_ask_for() -> None:
     """A `secretKeyRef` at a key nothing writes is a pod that cannot start."""
-    secrets = [
-        d for d in _rendered_docs(ON) if d.get("kind") == "Secret" and d["metadata"]["name"].endswith("-infra-credentials")
-    ]
+    secrets = [d for d in _rendered_docs(ON) if d.get("kind") == "Secret" and d["metadata"]["name"].endswith("-infra-credentials")]
     assert secrets, "no infra-credentials Secret rendered"
     assert f"service-token-{WEB}" in (secrets[0].get("stringData") or {})
 

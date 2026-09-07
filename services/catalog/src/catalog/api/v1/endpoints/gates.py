@@ -2,7 +2,7 @@
 
 The gate decides whether a stage's output may publish: which column identifies a row, which columns
 a consumer depends on, and how far a row count may move before a promotion waits for a human. All of
-it lived ONLY as environment on a mover Deployment, so moving a threshold meant editing a values file
+it lived ONLY as environment on a stage runner Deployment, so moving a threshold meant editing a values file
 and running ``helm upgrade`` — an operation nobody could enumerate, review, or be gated on. This door
 makes a gate a record like every other governed artefact, exactly as ``transforms`` did for lanes.
 

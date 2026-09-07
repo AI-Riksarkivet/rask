@@ -230,7 +230,7 @@ services:
       # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
       # merely down must fail the run loudly, not silently downgrade to a local write that produces
       # governed data the catalog has never heard of — and that nothing downstream will ever be told
-      # about, because the event a mover rides is the catalog's publication of a new version.
+      # about, because the event a stage runner rides is the catalog's publication of a new version.
       RASK_INGEST_USE_CATALOG: "true"
       RASK_CATALOG_URL: http://rask-catalog:2333
       # A15's other side of the relation. A run holds a read_version from enumeration until commit,
@@ -328,7 +328,7 @@ services:
     #
     # It is the first fleet.yaml service to need the token: every other caller of
     # `assert_app_token_configured` is a lance-plane pod (catalog, lineage, the medallion producer and
-    # movers, maintenance) templated elsewhere, each rendering APP_API_TOKEN explicitly. In fleet.yaml
+    # stage runners, maintenance) templated elsewhere, each rendering APP_API_TOKEN explicitly. In fleet.yaml
     # the token had only ever been reachable through `lanceWriter`, which this service is not.
     daprIngest: true
     # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; the ingest service,
@@ -490,7 +490,7 @@ image:
   localImages: false
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
-  # movers + maintenance + the media services all run from this one image, different entrypoint.
+  # stage runners + maintenance + the media services all run from this one image, different entrypoint.
   # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
   catalog: { repository: lance-rest-catalog, tag: dev }
 
@@ -593,7 +593,7 @@ resources:
 #
 # The sidecar term is the one that was missing entirely. `rask.daprAnnotations` said nothing about
 # shutdown, so daprd took its own 5s default — and the kubelet SIGTERMs every container in the pod
-# SIMULTANEOUSLY, so the sidecar was gone before the app's drain window had properly opened. A mover
+# SIMULTANEOUSLY, so the sidecar was gone before the app's drain window had properly opened. A stage runner
 # that finished its Lance write and then called publish_event to fire the next stage published at a
 # sidecar that had already stopped: the write landed, the cascade trigger did not, and nothing
 # distinguishes that from a stage with no successor.
@@ -810,7 +810,7 @@ frontend:
 auth:
   # Bind each privileged service identity to its OWN credential instead of the shared APP_API_TOKEN.
   # OFF until the CLIENT half exists: the catalog would demand `service-token-<identity>` while the
-  # movers still present APP_API_TOKEN, which 401s every catalog call and stops the cascade (measured
+  # stage runners still present APP_API_TOKEN, which 401s every catalog call and stops the cascade (measured
   # 2026-08-26). The tokens are seeded already; what is missing is each service sending its own.
   dedicatedServiceCredentials: false
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
@@ -863,7 +863,7 @@ auth:
 #                   and read-tier PUT all 403). An UNSIGNED probe answers InvalidRequest, which is about
 #                   signing, not support; reading it as "unsupported" is what kept this mode unused.
 #                   It is also the only mode that can serve the CASCADE: web_identity needs the caller to
-#                   present an OIDC token, and a mover authenticates with dapr-api-token +
+#                   present an OIDC token, and a stage runner authenticates with dapr-api-token +
 #                   x-lance-service-identity, never a bearer.
 #   static        — pre-provisioned per-bucket keys.
 vending:
@@ -947,7 +947,7 @@ catalog:
   # reads; a relay without staging drains an empty prefix.
   #
   # Why the control lane needs durability at all, when the events are documented as refresh hints: most
-  # of them are, and `table_published` is not. The mover does not fire the next stage's topic, and
+  # of them are, and `table_published` is not. The stage runner does not fire the next stage's topic, and
   # `/publication-arrival` receiving this event is the ONLY thing that WAKES silver->gold. The cascade-lag
   # cron re-reads the `published` tag since docs/DECISIONS.md "Cascade repair" (C3), but it only MEASURES: it reports
   # how far a tier has fallen behind and advances nothing, so this lane's durability is still the whole
@@ -989,7 +989,7 @@ pubsub:
 # --- Event-driven medallion pipeline (bronze → silver → gold; R23 — raw is the EXTERNAL world) -----
 # medallion-producer (dummy producer) is the HEAD: it ingests external raw straight into BRONZE (POST /produce
 # seeds bronze$events; /ingest-iiif harvests bronze$pages) and emits the bronze lineage; its OWN
-# /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each mover subscribes to
+# /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each stage runner subscribes to
 # its upstream stage's trigger, emits the transform's lineage (the DERIVED_FROM edge), and publishes the
 # next trigger — one ingest cascades the whole DAG, and Dapr propagates the trace context across every
 # hop. Dapr also EXPORTS a span for each of them as of 2026-08-22 — until then `lance-tracing` named
@@ -1014,7 +1014,7 @@ medallion:
   # (`<parent>$bronze`), so they inherit their parent namespace's location and warehouse rather than
   # resolving a bucket of their own. See `producer.bronzeNamespace` for why they are nested.
   buckets: {}
-  # #84 per-tenant medallion routing (OPT-IN). When true, the producer + movers get
+  # #84 per-tenant medallion routing (OPT-IN). When true, the producer + stage runners get
   # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<rustfs.bucket> the
   # catalog's LANCE_REST_ROOT names), so a `project`-carrying POST /produce (or stage trigger) resolves
   # that project's ACTIVE warehouse (`_warehouses/*.json`, provisioned via POST /v1/warehouses) and the
@@ -1024,7 +1024,7 @@ medallion:
   # fallback into the shared zone URIs). Per-project FGA namespace tuples must be seeded separately.
   # OFF renders no MEDALLION_CONTROL_ROOT anywhere, and the resulting failure names neither this flag
   # nor that variable — measured live 2026-08-23 on a seeded estate: `POST /produce?project=acme`
-  # answered `409 routing is disabled (MEDALLION_CONTROL_ROOT unset)`, and the silver->gold mover
+  # answered `409 routing is disabled (MEDALLION_CONTROL_ROOT unset)`, and the silver->gold stage runner
   # logged `medallion_stage_project_routing_disabled` and parked its trigger in the DLQ, so the run
   # reported nothing and gold never existed. Fail-closed is correct — a project trigger must never
   # fall back to the shared roots and transform the WRONG tenant's data — but an estate that HAS
@@ -1044,14 +1044,14 @@ medallion:
   # tests/unit/test_invariants.py::test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse.
   projectsEnabled: true
   # Gold SERVING warehouse (OPT-IN; composes with projectsEnabled). When true, the terminal silver→gold
-  # mover gets MEDALLION_GOLD_WAREHOUSE_ENABLED: a `project`-carrying trigger's TARGET root becomes the
+  # stage runner gets MEDALLION_GOLD_WAREHOUSE_ENABLED: a `project`-carrying trigger's TARGET root becomes the
   # project's gold serving warehouse — the registry record created with `"serving": "gold"` on POST
   # /v1/warehouses — when one exists. The upstream read + bronze/silver stay in the tenant's WORK
   # warehouse. Absent gold warehouse, or this false (default), → byte-identical work-warehouse routing.
   goldWarehouse: false
-  # ReBAC enforcement: when true, each mover CHECKS it's authorized (OpenFGA) to produce its target stage
-  # before emitting — the silver→gold mover needs `can_promote` (validator), the others `can_create_table`
-  # (writer). Off by default (the open-mode demo runs without it); seed the mover-identity grants first
+  # ReBAC enforcement: when true, each stage runner CHECKS it's authorized (OpenFGA) to produce its target stage
+  # before emitting — the silver→gold stage runner needs `can_promote` (validator), the others `can_create_table`
+  # (writer). Off by default (the open-mode demo runs without it); seed the stage runner-identity grants first
   # (scripts/seed_medallion_fga.sh) before flipping it on.
   fgaEnabled: false
   fgaApiUrl: http://rask-openfga:8080
@@ -1060,9 +1060,9 @@ medallion:
   # The service-to-service app-token path is unchanged; this is a SECOND, admin-only door, gated on
   # auth.enabled + fga. Matches the project the seed grants admin on (scripts/e2e_stack.sh → project:acme).
   produceAdminProject: acme
-  # Replica counts — each mover's own pubsub component carries queueGroupName=<app-id>, so its replicas
+  # Replica counts — each stage runner's own pubsub component carries queueGroupName=<app-id>, so its replicas
   # form a competing-consumer group (single delivery per trigger; without the queue group every replica
-  # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Movers are idempotent on
+  # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Stage runners are idempotent on
   # top (MERGE on run_id). medallion-producer is a subscriber too (/bronze-arrival). All stateless.
   producerReplicas: 1
   # THE CASCADE LAG DETECTOR (docs/DECISIONS.md "Cascade repair" (C3)) — the LOSS half of cascade monitoring.
@@ -1086,7 +1086,7 @@ medallion:
     # in five minutes", which `for:` answers. A tighter cadence buys resolution nobody reads and costs
     # a catalog + lineage read per edge per tick.
     schedule: "@every 300s"
-  moverReplicas: 1
+  stageRunnerReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
   # event-driven cascade produces actual versioned data on RustFS, not just provenance — the lineage graph
   # then reflects what storage holds and outputStatistics carry real rows/bytes. Off by default (the demo
@@ -1105,12 +1105,12 @@ medallion:
   # sets this false. Prefix/topic/dataset names use the code defaults.
   # The media lane's BRONZE namespace, nested like every other tier. It was hardcoded twice in
   # templates/medallion.yaml (`stageBucket "bronze-media"` and the path segment), so the media chain
-  # kept writing to the flat location after the tiers moved and its mover DROPped every trigger.
+  # kept writing to the flat location after the tiers moved and its stage runner DROPped every trigger.
   mediaBronzeNamespace: bronze-media
   mediaSeedSamples: true
   # Event-driven REAL-Ray compute (requires compute + a running Ray cluster — deploy/ray-lance-demo.yaml).
-  # When true, each mover submits its stage transform as a `ray job submit` to the ray-lance cluster IN
-  # RESPONSE TO its Dapr trigger (Ray Jobs REST API, httpx-only — no ray package in the mover image), instead
+  # When true, each stage runner submits its stage transform as a `ray job submit` to the ray-lance cluster IN
+  # RESPONSE TO its Dapr trigger (Ray Jobs REST API, httpx-only — no ray package in the stage runner image), instead
   # of the in-process fake-Ray write. Default off. Production is KubeRay (the RayService this chart already
   # renders under ray.enabled); the raw Ray head here is the on-kind proof.
   # OFF by default again (2026-08-15), and the reason is measured rather than a preference.
@@ -1126,7 +1126,7 @@ medallion:
   # The lane is designed against `.docker/ray-lance.dockerfile` — "a thin CPU Ray image for the
   # medallion compute seam: official Ray + the lance-ray Data integration" — deployed by
   # `deploy/ray-lance-demo.yaml` as a SEPARATE `ray-lance-head`. The chart does not deploy that, so
-  # ON-by-default pointed every mover at a cluster that cannot run the work.
+  # ON-by-default pointed every stage runner at a cluster that cannot run the work.
   #
   # Turning it off restored the documented default and the cascade completed end to end on the first
   # drive: bronze -> silver -> gold, all three COMPLETE in the lineage graph (2026-08-15 20:59). That
@@ -1142,12 +1142,12 @@ medallion:
   #     kubectl rollout restart deploy/rask-bronze-to-silver deploy/rask-silver-to-gold
   #
   # THE RESTART IS NOT OPTIONAL AND IT COST TWO FAILED DRIVES TO LEARN. This flag also decides
-  # whether the movers appear in `lance-statestore`'s `scopes` (dapr-statestore.yaml derives them from
-  # `medallion.movers` when `medallion.ray`), and **daprd caches the actor state store at sidecar
+  # whether the stage runners appear in `lance-statestore`'s `scopes` (dapr-statestore.yaml derives them from
+  # `medallion.stageRunners` when `medallion.ray`), and **daprd caches the actor state store at sidecar
   # start and cannot hot-reload it**. Enabling the lane and the Component in one upgrade races: the
   # sidecars come up against the OLD scope list and every dispatch fails with
   # `the state store is not configured to use the actor runtime`, which reads as a missing
-  # `actorStateStore: true` rather than as a stale sidecar. Restart the movers after the Component
+  # `actorStateStore: true` rather than as a stale sidecar. Restart the stage runners after the Component
   # settles. For the same reason `kubectl set env MEDALLION_RAY_ENABLED=true` alone can NEVER work —
   # it moves the flag without moving the scope.
   #
@@ -1155,7 +1155,7 @@ medallion:
   # the dummy lane verified running inside the built image). `ray-lance` carries pylance 9.0.0 +
   # lance_ray and bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
   # bronze -> silver -> gold all COMPLETE, with S1's watcher doing exactly its job
-  # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the mover).
+  # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the stage runner).
   #
   # ON by default since 2026-08-24. It was `false` on the argument that the chart deploys no
   # Lance-capable cluster — a default aimed at a cluster the chart does not create. That argument is
@@ -1164,14 +1164,14 @@ medallion:
   # 10.0.0 and carries `lance_ray`. It never was the HTR image the old comment described.
   #
   # The second blocker is closed too, and it is the one that mattered. `ray_submit.py` shipped a FIXED
-  # env dict, so a mover could reach a working cluster and still not describe its own work; it now
+  # env dict, so a stage runner could reach a working cluster and still not describe its own work; it now
   # resolves `entrypoint`/`params`/`code_version` from the lane declaration and namespaces the
   # workload's half as `RASK_PARAM_*` (the prefix applied at the submitter, so a lane cannot name its
   # way to S3_SECRET). Measured end to end 2026-08-24: a real stage job
   # (`stage-ray-silver-3beb0dd2…`) ran as a Dapr Workflow, the watcher polled the head's
-  # `/api/jobs/<id>` 200, the orchestration COMPLETED and the mover moved the stage.
+  # `/api/jobs/<id>` 200, the orchestration COMPLETED and the stage runner moved the stage.
   #
-  # UPGRADING an existing release from off->on still needs the mover restart the block above
+  # UPGRADING an existing release from off->on still needs the stage runner restart the block above
   # describes — the sidecars cached the old `lance-statestore` scope list. A FRESH install is
   # unaffected: the Component and the flag render together, so the sidecars come up already scoped.
   ray: true
@@ -1230,7 +1230,7 @@ medallion:
     # The training job is not a row transform — it reads a governed table and emits a MODEL — so it
     # constrains no cardinality rather than claiming one the vocabulary cannot express.
     - { task: train, command: "python /home/ray/jobs/ray_train_job.py" }
-  # When true, after the compute writes a stage's Lance dataset the mover runs data-quality assertions on it
+  # When true, after the compute writes a stage's Lance dataset the stage runner runs data-quality assertions on it
   # (row_count > 0, key column non-null) and BLOCKS promotion on failure — the failed run + its
   # dataQualityAssertions facet are still emitted (auditable in lineage), but the next stage is NOT
   # triggered, so a bad batch can't cascade. The automated *validator* half of governance (FGA decides who
@@ -1245,10 +1245,10 @@ medallion:
   # OFF by default, and the default is the OLD behaviour rather than a weaker one: an estate with
   # nobody to ask must not park promotions on an external event no one will ever raise.
   #
-  # Where it runs matters. The mover that holds the promotion publishes it on `promotionTopic`; the
+  # Where it runs matters. The stage runner that holds the promotion publishes it on `promotionTopic`; the
   # `promotion_review` workflow and the approve door BOTH live in medallion-producer, because
   # `raise_workflow_event` resolves an instance through the CALLING app's app-id — route and instance
-  # must share a process, and a mover has no gateway row and no Ingress path. Turning this on
+  # must share a process, and a stage runner has no gateway row and no Ingress path. Turning this on
   # therefore also scopes `medallion-producer` on the actor state store (dapr-statestore.yaml); without
   # that scope the sidecar logs "Workflow engine started" and dispatch fails on every delivery.
   qualityReview: false
@@ -1266,7 +1266,7 @@ medallion:
   # real promotions, not an opinion.
   #
   # This is the gate's other question. The assertions answer "is it broken"; they cannot answer "is
-  # it strange", so a batch whose row count doubled passes every one of them. Read by the MOVER, at
+  # it strange", so a batch whose row count doubled passes every one of them. Read by the STAGE RUNNER, at
   # dispatch, and only consulted when qualityReview is on: a breach is a QUESTION, and with nobody to
   # ask the honest answer is to promote rather than invent a verdict.
   #
@@ -1274,12 +1274,12 @@ medallion:
   # promotes everything, because that is the failure this setting exists to end.
   promotionReviewBand: 0.25
   promotionTopic: medallion.promotion
-  # ONE trigger, ONE gate: the mover registers, publishes, and stops. Advancing the `published` tag
+  # ONE trigger, ONE gate: the stage runner registers, publishes, and stops. Advancing the `published` tag
   # emits `table_published`, the publication head routes it to the lane that owns the source
-  # namespace, and the mover's local quality gate is skipped because the catalog's runs instead.
+  # namespace, and the stage runner's local quality gate is skipped because the catalog's runs instead.
   #
   # Why it replaces the local gate rather than joining it: both run identical assertions, but the
-  # mover's withheld only the next TRIGGER — a refused batch was already committed into the tier and
+  # stage runner's withheld only the next TRIGGER — a refused batch was already committed into the tier and
   # visible to anyone reading `latest`. Only the tag is a boundary.
   #
   # Ray TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer
@@ -1306,10 +1306,10 @@ medallion:
     # gateway route — the in-cluster ClusterIP route stays reachable + unauthenticated.
     expose: true
     # NESTED to match `bronzeNamespace` below. These two are a PAIR: the producer stamps this dataset
-    # name on the trigger it publishes, and each mover compares it against its own
-    # MEDALLION_FROM_DATASET. A mismatch is not an error anywhere — the mover returns DROP, daprd logs
-    # "DROP status returned from app", and the mover itself logs NOTHING. Measured 2026-08-25: this
-    # still read `bronze$events` while the movers had moved to `lakehouse$…`, so every cascade died at
+    # name on the trigger it publishes, and each stage runner compares it against its own
+    # MEDALLION_FROM_DATASET. A mismatch is not an error anywhere — the stage runner returns DROP, daprd logs
+    # "DROP status returned from app", and the stage runner itself logs NOTHING. Measured 2026-08-25: this
+    # still read `bronze$events` while the stage runners had moved to `lakehouse$…`, so every cascade died at
     # the first hop with a 200 OK on the wire.
     bronzeDataset: bronze$events
     # DECLARED UNQUALIFIED. On a projects-enabled estate the tier name is qualified at RUNTIME —
@@ -1329,31 +1329,31 @@ medallion:
     operation: lance_ray_ingest
     author: ray
     bronzeTopic: medallion.bronze
-  # The 3 stage movers run medallion.mover:app, differing only by env. order = the DAG. (R23: there is
-  # no raw→bronze mover — its stage stamp/provenance logic merged into the producer's bronze ingest.)
+  # The 3 stage runners run medallion.stage_runner:app, differing only by env. order = the DAG. (R23: there is
+  # no raw→bronze stage runner — its stage stamp/provenance logic merged into the producer's bronze ingest.)
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
-  # (validator-only); the others `can_create_table` (writer). Each mover checks as its own identity.
+  # (validator-only); the others `can_create_table` (writer). Each stage runner checks as its own identity.
   # ⚠ Every requiredAction below MUST be a real relation on the `namespace` type in
-  # packages/service-kit/src/service_kit/governed/auth/model.json — the mover checks it on namespace:<toNamespace>, and a
+  # packages/service-kit/src/service_kit/governed/auth/model.json — the stage runner checks it on namespace:<toNamespace>, and a
   # typo 503s the whole cascade at the FGA gate instead of denying it. Pinned by
   # tests/unit/test_fga_model_contract.py::test_chart_medallion_required_actions_exist_on_namespace.
-  movers:
-    # Optional per-mover `stageJob: "python /home/ray/jobs/<job>.py"` — the Ray stage-job entrypoint
-    # this mover submits when medallion.ray is on (MEDALLION_RAY_ENTRYPOINT). This is the P7b seam:
+  stageRunners:
+    # Optional per-stage runner `stageJob: "python /home/ray/jobs/<job>.py"` — the Ray stage-job entrypoint
+    # this stage runner submits when medallion.ray is on (MEDALLION_RAY_ENTRYPOINT). This is the P7b seam:
     # the HTR lanes select the layout/lines + transcribe stage jobs here (runner re-cut gate); unset
     # falls back to the shared ray_stage_job.py default.
     # serviceIdentity is a BARE subject — common.fga.check prefixes `user:` itself (a `user:` here would
     # double-prefix and always deny). The seeded FGA tuples grant these `user:service-*` identities.
-    # Optional per-mover `requiredColumns: "id,embedding"` — declared consumer dependencies
+    # Optional per-stage runner `requiredColumns: "id,embedding"` — declared consumer dependencies
     # (data-contract gap #1): the quality gate adds a `column_declared` assertion per name, so a
     # promotion that dropped/renamed a declared column is BLOCKED (the breaking-change detector).
     - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: bronze, fromDataset: bronze$events, toNamespace: silver, toDataset: silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
     - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: silver, fromDataset: silver$features, toNamespace: gold, toDataset: gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
     # The MEDIA lane (multimodal §9): POST /ingest-media on medallion-producer lands bronze-media blobs and
-    # publishes medallion.media; this mover's generic compute then derives what the blob CONTENT
+    # publishes medallion.media; this stage runner's generic compute then derives what the blob CONTENT
     # supports (image → inline thumbnail + embedding; unrecognised media carries through untouched —
-    # no media config anywhere, the same binary as every mover). Terminal (pubTopic ""). Own
-    # namespaces: mover URIs derive from the namespace, so reusing bronze/silver would collide with
+    # no media config anywhere, the same binary as every stage runner). Terminal (pubTopic ""). Own
+    # namespaces: stage runner URIs derive from the namespace, so reusing bronze/silver would collide with
     # the events chain's datasets on the same paths.
     - { name: media-to-silver, daprAppId: media-to-silver, fromNamespace: bronze-media, fromDataset: bronze-media$objects, toNamespace: silver-media, toDataset: silver-media$features, operation: derive_media, author: data_eng, subTopic: medallion.media, pubTopic: "", requiredAction: can_create_table, serviceIdentity: "service-media-to-silver", requiredColumns: "id,thumbnail,embedding" }
     # REMOVED 2026-08-17 — the transcription lane. Its in-process compute lived inside the medallion
@@ -1363,12 +1363,12 @@ medallion:
     # cascade as CONFIGURATION — an operation name, requiredColumns, a Ray `stageJob` entrypoint —
     # never as a code branch.
     #
-    # The mover row goes with the code, deliberately. Leaving it would route `transcribe_pages` into
+    # The stage runner row goes with the code, deliberately. Leaving it would route `transcribe_pages` into
     # the GENERIC transform, which knows nothing of the workload and would write silently wrong gold
     # — worse than the lane being absent. Re-landing it means a Ray job entrypoint baked into the
-    # ray-cluster image plus `stageJob:` on a mover row; no change to the cascade.
+    # ray-cluster image plus `stageJob:` on a stage runner row; no change to the cascade.
     #
-    # The lane was already non-functional: `htrflowUrl` shipped empty and the mover dead-lettered
+    # The lane was already non-functional: `htrflowUrl` shipped empty and the stage runner dead-lettered
     # every trigger it received.
 
 # --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
@@ -1632,7 +1632,7 @@ explorer:
   # injects no row predicate, so that answers 200 for a caller with no grant at all.
   #
   # The cited justification ("callers with no request context, the publish saga") does not use it:
-  # the saga mints its own token from Dex via MEDIA_PUBLISH_TOKEN_URL. The movers' equivalent
+  # the saga mints its own token from Dex via MEDIA_PUBLISH_TOKEN_URL. The stage runners' equivalent
   # (MEDALLION_CATALOG_TOKEN) is untouched — they genuinely have no caller to forward.
   # The annotator PUBLISHES control events (`task_assigned` / `task_unassigned`) so the notifications
   # plane can put assigned work in the assignee's inbox instead of making them go looking for it.
@@ -1765,11 +1765,11 @@ stateStore:
     # decision, the state.postgresql v1→v2 move); ride them together or not at all.
     - notifications
     # ── S1's stage watcher is NOT listed here, and that is deliberate. ──────────────────────────────
-    # The Ray lane's `stage_run` (`medallion/workflow.py`) runs inside `mover.py`, and each mover has
-    # its OWN `daprAppId` from `medallion.movers[]` (`bronze-to-silver`, `silver-to-gold`, …). There is
+    # The Ray lane's `stage_run` (`medallion/workflow.py`) runs inside `stage_runner.py`, and each stage runner has
+    # its OWN `daprAppId` from `medallion.stageRunners[]` (`bronze-to-silver`, `silver-to-gold`, …). There is
     # no `medallion` app-id anywhere in the estate — an entry for one was written here on 2026-08-15
     # and was completely INERT, which the live sidecar reported as health (see below). The template
-    # derives the movers' ids from `medallion.movers` when `medallion.ray` is on, so adding a mover
+    # derives the stage runners' ids from `medallion.stageRunners` when `medallion.ray` is on, so adding a stage runner
     # cannot produce one that silently fails to dispatch.
     #
     # WHY THE MISTAKE SURVIVED A RESTART: an unscoped app-id logs
@@ -1779,7 +1779,7 @@ stateStore:
     # does start. Dispatch then fails on every delivery.
     #
     # SAME COORDINATED-ROLLOUT RULE as `notifications` above: daprd refuses to hot-reload an actor
-    # state store, so a running mover keeps the OLD scope list until it restarts.
+    # state store, so a running stage runner keeps the OLD scope list until it restarts.
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
@@ -1912,7 +1912,7 @@ rustfs:
   # rather than a hand-run session.
   maintenanceAccessKey: ""
   maintenanceSecretKey: ""
-  # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three movers share one, because
+  # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three stage runners share one, because
   # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
   # is the whole setting; the secret is derived unless supplied (`lance.scopedStorageSecret`).
   # Empty falls back to the tenant ROOT credential, which is what an install runs until one is named
@@ -2311,7 +2311,7 @@ dapr:
   sidecarRestricted: false
   # Bound every DaprClient gRPC call (publish_event has no per-call timeout arg, and the SDK's default
   # deadline is unset) so a wedged sidecar can't hang a publisher indefinitely — a timeout surfaces as a
-  # publish failure the caller handles (the producer → 503, the movers → RETRY) instead of a stuck request.
+  # publish failure the caller handles (the producer → 503, the stage runners → RETRY) instead of a stuck request.
   apiTimeoutSeconds: 30
   # Dapr app-API-token — Dapr injects it (APP_API_TOKEN) into subscriber apps AND stamps a
   # `dapr-api-token` header on every event it DELIVERS, so the sidecar-delivered routes (/lineage-events,

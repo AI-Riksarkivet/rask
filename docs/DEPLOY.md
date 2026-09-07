@@ -24,7 +24,7 @@ into `.localbin/` (gitignored).
 | **catalog** | app (FastAPI) + daprd sidecar | **producer** — creates Lance tables on S3; publishes OpenLineage events via Dapr |
 | **lineage** | app (FastAPI) + daprd sidecar | **consumer** — Dapr subscription ingests events into Apache AGE; serves the lineage API |
 | **frontend zones** | 4 apps (SvelteKit SSR) | the UI as rask-style micro-frontend **zones** — `home` (catch-all `/`, owns `/auth/*`) + `lakehouse` (`/lakehouse`) + `media` (`/media`) + `annotator` (`/annotator`). `lakehouse` is one app hosting four AREAS at `/lakehouse/{data,lineage,models,admin}`: they were four separate zones over one backend plane and one shared client, paying four SSR servers and a hard reload per hop for no independent-deploy payoff. `annotator` stays separate from `media` despite sharing its plane, purely to keep its Pixi + OpenCV bundle out of a searcher's. One parametrized `frontend.dockerfile` (`lance-<zone>:tag`, per-zone tag override on `frontend.apps`); the **Ingress** path-routes each zone (`ingress.yaml`); every zone shares one env seam (`lance.frontendEnv`) + reads one origin-wide OIDC session cookie. The admin AREA serves the ops pages `/lakehouse/admin/{audit,dlq,events,streams,tenants,access}` behind a fail-closed estate-admin gate; the data area carries the namespace + table **lifecycle** surfaces. | the UI as rask-style micro-frontend **zones** — `home` (catch-all `/`) + `data` (`/data`) + `lineage` (`/lineage`) + `models` (`/models`) + `admin` (`/admin`). One parametrized `frontend.dockerfile` (`lance-<zone>:tag`); the **Ingress** path-routes each zone (`ingress.yaml`); every zone shares one env seam (`lance.frontendEnv`) + reads one origin-wide OIDC session cookie (the `home` zone owns `/auth/*`). Replaces the retired single `web` pod. The admin zone additionally serves the ops pages `/admin/{audit,dlq,events,streams,tenants}` — the estate-wide ones (events feed, JetStream panel, tenant admin) gate on the `auth.bootstrapAdmin` estate-admin grant — and the data zone carries the namespace + table **lifecycle** surfaces (`/data/{namespaces,tables,warehouses}`: declare/create, drop/deregister/restore, rename, grants). |
-| **medallion** | 4 apps + sidecars | event-driven pipeline: `medallion-producer` producer + raw→bronze→silver→gold movers (see [MEDALLION.md](MEDALLION.md)) |
+| **medallion** | 4 apps + sidecars | event-driven pipeline: `medallion-producer` producer + raw→bronze→silver→gold stage runners (see [MEDALLION.md](MEDALLION.md)) |
 | **compaction** | app + sidecar | compaction/GC service triggered by a Dapr **cron binding** (`bindings.cron`) — compacts Lance fragments + GCs old versions |
 | **gateway** | nginx + sidecar | **backend** clean-URL edge that routes API traffic via **Dapr service invocation** (`/v1.0/invoke/...`): `/lineage/`,`/catalog/`,`/produce` (values-gated: `medallion.producer.expose`, off in prod — it's the unauthenticated demo entry),`/perses/`,`/greptime/`. Reached by a port-forward to its Service (`make dashboards`); it is **out of the frontend path** now (the zones' BFF proxies reach the backend directly, and the Ingress routes the zones). Dapr-delivered routes (lineage ingest + the reconcile cron binding) are **403-blocked** from one source (`lance.lineageSidecarOnlyRoutes`) — the sidecar is their only legitimate caller |
 | **Dapr** | subchart | control plane + sidecar injection + pub/sub + secret-store + tracing config |
@@ -57,7 +57,7 @@ catalog --DaprClient.publish_event--> [daprd sidecar] --pubsub.jetstream--> NATS
 - **Every subscriber has its own pubsub component** (`lineage-pubsub-<app-id>`, the `lance.subPubsub`
   helper): `queueGroupName=<app-id>` makes that app's replicas a competing-consumer group (single
   delivery per app — safe to scale), and `deliverPolicy` is `all` for lineage (restart replays into the
-  idempotent MERGE = the durability story) but `new` for the cascade head + movers (a replay would
+  idempotent MERGE = the durability story) but `new` for the cascade head + stage runners (a replay would
   re-fire every cascade in the 168h retention window). The bare `lineage-pubsub` component is publish-only
   (catalog + compaction).
 - `make verify` publishes a `create_table` event and asserts AGE recorded the creator.
@@ -93,7 +93,7 @@ pipeline works **and** is observable".
 **Lance-native IO metrics (live since the pylance 9 bump):** pylance ≥ 9.0 ships
 `lance.otel.instrument_lance_metrics()` (the `pylance[otel]` extra) — Lance's Rust object-store/IO
 metrics registered straight onto the global MeterProvider the services already run under. Every
-Lance-I/O service (catalog, lineage, compaction, medallion producer + movers) calls the guarded
+Lance-I/O service (catalog, lineage, compaction, medallion producer + stage runners) calls the guarded
 `service_kit.lakehouse.lance_metrics.instrument_lance_if_available()` at startup; the lock pins
 pylance 9.0.0, so it logs `lance_metrics_instrumented` and the metrics land in GreptimeDB (the guard
 stays: a consumer resolving pylance < 9 degrades to a logged no-op rather than failing startup). OTel
@@ -182,7 +182,7 @@ catalog/lineage.
 
 - **Dapr JetStream consumers** are split BY RECOVERY STORY (2026-07-06/12): the LINEAGE ingest stays
   **ephemeral** (deliverPolicy=all — a restart replays the retained stream into the idempotent MERGE;
-  a durable cursor would defeat that recovery), while the cascade head + movers pair
+  a durable cursor would defeat that recovery), while the cascade head + stage runners pair
   `deliverPolicy=new` with a **durable + queue-group** consumer (cursor survives pod death/redeploys —
   chaos-verified; the durable-orphan failure applies only to durables WITHOUT a queue group). Since
   2026-07-12 the **Dapr Resiliency + DLQ layer is DEFAULT ON** (`dapr.resiliency.enabled`): the sidecar
@@ -213,7 +213,7 @@ catalog/lineage.
   `JETSTREAM_EXPECTED_CONSUMERS` (rendered from the same values the subscriptions render from) to
   flag silently-dead subscriptions.
 - **Per-tenant medallion routing (`medallion.projectsEnabled`, opt-in, #84):** when true, the producer +
-  movers resolve a `project`-carrying trigger to that project's ACTIVE warehouse bucket (via
+  stage runners resolve a `project`-carrying trigger to that project's ACTIVE warehouse bucket (via
   `MEDALLION_CONTROL_ROOT`) and the cascade writes `s3://<project-bucket>/medallion/<stage>` with
   project-qualified lineage; project-less traffic is byte-identical, and with it false a project-carrying
   trigger is dropped fail-closed. Warehouse-create refuses the medallion zone buckets

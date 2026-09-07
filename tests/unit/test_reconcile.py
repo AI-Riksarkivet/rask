@@ -153,7 +153,7 @@ def test_reconcile_all_flags_stale_only_with_a_budget_and_readable_storage() -> 
 def test_reconcile_all_flags_missing_declared_columns_estate_wide() -> None:
     """Batch 23 — the estate-patrol half of column_declared: a declared dataset whose CURRENT
     storage schema lost a declared column is flagged WITH column blame (catches writes that
-    bypassed the mover's gate); undeclared datasets pay NO schema read; a failed schema read
+    bypassed the stage runner's gate); undeclared datasets pay NO schema read; a failed schema read
     reports nothing (never a phantom violation)."""
     repo = _FakeRepo(
         datasets=["broken", "healthy", "undeclared"],

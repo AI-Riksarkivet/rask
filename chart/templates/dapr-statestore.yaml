@@ -75,12 +75,12 @@ auth:
   {{- if include "lance.secretsViaDapr" . }}
   secretStore: {{ .Values.stateStore.secretStore }}
   {{- end }}
-{{- /* The MOVERS' app-ids are DERIVED, not listed. S1's stage watcher (`medallion/workflow.py`) runs in
-       `mover.py`, and each mover has its own `daprAppId` from `medallion.movers[]` — there is no
+{{- /* The STAGE RUNNERS' app-ids are DERIVED, not listed. S1's stage watcher (`medallion/workflow.py`) runs in
+       `stage_runner.py`, and each stage runner has its own `daprAppId` from `medallion.stageRunners[]` — there is no
        `medallion` app-id anywhere in the estate, so a hand-written entry for one is inert. Deriving
-       them also means adding a mover cannot silently produce one that fails to dispatch.
+       them also means adding a stage runner cannot silently produce one that fails to dispatch.
 
-       Gated on `medallion.ray` because that is exactly the condition under which a mover sets
+       Gated on `medallion.ray` because that is exactly the condition under which a stage runner sets
        MEDALLION_RAY_ENABLED and therefore starts a workflow runtime at all (medallion.yaml:325).
 
        THE FAILURE THIS PREVENTS IS INVISIBLE FROM THE SIDECAR LOG. Measured live 2026-08-15 on
@@ -93,12 +93,12 @@ auth:
        every delivery. */}}
 {{- $scopes := .Values.stateStore.scopes | default list }}
 {{- if .Values.medallion.ray }}
-{{-   range .Values.medallion.movers }}
+{{-   range .Values.medallion.stageRunners }}
 {{-     $scopes = append $scopes .daprAppId }}
 {{-   end }}
 {{- end }}
 {{- /* The PRODUCER's app-id, for the same reason and under a different condition. `promotion_review`
-       runs in `producer.py`, not in a mover: the approve route and the workflow instance must share a
+       runs in `producer.py`, not in a stage runner: the approve route and the workflow instance must share a
        process because `raise_workflow_event` resolves the instance through the calling app's app-id,
        and only the producer has a gateway row to serve that route from.
 

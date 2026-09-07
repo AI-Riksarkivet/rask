@@ -159,10 +159,10 @@ scopes:
      live on one shared component because lineage and medallion-producer both consume lineage.events.v1 — one
      shared queue group would split those messages across the two apps. deliverPolicy differs on
      purpose: `all` for lineage (a restart replays the retained stream into the idempotent MERGE ingest —
-     that replay IS the outage-durability story), `new` for the cascade head + movers (a replayed
+     that replay IS the outage-durability story), `new` for the cascade head + stage runners (a replayed
      168h of triggers would re-fire cascades / re-run compute). The `new` subscribers ALSO get a
      durableName: an ephemeral queue-group consumer is deleted with its last member, so a trigger
-     published (or unacked) while the mover is down was LOST — deliverPolicy=new skipped it on
+     published (or unacked) while the stage runner is down was LOST — deliverPolicy=new skipped it on
      reconnect (the chaos-confirmed cascade stall, docs/RESILIENCE.md). A durable+queue-group consumer
      keeps its cursor across pod death AND redeploys — chaos-verified live 2026-07-06: publish-while-down
      delivered on recovery, and a rollout restart re-attached with zero "consumer name already in use"
@@ -172,7 +172,7 @@ scopes:
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
 {{- if .Values.medallion.enabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new") }}
-{{- range .Values.medallion.movers }}
+{{- range .Values.medallion.stageRunners }}
 {{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new") }}
 {{- end }}
 {{- end }}
@@ -217,13 +217,13 @@ spec:
     - { name: queueGroupName, value: {{ .appId | quote }} }
     - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
     {{- if eq .deliverPolicy "new" }}
-    # Durable cursor for the trigger consumers (movers + cascade head): survives pod death and redeploys,
+    # Durable cursor for the trigger consumers (stage runners + cascade head): survives pod death and redeploys,
     # so a trigger published while the app is down is DELIVERED on recovery instead of skipped (see the
     # comment block above; chaos-verified). Name matches the app-id — one durable per subscriber app.
     - { name: durableName, value: "{{ .appId }}-durable" }
     {{- end }}
     # backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its FIRST value is the
-    # effective ack window, so it must not undercut the slowest handler (a compute-on mover does real
+    # effective ack window, so it must not undercut the slowest handler (a compute-on stage runner does real
     # S3 reads+writes) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
     {{- if $.Values.dapr.resiliency.enabled }}
     # Resiliency ON: the SIDECAR owns delivery retries (Resiliency CRD, 450s = 7.5 min total: 30+60+
@@ -322,7 +322,7 @@ spec:
        boot when a store is configured) — unscoped, every compute-on + openbao-on medallion pod
        fail-closed with ERR_SECRET_STORES_NOT_CONFIGURED (found live 2026-07-24). */}}
 {{- $secretScopes = append $secretScopes .Values.medallion.producer.daprAppId }}
-{{- range .Values.medallion.movers }}
+{{- range .Values.medallion.stageRunners }}
 {{- $secretScopes = append $secretScopes .daprAppId }}
 {{- end }}
 {{- end }}

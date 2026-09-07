@@ -13,7 +13,7 @@
 # `kubectl apply -f` here is a hard overwrite. `image: ray-lance:dev` is what `make ray-demo` builds
 # locally, and applying it REPLACES whatever tag the head is serving — including one carrying
 # `service_kit` + `storage` (without which every `ray_stage_job.py` dies `ModuleNotFoundError` and the
-# whole cascade fails while the mover reports a terminal job) and `dummy_runner` (without which the
+# whole cascade fails while the stage runner reports a terminal job) and `dummy_runner` (without which the
 # baked dummy job cannot run at all).
 #
 # Read what is actually deployed first, and put it back if it is not `:dev`:

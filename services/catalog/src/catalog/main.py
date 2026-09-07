@@ -225,8 +225,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # both of those are the design rather than caution:
     #
     #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_CASCADE_WRITERS` — a value
-    #     that CHANGES. Adding a mover extends the list and every older warehouse is missing the new
-    #     subject, so that mover cannot promote into any existing tenant. It fails 403 at promotion,
+    #     that CHANGES. Adding a stage runner extends the list and every older warehouse is missing the new
+    #     subject, so that stage runner cannot promote into any existing tenant. It fails 403 at promotion,
     #     in a log nobody watches. Measured on the k3s estate: `user:service-silver-to-gold` held
     #     `owner` on NEITHER warehouse:acme-bucket NOR warehouse:research-bucket.
     #   * A hook Job was the first choice and cannot work here. With `secrets_from_dapr` the registry

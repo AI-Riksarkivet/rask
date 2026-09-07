@@ -16,7 +16,7 @@ are design sketches, **not** the current mechanism.
 ```
             POST /produce                    medallion.bronze          medallion.silver
  (you/cron) ───────────▶ medallion-producer ──pub────────────▶ bronze→silver ──pub────────▶ silver→gold
-                         (producer)                    (mover)                     (mover, terminal)
+                         (producer)                    (stage runner)                     (stage runner, terminal)
                             │ ingest bronze$events        │ transform                 │ transform
                             │ + emit lineage              │ + emit + GATE             │ + emit + GATE
                             ▼                             ▼                           ▼
@@ -40,25 +40,25 @@ It does **not** itself publish `medallion.bronze`. `medallion-producer` also *su
 (`/bronze-arrival`) and — only for a bronze-dataset write — publishes the first trigger
 `medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not the call
 (GOAL 4 B2); any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write
-event drives it, and the head is a subscriber like every other stage. Loop-guarded so the movers' own
+event drives it, and the head is a subscriber like every other stage. Loop-guarded so the stage runners' own
 downstream events can't re-fire it.
 
 A failed bronze-write emit is the cascade head failing, so `/produce` returns **503** (the caller
 retries) — not a silent 202. The bronze-write event *is* the registered run; `/bronze-arrival` turns it
-into `medallion.bronze`, and each mover downstream picks that up.
+into `medallion.bronze`, and each stage runner downstream picks that up.
 
 → [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{producer.py,services/produce.py}`
 
-## 2. Transform — the movers (one Dapr subscriber per DAG edge)
+## 2. Transform — the stage runners (one Dapr subscriber per DAG edge)
 
-The movers run the **same** module (`medallion.mover:app`), differing only by `MEDALLION_*` env:
+The stage runners run the **same** module (`medallion.stage_runner:app`), differing only by `MEDALLION_*` env:
 
-| Mover | subscribes | publishes | operation |
+| Stage runner | subscribes | publishes | operation |
 |-------|-----------|-----------|-----------|
 | `bronze→silver` | `medallion.bronze` | `medallion.silver` | `embed_features` |
 | `silver→gold` | `medallion.silver` | — (terminal) | `aggregate_gold` |
 
-On each delivery a mover (`services/medallion/services/transform.py: handle_stage`):
+On each delivery a stage runner (`services/medallion/services/transform.py: handle_stage`):
 
 1. (compute on) runs the **fake-Ray compute** — reads its upstream Lance dataset, applies a stage transform,
    writes the downstream dataset (`read → transform → write → version`), measuring exact rows + on-disk
@@ -72,7 +72,7 @@ On each delivery a mover (`services/medallion/services/transform.py: handle_stag
 Idempotent + at-least-once safe: the run_id is `operation-token`, the graph MERGEs on it, and a transient
 failure returns `RETRY` so the Dapr sidecar redelivers.
 
-→ [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{mover.py,services/transform.py,services/compute.py}`
+→ [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{stage_runner.py,services/transform.py,services/compute.py}`
 
 ## 3. Promotion gates — who *may* promote, and whether the data is *good enough*
 
@@ -81,7 +81,7 @@ distinction between a *registered validator that gates movement* and the *event-
 
 | Gate | Flag | Question | Fail action |
 |------|------|----------|-------------|
-| **Authorization** (OpenFGA) | `RASK_FGA_ENABLED` | May this identity promote? `silver→gold` needs `can_promote` (validator rung), the others `can_create_table` (writer) — checked as the mover's own service identity | `DROP` + `medallion.stage.denied` |
+| **Authorization** (OpenFGA) | `RASK_FGA_ENABLED` | May this identity promote? `silver→gold` needs `can_promote` (validator rung), the others `can_create_table` (writer) — checked as the stage runner's own service identity | `DROP` + `medallion.stage.denied` |
 | **Data quality** | `MEDALLION_QUALITY_ENABLED` | Is the produced data good enough? assertions on the written dataset (`row_count_positive`, `not_null` on the key) | `DROP` + `medallion.stage.quality_blocked`; the failed run + its `dataQualityAssertions` are still emitted (auditable) |
 
 Both gate the **same act** (promotion) and compose: a stage promotes only when *authorized* **and** the data
@@ -134,7 +134,7 @@ What lands when this merges into the sibling `rask` repo (see [`RASK-INTEGRATION
 - **Distributed compute:** the in-process fake-Ray compute (`compute.py`) is replaced by a real **lance-ray**
   Ray Data job on rask's **KubeRay** cluster — the *same* `read → transform → write → version` contract, just
   distributed. Nothing else in the flow changes.
-- **Auto-instrumented lineage (GOAL 3):** instead of the mover hand-building the `RunEvent`, the medallion-producer
+- **Auto-instrumented lineage (GOAL 3):** instead of the stage runner hand-building the `RunEvent`, the medallion-producer
   OpenLineage integration emits the `outputStatistics`/`dataQualityAssertions` facets **automatically** from
   the runtime — true Marquez-grade auto-lineage.
 - **Other sketches:** [`event-driven-pipeline.md`](event-driven-pipeline.md) and

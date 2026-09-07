@@ -17,7 +17,7 @@ AND THE CLOSE MATTERS AS MUCH AS THE POOL. A module-level client that nothing cl
 per-call teardown for a permanent leak plus a "Unclosed client session" on every shutdown. The test
 below pins both halves, because the pooling half alone is the easier and worse fix.
 
-`mover.py` already pools its catalog client, so this was MED-008 partially applied — the workflow
+`stage_runner.py` already pools its catalog client, so this was MED-008 partially applied — the workflow
 activities were its unfixed remainder.
 """
 

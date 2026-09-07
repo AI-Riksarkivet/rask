@@ -451,7 +451,5 @@ def test_rename_KEEPS_a_table_with_branches_intact(tmp_path: Path) -> None:
     ds.create_branch("feature-x")
     before = lance.dataset(uri).branches.list()
 
-    assert not hasattr(dataplane, "_refuse_rename_with_branches"), (
-        "the branch refusal is back; it declines a rename that measurably orphans nothing"
-    )
+    assert not hasattr(dataplane, "_refuse_rename_with_branches"), "the branch refusal is back; it declines a rename that measurably orphans nothing"
     assert lance.dataset(uri).branches.list() == before

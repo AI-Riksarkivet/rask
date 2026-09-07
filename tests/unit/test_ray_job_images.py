@@ -3,7 +3,7 @@
 The medallion submits jobs through the Ray Jobs REST API with an ``entrypoint`` string that names an
 absolute path inside the Ray image — ``python /home/ray/jobs/<job>.py``. Nothing validates that path at
 submit time: a job the settings name but the image does not carry fails only on the cluster, as a job whose
-logs say "No such file or directory", after the mover has already committed to the Dapr redelivery cycle.
+logs say "No such file or directory", after the stage runner has already committed to the Dapr redelivery cycle.
 
 That is not hypothetical — it is how the P7a IIIF head's Ray branch was dead on arrival:
 An entrypoint setting defaulted to a job script the image did not carry, while

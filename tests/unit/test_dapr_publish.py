@@ -92,7 +92,7 @@ def test_bytes_payloads_are_measured_too() -> None:
 
 def test_hung_sidecar_still_raises_timeout() -> None:
     # ASSERTS: the original contract survives the guard — a wedged sidecar → TimeoutError,
-    # which every caller already maps (mover RETRY / best-effort swallow).
+    # which every caller already maps (stage runner RETRY / best-effort swallow).
     class _Hung:
         async def publish_event(self, **_kw: Any) -> None:
             await asyncio.sleep(60)

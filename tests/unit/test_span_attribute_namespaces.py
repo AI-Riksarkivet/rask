@@ -8,7 +8,7 @@ the code rather than taken on trust, and the analysis is the half that is right:
 
 * `lance.ingest.run_id` is `spec.run_id` — the ingest harvest's run.
 * `lance.lineage.run_id` is `lineage_doc.run_id`, and `promotion_lineage` (promotion.py) calls
-  `build_run_event(...)` and returns `LineageDoc.from_run_event(...)` — a run MINTED IN THE MOVER.
+  `build_run_event(...)` and returns `LineageDoc.from_run_event(...)` — a run MINTED IN THE STAGE RUNNER.
 
 They are two different ids. So the Fix's "change ingest/workflow.py to match" is **not implemented**:
 it would put two unrelated ids under one key, which is worse than two keys — an operator would then
@@ -24,7 +24,7 @@ What survives is the namespace hygiene, and that is what this gates. Two rules, 
 of the `lance.` namespace. The three write-result ones describe the SAME Lance commit in three
 services, so they become one shared `lance.write.*` set rather than three service-prefixed copies.
 
-**A service's domain segment belongs to that service.** This is what catches the mover's
+**A service's domain segment belongs to that service.** This is what catches the stage runner's
 `lance.lineage.*`: it stamps its own promotion run under the segment that names ANOTHER service, on a
 span whose every sibling attribute is `lance.medallion.*`. `lance.medallion.run_id` says "medallion's
 run", which is true and cannot be mistaken for a shared lineage identity.
@@ -52,10 +52,10 @@ SERVICE_DOMAINS = frozenset(p.name for p in (REPO / "services").iterdir() if p.i
 
 #: Domains that are NOT a service — a concept several services legitimately share. Each one has to
 #: earn its place here, and `write` earns it: `version`, `row_count` and `size_bytes` describe one
-#: Lance commit, and the producer, the media head and the mover all report the same commit shape.
+#: Lance commit, and the producer, the media head and the stage runner all report the same commit shape.
 SHARED_DOMAINS = frozenset({"write"})
 
-#: The ONE cross-domain attribute, with its reason. The medallion mover records whether the CATALOG
+#: The ONE cross-domain attribute, with its reason. The medallion stage runner records whether the CATALOG
 #: accepted its stage output (`ensure_stage_output` registers it; an unset `MEDALLION_CATALOG_URL`
 #: leaves it ungoverned). That is a catalog fact recorded on a medallion span, which is legitimate —
 #: unlike stamping your own run id under another service's segment.
@@ -98,7 +98,7 @@ def test_the_attribute_names_a_domain(owner: str, path: pathlib.Path, key: str) 
 def test_a_services_domain_segment_is_not_borrowed(owner: str, path: pathlib.Path, key: str) -> None:
     """Stamping your own value under another service's segment invites a join that cannot hold.
 
-    The mover minted its OWN promotion run and filed it under `lance.lineage.*`, so the key read as a
+    The stage runner minted its OWN promotion run and filed it under `lance.lineage.*`, so the key read as a
     shared lineage identity while `lance.ingest.run_id` — a genuinely different run — read as another
     one. Neither joins to the other, and the key names were the only thing suggesting they might.
     """

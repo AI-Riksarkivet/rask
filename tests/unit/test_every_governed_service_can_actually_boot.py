@@ -66,11 +66,7 @@ def test_every_such_service_is_given_an_answer_by_the_chart(auth_enabled: str) -
 
     for service in sorted(_services_that_refuse_to_boot_unauthenticated()):
         for deployment in _deployments_of(service, docs):
-            env = {
-                e["name"]
-                for container in deployment["spec"]["template"]["spec"]["containers"]
-                for e in (container.get("env") or [])
-            }
+            env = {e["name"] for container in deployment["spec"]["template"]["spec"]["containers"] for e in (container.get("env") or [])}
             if not env & set(SATISFIES):
                 unanswered.append(deployment["metadata"]["name"])
 
@@ -83,7 +79,7 @@ def test_every_such_service_is_given_an_answer_by_the_chart(auth_enabled: str) -
 def test_a_service_with_no_human_door_is_NOT_wired_to_the_assertion() -> None:
     """The other direction, and it cost two reverts to learn. `maintenance` and `notifications`
     mix in `FgaSettings` alone — "no human door: its routes are gated by the Dapr app token and it
-    only ever READS tuples, as itself" — and the medallion MOVERS render no OIDC either. Wiring the
+    only ever READS tuples, as itself" — and the medallion STAGE RUNNERS render no OIDC either. Wiring the
     assertion into any of them refuses a boot over an authentication mode they never had."""
     doorless = {"maintenance", "notifications"}
     wired = _services_that_refuse_to_boot_unauthenticated()

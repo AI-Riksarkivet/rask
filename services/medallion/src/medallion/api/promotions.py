@@ -1,14 +1,14 @@
 """The held-promotion door: the bus ingress that starts a review, and the route a person answers it on.
 
-**Why this lives on `medallion-producer` and not on the mover that held the promotion.**
+**Why this lives on `medallion-producer` and not on the stage runner that held the promotion.**
 `raise_workflow_event` resolves the workflow actor through the app-id of the process that calls it, so
 the route and the workflow instance must be in the SAME app. The quality gate runs in the
-`silver-to-gold` mover — a bus-only worker with no gateway row and no Ingress path — and giving it one
+`silver-to-gold` stage runner — a bus-only worker with no gateway row and no Ingress path — and giving it one
 would make a cascade stage publicly addressable to expose a single button. Hosting only the ROUTE here
 is worse than either: the sidecar looks for the instance under this app-id, does not find it, and
 accepts the call anyway. The operator sees their approval succeed and the promotion expires regardless.
 
-So the workflow is hosted HERE, beside the door, and the mover reaches it the way it reaches every
+So the workflow is hosted HERE, beside the door, and the stage runner reaches it the way it reaches every
 other stage — by publishing an event.
 """
 
@@ -112,7 +112,7 @@ class DecisionRequest(BaseModel):
 def instance_for(token: str) -> str:
     """The workflow instance id for a promotion, derived from the run token.
 
-    Deterministic because it is the only handle either side has: the mover publishes a hold and moves
+    Deterministic because it is the only handle either side has: the stage runner publishes a hold and moves
     on, and the door receives an id from a URL. A redelivered hold must re-attach to the review that
     is already open rather than asking the approver a second time.
     """
@@ -154,7 +154,7 @@ def promotion_object(spec: PromotionSpec) -> str:
 
 
 async def handle_promotion_held(event: dict[str, Any], *, client: _Client | None = None) -> dict[str, str]:
-    """Turn a mover's held promotion into a durable review instance. Testable half of the subscription."""
+    """Turn a stage runner's held promotion into a durable review instance. Testable half of the subscription."""
     try:
         spec = PromotionSpec.model_validate((event or {}).get("data") or {})
     except ValidationError:
@@ -313,7 +313,7 @@ async def show(
 
 
 def register_promotion_route(app: FastAPI, dapr_app: DaprApp | None = None) -> DaprApp:
-    """Subscribe to the movers' held-promotion topic (reusing the producer's ``DaprApp``)."""
+    """Subscribe to the stage runners' held-promotion topic (reusing the producer's ``DaprApp``)."""
     settings = get_settings()
     dapr_app = dapr_app or DaprApp(app)
 

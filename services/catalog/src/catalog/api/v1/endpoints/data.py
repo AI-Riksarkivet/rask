@@ -322,7 +322,7 @@ async def merge_insert_into_table(
     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
 
     Training-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``
-    record the version-pinned upstream this merge DERIVED FROM (a mover's merge from ``source@N`` — the
+    record the version-pinned upstream this merge DERIVED FROM (a stage runner's merge from ``source@N`` — the
     reproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries
     producer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.
 

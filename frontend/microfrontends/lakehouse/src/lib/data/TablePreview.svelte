@@ -86,7 +86,7 @@
 		untrack(() => load());
 	});
 
-	// #73: the Arrow preview was read ONCE per table and never again, so a compaction, a mover run or
+	// #73: the Arrow preview was read ONCE per table and never again, so a compaction, a stage runner run or
 	// anyone else's write left it showing rows that no longer exist — silently, because a stale table
 	// looks exactly like a fresh one. It rides the SAME `lineageFeed` the shell's bell does, so the
 	// preview and the notification above it can never disagree about when the estate changed.

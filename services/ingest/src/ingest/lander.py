@@ -338,9 +338,9 @@ def create_empty(dataset_uri: str, schema: pa.Schema, external_base: str | None 
     # STAMPED INTO THE SCHEMA AS WELL AS REGISTERED, and the two are not redundant. The manifest is
     # the authoritative record of which bases this dataset registered and is what `external_base_of`
     # reads first; the stamp records which base a `blob_uri` is RELATIVE to, and is what makes the
-    # data self-describing in the #21 sense — a mover that has never met the service that wrote it
+    # data self-describing in the #21 sense — a stage runner that has never met the service that wrote it
     # resolves the pointer from the dataset alone. A scanned descriptor's `blob_uri` is BASE-RELATIVE,
-    # so a mover that cannot resolve it cannot forward it, and the cascade would copy the bytes it was
+    # so a stage runner that cannot resolve it cannot forward it, and the cascade would copy the bytes it was
     # built to stop copying.
     schema = blobs.stamp_external_base(schema, external_base)
     ds = lance.write_dataset(

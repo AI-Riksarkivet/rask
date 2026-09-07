@@ -2,7 +2,7 @@
 
 `LocalCatalog` writes datasets straight to the object store and records versions in a Python list.
 That is fine for a test and wrong for a cluster: a commit nobody else can see is a commit the
-cascade cannot ride, because the event that wakes a mover is the CATALOG's publication of a new
+cascade cannot ride, because the event that wakes a stage runner is the CATALOG's publication of a new
 version. Registering locally means the run lands its data and nothing downstream ever learns of it.
 
 **The two doors, and why they are two** (D6, §0 C10):

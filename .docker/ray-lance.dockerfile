@@ -34,14 +34,14 @@ FROM rayproject/ray:2.58.0-py312-cpu@sha256:c3c9573c5c6bfe4127885f79622d6a32064d
 # in-process. Drop this + the round-trip when lance-ray gains inline-blob-preserving read/write.
 # THE FLEET'S OWN STACK, so the baked production jobs can actually run.
 #
-# `ray_stage_job.py` — the per-stage cascade transform every mover submits — imports
+# `ray_stage_job.py` — the per-stage cascade transform every stage runner submits — imports
 # `service_kit.lakehouse`. This image did not provide it, so the job died on line 65 the moment
 # anything submitted it. MEASURED on the k3s estate, driving a real 50k `/produce`:
 #
 #   ray-silver-e2e-verify-…  FAILED
 #   ModuleNotFoundError: No module named 'service_kit'
 #
-# while the mover logged `medallion_stage_dispatched_to_workflow` and reported a terminal job — a
+# while the stage runner logged `medallion_stage_dispatched_to_workflow` and reported a terminal job — a
 # dead cascade wearing a dispatched one. Pinned by `test_a_baked_job_gets_every_repo_package_it_imports`.
 #
 # EXPORTED, NOT SYNCED. `.docker/ray-cluster.dockerfile` builds a `/opt/venv` from the root lock, which
@@ -76,7 +76,7 @@ RUN pip install --no-cache-dir "opentelemetry-sdk==1.43.0" "opentelemetry-export
 # dead on arrival (R27 audit, 2026-07-28: an entrypoint setting pointed at a file this COPY
 # omitted). Pinned by tests/unit/test_ray_job_images.py.
 #   ray_lance_job.py        — the standalone write/index/evolve/compact demo (make ray-demo)
-#   ray_stage_job.py        — the per-stage cascade transform a mover submits (MEDALLION_RAY_ENABLED)
+#   ray_stage_job.py        — the per-stage cascade transform a stage runner submits (MEDALLION_RAY_ENABLED)
 #   ray_train_job.py        — the TRAINING job the trainer consumer submits (#115b, docs/RAY-TRAIN.md D2–D4)
 COPY scripts/ray_lance_job.py scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
 # The DUMMY lane (A11): a sealed runner whose transform is trivial but whose mechanics are real —

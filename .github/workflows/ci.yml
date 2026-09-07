@@ -478,8 +478,8 @@ jobs:
         run: make e2e-ci
 
   # #53 Ray-path live proof. Its OWN job (not folded into e2e-stack): the train head shares
-  # MEDALLION_RAY_ENABLED with the movers, so a ray-ON stack is a different deploy — flipping it on mid-run
-  # against the openbao-ON core stack races the OpenBao secret store and hangs the movers. This job deploys
+  # MEDALLION_RAY_ENABLED with the stage runners, so a ray-ON stack is a different deploy — flipping it on mid-run
+  # against the openbao-ON core stack races the OpenBao secret store and hangs the stage runners. This job deploys
   # the ray-ON recipe (openbao OFF → no secret race, compute+ray+quality+auth+fga ON) from the start plus a
   # real KubeRay head, then runs both Ray suites. `make e2e-ray-ci` == this job (scripts/ray_e2e_stack.sh).
   # Fork-gated like the other live jobs. Observability is off to fit the runner (train's GreptimeDB-metrics

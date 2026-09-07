@@ -346,7 +346,7 @@ def test_the_terminal_event_matches_what_the_CASCADE_HEAD_filters_on() -> None:
 def test_a_FAILED_run_does_NOT_wake_the_cascade() -> None:
     """The head filters on COMPLETE for a reason: a FAIL announces that data is NOT there.
 
-    Firing the cascade off one would kick every downstream mover over rows that were never written,
+    Firing the cascade off one would kick every downstream stage runner over rows that were never written,
     and each would then fail for its own unrelated-looking reason.
     """
     from medallion.core.config import MedallionSettings

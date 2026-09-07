@@ -5,7 +5,7 @@ FIXED in 10.0.0 — see ``docs/architecture/lance-blob-v2-findings.md``), so any
 output with a second scan
 BY POSITION is misaligned the moment one row's payload is null — which is exactly the medallion's own
 "a failed harvest, a skipped page" case. Before this guard the cascade turned one un-harvested page into
-``ArrowInvalid: Column 1 named payload expected length 3 but got length 2``, which the movers classify as
+``ArrowInvalid: Column 1 named payload expected length 3 but got length 2``, which the stage runners classify as
 a TRANSIENT failure: a RETRY storm re-reading every blob from S3 up to maxDeliver, then the DLQ, for a
 condition redelivery can never fix.
 

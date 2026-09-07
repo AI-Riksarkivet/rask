@@ -105,7 +105,7 @@ def test_declaring_a_lane_persists_it_and_answers_with_the_stored_record(client:
     assert response.json()["project"] == "acme", "the project must come from the gated path, not the body"
 
     # Read back through the registry directly — no request, no app, no shared memory. This is the
-    # same call a mover pod makes, and it is what "survives a pod restart" reduces to.
+    # same call a stage runner pod makes, and it is what "survives a pod restart" reduces to.
     stored = transform_specs.get_spec(control_root, {}, "acme", "dummy")
     assert stored is not None and stored.task == VALID["task"]
 

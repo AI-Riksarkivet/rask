@@ -10,7 +10,7 @@ Argo step, a person with credentials) meets through HTTP and nothing else:
    an error, never a silent downgrade.
 2. Where the project has a DECLARED `GateSpec`, that record governs the key column and its required
    columns are enforced on top of the caller's. An external writer — the party trusted least —
-   otherwise got a weaker gate than a mover, which resolves the same declaration for itself.
+   otherwise got a weaker gate than a stage runner, which resolves the same declaration for itself.
 
 Driven through a real ``dir`` namespace and real pylance writes, like `tests/unit/test_publication.py`:
 the subject is what the assertions actually do to a real dataset, and a doubled namespace would prove

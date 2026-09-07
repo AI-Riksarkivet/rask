@@ -1,13 +1,13 @@
 """Transform-spec registry — a TRANSFORM DECLARED as a governed record instead of a Deployment's env block.
 
 A medallion transform (one bronze->silver edge: read this, run that, write there) used to exist only as
-environment on a mover pod. That makes the transform invisible to governance — nothing can list them,
+environment on a stage runner pod. That makes the transform invisible to governance — nothing can list them,
 review them, or gate who may add one — and it makes an undeclared transform fail deep, at the Ray submit
 seam, where the error names an image rather than the key nobody declared.
 
 This is the same stateless-over-object-store shape as ``maintenance_policies`` and the warehouse
 registry, chosen for the same reason: one service WRITES (the catalog, admin-gated) and a different
-one READS (the medallion mover, which holds no catalog client on its submit path). Both need one
+one READS (the medallion stage runner, which holds no catalog client on its submit path). Both need one
 format, so the format lives here rather than as two copies that drift.
 
 Each spec is one JSON record under ``<control_root>/_transforms/``, keyed by ``(project, name)`` —
@@ -60,7 +60,7 @@ _RESERVED_PARAM_PREFIX = "RASK_PARAM_"
 
 
 class TransformSpec(BaseModel):
-    """One declared TRANSFORM. Written by the catalog's admin-gated door, read by the mover."""
+    """One declared TRANSFORM. Written by the catalog's admin-gated door, read by the stage runner."""
 
     model_config = ConfigDict(extra="forbid")
 

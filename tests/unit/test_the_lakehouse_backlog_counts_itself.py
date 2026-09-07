@@ -55,8 +55,7 @@ def test_the_header_totals_match_the_rows() -> None:
     real_open = real_tracked - real_struck
 
     assert (tracked, open_, struck) == (real_tracked, real_open, real_struck), (
-        f"header says {tracked} tracked / {open_} open / {struck} struck; "
-        f"the rows say {real_tracked} / {real_open} / {real_struck}"
+        f"header says {tracked} tracked / {open_} open / {struck} struck; the rows say {real_tracked} / {real_open} / {real_struck}"
     )
 
 

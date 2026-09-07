@@ -51,7 +51,7 @@ def test_a_clean_stage_publishes_when_publishing_drives_the_cascade() -> None:
 def test_a_clean_stage_still_publishes_when_a_topic_also_exists() -> None:
     """There is ONE door. A downstream topic does not offer a second way to promote.
 
-    This asserted TRIGGER while `GateOutcome.TRIGGER` existed -- the mover firing the next stage's
+    This asserted TRIGGER while `GateOutcome.TRIGGER` existed -- the stage runner firing the next stage's
     topic itself, promoting without the catalog ruling. That was the second enforcement point
     `publication.py` exists to prevent, and it was the DEFAULT path because
     MEDALLION_CASCADE_VIA_PUBLISH defaulted False. The stage still promotes; it promotes through the
@@ -106,7 +106,7 @@ def test_publishing_requires_a_catalog() -> None:
     This precondition used to be carried by `MEDALLION_CASCADE_VIA_PUBLISH`, whose settings validator
     refused the flag without a reachable catalog — so while two doors existed the publish branch could
     not be reached without one. Deleting the flag deleted the guard, and because
-    `publish_stage_output` RAISES on an empty catalog URL, every ungoverned mover answered its trigger
+    `publish_stage_output` RAISES on an empty catalog URL, every ungoverned stage runner answered its trigger
     RETRY, forever, on a redelivery that cannot set an env var. Found by running the suite, not by
     reading the diff.
     """

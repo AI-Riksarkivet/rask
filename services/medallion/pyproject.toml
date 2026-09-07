@@ -1,7 +1,7 @@
 [project]
 name = "medallion"
 version = "0.1.0"
-description = "Medallion service — bronze/silver/gold producer and movers: Dapr pub/sub events, Lance writes, and the Ray Jobs REST submit seam."
+description = "Medallion service — bronze/silver/gold producer and stage runners: Dapr pub/sub events, Lance writes, and the Ray Jobs REST submit seam."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [

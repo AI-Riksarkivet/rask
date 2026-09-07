@@ -17,7 +17,7 @@ metadata:
   labels: {{- include "lance.labels" $ | nindent 4 }}
 automountServiceAccountToken: false
 {{- end }}
-{{- range .Values.medallion.movers }}
+{{- range .Values.medallion.stageRunners }}
 ---
 apiVersion: v1
 kind: ServiceAccount

@@ -12,7 +12,7 @@ onto the stage trigger. From there the range dies quietly:
 `runners/dummy/job.py` reads `BASE_VERSION` as "the delta boundary … from the publication event,
 which carries the exact range". It is never set, so the job reads the whole tier every time.
 
-What this is and is not: the Ray stage-job entrypoint is per-mover OPT-IN and no mover row in
+What this is and is not: the Ray stage-job entrypoint is per-stage runner OPT-IN and no stage runner row in
 `chart/values.yaml` declares one, so nothing pays the O(tier) cost in the shipped estate today. It is
 dead config on an opt-in lane, not a live regression -- but D1's advertised "O(delta), not a tier
 rescan" property is unobtainable by any lane that switches the Ray stage job on, and two docstrings

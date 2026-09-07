@@ -61,7 +61,7 @@ The non-fleet services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` 
 rather than the fleet's flat-module layout — that half of the old paragraph still holds. What changed
 is the ENTRYPOINT: a `main.py` that opens its own `app = FastAPI(...)` is now the exception to
 justify, not the norm (docs/DECISIONS.md "The Python estate audit" DUP-12 counted eight of them repeating one boot, and the
-copies had drifted — the medallion mover had lost its request-id layer entirely).
+copies had drifted — the medallion stage runner had lost its request-id layer entirely).
 
 A thin fleet-layout entrypoint is **~20 lines** — import routers + a lifespan from the domain package, call the factory. `compute/__init__.py`:
 

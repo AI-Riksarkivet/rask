@@ -9,7 +9,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 ## Orientation
 
 - **Services** (FastAPI): `catalog` (REST catalog + model registry), `lineage` (OpenLineage → Apache AGE
-  graph), the medallion **movers** (`bronze-to-silver`, `silver-to-gold`, `media-to-silver`),
+  graph), the medallion **stage runners** (`bronze-to-silver`, `silver-to-gold`, `media-to-silver`),
   `medallion-producer` (the `/produce` + `/train` head), `compaction`, `gateway`, `web`.
 - **Stores**: `age-postgres` (the lineage graph **AND** OpenFGA's datastore — one pod, dual-purpose),
   `rustfs` (the Lance object store — all medallion + registry data), `openfga` (authz), `openbao` (secrets,
@@ -101,14 +101,14 @@ restart the pod. If the pool is down, see [AGE down](#age-postgres-down--lineage
 **Symptom.** `/produce` ran but the cascade stops mid-way — e.g. `bronze$events` exists but `silver$features`
 never lands. `medallion_stage_transitions_total` flat for the missing stage.
 
-**Cause (in order of likelihood).** (1) The stage mover was **FGA-denied** — it lacks the grant to write its
+**Cause (in order of likelihood).** (1) The stage runner was **FGA-denied** — it lacks the grant to write its
 target (`medallion_stage_denied` rises); re-seed with `scripts/seed_medallion_fga.sh`. (2) A **quality gate**
 blocked a bad batch (`medallion_stage_quality_blocked`) — by design, the bad batch does not promote; the
 failed run is in the lineage graph. (3) With Ray on, the stage Ray job failed/timed out — check
 `ray job list` on `ray-lance-head`. (4) The delivery exhausted retries and parked — see
 [DLQ parking](#dlq-parking--a-delivery-gave-up).
 
-**Diagnose.** Mover logs (`kubectl logs -l app.kubernetes.io/component=bronze-to-silver`); grep
+**Diagnose.** Stage runner logs (`kubectl logs -l app.kubernetes.io/component=bronze-to-silver`); grep
 `medallion_stage_denied` / `medallion_quality_blocked` / `ray_stage_job`.
 
 **Act.** Re-seed FGA for a denial; a quality block is expected (fix the source data); resubmit/replay after
@@ -122,7 +122,7 @@ logs. A specific cascade item is permanently stalled after exhausting its retry 
 **Cause.** Dapr's Resiliency retry policy was exhausted for a delivery, so the sidecar published it to the
 DLQ topic and acked the original (no infinite retry loop). The message is retained in JetStream.
 
-**Diagnose.** The log line carries `app`, `source_topic`, and `token` — trace that token through the mover
+**Diagnose.** The log line carries `app`, `source_topic`, and `token` — trace that token through the stage runner
 logs to the root failure (a bad payload, a persistent downstream outage).
 
 **Act.** Fix the root cause, then **replay** from the retained JetStream stream (or re-trigger the stage).

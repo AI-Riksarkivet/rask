@@ -107,9 +107,9 @@ if TYPE_CHECKING:
 # was exactly the state that makes every read API lie.
 #
 # `stage` is the tier provenance stamp every governed dataset in the estate carries. The head this
-# plane replaced wrote it AT INGEST — it absorbed the retired raw→bronze mover when R23 made bronze
+# plane replaced wrote it AT INGEST — it absorbed the retired raw→bronze stage runner when R23 made bronze
 # the first governed tier — and dropping it was recorded here as a cheap, non-fatal loss because the
-# movers' `_stamp_stage` appends the column when it is absent.
+# stage runners' `_stamp_stage` appends the column when it is absent.
 #
 # That was wrong, and measurably so. The READ path hard-requires it: the media viewer projects
 # `_PAGE_COLUMNS = ["id", "source_uri", "stage"]` (`viewer/api/v1/endpoints/pages.py:37`), and that
@@ -125,7 +125,7 @@ if TYPE_CHECKING:
 # medallion head without inheriting it): a hex SHA-256 over the bytes AS FETCHED, computed before
 # the write and never recomputed — a digest taken from the stored copy would agree with that copy
 # however corrupt it is, which is precisely the failure fixity exists to catch. Same column name as
-# the medallion writer's, so the movers' generic carry-forward keeps gold rows traceable to the
+# the medallion writer's, so the stage runners' generic carry-forward keeps gold rows traceable to the
 # exact page bytes they were read from whichever head landed them (pinned by
 # tests/unit/test_bronze_writers_compat.py).
 #
@@ -186,7 +186,7 @@ BRONZE_SCHEMA = pa.schema(
 )
 
 #: What `stage` holds at ingest. Bronze is the first GOVERNED tier (R23: raw is the external world),
-#: so the cascade's later movers re-stamp their own tier as the rows move up.
+#: so the cascade's later stage runners re-stamp their own tier as the rows move up.
 BRONZE_STAGE = "bronze"
 
 
@@ -720,7 +720,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
 
     if isinstance(catalog, CommittingCatalog):
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot
-        # ride: the event that wakes a mover is the catalog's publication of a new version, so a
+        # ride: the event that wakes a stage runner is the catalog's publication of a new version, so a
         # locally-recorded commit lands the data and tells nothing downstream it happened.
         version, tier_rows = catalog.commit(
             spec.namespace,

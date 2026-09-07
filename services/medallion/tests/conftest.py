@@ -7,7 +7,7 @@ stub `ensure_stage_output` to drive the write path — and there are nine — wo
 connection error while testing something else entirely.
 
 DEFAULTED, NOT DISABLED. The stub answers what the live catalog answers today (`server_mediated`,
-measured against `bind86-gold$catalog` with the mover's own credential), and it RECORDS its calls, so
+measured against `bind86-gold$catalog` with the stage runner's own credential), and it RECORDS its calls, so
 a test that cares about the authorization can assert on it rather than re-stub. The gate that proves
 the call happens at all lives in `tests/unit/test_the_cascade_authorizes_its_own_writes.py`, where it
 is checked against the parsed source rather than against a double — a double can only show that a

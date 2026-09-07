@@ -1,7 +1,7 @@
 """Transform-lane declaration endpoints — the governed door a medallion lane is DECLARED through.
 
 A lane (one bronze->silver edge: read this, run that baked job, write there) used to exist only as
-environment on a mover Deployment. Nothing could enumerate the lanes, review one, or gate who adds
+environment on a stage runner Deployment. Nothing could enumerate the lanes, review one, or gate who adds
 one, and a trigger naming an undeclared lane failed at the Ray submit seam with an error that named
 the image rather than the key. This door makes a lane a record like every other governed artefact.
 
@@ -64,11 +64,11 @@ def _as_request_validation(exc: ValidationError) -> RequestValidationError:
     """Re-raise the spec model's own errors as a request-validation 422.
 
     The platform-level rules (safe lane key, registered task, namespaced params) live on
-    ``TransformSpec`` so the catalog and the mover share ONE definition — but that means they fire
+    ``TransformSpec`` so the catalog and the stage runner share ONE definition — but that means they fire
     when the handler constructs the spec, not when FastAPI parses the body, and a bare pydantic
     ``ValidationError`` escaping a handler is a 500. A malformed declaration is the caller's fault
     and must read as one, so the errors are translated rather than the rules duplicated onto the
-    request model (where the two copies would drift, and the mover's copy is the one that matters).
+    request model (where the two copies would drift, and the stage runner's copy is the one that matters).
 
     ``loc`` is prefixed with ``body`` so the field renders as ``body.name``, matching every other
     422 this service emits.
@@ -90,7 +90,7 @@ def _unknown_transform(project: str, name: str) -> RequestValidationError:
     """The 422 an undeclared transform earns — shaped so the handler renders ``body.name``.
 
     Built rather than raised inline so the message is identical everywhere a lane is resolved: the
-    operator sees the same sentence whether they typed the key at this door or a mover resolved it
+    operator sees the same sentence whether they typed the key at this door or a stage runner resolved it
     from a trigger.
     """
     return RequestValidationError(

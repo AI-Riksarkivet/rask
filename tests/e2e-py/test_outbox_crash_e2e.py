@@ -105,7 +105,7 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
     """Spawn a real producer, let it stage, then SIGKILL it before it can publish or drop.
 
     The child stages the event and then blocks forever. We kill it with -9 from the parent: the process dies
-    with the staged object on disk and no publish — byte-for-byte the state a crashed mover leaves behind.
+    with the staged object on disk and no publish — byte-for-byte the state a crashed stage runner leaves behind.
     """
     child = textwrap.dedent(f"""
         import sys, time

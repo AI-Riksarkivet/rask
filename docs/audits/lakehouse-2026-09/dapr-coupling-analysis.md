@@ -186,7 +186,7 @@ guard lives (900 KiB hard cap, 64 KiB warn).
   per service (credentialed NATS is already in the chart per `Chart.yaml:33`) and the envelope
   becomes your own schema.
 - Component scopes → NATS account and subject permissions.
-- `queueGroupName` per mover → JetStream durable consumer naming.
+- `queueGroupName` per stage runner → JetStream durable consumer naming.
 - W3C trace context through the sidecar's instrumented gRPC client → `traceparent` in NATS
   headers, injected by hand (`UnitTask.traceparent` in ingest already does this).
 - The catalog's broadcast subscription (no queue group, every replica gets every event) → an
@@ -194,7 +194,7 @@ guard lives (900 KiB hard cap, 64 KiB warn).
 - The claim-check guard stays; it is application code.
 
 **Effort class.** Moderate. The publish side is a few adapters. The subscribe side is 25 routes
-becoming consumers, and each mover's `RETRY`-return-to-redeliver contract becomes a nak.
+becoming consumers, and each stage runner's `RETRY`-return-to-redeliver contract becomes a nak.
 
 ### 4.2 Actors
 
@@ -357,7 +357,7 @@ The bound is real but it is not evenly spread, and the file counts hide where it
 - **If the question is "can rask as it exists today run without Dapr"**: not without rewriting
   annotator, notifications, ingest, medallion and flows, which is ~5,900 lines of model code plus
   ~110 test files, plus a security model built from scratch.
-- **The cheapest honest first move** is not removal. It is making one mover consume its trigger
+- **The cheapest honest first move** is not removal. It is making one stage runner consume its trigger
   through nats-py behind the existing seam, with the delivery-auth question answered for that one
   path. That tells you whether the external-consumer contract holds before anything is deleted,
   and it leaves every ruling intact.

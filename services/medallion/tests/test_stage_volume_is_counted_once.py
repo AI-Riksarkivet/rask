@@ -93,7 +93,7 @@ def test_a_caller_with_NO_key_is_unchanged(counted: dict[str, list[int]]) -> Non
 
 
 def test_the_dedupe_set_is_BOUNDED() -> None:
-    """A metrics guard, not a ledger: an unbounded set in a long-lived mover is a leak, and the
+    """A metrics guard, not a ledger: an unbounded set in a long-lived stage runner is a leak, and the
     duplicates worth catching arrive seconds apart."""
     for i in range(metrics._COUNTED_VOLUME_MAX + 50):
         metrics.record_stage_completion("t", duration_seconds=0.0, rows=1, volume_key=f"t:{i}")

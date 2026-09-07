@@ -70,5 +70,5 @@ service-door principal (app token + allowlisted subject — how the Ray trainer'
 | **Search** | `GET /search` | |
 | **Health** | `GET /livez`, `GET /readyz` | |
 
-Medallion movers, the compaction sweep, and the Ray train job are Dapr/queue-driven (no public REST surface),
+Medallion stage runners, the compaction sweep, and the Ray train job are Dapr/queue-driven (no public REST surface),
 so they are not in these specs; their contract is the OpenLineage events they publish, consumed here.

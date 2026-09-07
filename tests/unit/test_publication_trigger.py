@@ -7,7 +7,7 @@ Two defects sit behind "the cascade moves no data", and they are independent:
 * the trigger named a TABLE, not a range, so a consumer had to rescan or keep its own bookmark, and a
   table's second arrival woke nothing useful.
 
-And a third, quieter one: without `project` on the trigger the mover cannot resolve its tier roots,
+And a third, quieter one: without `project` on the trigger the stage runner cannot resolve its tier roots,
 falls back to the empty `MEDALLION_FROM_URI`/`MEDALLION_TO_URI`, and SKIPS its compute path — the
 cascade "runs" and moves nothing at all.
 """
@@ -45,7 +45,7 @@ class _Dapr:
         self.published.append(json.loads(kwargs["data"]))
 
 
-#: The declared DAG, as the chart derives it from `medallion.movers[]`. The head drives only lanes it
+#: The declared DAG, as the chart derives it from `medallion.stageRunners[]`. The head drives only lanes it
 #: is told about — it used to stamp the bronze topic on every publication regardless of tier.
 ROUTES = {"bronze": "medallion.bronze", "silver": "medallion.silver", "bronze-media": "medallion.media"}
 
@@ -64,9 +64,9 @@ def _event(action: str = "table_published", object_id: str = "table:acme-bronze$
     return {"data": {"action": action, "object_id": object_id, "event_id": "evt-1", "extra": extra}}
 
 
-#: What a MOVER authenticates to the catalog as (`chart/values.yaml` `medallion.movers[].serviceIdentity`).
+#: What a STAGE RUNNER authenticates to the catalog as (`chart/values.yaml` `medallion.stageRunners[].serviceIdentity`).
 #: Under one door this — not a person — is the actor of every publication that drives the cascade.
-_MOVER = "service-bronze-to-silver"
+_STAGE_RUNNER = "service-bronze-to-silver"
 
 
 def _with_actor(event: dict[str, Any], actor: str | None) -> dict[str, Any]:
@@ -98,7 +98,7 @@ async def test_a_publication_triggers_the_cascade_WITH_the_range() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_trigger_carries_the_PROJECT_or_the_mover_moves_nothing() -> None:
+async def test_the_trigger_carries_the_PROJECT_or_the_stage_runner_moves_nothing() -> None:
     """The quiet half of B8.
 
     `handle_stage` resolves its tier roots only when the trigger carries a project; otherwise it uses
@@ -172,12 +172,12 @@ async def test_a_publish_OUTAGE_retries() -> None:
 async def test_the_trigger_carries_the_CATALOG_VENDED_location() -> None:
     """I2 from the consuming end, and the reason the cascade moved nothing.
 
-    The catalog vends a table at `s3://<warehouse>/<hash>_<ns>$<name>`; the mover composed
+    The catalog vends a table at `s3://<warehouse>/<hash>_<ns>$<name>`; the stage runner composed
     `{project_root}/medallion/{namespace}` and read a path no catalog-written table has ever occupied.
-    So the cascade fired correctly, woke the mover, and found an empty location — for every
+    So the cascade fired correctly, woke the stage runner, and found an empty location — for every
     ingest-written table, silently.
 
-    The fix is not for the mover to guess better. The catalog already HAS the location, so it puts it
+    The fix is not for the stage runner to guess better. The catalog already HAS the location, so it puts it
     on the event and the trigger carries it; nothing downstream composes anything.
     """
     dapr = _Dapr()
@@ -215,10 +215,10 @@ async def test_the_lane_name_carries_NO_tenant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_lane_name_is_EXACTLY_what_a_mover_compares_against() -> None:
+async def test_the_lane_name_is_EXACTLY_what_a_stage_runner_compares_against() -> None:
     """Couples the two sides in one assertion instead of restating a literal on each.
 
-    A mover's discriminator is `arrived != settings.from_dataset`, and a deployment sets that from
+    A stage runner's discriminator is `arrived != settings.from_dataset`, and a deployment sets that from
     `bronze_dataset`. Asserting the produced name equals that setting means a change to either side
     fails here rather than in a cluster, silently, as a DROP nobody sees.
     """
@@ -233,7 +233,7 @@ async def test_the_lane_name_is_EXACTLY_what_a_mover_compares_against() -> None:
 @pytest.mark.asyncio
 async def test_a_DIFFERENT_table_is_a_DIFFERENT_lane() -> None:
     """Lanes are per-table, not one global lane — the page lane and the events lane are distinct
-    movers subscribed to the same topic, and each must see only its own."""
+    stage runners subscribed to the same topic, and each must see only its own."""
     dapr = _Dapr()
 
     await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
@@ -313,9 +313,9 @@ async def test_the_trigger_carries_the_PERSON_the_catalog_resolved_so_the_cascad
 
     THIS USED TO READ THE `actor`, and the reasoning was half right. The actor IS the last verified
     identity on a publication a person performed — but under one door the publications that matter are
-    performed by a MOVER, which authenticates to the catalog as itself. So the field this head filled
+    performed by a STAGE RUNNER, which authenticates to the catalog as itself. So the field this head filled
     from `actor` said `service-bronze-to-silver`, and every silver→gold failure addressed an inbox
-    actor named after a mover: role-shaped, unread, and indistinguishable from a delivery.
+    actor named after a stage runner: role-shaped, unread, and indistinguishable from a delivery.
 
     The catalog resolves it now (`publication.publication_originator`), because it is the only
     component that knows whether its caller was a person or a service, and hands the answer over on
@@ -336,7 +336,7 @@ async def test_a_SERVICE_publication_carries_no_originator_rather_than_a_fake_on
     `transform.py` treats present-and-wrong far more harshly than absent."""
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _with_actor(_event(), f"user:{_MOVER}"))
+    await handle_publication(dapr, _Settings(), _with_actor(_event(), f"user:{_STAGE_RUNNER}"))
 
     assert "originator" not in dapr.published[0]
 
@@ -345,13 +345,13 @@ async def test_a_SERVICE_publication_carries_no_originator_rather_than_a_fake_on
 async def test_the_ACTOR_is_never_read_as_the_person_the_cascade_is_for() -> None:
     """The defect's own signature, pinned so the guess cannot come back.
 
-    A cascade publication's actor is the mover. Reading it here is what put a service identity on the
+    A cascade publication's actor is the stage runner. Reading it here is what put a service identity on the
     trigger; the rule that a principal must name a PERSON (trap 4) now lives at the catalog's
     resolver, where the caller's kind is actually known — `tests/unit/test_cascade_originator.py`
     covers the wildcards and usersets it refuses.
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _with_actor(_event(), f"user:{_MOVER}"))
+    await handle_publication(dapr, _Settings(), _with_actor(_event(), f"user:{_STAGE_RUNNER}"))
 
-    assert _MOVER not in json.dumps(dapr.published[0])
+    assert _STAGE_RUNNER not in json.dumps(dapr.published[0])

@@ -42,17 +42,16 @@ def _issued_verbs() -> set[str]:
 
 
 def _granted_verbs() -> set[str]:
-    match = re.search(r'^\s*verbs:\s*\[([^\]]+)\]', ROLE.read_text(), re.MULTILINE)
+    match = re.search(r"^\s*verbs:\s*\[([^\]]+)\]", ROLE.read_text(), re.MULTILINE)
     assert match, "no verbs list in the RayJob Role — the parser is broken, not the chart"
-    return {v.strip().strip('"\'') for v in match.group(1).split(",")}
+    return {v.strip().strip("\"'") for v in match.group(1).split(",")}
 
 
 def test_the_role_grants_nothing_the_executor_does_not_issue() -> None:
     granted, issued = _granted_verbs(), _issued_verbs()
     assert issued, "no HTTP calls parsed out of the executor — the parser is broken"
     assert not (granted - issued), (
-        f"the Role grants verbs the executor never issues: {sorted(granted - issued)}. "
-        "`list` on rayjobs enumerates every tenant's job in the namespace."
+        f"the Role grants verbs the executor never issues: {sorted(granted - issued)}. `list` on rayjobs enumerates every tenant's job in the namespace."
     )
 
 

@@ -15,7 +15,7 @@ THE MECHANISM. With `medallion.projectsEnabled`, `medallion.workflow._qualified`
 `seed_medallion_namespaces.py` read the chart's BARE names and had no `--project` at all, so it could
 only ever create the unqualified set: namespaces the cascade will never ask for, and none of the ones
 it will. Every tenant's tiers were therefore unprovisioned by construction, and the failure surfaced
-one hop from the end, in a mover log, as a permissions error.
+one hop from the end, in a stage runner log, as a permissions error.
 
 That script's own docstring already names this failure class, one level up — "authorization and
 existence were seeded by different files and only one of them ran". It recurred one level down
@@ -77,7 +77,7 @@ def test_the_seeder_and_the_runtime_agree(project: str, name: str, expected: str
     assert runtime(project, name) == expected, f"the RUNTIME would ask for {runtime(project, name)!r}"
     assert seed(project, name) == runtime(project, name), (
         "the seeder provisions one name and the cascade asks for another — the tier will not exist "
-        "when the mover reaches it, and the refusal will read as a permissions error"
+        "when the stage runner reaches it, and the refusal will read as a permissions error"
     )
 
 
@@ -110,6 +110,6 @@ def test_the_names_the_seeder_would_actually_create_are_qualified() -> None:
     assert for_tenant, "a project-scoped seed produced no namespaces"
     offenders = [n for n in for_tenant if not n.startswith("bind86-")]
     assert not offenders, (
-        f"the seeder would create {offenders} while the cascade asks for bind86-prefixed names, so those tiers will not exist when a mover reaches them"
+        f"the seeder would create {offenders} while the cascade asks for bind86-prefixed names, so those tiers will not exist when a stage runner reaches them"
     )
     assert len(for_tenant) == len(unqualified), "qualification changed how MANY namespaces are seeded, which it must not"

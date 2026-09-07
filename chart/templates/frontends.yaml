@@ -50,13 +50,13 @@ zones additionally get the media plane's upstreams, scoped per zone.
 {{- end -}}
 {{- if $root.Values.medallion.enabled -}}
 {{- $expected = append $expected (printf "LINEAGE:%s" $root.Values.medallion.producer.daprAppId) -}}
-{{- range $root.Values.medallion.movers -}}
+{{- range $root.Values.medallion.stageRunners -}}
 {{- $expected = append $expected (printf "MEDALLION:%s" .daprAppId) -}}
 {{- end -}}
 {{- $expected = append $expected (printf "TRAINING:%s" $root.Values.medallion.producer.daprAppId) -}}
 {{- if $root.Values.dapr.resiliency.enabled -}}
 {{- $expected = append $expected (printf "DLQ:%s" $root.Values.medallion.producer.daprAppId) -}}
-{{- range $root.Values.medallion.movers -}}
+{{- range $root.Values.medallion.stageRunners -}}
 {{- $expected = append $expected (printf "DLQ:%s" .daprAppId) -}}
 {{- end -}}
 {{- end -}}

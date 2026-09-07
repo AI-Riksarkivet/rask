@@ -4,7 +4,7 @@ The delimiter was hand-typed as a bare ``"$"`` in seventeen places — five env-
 three ``os.getenv`` defaults, two module constants, several ``delimiter: str = "$"`` params, and the
 parse sites that ``.split("$")`` / ``.partition("$")`` a governed table id. Every one must resolve
 through ``service_kit.lakehouse.naming.CATALOG_DELIMITER`` so the id the catalog mints and the id every
-producer/mover/reader parses cannot drift apart. This gate fails if a bare literal reappears in any of
+producer/stage runner/reader parses cannot drift apart. This gate fails if a bare literal reappears in any of
 those delimiter contexts.
 
 Regex-embedded delimiters (``DATASET_PATTERN = r"...\\$..."``) are a separate concern and out of

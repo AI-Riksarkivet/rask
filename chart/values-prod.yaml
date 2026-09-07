@@ -14,18 +14,18 @@ image:
   # web:     { tag: v1.2.3 }   # the released web image tag
 
 # --- Governance ON — Dex OIDC + OpenFGA. auth.enabled governs the catalog + lineage; medallion.fgaEnabled
-# additionally governs the bronze→silver→gold movers' WRITE path (can_create_table / can_promote).
-# PREREQUISITE: seed the mover-identity grants first (scripts/seed_medallion_fga.sh) or the movers fail
+# additionally governs the bronze→silver→gold stage runners' WRITE path (can_create_table / can_promote).
+# PREREQUISITE: seed the stage runner-identity grants first (scripts/seed_medallion_fga.sh) or the stage runners fail
 # closed and the pipeline stalls. ------------------------------------------------------------------
 auth:
   enabled: true
   lockRootCreate: true # prod: a token alone can't create root namespaces — needs a warehouse create grant
 medallion:
   fgaEnabled: true
-  # 1, NOT 2 (audit 2026-07-14 claim-drift #2): the mover single-flight lock is PROCESS-LOCAL
+  # 1, NOT 2 (audit 2026-07-14 claim-drift #2): the stage runner single-flight lock is PROCESS-LOCAL
   # (transform.py), so 2 replicas can race concurrent overwrites of the same stage dataset.
   # Raise only after a cross-pod lock ships.
-  moverReplicas: 1
+  stageRunnerReplicas: 1
   producer:
     expose: false # /produce is the unauthenticated demo entry — the prod head fires from real bronze ingests
 
@@ -90,7 +90,7 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# OpenFGA is the authz chokepoint — every governed catalog write, every lineage read, and all four movers'
+# OpenFGA is the authz chokepoint — every governed catalog write, every lineage read, and all four stage runners'
 # WRITE path fail CLOSED through it, so a single drained/OOMed replica 503s the whole estate until it
 # reschedules. Run the subchart's supported 3 replicas (kind pinned it to 1) + size its resources. Its PDB
 # + pod anti-affinity are P2 (they need the subchart's own label selector). (prod-readiness P1)
@@ -120,7 +120,7 @@ catalog:
 
 # Per-workload resource tiers (P2): the shared 1-CPU/512Mi default sizes the stateful stores + the Arrow-
 # IPC-buffering catalog like stateless request pods. Give the memory-heavy workloads a real limit (the rest
-# keep resources.default). Requests reserve scheduler headroom. Movers/lineage stay on default until load
+# keep resources.default). Requests reserve scheduler headroom. Stage runners/lineage stay on default until load
 # data says otherwise. (prod-readiness P2)
 resources:
   catalog:

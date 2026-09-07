@@ -2,7 +2,7 @@
 
 The gate decides whether a stage's output may publish: which column identifies a row, which columns
 a consumer depends on, and how far a row-count may move before a promotion needs a human. Every one
-of those lived ONLY as env on a mover pod, so changing a threshold meant editing a values file and
+of those lived ONLY as env on a stage runner pod, so changing a threshold meant editing a values file and
 running `helm upgrade` — and nothing could list what the gates were, review one, or gate who
 changed it.
 

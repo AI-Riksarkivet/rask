@@ -137,7 +137,7 @@ class InputPin(BaseModel):
 
     The API-surface shape (catalog ``segments``, as any ``{id}`` route uses); ``emit_write_event`` resolves
     it to the canonical lineage/FGA id. A pinned ``version`` becomes a ``DatasetVersionDatasetFacet`` on the
-    input edge — the reproducibility handshake a derived write (a mover's merge_insert from ``source@N``)
+    input edge — the reproducibility handshake a derived write (a stage runner's merge_insert from ``source@N``)
     needs so its provenance names the precise input version, not just the dataset.
     """
 
@@ -302,7 +302,7 @@ _RESERVED_RUN_FACETS = frozenset({"lance", "author", "errorMessage", "progress",
 def shape_run_facets(raw: dict[str, Any]) -> dict[str, Any]:
     """Wrap caller-supplied run-facet payloads with the spec-required ``_producer`` / ``_schemaURL``.
 
-    The catalog stays un-opinionated about a producer's run metadata (e.g. a mover's merge carrying
+    The catalog stays un-opinionated about a producer's run metadata (e.g. a stage runner's merge carrying
     training ``params``): it does not interpret the payload, it only stamps each named facet spec-legal
     via :func:`custom_facet` so a strict OpenLineage consumer accepts the event. ``raw`` maps a facet
     name to its payload object. Guarded fail-closed: the facet NAME may not be a reserved catalog-owned /
@@ -760,7 +760,7 @@ async def emit_write_event(
     ``source_uri`` attaches the standard dataSource facet (the physical storage URI) so #23 reconcile can
     find the on-disk file — passed by ops that (re)attach a location, e.g. ``register``/``declare``.
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
-    rename passes its source; a mover's merge passes ``source@N``); ``extra_run_facets`` rides caller-supplied
+    rename passes its source; a stage runner's merge passes ``source@N``); ``extra_run_facets`` rides caller-supplied
     run facets (e.g. training params). Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
     """
     refs = [

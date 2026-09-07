@@ -140,7 +140,7 @@ def test_a_parked_delivery_is_counted_and_acked(with_dead_lettering: TestClient,
 
 def test_the_park_counter_names_this_app_and_not_the_topic_that_failed(with_dead_lettering: TestClient, parked: _Counter) -> None:
     """`dlq.notifications` → `notifications`. Labelling by the SOURCE topic is the shape that made two
-    movers' parks indistinguishable in the cascade's counter — every app subscribed to that topic
+    stage runners' parks indistinguishable in the cascade's counter — every app subscribed to that topic
     contributes to one series, so the number answers no operational question at all."""
     with_dead_lettering.post("/dlq-event", json={"id": "ce-9", "topic": "lineage.events.v1", "data": RUN_EVENT})
 

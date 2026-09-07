@@ -11,7 +11,7 @@ suppression itself is correct and stays (a graph outage must not convert a corre
 storm); what it must not do is discard the diagnosis, so the four sites now run under `_best_effort`,
 which logs.
 
-Targeting matters as much as existence here. Per `.claude/skills/rask-notifications`, the mover authors
+Targeting matters as much as existence here. Per `.claude/skills/rask-notifications`, the stage runner authors
 with a chart ROLE LITERAL, so `author_subject()` addresses an inbox actor named `data_eng` — nobody. A
 failed media run reaches the person who asked for it only through `lance.originator`, which is why this
 file asserts the FAIL event carries it rather than merely asserting a FAIL was emitted.
@@ -91,7 +91,7 @@ def test_underivable_media_records_a_FAIL_run_and_drops(tmp_path: Any, underivab
 def test_the_FAIL_run_names_the_person_the_media_was_derived_for(tmp_path: Any, underivable: None) -> None:
     """Trap 2 on the failure path — the only path where being told actually matters.
 
-    The mover authors with a chart role literal, so the author facet reaches an inbox named after a
+    The stage runner authors with a chart role literal, so the author facet reaches an inbox named after a
     ROLE. `lance.originator` is what carries the human, and a failed run that omits it is delivered to
     nobody while acking SUCCESS.
     """

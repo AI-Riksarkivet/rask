@@ -8,7 +8,7 @@ a full cascade raised no review at all. Nothing was red, because the chain was s
 the branch was simply unreachable.
 
 Extracted rather than reordered in place: the ordering IS the policy, and a policy that can only be
-exercised by standing up a mover, a catalog and an object store is a policy nobody re-checks.
+exercised by standing up a stage runner, a catalog and an object store is a policy nobody re-checks.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def gate_decision(
     they drift, and it is the only place a concurrent advance is detectable, because
     `UpdateTableTag` returns `ConcurrentModification` while a tag file has no format-level CAS.
 
-    **There used to be a second door.** `TRIGGER` fired the next stage's topic from the mover,
+    **There used to be a second door.** `TRIGGER` fired the next stage's topic from the stage runner,
     promoting without the catalog ruling, and a flag (`MEDALLION_CASCADE_VIA_PUBLISH`, default
     False) chose between them — so the DEFAULT deployment used the door that module says must not
     exist. Both the outcome and the flag are gone.

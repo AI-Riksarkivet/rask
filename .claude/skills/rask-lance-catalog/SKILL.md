@@ -350,16 +350,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   concluded *"those tiers simply were never registered"*. At HEAD that is false for silver and gold
   and true only of the PRODUCER's bronze seed. Split them:
 
-  - **Every MOVER output is a catalog table.** `transform.py` calls
+  - **Every STAGE RUNNER output is a catalog table.** `transform.py` calls
     `catalog_register.ensure_stage_output` BEFORE the write — describe, create-if-absent, then take
     the location from the catalog's own answer — so the tier is a `table:` object with ownership
     tuples before a byte lands, and it then publishes the written version through
     `catalog_register.publish_stage_output` (the catalog's quality gate; `workflow.py::_resume_publish`
     is the approval resume of the same call). That is bronze→silver, silver→gold and the media lane —
     i.e. silver, gold and silver-media. The chart always supplies the URL
-    (`chart/templates/medallion.yaml` renders `MEDALLION_CATALOG_URL` for producer and movers alike),
+    (`chart/templates/medallion.yaml` renders `MEDALLION_CATALOG_URL` for producer and stage runners alike),
     so the ungoverned branch — `if settings.catalog_url and to_dataset` — is the dev shape, not the
-    deployed one. Symbols rather than line numbers throughout this sub-bullet on purpose: the mover is
+    deployed one. Symbols rather than line numbers throughout this sub-bullet on purpose: the stage runner is
     edited often enough that a cited line goes wrong within the week.
   - **The producer's bronze seed WAS the one that was not, and is governed as of 2026-08-29.**
     `medallion/services/produce.py` composed `bronze_uri` from settings (or from the project's
@@ -369,10 +369,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
     passed the gate fell out at `policies.py`'s `describe_table` → **404 "table has no storage location
     to police"**. The head now calls `catalog_register.register_written_dataset` BEFORE it seeds — the
     `register_table` door described further down, which needs no warehouse and therefore reaches the
-    reserved bucket. It TELLS rather than asks, and that is the one place it departs from a mover: its
+    reserved bucket. It TELLS rather than asks, and that is the one place it departs from a stage runner: its
     write location is a deployment contract (`chart/templates/medallion.yaml` renders
-    `MEDALLION_BRONZE_URI` and the bronze→silver mover's `MEDALLION_FROM_URI` from one expression, and
-    the `medallion.bronze` trigger carries no `from_uri`), so a vended location would leave that mover
+    `MEDALLION_BRONZE_URI` and the bronze→silver stage runner's `MEDALLION_FROM_URI` from one expression, and
+    the `medallion.bronze` trigger carries no `from_uri`), so a vended location would leave that stage runner
     opening a path nothing writes to. The location is sent RELATIVE to `MEDALLION_CATALOG_ROOT` — the
     dir backend answers *"Absolute URIs are not allowed for register_table"* — and a catalog refusal
     fails the request **503** before any byte is written, rather than seeding an ungoverned tier
@@ -403,7 +403,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   and no parent tuple, NO principal can hold `can_delete`/`can_drop` on the seed's dataset, so no
   policy, protection or grant can be applied to it. **Read that precisely, and note how the scope of this
   sentence has moved twice: it said "the datasets the cascade writes", which over-claimed once the
-  mover outputs were registered, and it then said "the seed", which over-claims now that the head
+  stage runner outputs were registered, and it then said "the seed", which over-claims now that the head
   registers too. The seed was never UNMAINTAINED, only un-OVERRIDABLE, and it is neither today.** The sweep covers them like everything else under the
   platform's own settings — `MAINTENANCE_OLDER_THAN_DAYS` (7), `tiers.py`'s per-tier fragment sizing,
   `optimize_indices` — which is why every live summary counts them among its 27 datasets and reports
@@ -419,13 +419,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   platform storage) while leaving the REGISTRATION route open (naming an individual dataset) — two
   different mechanisms, and conflating them is how you conclude the cascade can never be governed.
   **THERE ARE TWO SEAMS IN `catalog_register.py`, and which one a writer uses is decided by who owns
-  its location.** A MOVER asks: `ensure_stage_output` describes the table, CREATES it through the
-  catalog's own door when absent, and returns the location the catalog vends, which the mover then
-  writes to (rule I2 applied to the write side) — correct because nothing else names where a mover's
+  its location.** A STAGE RUNNER asks: `ensure_stage_output` describes the table, CREATES it through the
+  catalog's own door when absent, and returns the location the catalog vends, which the stage runner then
+  writes to (rule I2 applied to the write side) — correct because nothing else names where a stage runner's
   output lives. The CASCADE HEAD tells: `register_written_dataset` attaches the URI the producer
   already owns, relative to `MEDALLION_CATALOG_ROOT`, treating 409 as convergence only after a
   `describe` CONFIRMS the catalog governs that same location. The telling form was deleted once, when
-  its only caller was a mover that should have been asking (and `relative_location` and
+  its only caller was a stage runner that should have been asking (and `relative_location` and
   `MEDALLION_CATALOG_ROOT` went with it); the direction was never the defect, the CALLER was.
   Registration belongs to the CASCADE, which is why the module is workload-neutral and takes only an
   id and a URI or schema: every lane gets it, or the first workload built is the only governed one.

@@ -2,7 +2,7 @@
 
 Four services consume the S3 secret from the Dapr secret store in their lifespan and then serve every
 later read out of the same ``@lru_cache``d ``get_settings()``, over five call sites: ``catalog.main``,
-``medallion.producer``, ``medallion.mover``, ``maintenance.service`` and ``lineage.main`` (through
+``medallion.producer``, ``medallion.stage_runner``, ``maintenance.service`` and ``lineage.main`` (through
 ``apply_lineage_secrets``, which splices the AGE password onto the same object). The splice
 (``service_kit.governed.secrets.apply_dapr_secrets``) therefore assigns onto the cached instance IN
 PLACE — that is the mechanism, not an accident, and it is what makes the per-request ``SettingsDep``

@@ -48,8 +48,8 @@ _NOT_ALERTED: dict[str, str] = {
     "medallion.stage.media_underivable": "a per-row data property, not a cascade halt",
     "medallion.promotion.outcome": "a human decision lane; a held promotion is answered on /promotions",
     "medallion.train.outcome": "the training lane, outside the cascade this file guards",
-    # ROUTINE, not a halt: several movers subscribe to one tier's topic, so a trigger for a lane this
-    # mover does not own is expected traffic and `> 0` would alert constantly. The condition its
+    # ROUTINE, not a halt: several stage runners subscribe to one tier's topic, so a trigger for a lane this
+    # stage runner does not own is expected traffic and `> 0` would alert constantly. The condition its
     # docstring actually cares about — a lane with NO consumer — is `other_lane` rising while
     # `transitions` stays flat, a ratio rule, not a threshold. Worth building; not built, so not
     # claimed here.
@@ -72,11 +72,7 @@ def _promql() -> str:
     must not have.
     """
     document = yaml.safe_load(_RULES.read_text()) or {}
-    return "\n".join(
-        str(rule.get("expr", ""))
-        for group in document.get("groups", [])
-        for rule in group.get("rules", [])
-    )
+    return "\n".join(str(rule.get("expr", "")) for group in document.get("groups", []) for rule in group.get("rules", []))
 
 
 def _series(counter: str) -> str:

@@ -1,8 +1,8 @@
-"""The mover ASKS the catalog where to write, instead of telling it afterwards.
+"""The stage runner ASKS the catalog where to write, instead of telling it afterwards.
 
 Rule I2 — "resolve the location through the CATALOG, never compose a path" —
-is applied today to the READ side only; `transform.py` says so outright: "the mover still owns where
-it WRITES." That half is the defect behind everything the live cascade hit. The mover composed
+is applied today to the READ side only; `transform.py` says so outright: "the stage runner still owns where
+it WRITES." That half is the defect behind everything the live cascade hit. The stage runner composed
 `{root}/medallion/{tier}`, a layout the catalog has never vended, wrote there, and then told the
 catalog that was the table's home. The catalog's own binding said otherwise, so publish opened the
 catalog's answer and found nothing.
@@ -10,9 +10,9 @@ catalog's answer and found nothing.
 The ingest plane already does this correctly (`CatalogServiceClient.ensure`): describe, create if
 absent, and take the location from the create's own response. This is that, for the medallion.
 
-THE CREATE'S JOB IS A GOVERNED LOCATION, NOT A SCHEMA. The mover does not know its output schema
+THE CREATE'S JOB IS A GOVERNED LOCATION, NOT A SCHEMA. The stage runner does not know its output schema
 until it has computed, and it does not need to: a Lance `overwrite` replaces the schema wholesale, so
-the empty table exists only to make the catalog mint and govern a URI the mover can then write to.
+the empty table exists only to make the catalog mint and govern a URI the stage runner can then write to.
 """
 
 from __future__ import annotations

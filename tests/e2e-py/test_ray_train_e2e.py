@@ -150,7 +150,7 @@ def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> Non
     # proof: the FGA object table:silver$features is a SEEDED parent link, so an authorized reader (alice)
     # gets 200 with EMPTY edges for a not-yet-written dataset — which silently skipped /produce and made the
     # train 422 "cannot resolve feature dataset". The COMPLETE producer run is the true "data committed"
-    # signal (the mover emits it AFTER the Lance write lands), so it implies the head-opened dataset exists.
+    # signal (the stage runner emits it AFTER the Lance write lands), so it implies the head-opened dataset exists.
     def _silver_written() -> bool:
         r = requests.get(f"{lineage}/datasets/silver$features/producers", headers=alice, timeout=8)
         return r.status_code == 200 and any(p.get("event_type") == "COMPLETE" for p in r.json().get("producers", []))

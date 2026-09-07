@@ -3,7 +3,7 @@
 WHY A SUITE NEEDS THIS. An estate may run human-in-the-loop promotion review
 (``MEDALLION_QUALITY_REVIEW_ENABLED``). When it does, a **first** promotion holds every single time:
 the review band compares a stage's row count against its predecessor's, a first promotion has no
-predecessor, and ``FIRST_PROMOTION`` reads as a breach. The mover publishes, the gate holds, and a
+predecessor, and ``FIRST_PROMOTION`` reads as a breach. The stage runner publishes, the gate holds, and a
 ``promotion_review`` workflow waits for a human who is not coming. The suite then times out and
 reports "the cascade did not complete", which is the wrong sentence — the cascade completed and
 governance stopped it.
@@ -18,7 +18,7 @@ for the estate that runs review OFF (nothing to approve) or for a suite that wan
 
 THE ID IS DERIVED, NOT DISCOVERED. ``promotions.instance_for`` is ``f"promotion-{token}"`` and the
 producer exposes no list endpoint — deliberately, per its docstring: "it is the only handle either
-side has: the mover publishes a hold and moves on, and the door receives an id from a URL". So a
+side has: the stage runner publishes a hold and moves on, and the door receives an id from a URL". So a
 caller that knows its own cascade token knows its own hold, and can clear no one else's.
 """
 

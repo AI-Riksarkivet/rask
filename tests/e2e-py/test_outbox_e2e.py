@@ -3,7 +3,7 @@
 Simulates a producer that crashed AFTER the Lance commit but BEFORE the publish acked: a full RunEvent is
 left staged in the object-store outbox. Triggering the reconcile sweep must DRAIN it — re-ingest the event
 into the graph (the ``outbox_drained`` counter increments only on a successful ingest) and delete the
-object. Combined with the unit test that proves the mover leaves the event staged on a publish failure,
+object. Combined with the unit test that proves the stage runner leaves the event staged on a publish failure,
 this closes the commit→publish loss window end to end.
 
 Skipped unless ``LANCE_E2E_LINEAGE_URL`` + ``LANCE_E2E_DAPR_TOKEN`` are set. Run via ``make e2e-outbox``

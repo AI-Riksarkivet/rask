@@ -225,7 +225,7 @@ class Settings(GovernedAuthSettings, BaseSettings):
     #:
     #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines
     #: ``can_update_tag: owner``. Without the grant a tenant is created, its tiers are created, rows land
-    #: in bronze, lineage records the run — and the promotion is refused with a 403 in a mover log nobody
+    #: in bronze, lineage records the run — and the promotion is refused with a 403 in a stage runner log nobody
     #: is watching. Measured five times on the live estate before this existed, once AFTER a human had
     #: already approved the promotion (the resume runs as the producer, which held nothing).
     #:
@@ -401,7 +401,7 @@ class Settings(GovernedAuthSettings, BaseSettings):
     #: other lane's events.
     #:
     #: Why the control lane needs one at all: `table_published` is what wakes the next cascade hop.
-    #: The mover does not fire its own topic and the medallion plane runs no cron and no reconcile
+    #: The stage runner does not fire its own topic and the medallion plane runs no cron and no reconcile
     #: binding, so it never re-reads the tag. `DaprControlEmitter.emit` swallows a publish failure by
     #: design — it is called after the change is already made and audited, so raising would turn a
     #: delivered mutation into a 500 — which meant a NATS blip cancelled the cascade outright with

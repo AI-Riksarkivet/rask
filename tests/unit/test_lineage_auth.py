@@ -1232,7 +1232,7 @@ def test_the_EMITTER_path_carries_no_caller_id_and_is_untouched(monkeypatch: pyt
     """`lineage_kit.emitter` posts to RASK_LINEAGE_ENDPOINT over plain Service DNS.
 
     No Dapr invocation hop means no `dapr-caller-app-id`, so absence must keep working — it is how
-    the medallion producer, all three movers and the Ray train job emit. Treating absence as public
+    the medallion producer, all three stage runners and the Ray train job emit. Treating absence as public
     would stop every provenance record in the estate.
     """
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")

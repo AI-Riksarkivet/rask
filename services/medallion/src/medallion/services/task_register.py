@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 
 from medallion.core.config import MedallionSettings
+from medallion.services import engine_names
 from service_kit.lakehouse import task_registry
 from service_kit.lakehouse.task_registry import TaskRegistration
 
@@ -30,7 +31,7 @@ log = logging.getLogger(__name__)
 
 #: The engine name this plane answers to. Kept beside the writer rather than in `service-kit`,
 #: because the platform must never hold an engine vocabulary — that is the whole decoupling.
-RAY_ENGINE = "ray"
+RAY_ENGINE = engine_names.RAY_ENGINE
 
 
 def register_ray_tasks(settings: MedallionSettings) -> int:

@@ -1,6 +1,6 @@
-"""A medallion stage mover — one DAG edge, event-driven (FastAPI application entry).
+"""A medallion stage runner — one DAG edge, event-driven (FastAPI application entry).
 
-All movers run THIS module (``medallion.mover:app``) and differ only by ``MEDALLION_*`` env: each
+All stage runners run THIS module (``medallion.stage_runner:app``) and differ only by ``MEDALLION_*`` env: each
 subscribes to its upstream stage's trigger topic, emits a standard OpenLineage transform event
 (``inputs=[from_dataset]`` → ``outputs=[to_dataset]`` — the ``DERIVED_FROM`` edge), and publishes the next
 stage's trigger. So a single producer event cascades bronze→silver→gold (R23: bronze is the first
@@ -10,7 +10,7 @@ publish over the instrumented gRPC client, the W3C trace context propagates → 
 Idempotent + best-effort: with ``MEDALLION_COMPUTE_ENABLED`` each stage does a REAL in-process Lance write
 (the fake-Ray compute) so the cascade produces data, not just provenance; off, it's a pure lineage emit.
 The graph MERGEs on run_id, and a compute/publish outage returns ``RETRY`` so the Dapr sidecar redelivers.
-Run: ``uvicorn medallion.mover:app``.
+Run: ``uvicorn medallion.stage_runner:app``.
 """
 
 from __future__ import annotations
@@ -60,27 +60,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await run_in_threadpool(apply_dapr_secrets, _settings)
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     app.state.dapr = DaprClient()  # local sidecar; persists publishes to NATS JetStream
-    # ONE catalog client for the process, not one per stage transition. Every mover event makes at
+    # ONE catalog client for the process, not one per stage transition. Every stage runner event makes at
     # least one catalog call (register/publish) and the held path makes two, each of which was opening
     # and tearing down its own connection — `fastapi` -> production-patterns.md § Lifespan: build once,
     # dispose once. Closed below, beside the sidecar client.
     app.state.catalog_http = httpx.Client(base_url=_settings.catalog_url.rstrip("/"), timeout=_settings.publish_timeout_seconds)
-    # THE FGA HALF ONLY, deliberately. A mover is bus-only — no gateway row, no Ingress, no human
+    # THE FGA HALF ONLY, deliberately. A stage runner is bus-only — no gateway row, no Ingress, no human
     # caller — so it has never had an OIDC door and must not grow one as a side effect of sharing the
     # bootstrap: constructing a verifier here would fetch discovery at boot for a token nothing
     # presents. It checks authorization as its OWN service identity before every transition.
     #
     # Pre-set to None because the transition guard reads the attribute directly; unset would be an
     # AttributeError on the hot path rather than a fail-closed refusal. Pinned ids when set (the
-    # production posture), else provision by store NAME so the mover converges on the catalog's
+    # production posture), else provision by store NAME so the stage runner converges on the catalog's
     # Zanzibar store (idempotent).
     #
     # `fatal=True` KEEPS THIS APP'S POSTURE: no `try` wrapped the build, so a failed one has always
-    # crashed the pod. A mover that cannot authorize must not sit in the subscription quietly
+    # crashed the pod. A stage runner that cannot authorize must not sit in the subscription quietly
     # refusing every stage — nothing downstream would report it.
     settings = get_settings()
-    app.state.fga = await build_fga_client(settings, service="medallion-mover", fatal=True)
-    # THE WORKFLOW WORKER (S1). Without this the mover can SCHEDULE `stage_run` and nothing will ever
+    app.state.fga = await build_fga_client(settings, service="medallion-stage runner", fatal=True)
+    # THE WORKFLOW WORKER (S1). Without this the stage runner can SCHEDULE `stage_run` and nothing will ever
     # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
     # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still
     # could not run a workflow because the APP side was absent — an asymmetry that looks healthy from
@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
             # app-id can reach an actor state store, and without one the first call fails (and,
             # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
-            await probe_actor_state_store(capability="this mover cannot run a stage")
+            await probe_actor_state_store(capability="this stage runner cannot run a stage")
         except Exception:
             # Non-fatal, same reasoning as ingest: a service that refuses to start because its sidecar
             # is not up yet turns an ordering blip into a CrashLoopBackOff. A stage that cannot
@@ -113,7 +113,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             log.warning("dapr workflow runtime unavailable — ray stages cannot wait for their jobs", exc_info=True)
     else:
         # ANNOUNCE THE NEGATIVE CASE. `flows` states its inline fallback and `ingest` states its own;
-        # this branch said nothing, so a mover hosting ZERO workflow workers looked identical in the log
+        # this branch said nothing, so a stage runner hosting ZERO workflow workers looked identical in the log
         # to one hosting them. The lane is coherently off — `transform.py` gates dispatch on the same
         # flag — but "off" and "broken" have to be distinguishable without reading the chart.
         log.info("dapr workflow runtime NOT started — the ray lane is off (MEDALLION_RAY_ENABLED unset)")
@@ -161,18 +161,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
 # `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
 #
-# THE MOVER IS THE COPY THAT LOST ONE. Its four siblings each added `RequestIDMiddleware` under the
+# THE STAGE RUNNER IS THE COPY THAT LOST ONE. Its four siblings each added `RequestIDMiddleware` under the
 # same copied comment, and this file did not — so the service that consumes the cascade's bus
 # deliveries was the one whose responses carried no id to quote. Coming through the factory it gets
 # the same layer as everything else.
 app = build_lance_service_app(
-    title=f"medallion mover ({_settings.from_namespace}->{_settings.to_namespace})",
+    title=f"medallion stage runner ({_settings.from_namespace}->{_settings.to_namespace})",
     docs_enabled=_settings.docs_enabled,
     lifespan=lifespan,
     log=log,
 )
 # The DaprApp wrapper serves GET /dapr/subscribe (read by the sidecar at startup) and routes deliveries
-# of `sub_topic` to /medallion-event. Each mover has its own app-id + sub_topic, so no consumer clash.
+# of `sub_topic` to /medallion-event. Each stage runner has its own app-id + sub_topic, so no consumer clash.
 register_stage_route(app)
 # The cascade's operator surface (DWF-MGT-002/003). Mounted HERE and not on the producer because both
 # `get_workflow_state` and `terminate_workflow` resolve the instance through the calling app's app-id:

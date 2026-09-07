@@ -25,9 +25,7 @@ def test_a_project_with_a_live_warehouse_is_measured() -> None:
 def test_two_warehouses_for_one_project_are_ONE_tenant() -> None:
     """`acme` holds both `acme-bucket` and `tracka-wh` on the live estate. Measuring it twice would
     publish two identical series under one key and double every count that reads them."""
-    assert measurable_projects(
-        [{"project": "acme", "bucket": "acme-bucket"}, {"project": "acme", "bucket": "tracka-wh"}]
-    ) == ["acme"]
+    assert measurable_projects([{"project": "acme", "bucket": "acme-bucket"}, {"project": "acme", "bucket": "tracka-wh"}]) == ["acme"]
 
 
 def test_a_DEACTIVATED_tenant_is_not_measured() -> None:

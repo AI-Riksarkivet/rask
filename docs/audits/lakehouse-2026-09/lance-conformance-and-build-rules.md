@@ -332,7 +332,7 @@ Evidence per row:
 - **MM1** — services/catalog/src/catalog/services/dataplane.py:264-274 (per section read); lance_docs/guide.md:264-267, 584-586
 - **MM7** — services/annotator/src/annotator/annotations/schema.py:213-224 (per section read); grep create_scalar_index/IndexConfig under services/annotator/src → none (per section read); services/medallion/src/medallion/services/compute.py:250 (this run: `_index_lineage`); lance_docs/guide.md:2010-2062, 2171
 - **CP7 / MR1** — services/maintenance/src/maintenance/services/optimize.py:99-136 (this run: `if marker ... found.uris.append(...)` with no recursion into a dataset root); lance_docs/ray.md:70-72, 100-131
-- **BR15** — services/ingest/pyproject.toml:29; grep instrument_lance → catalog main.py:80, lineage main.py:50, maintenance service.py:135, medallion mover.py:55 only (per section read); lance_docs/guide.md:2805-2878
+- **BR15** — services/ingest/pyproject.toml:29; grep instrument_lance → catalog main.py:80, lineage main.py:50, maintenance service.py:135, medallion stage_runner.py:55 only (per section read); lance_docs/guide.md:2805-2878
 - **BR20** — services/catalog/src/catalog/services/dataplane.py:1323-1418 (tag/branch ops, per section read); lance_docs/file_format.md:2707-2720, 2784-2792
 - **BR8** — services/catalog/src/catalog/core/config.py:167 (per section read); packages/service-kit/src/service_kit/media/config.py:226 (per section read); lance_docs/guide.md:2338
 

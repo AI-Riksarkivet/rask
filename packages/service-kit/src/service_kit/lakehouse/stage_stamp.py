@@ -45,7 +45,7 @@ LINEAGE_COLUMN: Final = "lineage"
 #: value advances on the next overwrite, so persisting it records an id that will not be true.
 _ROWID: Final = "_rowid"
 
-#: A lane that maps each input row to exactly one output row — every default mover's shape.
+#: A lane that maps each input row to exactly one output row — every default stage runner's shape.
 ONE_TO_ONE: Final = "1:1"
 
 #: A lane that may emit MANY output rows per input row: a video into frames, a recording into speaker

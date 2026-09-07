@@ -61,7 +61,7 @@ _poison_dropped = _meter.create_counter(
 # --- Saturation: the alertable pair. An ObservableGauge is the right instrument (observability.md: "pool/
 # queue depth ... ObservableGauge for resource usage") — the relay OBSERVES the prefix on each tick rather
 # than the outbox trying to track a distributed count itself. Registered LAZILY on the first backlog
-# observation: the producers/movers import this module too (for the counters), and import-time gauges made
+# observation: the producers/stage runners import this module too (for the counters), and import-time gauges made
 # all five of those pods export a constant depth=0/oldest_age=0 forever, diluting any unfiltered
 # aggregation over the one series that carries truth — the relay's (audit 2026-07-15).
 _depth: float = 0.0

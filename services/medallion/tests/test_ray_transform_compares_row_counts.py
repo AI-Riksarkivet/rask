@@ -3,7 +3,7 @@
 `promotion_band.review_reasons` treats `previous_row_count=None` as FIRST_PROMOTION and asks. That is
 the right default for an unknown history — "a dataset we cannot read the history of gets a person's
 attention instead of a silent promote" — but on the Ray lane it was not an unknown history, it was a
-structural blind spot: the job writes OUT-OF-PROCESS, so by the time the mover measures in pass 2 the
+structural blind spot: the job writes OUT-OF-PROCESS, so by the time the stage runner measures in pass 2 the
 predecessor is already overwritten and `WriteResult.previous_row_count` is None on every single run.
 
 A review that fires every time is the same as no review. The signal it exists to carry — THIS promotion

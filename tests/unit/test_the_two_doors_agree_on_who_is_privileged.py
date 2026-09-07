@@ -35,11 +35,7 @@ def _env(rendered: str, component: str) -> dict[str, str]:
     renders the Deployment as `lineage` where the cluster holds `rask-lineage`. Matching the literal
     silently found nothing and every assertion here passed on an empty dict.
     """
-    blocks = [
-        b
-        for b in rendered.split("---")
-        if "kind: Deployment" in b and re.search(rf"^  name: (?:[a-z0-9-]+-)?{re.escape(component)}$", b, re.MULTILINE)
-    ]
+    blocks = [b for b in rendered.split("---") if "kind: Deployment" in b and re.search(rf"^  name: (?:[a-z0-9-]+-)?{re.escape(component)}$", b, re.MULTILINE)]
     assert blocks, f"no {component} Deployment in the render"
     return dict(re.findall(r"\{\s*name:\s*([A-Z0-9_]+),\s*value:\s*\"?([^\"}\n]*)\"?\s*\}", blocks[0]))
 

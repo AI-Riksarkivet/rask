@@ -137,7 +137,7 @@ def test_the_scheduled_input_ROUND_TRIPS_the_trigger_for_republication(monkeypat
 
     `project` in particular: losing it would make the completed-pass resolve the DEFAULT roots and
     transform the wrong tenant's data while emitting real-looking lineage for it — the exact failure
-    the mover's fail-closed project handling exists to prevent.
+    the stage runner's fail-closed project handling exists to prevent.
     """
     from medallion.core.config import get_settings
     from medallion.services import transform

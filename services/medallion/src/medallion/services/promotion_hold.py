@@ -1,9 +1,9 @@
-"""The mover's side of the quality gate's third answer: publish the HOLD instead of ruling on it.
+"""The stage runner's side of the quality gate's third answer: publish the HOLD instead of ruling on it.
 
 `_QUALITY_BLOCKED` is a permanent DROP, and for a corrupt blob pointer or a null key that is exactly
 right — no approval makes broken data correct. It is the wrong answer for a promotion that is merely
 UNUSUAL: a batch that legitimately shipped zero rows, a declared column a consumer already agreed to
-drop. Those are decisions, and a mover has nobody to ask.
+drop. Those are decisions, and a stage runner has nobody to ask.
 
 Splitting the two is NOT done here. This module publishes what the gate saw; `promotion_review` — which
 runs in the producer, beside the door a person can reach — decides whether the hold is corrupt (BLOCK),
@@ -52,7 +52,7 @@ def hold_spec(
     The deadline, the approver and the downstream topic all ride the spec rather than being read
     inside the workflow: a body that reads settings replays against whatever the value is now instead
     of what it was when the promotion was held. `pub_topic` matters most — the producer hosting the
-    review has no idea what this mover's next hop is, so without it an approval records a decision and
+    review has no idea what this stage runner's next hop is, so without it an approval records a decision and
     promotes nothing.
     """
     return PromotionSpec(
@@ -71,7 +71,7 @@ def hold_spec(
         # commit may land while the approver decides, and publishing that would ship a version nobody
         # reviewed.
         version=version,
-        # Resolved HERE because here is the only place that knows: this runs in the mover, so
+        # Resolved HERE because here is the only place that knows: this runs in the stage runner, so
         # `settings` is the held stage's. The producer that emits the outcome reads its own settings
         # and sets neither var, so before these rode the spec every approved promotion was recorded
         # as `embed_features`/`data_eng` — right by accident for a silver hold, wrong for every

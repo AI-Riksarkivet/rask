@@ -9,7 +9,7 @@ write. It does NOT itself trigger the cascade — medallion-producer's own ``/br
 event-driven demo needs.
 
 The bronze dataset it seeds is REGISTERED with the catalog first, so the cascade's head tier is a governed
-``table:`` object exactly like the silver and gold the movers write. Until it was, the same tier was
+``table:`` object exactly like the silver and gold the stage runners write. Until it was, the same tier was
 governed or not purely by which door produced it.
 
 Best-effort ON THE BUS ONLY: a sidecar/broker outage logs + still returns (never 500s the producer) — the
@@ -123,17 +123,17 @@ async def produce(
         # heard of: no `table:` object, so `policy/set` answered 404 "table has no storage location to
         # police", no `_protection/` record was reachable and no FGA grant could name it — while silver
         # and gold, written by the very same cascade, were governed. Registering here closes that, in
-        # the movers' own order (`test_no_rows_without_a_catalog_record`): ask first, write second, so
+        # the stage runners' own order (`test_no_rows_without_a_catalog_record`): ask first, write second, so
         # no window exists in which bronze rows sit on disk unregistered.
         #
-        # IT TELLS RATHER THAN ASKS, and this is the ONE place the head departs from a mover. A mover
+        # IT TELLS RATHER THAN ASKS, and this is the ONE place the head departs from a stage runner. A stage runner
         # takes the location `ensure_stage_output` vends because nothing else names where its output
-        # lives. This URI is a DEPLOYMENT CONTRACT: the chart renders it and the bronze->silver mover's
+        # lives. This URI is a DEPLOYMENT CONTRACT: the chart renders it and the bronze->silver stage runner's
         # `MEDALLION_FROM_URI` from one expression, so the location is already stated where both sides
         # read it. `register_table` is the door for exactly that writer, and it needs no warehouse —
         # which is what lets the head reach the medallion path in the reserved platform bucket.
         #
-        # The cascade does not depend on this URI matching the mover's composed path: `/bronze-arrival`
+        # The cascade does not depend on this URI matching the stage runner's composed path: `/bronze-arrival`
         # resolves the arrived table's location through the catalog and names it on the trigger
         # (`ingest_trigger._vended_upstream`), so a bronze table created by ANOTHER writer — `ingest`,
         # which creates through the catalog's door and takes the vended `{root}/{hash}_{ns}${name}` —
@@ -145,7 +145,7 @@ async def produce(
         # has, and a retry carrying the same Idempotency-Key converges. Best-effort was the alternative
         # and it reinstates this very defect silently: an ungoverned tier nobody is told about.
         # GATED ON THE SAME CONDITION AS THE SEED, so it governs exactly what this call writes. No
-        # catalog URL is the ungoverned dev shape (the movers keep the same escape hatch); no compute
+        # catalog URL is the ungoverned dev shape (the stage runners keep the same escape hatch); no compute
         # is the pure-emit shape, which writes no dataset at all — registering there would attach a
         # `table:` object to bytes that never arrive, and would turn a demo that needs no object store
         # into one that fails on a URI it was never going to open.
@@ -173,7 +173,7 @@ async def produce(
         if settings.compute_enabled and bronze_uri:
             # Fake-Ray ingest: a REAL Lance write of bronze$events (blocking IO → threadpool) → the real version
             # + the measured output statistics (rows + on-disk bytes) the emit records as outputStatistics.
-            # DECLARE the canonical name, exactly as every mover does (transform.py). `bronze_uri` is
+            # DECLARE the canonical name, exactly as every stage runner does (transform.py). `bronze_uri` is
             # composed from the NAMESPACE alone, so `medallion/bronze` is both `bronze$events` and
             # `bronze$pages` — the sweep cannot derive the id and, without this, emits no maintenance
             # provenance and no per-dataset FAIL event for the cascade HEAD.
@@ -206,7 +206,7 @@ async def produce(
             schema_fields=result.fields if result else None,
             token=token,
             project=project or None,
-            # Same contract as every mover (see transform.py). Suppressing instead of marking is NOT an
+            # Same contract as every stage runner (see transform.py). Suppressing instead of marking is NOT an
             # option here: /bronze-arrival subscribes to this very event to publish medallion.bronze, so a
             # missing head event stops the cascade rather than merely thinning the graph.
             synthetic=result is None,
@@ -215,7 +215,7 @@ async def produce(
             # The cascade HEAD is this bronze-write lineage event: medallion-producer's own /bronze-arrival subscription
             # reacts to it and publishes the medallion.bronze trigger, so the pipeline is driven by the arrival
             # EVENT, not by this call directly (event-driven head — the trigger publish moved to
-            # ingest_trigger.py). Stage-then-publish-then-drop through the outbox (#4), same as every mover in
+            # ingest_trigger.py). Stage-then-publish-then-drop through the outbox (#4), same as every stage runner in
             # transform.py — so a crash between the bronze Lance commit and the publish ack leaves the cascade
             # HEAD's event staged for
             # the reconcile relay to recover (author + source_uri the version+schema back-fill can't reconstruct).

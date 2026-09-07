@@ -2,7 +2,7 @@
 
 R23: bronze is the FIRST governed tier — the producer ingests straight into it (raw is the external
 world and owns no dataset). This is the regression guard for "the event-driven loop produces real DATA +
-a correct lineage CHAIN". It runs the producer + both stage movers in sequence with the fake-Ray compute
+a correct lineage CHAIN". It runs the producer + both stage runners in sequence with the fake-Ray compute
 ON, against a temp directory (real Lance, no S3/Dapr/AGE), capturing every emitted OpenLineage event, and
 asserts BOTH halves:
 
@@ -49,7 +49,7 @@ class _FakeDapr:
         self.published.append({"topic": topic_name, "data": json.loads(data)})
 
 
-# The medallion DAG as (operation, from_ns, from_ds, to_ns, to_ds) — the same shape the chart wires per mover.
+# The medallion DAG as (operation, from_ns, from_ds, to_ns, to_ds) — the same shape the chart wires per stage runner.
 _HOPS = [
     ("embed", "bronze", "bronze$events", "silver", "silver$features"),
     ("aggregate", "silver", "silver$features", "gold", "gold$catalog"),
@@ -66,10 +66,10 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     bronze_tbl = lance.dataset(uris["bronze"]).to_table()
     bronze_rows = bronze_tbl.num_rows
     assert bronze_rows > 0
-    # The retired raw→bronze mover's stage stamp merged into the bronze ingest head (R23).
+    # The retired raw→bronze stage runner's stage stamp merged into the bronze ingest head (R23).
     assert set(bronze_tbl.column("stage").to_pylist()) == {"bronze"}
 
-    # The 2 movers, each reading its upstream Lance dataset and writing the downstream one.
+    # The 2 stage runners, each reading its upstream Lance dataset and writing the downstream one.
     for op, from_ns, from_ds, to_ns, to_ds in _HOPS:
         settings = MedallionSettings.model_validate(
             {
@@ -107,7 +107,7 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     # emitted. The URI is composed from the NAMESPACE alone (`medallion/bronze` is both `bronze$events`
     # and `bronze$pages`), so the maintenance sweep cannot derive this — unstamped, that tier gets no
     # maintenance provenance and no per-dataset FAIL event. The HEAD was unstamped until 2026-08-16
-    # while both movers already declared theirs.
+    # while both stage runners already declared theirs.
     for name, ns in (("bronze$events", "bronze"), ("silver$features", "silver"), ("gold$catalog", "gold")):
         declared = (lance.dataset(uris[ns]).schema.metadata or {}).get(b"lineage.dataset_id")
         assert declared == name.encode(), f"{ns} did not declare its canonical id: {declared!r}"
@@ -188,7 +188,7 @@ def _provision(control: Path, project: str, root: Path) -> None:
     (registry / "wh1.json").write_text(json.dumps(record))
 
 
-def _mover_settings(hop: tuple[str, str, str, str, str], uris: dict[str, str], **extra: Any) -> MedallionSettings:
+def _stage_runner_settings(hop: tuple[str, str, str, str, str], uris: dict[str, str], **extra: Any) -> MedallionSettings:
     op, from_ns, from_ds, to_ns, to_ds = hop
     return MedallionSettings.model_validate(
         {
@@ -209,9 +209,9 @@ def _mover_settings(hop: tuple[str, str, str, str, str], uris: dict[str, str], *
 def _next_trigger_from_publication(hop: tuple[str, str, str, str, str], previous: dict[str, Any]) -> dict[str, Any]:
     """What the CATALOG's publication head hands the next hop, built explicitly.
 
-    Under one door a mover publishes nothing but its lineage event: the next tier is woken by the
+    Under one door a stage runner publishes nothing but its lineage event: the next tier is woken by the
     catalog's publish, which `/publication-arrival` turns into this trigger
-    (`services/publication_trigger.py`). These tests drive movers directly with no catalog in the
+    (`services/publication_trigger.py`). These tests drive stage runners directly with no catalog in the
     loop, so the hand-off has to be constructed rather than read off `dapr.published[-1]`.
 
     Constructed rather than deleted, because the thing worth testing is that a hop consumes what the
@@ -220,12 +220,12 @@ def _next_trigger_from_publication(hop: tuple[str, str, str, str, str], previous
     """
     _op, _from_ns, _from_ds, to_ns, to_ds = hop
     trigger = {"token": previous["token"], "dataset": to_ds, "namespace": to_ns}
-    # Both of these are read off the control event's `extra`, which the catalog composes: the mover
+    # Both of these are read off the control event's `extra`, which the catalog composes: the stage runner
     # sends them on its publish body and `publication_extra` echoes them, omitting either when empty
     # — byte-identical for a projectless, personless estate. Mirrored exactly here.
     #
     # The ORIGINATOR line used to describe a mechanism that did not exist: the head derived it from
-    # the event's ACTOR, which for a cascade publish is the mover's own service identity, so this
+    # the event's ACTOR, which for a cascade publish is the stage runner's own service identity, so this
     # helper carried `alice` while production carried `service-bronze-to-silver`. The hand-off is now
     # what this mirrors (`tests/unit/test_cascade_originator.py` drives the real head end to end).
     if previous.get("project"):
@@ -237,7 +237,7 @@ def _next_trigger_from_publication(hop: tuple[str, str, str, str, str], previous
 
 def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage(tmp_path: Any) -> None:
     """#84 happy path, head→gold: /produce {project} seeds the PROJECT warehouse, /bronze-arrival copies
-    the project onto the stage trigger, every mover resolves its URIs off the registry (the env decoy URIs
+    the project onto the stage trigger, every stage runner resolves its URIs off the registry (the env decoy URIs
     are never touched), each next-trigger PROPAGATES the project, and the lineage chain is
     project-qualified end to end (distinct graph nodes per tenant)."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
@@ -265,15 +265,15 @@ def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage
     trigger = head["data"]
     for hop in _HOPS:
         to_ns = hop[3]
-        settings = _mover_settings(hop, decoys, control_root=str(control))
+        settings = _stage_runner_settings(hop, decoys, control_root=str(control))
         assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": trigger})) == {"status": "SUCCESS"}
         assert lance.dataset(str(wh / "medallion" / to_ns)).to_table().num_rows > 0
         assert not Path(decoys[to_ns]).exists()
-        # ONE DOOR: the mover promotes nothing itself. This read the next trigger off
-        # `dapr.published[-1]` because the mover published it — the second enforcement point.
+        # ONE DOOR: the stage runner promotes nothing itself. This read the next trigger off
+        # `dapr.published[-1]` because the stage runner published it — the second enforcement point.
         if settings.pub_topic:
             assert not any(p["topic"] == settings.pub_topic for p in dapr.published), (
-                f"the mover published {settings.pub_topic} itself — promotion is the catalog's tag move"
+                f"the stage runner published {settings.pub_topic} itself — promotion is the catalog's tag move"
             )
             trigger = _next_trigger_from_publication(hop, trigger)
             assert trigger["project"] == "acme"  # still propagated down the whole cascade
@@ -298,7 +298,7 @@ def test_project_trigger_with_routing_disabled_is_dropped_fail_closed(tmp_path: 
     falling back to the default roots would transform the wrong tenant's data under real-looking lineage."""
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver")}
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], uris)  # control_root unset (the default)
+    settings = _stage_runner_settings(_HOPS[0], uris)  # control_root unset (the default)
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "acme"}}))
     assert status == {"status": "DROP"}
     assert dapr.published == []  # no lineage emit, no next trigger
@@ -310,7 +310,7 @@ def test_project_trigger_with_no_active_warehouse_records_fail_and_drops(tmp_pat
     (control / "_warehouses").mkdir(parents=True)  # registry exists, but no warehouse for the project
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver")}
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], uris, control_root=str(control))
+    settings = _stage_runner_settings(_HOPS[0], uris, control_root=str(control))
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "ghost"}}))
     assert status == {"status": "DROP"}
     assert not Path(uris["silver"]).exists()
@@ -322,7 +322,7 @@ def test_project_trigger_with_no_active_warehouse_records_fail_and_drops(tmp_pat
 
 def test_unsafe_project_in_trigger_is_dropped_without_any_emit(tmp_path: Any) -> None:
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "../evil"}}))
     assert status == {"status": "DROP"} and dapr.published == []
 
@@ -335,7 +335,7 @@ def test_the_default_config_still_cascades_with_compute_off(tmp_path: Any) -> No
     stats, dataSource or schema facet — and `/bronze-arrival` decides whether to fire the cascade by
     matching `_bronze_write_dataset` against the event's outputs. Had that matcher depended on any
     facet rather than on namespace+name, this change would have silently stopped the entire default
-    pipeline at its head: producer reports success, no trigger, no mover, empty graph, nothing logged
+    pipeline at its head: producer reports success, no trigger, no stage runner, empty graph, nothing logged
     above DEBUG anywhere in the chain.
 
     Asserted end to end (produce → arrival → trigger) rather than by reading the matcher, because the
@@ -359,31 +359,31 @@ def test_the_default_config_still_cascades_with_compute_off(tmp_path: Any) -> No
     assert trigger["data"]["token"] == "t1"
 
 
-def test_page_lane_arrival_does_not_fire_the_events_lane_mover(tmp_path: Any) -> None:
-    """P7a lane isolation: a ``bronze$pages`` arrival must not drive the ``bronze$events`` mover.
+def test_page_lane_arrival_does_not_fire_the_events_lane_stage_runner(tmp_path: Any) -> None:
+    """P7a lane isolation: a ``bronze$pages`` arrival must not drive the ``bronze$events`` stage runner.
 
-    Both ingest lanes publish to the SAME ``medallion.bronze`` topic, so every mover subscribed to it
+    Both ingest lanes publish to the SAME ``medallion.bronze`` topic, so every stage runner subscribed to it
     sees every bronze arrival. ``ingest_trigger`` already put the discriminator on the wire — its own
-    docstring says the returned name is "the one actually written, so the trigger tells the mover which
-    lane fired" — and ``handle_stage`` read only ``token`` and ``project``, so the events mover woke on a
+    docstring says the returned name is "the one actually written, so the trigger tells the stage runner which
+    lane fired" — and ``handle_stage`` read only ``token`` and ``project``, so the events stage runner woke on a
     page arrival and transformed ``bronze$events``: real-looking lineage for a run nothing asked for,
     attributed to the page cascade's token.
 
-    A mismatch is deterministic — redelivery cannot make this the right mover — so it DROPs.
+    A mismatch is deterministic — redelivery cannot make this the right stage runner — so it DROPs.
     """
-    # bronze$events is seeded on purpose: without it the mover merely ERRORS on a missing dataset, which
+    # bronze$events is seeded on purpose: without it the stage runner merely ERRORS on a missing dataset, which
     # would hide the actual defect behind an accident. Seeded, the spurious run SUCCEEDS end to end —
     # writing silver and emitting a COMPLETE — which is exactly the damage being fixed.
     seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
     trigger = {"data": {"token": "t", "dataset": "bronze$pages", "namespace": "bronze"}}
 
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
 
     assert status == {"status": "DROP"}
-    assert dapr.published == [], f"the events-lane mover emitted on a page arrival: {dapr.published}"
-    assert not (tmp_path / "silver").exists(), "the events-lane mover wrote silver from a page trigger"
+    assert dapr.published == [], f"the events-lane stage runner emitted on a page arrival: {dapr.published}"
+    assert not (tmp_path / "silver").exists(), "the events-lane stage runner wrote silver from a page trigger"
 
 
 def test_the_dropped_lane_is_observable(tmp_path: Any, caplog: Any) -> None:
@@ -391,14 +391,14 @@ def test_the_dropped_lane_is_observable(tmp_path: Any, caplog: Any) -> None:
 
     A DROP is an ack — Dapr neither redelivers nor dead-letters — so if the app logs nothing and counts
     nothing, a completed IIIF ingest simply vanishes. That matters concretely: before the lane guard, a
-    ``bronze$pages`` arrival drove the events mover into a deterministic FAIL, and
+    ``bronze$pages`` arrival drove the events stage runner into a deterministic FAIL, and
     ``docs/architecture/live-proof-2026-07-28.md`` used that FAIL as its evidence that the P7b page lane
-    was unlanded. Asserted at INFO because the mover's logger is configured to INFO
+    was unlanded. Asserted at INFO because the stage runner's logger is configured to INFO
     (``configure_app_logging``), so a DEBUG record would never be emitted at all.
     """
     seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
 
     with caplog.at_level(logging.INFO, logger="medallion.services.transform"):
         asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "dataset": "bronze$pages"}}))
@@ -412,19 +412,19 @@ def test_matching_lane_trigger_still_runs(tmp_path: Any) -> None:
     """The other half of the guard: the discriminator must not reject the lane it belongs to.
 
     Cheap to state and the reason a naive `if dataset != from_dataset: DROP` is not obviously safe —
-    the trigger carries the RAW dataset name while the mover's own ``from_dataset`` is
+    the trigger carries the RAW dataset name while the stage runner's own ``from_dataset`` is
     project-QUALIFIED, so comparing the wrong one silently drops every tenant trigger.
     """
     seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
     trigger = {"data": {"token": "t", "dataset": "bronze$events", "namespace": "bronze"}}
 
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
 
     assert status == {"status": "SUCCESS"}
     # The subject is the LANE GUARD accepting its own lane, and the observable proof of that used to
-    # be the mover firing `medallion.silver`. That door is gone, so the proof is the write itself plus
+    # be the stage runner firing `medallion.silver`. That door is gone, so the proof is the write itself plus
     # the absence of the `medallion_stage_other_lane` drop its sibling test above asserts.
     assert lance.dataset(str(tmp_path / "silver")).to_table().num_rows == 2
     assert not any(p["topic"] == "medallion.silver" for p in dapr.published)
@@ -435,7 +435,7 @@ def test_trigger_without_a_dataset_is_still_accepted(tmp_path: Any) -> None:
     a queue at rollout) omits ``dataset`` entirely; the guard rejects a WRONG lane, not an unstated one."""
     seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
 
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
 
@@ -485,16 +485,16 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
         "namespace": "bronze",
     }
 
-    settings = _mover_settings(_HOPS[0], uris, control_root=str(control))
+    settings = _stage_runner_settings(_HOPS[0], uris, control_root=str(control))
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": dapr.published[-1]["data"]})) == {"status": "SUCCESS"}
     # The env URI was used; the provisioned project warehouse stayed untouched.
     assert lance.dataset(uris["silver"]).to_table().num_rows > 0
     assert not (wh / "medallion").exists()
     # EXACT equality on the trigger the NEXT tier would receive. It used to be read off
-    # `dapr.published[-1]` because the mover published it; one door means the catalog's publication
+    # `dapr.published[-1]` because the stage runner published it; one door means the catalog's publication
     # head builds it instead, so the shape is asserted against that builder. The property under test
     # is unchanged and is the whole point of the test: a projectless estate carries NO project key.
-    assert not any(p["topic"] == settings.pub_topic for p in dapr.published), "the mover published a next-stage trigger"
+    assert not any(p["topic"] == settings.pub_topic for p in dapr.published), "the stage runner published a next-stage trigger"
     assert _next_trigger_from_publication(_HOPS[0], {"token": token}) == {
         "token": token,
         "dataset": "silver$features",
@@ -505,7 +505,7 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
     assert "project" not in silver_event["run"]["facets"]["lance"]
 
 
-# ── gold serving warehouse: the terminal mover's tenant target root (DECISIONS "Medallion tiers") ──
+# ── gold serving warehouse: the terminal stage runner's tenant target root (DECISIONS "Medallion tiers") ──
 
 
 def _provision_gold(control: Path, project: str, root: Path) -> None:
@@ -539,8 +539,8 @@ def _seed_silver(work_wh: Path) -> None:
         (False, False, False),
     ],
 )
-def test_gold_mover_target_selection(tmp_path: Any, flag_on: bool, gold_present: bool, expect_gold_bucket: bool) -> None:
-    """The silver→gold mover's TENANT target root: retargets to the project's gold serving warehouse
+def test_gold_stage_runner_target_selection(tmp_path: Any, flag_on: bool, gold_present: bool, expect_gold_bucket: bool) -> None:
+    """The silver→gold stage runner's TENANT target root: retargets to the project's gold serving warehouse
     ONLY when MEDALLION_GOLD_WAREHOUSE_ENABLED is on AND a serving=="gold" record exists — every other
     combination is byte-identical work-warehouse behavior (and the read side ALWAYS stays in work)."""
     control, work_wh, gold_wh = tmp_path / "control", tmp_path / "acme-wh", tmp_path / "acme-gold"
@@ -551,7 +551,7 @@ def test_gold_mover_target_selection(tmp_path: Any, flag_on: bool, gold_present:
     decoys = {ns: str(tmp_path / f"default-{ns}") for ns in ("silver", "gold")}
     dapr = _FakeDapr()
 
-    settings = _mover_settings(_HOPS[1], decoys, control_root=str(control), gold_warehouse_enabled=flag_on)
+    settings = _stage_runner_settings(_HOPS[1], decoys, control_root=str(control), gold_warehouse_enabled=flag_on)
     trigger = {"data": {"token": "t", "project": "acme"}}
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger)) == {"status": "SUCCESS"}
 

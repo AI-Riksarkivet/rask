@@ -1,6 +1,6 @@
 """OpenTelemetry domain metrics for the medallion pipeline.
 
-The golden signal for the cascade: how many stage transitions each mover completed. Exported via the
+The golden signal for the cascade: how many stage transitions each stage runner completed. Exported via the
 OTel SDK (``opentelemetry-instrument``) over OTLP to GreptimeDB, queryable in PromQL / Perses. Bounded
 cardinality — only the namespaced ``lance.medallion.transition`` label (e.g. ``bronze->silver``); per-run ids
 stay on spans/logs. (Dot-namespaced under the project's `lance.*` convention —
@@ -34,7 +34,7 @@ _stage_transitions = _meter.create_counter(
 _stage_denied = _meter.create_counter(
     "medallion.stage.denied",
     unit="{transition}",
-    description="Stage transitions DENIED by the FGA gate (the mover lacked the required role).",
+    description="Stage transitions DENIED by the FGA gate (the stage runner lacked the required role).",
 )
 _stage_quality_blocked = _meter.create_counter(
     "medallion.stage.quality_blocked",
@@ -55,7 +55,7 @@ _dlq_parked = _meter.create_counter(
 _stage_other_lane = _meter.create_counter(
     "medallion.stage.other_lane",
     unit="{trigger}",
-    description="Stage triggers DROPped as another ingest lane's (the arrived dataset is not this mover's input).",
+    description="Stage triggers DROPped as another ingest lane's (the arrived dataset is not this stage runner's input).",
 )
 
 #: HOW FAR BEHIND its source a destination tier is, in source versions. A LEVEL, not an event: true
@@ -163,7 +163,7 @@ def record_promotion_outcome(decision: str) -> None:
 #: Volume keys already counted, so a re-run of pass 2 does not add a stage's output twice.
 #:
 #: Bounded and FIFO because this is a metrics guard, not a ledger: an unbounded set in a long-lived
-#: mover is a leak, and the duplicates worth catching arrive seconds apart (an activity retry, or an
+#: stage runner is a leak, and the duplicates worth catching arrive seconds apart (an activity retry, or an
 #: at-least-once redelivery of `sub_topic`).
 _counted_volume: Final[OrderedDict[str, None]] = OrderedDict()
 _COUNTED_VOLUME_MAX: Final[int] = 4096
@@ -223,7 +223,7 @@ def record_transition(transition: str) -> None:
 
 
 def record_denied(transition: str) -> None:
-    """Increment the denied counter (the mover was not authorized to produce the target stage)."""
+    """Increment the denied counter (the stage runner was not authorized to produce the target stage)."""
     _stage_denied.add(1, {"lance.medallion.transition": transition})
 
 
@@ -257,14 +257,14 @@ def cascade_lag_gauge() -> LagGauge:
 
 
 def record_other_lane(transition: str) -> None:
-    """Count one trigger DROPped as another ingest lane's (the arrived dataset is not this mover's input).
+    """Count one trigger DROPped as another ingest lane's (the arrived dataset is not this stage runner's input).
 
     Labelled by transition only, never by the arrived dataset name — a dataset is caller-supplied and
     would make this counter's cardinality unbounded.
 
     This exists because the drop is otherwise invisible. DROP is an ack, so Dapr neither redelivers nor
     dead-letters, and the app records nothing. Before the lane guard, a ``bronze$pages`` arrival drove
-    the events mover into a deterministic FAIL — and that FAIL is precisely the evidence
+    the events stage runner into a deterministic FAIL — and that FAIL is precisely the evidence
     ``docs/architecture/live-proof-2026-07-28.md`` used to show the page lane had no consumer. Fixing
     the wrong behaviour must not also delete the signal that revealed it.
     """
@@ -276,7 +276,7 @@ def record_refused(transition: str, reason: str) -> None:
 
     The same argument `record_other_lane` makes, for every PRE-FLIGHT refusal: a DROP is an ack, so
     Dapr neither redelivers nor dead-letters and nothing downstream records the event. A rejected
-    `from_uri` is the signal that someone is publishing triggers this mover should not honour, and a
+    `from_uri` is the signal that someone is publishing triggers this stage runner should not honour, and a
     tenant trigger arriving with registry resolution off is a deployment gap that halts that tenant's
     cascade permanently — both are worth an alert, and neither raises one from a log line.
 
@@ -297,7 +297,7 @@ def record_refused(transition: str, reason: str) -> None:
 
 
 def record_dead_letter(app_label: str) -> None:
-    """Count one dead-lettered cascade delivery, by the app that parked it (bounded — one per mover/producer).
+    """Count one dead-lettered cascade delivery, by the app that parked it (bounded — one per stage runner/producer).
 
     The cascade's DEAD_LETTERED signal, mirroring the lineage DLQ's ``record_outcome`` so a permanently
     stalled item is dashboardable + alertable, not only in scrollback."""

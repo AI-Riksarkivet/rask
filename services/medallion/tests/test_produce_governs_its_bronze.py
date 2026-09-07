@@ -6,10 +6,10 @@ no catalog call at all. The dataset held no `table:` object, so `POST /v1/table/
 answered 404 *"table has no storage location to police"*, no `_protection/` record could be reached, and
 no FGA grant could name it. The same tier was governed or not purely by which door produced it.
 
-THE PRODUCER REGISTERS RATHER THAN ASKS, and that is the ONE place it departs from the movers. A mover
+THE PRODUCER REGISTERS RATHER THAN ASKS, and that is the ONE place it departs from the stage runners. A stage runner
 takes the location the catalog vends (`ensure_stage_output`) because nothing else names where its output
 lives. The producer's write location is a DEPLOYMENT CONTRACT: `chart/templates/medallion.yaml` renders
-`MEDALLION_BRONZE_URI` and the bronze->silver mover's `MEDALLION_FROM_URI` from the same expression, so
+`MEDALLION_BRONZE_URI` and the bronze->silver stage runner's `MEDALLION_FROM_URI` from the same expression, so
 the location is stated by the chart rather than asked for. The head keeps its URI and ATTACHES it through
 `register_table`, the door built for bytes written outside the catalog's own doors: it needs no warehouse,
 which is why it works in the reserved platform bucket the medallion lives in.
@@ -111,7 +111,7 @@ class TestTheHeadRegistersWhatItSeeds:
     @respx.mock
     @pytest.mark.asyncio
     async def test_registration_precedes_the_first_row(self, steps: list[str], published: list[dict[str, Any]]) -> None:
-        """The movers' ordering rule (`test_no_rows_without_a_catalog_record`), applied to the head."""
+        """The stage runners' ordering rule (`test_no_rows_without_a_catalog_record`), applied to the head."""
         _register_route().side_effect = lambda request: steps.append("register") or Response(200, json={"location": "medallion/bronze"})
 
         await _produce()
@@ -181,7 +181,7 @@ class TestTheUngovernedShapeIsUnchanged:
     @pytest.mark.asyncio
     async def test_no_catalog_url_still_seeds_and_emits(self, steps: list[str], published: list[dict[str, Any]], respx_allows_unused_routes: None) -> None:
         """The dev/demo stack runs with no catalog at all (`test_no_catalog_url_still_writes_to_its_
-        configured_uri` pins the mover's half). It must not acquire a hard dependency here."""
+        configured_uri` pins the stage runner's half). It must not acquire a hard dependency here."""
         register = _register_route()
 
         assert (await _produce(_settings(MEDALLION_CATALOG_URL="")))["status"] == "produced"

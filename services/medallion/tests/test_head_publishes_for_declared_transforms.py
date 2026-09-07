@@ -2,13 +2,13 @@
 
 `ingest_trigger._bronze_write_dataset` recognised exactly `settings.bronze_dataset` and returned
 `None` for everything else, acking without publishing. So a table created from the UI produced NO
-TRIGGER AT ALL: the mover's lane guard was never reached, because nothing was ever sent to it. That
+TRIGGER AT ALL: the stage runner's lane guard was never reached, because nothing was ever sent to it. That
 one line is what made an agnostic platform behave as a fixed pipeline — a new table needed a values
 edit and a redeploy.
 
 THE DECLARATION IS THE OPT-IN. A table with a declared lane cascades; one without does not, and
 "why didn't my table cascade" now has a visible answer with a door to fix it. That is the opposite
-of publishing everything and letting movers filter, which spends delivery on work nobody wants.
+of publishing everything and letting stage runners filter, which spends delivery on work nobody wants.
 
 THE CONFIGURED DATASET STILL FIRES with no record at all, byte-for-byte. An estate that has declared
 nothing is unchanged.

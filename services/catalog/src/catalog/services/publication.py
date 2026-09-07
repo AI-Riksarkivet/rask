@@ -103,7 +103,7 @@ class EffectiveGate(BaseModel):
 
     Two parties describe the gate at this door and they are not equals. The project's `GateSpec` is
     POLICY — declared through an admin-gated door, readable by anyone, and the same record the
-    medallion's movers resolve for themselves. The request's `key_column`/`required_columns` are a
+    medallion's stage runners resolve for themselves. The request's `key_column`/`required_columns` are a
     REQUEST, sent by whoever holds `can_update_tag`, up to and including an external writer the estate
     trusts least. A door that consulted only the request handed the least-trusted writer the weakest
     gate, which is exactly backwards.
@@ -194,7 +194,7 @@ def refuse_a_tier_without_provenance(schema: Any, *, version: int, has_stable_ro
     contaminated, so I re-run only those?" must not answer confidently and wrongly. A fabricated
     parent id is worse than an absent one, because it is queryable.
 
-    AT THIS DOOR, because it is the one every publisher passes — the cascade's movers and an external
+    AT THIS DOOR, because it is the one every publisher passes — the cascade's stage runners and an external
     writer alike — and because the job-side contract has a hole this closes: it counts parentless rows
     only `if SOURCE_ROWID_COLUMN in out.schema.names`, so a table that drops the column reports zero
     and passes the check that exists to catch it.

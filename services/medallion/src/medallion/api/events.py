@@ -1,9 +1,9 @@
-"""The mover's Dapr pub/sub subscription route (``/medallion-event``).
+"""The stage runner's Dapr pub/sub subscription route (``/medallion-event``).
 
 The :class:`DaprApp` wrapper serves ``GET /dapr/subscribe`` (read by the sidecar at startup) and routes
-deliveries of the mover's ``sub_topic`` to :func:`handle_stage`. Each mover has its own app-id + sub_topic,
+deliveries of the stage runner's ``sub_topic`` to :func:`handle_stage`. Each stage runner has its own app-id + sub_topic,
 so no consumer clash. Authenticated by the Dapr app-api-token (``require_dapr_token``) so a forged stage
-trigger can't drive the cascade. :func:`register_stage_route` wires it onto a mover app from the thin entry.
+trigger can't drive the cascade. :func:`register_stage_route` wires it onto a stage runner app from the thin entry.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from service_kit.governed.dapr_auth import require_dapr_token
 
 
 def register_stage_route(app: FastAPI) -> DaprApp:
-    """Wrap ``app`` in a :class:`DaprApp` and register the mover's stage subscription handler.
+    """Wrap ``app`` in a :class:`DaprApp` and register the stage runner's stage subscription handler.
 
     When ``dlq_topic`` is configured (chart: ``dapr.resiliency.enabled``), the subscription declares
     a Dapr ``deadLetterTopic`` and the DLQ parking route is registered — a stage trigger that
@@ -32,9 +32,9 @@ def register_stage_route(app: FastAPI) -> DaprApp:
     settings = get_settings()
     dapr_app = DaprApp(app)
     if settings.dlq_topic:
-        # The label is THIS mover's app-id, derived from its per-app DLQ topic (`dlq.<daprAppId>`,
-        # chart medallion.yaml). A shared literal ("mover") made two movers' parks indistinguishable
-        # in `medallion.dlq.parked` — and when the topic was per-subTopic, two movers subscribed to
+        # The label is THIS stage runner's app-id, derived from its per-app DLQ topic (`dlq.<daprAppId>`,
+        # chart medallion.yaml). A shared literal ("stage runner") made two stage runners' parks indistinguishable
+        # in `medallion.dlq.parked` — and when the topic was per-subTopic, two stage runners subscribed to
         # EACH OTHER's dead letters and double-counted every park.
         register_dlq_route(
             dapr_app,

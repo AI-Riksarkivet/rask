@@ -45,8 +45,7 @@ def test_both_bronze_schemas_declare_id_as_the_primary_key() -> None:
     for name, schema in (("ingest.BRONZE_SCHEMA", BRONZE_SCHEMA), ("medallion._INGEST_SCHEMA", _INGEST_SCHEMA)):
         field = _id_field(schema)
         assert (field.metadata or {}).get(_PK_KEY) == b"true", (
-            f"{name} does not declare `id` as Lance's unenforced primary key, so the key both cascade "
-            f"lanes merge on exists only as a convention"
+            f"{name} does not declare `id` as Lance's unenforced primary key, so the key both cascade lanes merge on exists only as a convention"
         )
 
 

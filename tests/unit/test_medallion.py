@@ -1,7 +1,7 @@
-"""Unit tests for the event-driven medallion movers + medallion-producer producer.
+"""Unit tests for the event-driven medallion stage runners + medallion-producer producer.
 
 Infra-free: no sidecar, no broker. A fake Dapr client records publishes; we pin the contract each
-service must honor — the mover emits the transform's lineage (inputs→outputs) AND the next stage's
+service must honor — the stage_runner emits the transform's lineage (inputs→outputs) AND the next stage's
 trigger, returns SUCCESS (RETRY on a publish outage), the producer emits ONLY the bronze-write event
 (R23: bronze is the first governed tier — never a direct cascade publish), and the event-driven head
 (/bronze-arrival) fires the medallion.bronze trigger for a bronze ingest while ignoring others.
@@ -19,7 +19,7 @@ import httpx
 import pytest
 
 import medallion.services.ray_submit as ray_submit
-import medallion.services.transform as mover
+import medallion.services.transform as stage_runner
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
@@ -33,7 +33,7 @@ from service_kit.openlineage import run_id_for
 def _fake_upstream(monkeypatch: pytest.MonkeyPatch, *, version: int = 1) -> None:
     """Stub the pre-write upstream read (R26): these tests fake the WRITE, so they must fake the read the
     consume-layer ``lineage`` document is built from — there is no real Lance dataset behind ``/tmp/from``."""
-    monkeypatch.setattr(mover, "read_upstream", lambda uri, _so: UpstreamFacts(uri=uri, version=version))
+    monkeypatch.setattr(stage_runner, "read_upstream", lambda uri, _so: UpstreamFacts(uri=uri, version=version))
 
 
 class _FakeDapr:
@@ -78,7 +78,7 @@ _BRONZE_TO_SILVER = MedallionSettings.model_validate(
 )
 # The same stage with the EVENT-DRIVEN Ray path on (compute + ray + from/to URIs). model_copy skips the
 # validators, matching what the deployed pod resolves; a local path keeps storage_options() creds-free.
-_RAY_MOVER = _BRONZE_TO_SILVER.model_copy(update={"compute_enabled": True, "ray_enabled": True, "from_uri": "/tmp/from", "to_uri": "/tmp/to"})
+_RAY_STAGE_RUNNER = _BRONZE_TO_SILVER.model_copy(update={"compute_enabled": True, "ray_enabled": True, "from_uri": "/tmp/from", "to_uri": "/tmp/to"})
 
 
 def test_build_run_event_records_the_transform_edge() -> None:
@@ -136,24 +136,24 @@ def test_run_id_is_project_qualified_so_tenants_never_collide() -> None:
     assert acme != globex
 
 
-def test_mover_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
+def test_stage_runner_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
     """ONE publish, and it is the lineage event. There is no second door.
 
     Renamed and inverted, not trimmed. It asserted `len(dapr.calls) == 2` — the lineage event AND the
-    mover publishing `medallion.silver` itself, which promoted the stage without the catalog ever
+    stage runner publishing `medallion.silver` itself, which promoted the stage without the catalog ever
     ruling on it. That was the second enforcement point `catalog/services/publication.py` exists to
     prevent, and it was the DEFAULT path because MEDALLION_CASCADE_VIA_PUBLISH defaulted False.
 
     Asserting the COUNT is the point: a test that merely stopped checking the trigger would pass just
-    as well if the mover started publishing something else.
+    as well if the stage runner started publishing something else.
     """
     dapr = _FakeDapr()
     event = {"data": {"token": "abc123", "dataset": "bronze$events", "namespace": "bronze"}}
 
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, event))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, event))
 
     assert status == {"status": "SUCCESS"}
-    assert len(dapr.calls) == 1, f"the mover published more than the lineage event: {[c['topic'] for c in dapr.calls]}"
+    assert len(dapr.calls) == 1, f"the stage_runner published more than the lineage event: {[c['topic'] for c in dapr.calls]}"
     (lineage,) = dapr.calls
     assert lineage["topic"] == "lineage.events.v1"
     assert lineage["data"]["inputs"][0]["name"] == "bronze$events"
@@ -162,11 +162,11 @@ def test_mover_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
     assert lineage["data"]["run"]["runId"] == run_id_for("embed_features-abc123")
     assert lineage["data"]["run"]["facets"]["lance"]["token"] == "abc123"
     assert not any(c["topic"] == "medallion.silver" for c in dapr.calls), (
-        "the mover fired the next stage itself — promotion is the catalog's tag move, and only that"
+        "the stage runner fired the next stage itself — promotion is the catalog's tag move, and only that"
     )
 
 
-def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
     """ray_enabled: handle_stage submits the Ray job, measures the written dataset, and emits the SAME
     lineage (measured version AND column edges) and fires NO trigger — the in-process contract, via Ray.
 
@@ -213,7 +213,7 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
         )
         return "stage-ray-silver-tok-abc"
 
-    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
+    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
     _fake_upstream(monkeypatch)
     measured = WriteResult(version=7, row_count=5, size_bytes=99, column_map=[("id", "id", "IDENTITY")])
     measured_uris: dict[str, str] = {}
@@ -222,16 +222,16 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
         measured_uris.update({"from": from_uri, "to": to_uri})
         return measured
 
-    monkeypatch.setattr(mover, "measure_stage", fake_measure_stage)
+    monkeypatch.setattr(stage_runner, "measure_stage", fake_measure_stage)
 
     # PASS 1 — the trigger arrives. S1: the handler DISPATCHES a watcher and returns; it must NOT
     # measure, because the job it just asked for has not run. Measuring here is the defect.
     first = _FakeDapr()
-    status = asyncio.run(mover.handle_stage(cast(Any, first), _RAY_MOVER, {"data": {"token": "tok"}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, first), _RAY_STAGE_RUNNER, {"data": {"token": "tok"}}))
 
     assert status == {"status": "SUCCESS"}
     assert {k: dispatched[k] for k in ("from", "to", "token")} == {"from": "/tmp/from", "to": "/tmp/to", "token": "tok"}
-    assert (dispatched["from_id"], dispatched["to_id"]) == (_RAY_MOVER.from_dataset, _RAY_MOVER.to_dataset), (
+    assert (dispatched["from_id"], dispatched["to_id"]) == (_RAY_STAGE_RUNNER.from_dataset, _RAY_STAGE_RUNNER.to_dataset), (
         "the job would name its datasets by their URI stems, which match no grant"
     )
     assert dispatched["run_id"], "the job would emit its lineage under a run id nothing else knows"
@@ -241,13 +241,13 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     # PASS 2 — the workflow read SUCCESSED and re-published the trigger with `ray_job_done`. NOW the
     # destination exists, so the measure is a question about this run's output rather than a race.
     dapr = _FakeDapr()
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok", "ray_job_done": True}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _RAY_STAGE_RUNNER, {"data": {"token": "tok", "ray_job_done": True}}))
 
     assert status == {"status": "SUCCESS"}
     # The measure reads BOTH ends — it needs the upstream schema to reconstruct the edges.
     assert measured_uris == {"from": "/tmp/from", "to": "/tmp/to"}
     # ONE publish on this lane too: the Ray path is submit-and-ack, so the job's own registered commit
-    # is what wakes the next tier. The mover firing a topic here would be the same second door.
+    # is what wakes the next tier. The stage runner firing a topic here would be the same second door.
     (lineage,) = dapr.calls
     # R26: the consume-layer provenance document rides the submission, so the JOB stamps it in its own
     # commit — the distributed path cannot produce a dataset the in-process path would have stamped.
@@ -261,12 +261,12 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     assert facets["version"]["datasetVersion"] == "7"  # the measured version
     assert facets["columnLineage"]["fields"]["id"]["inputFields"][0]["field"] == "id"
     assert not any(c["topic"] == "medallion.silver" for c in dapr.calls), (
-        "the Ray lane fired the next stage from the mover — submit-and-ack means the JOB's registered "
+        "the Ray lane fired the next stage from the stage runner — submit-and-ack means the JOB's registered "
         "commit wakes the next tier, and the catalog's tag move is the only promotion"
     )
 
 
-def test_mover_ray_branch_retries_when_the_watcher_cannot_be_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_runner_ray_branch_retries_when_the_watcher_cannot_be_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
     """S1 moved WHERE a ray failure surfaces, and this is the case that must not be swallowed.
 
     The Ray job is now submitted by the workflow, so a failure to DISPATCH the workflow means no job
@@ -281,12 +281,12 @@ def test_mover_ray_branch_retries_when_the_watcher_cannot_be_dispatched(monkeypa
     def fake_dispatch(*_a: Any, **_k: Any) -> str:
         raise RuntimeError("the state store is not configured to use the actor runtime")
 
-    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
-    status = asyncio.run(mover.handle_stage(cast(Any, _FakeDapr()), _RAY_MOVER, {"data": {"token": "t"}}))
+    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, _FakeDapr()), _RAY_STAGE_RUNNER, {"data": {"token": "t"}}))
     assert status == {"status": "RETRY"}  # nothing is watching and nothing was submitted → redeliver
 
 
-def test_mover_write_is_single_flight_under_concurrent_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_runner_write_is_single_flight_under_concurrent_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two concurrent deliveries of the SAME stage serialize their Lance write (item 7). Without the
     process-wide _write_lock both would enter the write (two threads → two `mode="overwrite"` commits
     racing on the same target); with it, at most ONE is ever in the critical section."""
@@ -308,8 +308,8 @@ def test_mover_write_is_single_flight_under_concurrent_delivery(monkeypatch: pyt
     async def _run_two() -> list[dict[str, str]]:
         return list(
             await asyncio.gather(
-                mover.handle_stage(cast(Any, _FakeDapr()), settings, {"data": {"token": "a"}}),
-                mover.handle_stage(cast(Any, _FakeDapr()), settings, {"data": {"token": "b"}}),
+                stage_runner.handle_stage(cast(Any, _FakeDapr()), settings, {"data": {"token": "a"}}),
+                stage_runner.handle_stage(cast(Any, _FakeDapr()), settings, {"data": {"token": "b"}}),
             )
         )
 
@@ -318,21 +318,21 @@ def test_mover_write_is_single_flight_under_concurrent_delivery(monkeypatch: pyt
     assert max_active == 1  # serialized — never two writes in flight for the same target at once
 
 
-def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ray_stage_runner_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -> None:
     """ray_enabled + a blob-carrying upstream now goes to the RAY job (Phase-3 parity, 2026-07-13): the
     stage job round-trips the blob column via pylance (read_blobs → blob_array → 2.2 write) and derives
     thumbnail+embedding — so there is no in-process fallback anymore. The old fallback is GONE."""
     from medallion.services.compute import WriteResult
 
     measured = WriteResult(version=7, row_count=5, size_bytes=99)
-    monkeypatch.setattr(mover, "measure_stage", lambda _from, _to, _so: measured)
+    monkeypatch.setattr(stage_runner, "measure_stage", lambda _from, _to, _so: measured)
     dispatched: list[str] = []
 
     def fake_dispatch(*_a: Any, **_k: Any) -> str:
         dispatched.append("ray")
         return "stage-ray-silver-tok-abc"
 
-    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
+    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
     transformed: list[str] = []
 
     def fake_transform(_f: str, _t: str, _so: dict[str, str], *, stage: str) -> WriteResult:
@@ -343,7 +343,7 @@ def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -
     _fake_upstream(monkeypatch)
     dapr = _FakeDapr()
 
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok"}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _RAY_STAGE_RUNNER, {"data": {"token": "tok"}}))
 
     assert status == {"status": "SUCCESS"}
     # The blob upstream still goes to RAY — S1 changed WHEN the job is waited for, not WHICH lane runs.
@@ -351,11 +351,11 @@ def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -
     assert transformed == []  # in-process transform did NOT run
 
 
-def test_terminal_mover_emits_lineage_but_no_next_trigger() -> None:
+def test_terminal_stage_runner_emits_lineage_but_no_next_trigger() -> None:
     terminal = _BRONZE_TO_SILVER.model_copy(update={"pub_topic": ""})  # gold: no downstream
     dapr = _FakeDapr()
 
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), terminal, {"data": {"token": "t"}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), terminal, {"data": {"token": "t"}}))
 
     assert status == {"status": "SUCCESS"}
     assert len(dapr.calls) == 1 and dapr.calls[0]["topic"] == "lineage.events.v1"
@@ -366,16 +366,16 @@ def test_medallion_apps_build_their_openapi() -> None:
 
     A route whose return annotation isn't a valid Pydantic response model (e.g. ``dict | JSONResponse``)
     passes every service-level test but crashes the app at startup/`openapi()` — this pins that the
-    producer + mover apps actually stand up. (Caught live when /produce's RFC-9457 union broke medallion-producer.)"""
-    import medallion.mover as mover_app
+    producer + stage_runner apps actually stand up. (Caught live when /produce's RFC-9457 union broke medallion-producer.)"""
     import medallion.producer as producer_app
+    import medallion.stage_runner as stage_runner_app
 
     assert producer_app.app.openapi()["openapi"]  # the crash path — must not raise
-    assert mover_app.app.openapi()["openapi"]
+    assert stage_runner_app.app.openapi()["openapi"]
 
 
-def test_mover_retries_on_publish_failure() -> None:
-    status = asyncio.run(mover.handle_stage(cast(Any, _FakeDapr(fail=True)), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
+def test_stage_runner_retries_on_publish_failure() -> None:
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, _FakeDapr(fail=True)), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
     assert status == {"status": "RETRY"}
 
 
@@ -436,7 +436,7 @@ def test_bronze_arrival_fires_the_cascade() -> None:
 
 
 def test_bronze_arrival_ignores_non_bronze_event() -> None:
-    # Loop guard: a mover's silver write on the SAME topic is acked and drives nothing — the head can't
+    # Loop guard: a stage runner's silver write on the SAME topic is acked and drives nothing — the head can't
     # self-trigger off the cascade it started.
     dapr = _FakeDapr()
     silver = {
@@ -495,39 +495,39 @@ async def _deny(*_a: Any, **_k: Any) -> bool:
     return False
 
 
-def test_mover_denied_when_not_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_runner_denied_when_not_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
     # FGA gate on + the service identity lacks the required role → DROP, and NOTHING is published.
-    monkeypatch.setattr(mover.fga, "check", _deny)
+    monkeypatch.setattr(stage_runner.fga, "check", _deny)
     dapr = _FakeDapr()
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
     assert status == {"status": "DROP"}
     assert dapr.calls == []  # not authorized → no lineage emitted, no next stage triggered
 
 
-def test_mover_allowed_when_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(mover.fga, "check", _allow)
+def test_stage_runner_allowed_when_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(stage_runner.fga, "check", _allow)
     dapr = _FakeDapr()
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
     assert status == {"status": "SUCCESS"}
     assert len(dapr.calls) == 1  # authorized → the lineage event, and nothing else
 
 
-def test_mover_retries_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An FGA OUTAGE (fail-closed 503 from fga.check) is transient — unlike a denial: the mover must
+def test_stage_runner_retries_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An FGA OUTAGE (fail-closed 503 from fga.check) is transient — unlike a denial: the stage runner must
     # return the explicit RETRY contract so the sidecar redelivers, and publish NOTHING meanwhile.
     from lance_namespace import ServiceUnavailableError
 
     async def _outage(*_a: Any, **_k: Any) -> bool:
         raise ServiceUnavailableError("openfga unreachable")
 
-    monkeypatch.setattr(mover.fga, "check", _outage)
+    monkeypatch.setattr(stage_runner.fga, "check", _outage)
     dapr = _FakeDapr()
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
     assert status == {"status": "RETRY"}
     assert dapr.calls == []  # nothing emitted while authz is unanswerable
 
 
-def test_mover_emits_fail_event_on_transform_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_runner_emits_fail_event_on_transform_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     # A GENUINE transform failure — the write itself raises, so nothing was committed — records a FAIL
     # RunEvent: BARE output (so the lineage repo makes a WROTE edge → producers() surfaces the attempt)
     # with NO version facet, the standard errorMessage facet, and RETRY.
@@ -545,7 +545,7 @@ def test_mover_emits_fail_event_on_transform_failure(monkeypatch: pytest.MonkeyP
     _fake_upstream(monkeypatch)
 
     dapr = _AttemptDapr(fail_at=99)  # publishing works; the WRITE is what fails
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), settings, {"data": {"token": "t"}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), settings, {"data": {"token": "t"}}))
     assert status == {"status": "RETRY"}
     fail_events = [e for e in dapr.attempts if e.get("eventType") == "FAIL"]
     assert fail_events, "a transform failure must emit a FAIL RunEvent"
@@ -563,40 +563,40 @@ def test_a_failed_complete_publish_is_not_a_run_failure() -> None:
     # OVERWRITE that staged COMPLETE, destroying the object the outbox exists to preserve.
     # Same principle as the trigger-publish case below, one step earlier in the sequence.
     dapr = _AttemptDapr(fail_at=0)  # the COMPLETE emit fails
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
     assert status == {"status": "RETRY"}  # redelivery re-emits the idempotent COMPLETE
     assert not any(e.get("eventType") == "FAIL" for e in dapr.attempts), (
         "a FAIL was emitted for a run whose data committed — and it would overwrite the staged COMPLETE"
     )
 
 
-def test_the_mover_makes_exactly_ONE_publish_and_it_is_the_COMPLETE() -> None:
+def test_the_stage_runner_makes_exactly_ONE_publish_and_it_is_the_COMPLETE() -> None:
     """The one-door property, asserted at the wire rather than at the decision.
 
     THIS TEST'S ORIGINAL SUBJECT NO LONGER EXISTS, and converting it beats deleting it. It was
-    `test_mover_does_not_fail_run_when_only_the_trigger_publish_fails`: with `fail_at=1` the COMPLETE
+    `test_stage_runner_does_not_fail_run_when_only_the_trigger_publish_fails`: with `fail_at=1` the COMPLETE
     landed and the SECOND publish — the downstream trigger — raised, and the contract was that a run
     whose data committed must not be flipped to FAIL. There is no second publish now, so `fail_at=1`
     has nothing to fail and the case is unreachable.
 
     The principle it protected (a publish failure after a committed write must not fabricate a FAIL)
     is still covered one step earlier by the `fail_at=0` sibling above. What is NOT covered anywhere
-    else is the property this file is now the only witness to: the mover's publish COUNT. `gate_decision`
+    else is the property this file is now the only witness to: the stage runner's publish COUNT. `gate_decision`
     can be reasoned about in isolation; what reaches the broker cannot, and a reintroduced second door
     would show up here first.
     """
     dapr = _AttemptDapr(fail_at=99)  # nothing fails; the subject is what gets published at all
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
+    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
     assert status == {"status": "SUCCESS"}
     assert [e.get("eventType", "trigger") for e in dapr.attempts] == ["COMPLETE"], (
-        "the mover published something besides its COMPLETE lineage event — the second door is back"
+        "the stage runner published something besides its COMPLETE lineage event — the second door is back"
     )
 
 
 def test_bronze_arrival_carries_the_originator_onto_the_trigger() -> None:
     """THE HEAD IS THE LAST PLACE THE HUMAN EXISTS.
 
-    A mover authors with a chart role literal (`data_eng`/`analyst`/`htr`/`ray`), so a failure at silver
+    A stage_runner authors with a chart role literal (`data_eng`/`analyst`/`htr`/`ray`), so a failure at silver
     or gold addressed an inbox nobody can open and the person whose ingest started the run was told
     nothing. The verified subject cannot be re-derived down there — the HTTP request is long gone — so it
     rides the trigger beside `token` and `project`, which is the only carrier that survives the hop.
@@ -647,7 +647,7 @@ class _FakeJobsAPI:
 def test_a_lane_supplies_its_own_parameters_under_a_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
     """A workload configures itself without a platform edit — the other half of `stageJob`.
 
-    Before this, `submit_stage_job` built a FIXED env dict, so a mover row could name a workload's Ray
+    Before this, `submit_stage_job` built a FIXED env dict, so a stage runner row could name a workload's Ray
     entrypoint and then had no way to configure it: a second workload either reused the first one's
     variables or required an edit to the platform. That is the coupling the agnostic ruling forbids,
     and it is why "a workload reaches the platform as configuration" had no mechanism behind it.
@@ -702,7 +702,7 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
 
 
 def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The declaration governs what runs — otherwise it is a record an admin edits and a mover ignores.
+    """The declaration governs what runs — otherwise it is a record an admin edits and a stage runner ignores.
 
     This is the assertion that makes `TransformSpec` load-bearing rather than decorative: two sources
     of truth for what a lane runs, with the GOVERNED one winning. The chart's values are deliberately
@@ -760,7 +760,7 @@ def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyP
     """The refusal, asserted where it matters: no job reaches the cluster.
 
     A fallback to `ray_entrypoint` would submit the chart's OLD program under the declaration's name
-    and report success — the mover would look healthy, the lane would look governed, and the wrong
+    and report success — the stage runner would look healthy, the lane would look governed, and the wrong
     transform would run. Better to submit nothing and retry once an admin declares it.
     """
     from medallion.services.transform_spec import UndeclaredTransformError

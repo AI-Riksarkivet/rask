@@ -126,7 +126,7 @@ def confine_to_lance_root(candidate: str) -> str:
 
     The governed check runs FIRST and independently of the confinement root: an operator who points
     `RASK_INGEST_LANCE_ROOT` at the catalog's own bucket must still not be able to re-ingest a governed
-    tier through this door. Its message names the mover, because "denied" without a destination is how a
+    tier through this door. Its message names the stage runner, because "denied" without a destination is how a
     caller ends up building the second, unlineaged copy path by hand.
     """
     config = settings()
@@ -134,7 +134,7 @@ def confine_to_lance_root(candidate: str) -> str:
     if governed and _under(candidate, governed):
         raise ValueError(
             f"{candidate!r} is a catalog-governed dataset; ingest does not copy between governed tiers — "
-            "that is the medallion mover's job (the bronze->silver->gold cascade). To land an EXISTING "
+            "that is the medallion stage runner's job (the bronze->silver->gold cascade). To land an EXISTING "
             "table under governance instead, use POST /v1/table/{id}/register."
         )
     base = config.lance_root

@@ -159,7 +159,7 @@ def medallion() -> dict:
 def test_the_ray_lane_reads_a_runtime_minted_warehouse_bucket(ray: dict) -> None:
     """The measured failure. `_resolve_roots` points a tenant's stage at its warehouse root, so a
     policy that names only static buckets 403s every project whose bucket was minted at runtime —
-    and the mover reports it as a failed Ray job, never as a missing grant."""
+    and the stage runner reports it as a failed Ray job, never as a missing grant."""
     assert allowed(ray, action="s3:ListBucket", bucket=RUNTIME_BUCKET, prefix="medallion/"), (
         "the stage job cannot even LIST its upstream — this is the AccessDenied that killed the acme cascade"
     )
@@ -287,9 +287,7 @@ def test_the_widening_DOES_disclose_the_bucket_list_and_that_is_the_trade(ray: d
     reachable, and a future edit that believes otherwise fails here.
     """
     assert not any(
-        "s3:ListAllMyBuckets" in (s["Action"] if isinstance(s["Action"], list) else [s["Action"]])
-        for s in ray["Statement"]
-        if s["Effect"] == "Allow"
+        "s3:ListAllMyBuckets" in (s["Action"] if isinstance(s["Action"], list) else [s["Action"]]) for s in ray["Statement"] if s["Effect"] == "Allow"
     ), "the compute lane now has the account-level action, which is a widening beyond the measured fallback"
     # Every bucket answers a per-bucket list, which is what the server uses to enumerate.
     assert allowed(ray, action="s3:ListBucket", bucket="any-tenant-bucket", prefix="medallion/")
@@ -368,7 +366,7 @@ def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attach
     assert not any(creates), "a policy create still swallows its failure — a bad policy renders as a successful hook"
 
 
-# ---- the medallion plane: the producer and the three movers --------------------------------------
+# ---- the medallion plane: the producer and the three stage runners --------------------------------------
 #
 # A THIRD SHAPE, and it had to be. Reusing `rask-ray-compute` here would have broken the cascade on
 # contact: that policy denies the control prefixes TOTALLY, which is right for a Ray stage job (it
@@ -406,7 +404,7 @@ def test_the_medallion_still_READS_the_records_it_resolves_against(medallion: di
 
 @pytest.mark.parametrize("prefix", ["_transforms", "_gates", "_warehouses", "_projects", "_protection", "_policies", "_trash", "__manifest"])
 def test_the_medallion_cannot_REWRITE_what_governs_it(medallion: dict, prefix: str) -> None:
-    """The point of the credential. A mover that can rewrite `_transforms/` re-points what it runs;
+    """The point of the credential. A stage runner that can rewrite `_transforms/` re-points what it runs;
     one that can rewrite `_gates/` admits its own blocked output; one that can rewrite `_warehouses/`
     moves a tenant's data; one that can delete `_trash/` strands bytes behind an undrop that can no
     longer find them. None of those is a write this plane ever makes."""

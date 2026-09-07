@@ -2,12 +2,12 @@
 
 :func:`ingest_media` lands external media objects as a bronze blob-v2 table (through the provider-agnostic
 :class:`service_kit.lakehouse.sources.S3FileSystemSource` seam), emits the ``source URIs -> bronze media`` OpenLineage event with the
-blob-aware schema facet, then publishes the media-chain trigger — the deployed bronze→silver media mover
+blob-aware schema facet, then publishes the media-chain trigger — the deployed bronze→silver media stage runner
 consumes it and derives the inline artifacts (thumbnail + embedding) by CONTENT in the generic compute.
 
 The bronze media table it lands is REGISTERED with the catalog first, so the multimodal head's tier is a
 governed ``table:`` object exactly like the ``bronze$events`` the other head seeds and the silver-media
-the next mover derives. Until it was, the same lane was governed or not purely by which door produced it.
+the next stage runner derives. Until it was, the same lane was governed or not purely by which door produced it.
 
 Unlike ``/produce`` (a dummy emitter that works compute-off), media ingest is REAL data by definition, so
 it requires compute + the media settings — a disabled head returns an explicit contract the route maps to
@@ -57,7 +57,7 @@ def media_head_enabled(settings: MedallionSettings) -> bool:
     """Whether the media ingest head is configured — compute + S3 + a bronze target + a source bucket.
 
     ``s3_endpoint`` is required too: the head seeds/reads the source prefix through an S3 filesystem, so
-    local-path compute (a supported mover configuration) cannot host it — 409, not a KeyError 500."""
+    local-path compute (a supported stage runner configuration) cannot host it — 409, not a KeyError 500."""
     return bool(settings.compute_enabled and settings.s3_endpoint and settings.media_bronze_uri and settings.media_source_bucket)
 
 
@@ -142,15 +142,15 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         # call at all — the identical defect `/produce` carried: the dataset held no `table:` object,
         # so `policy/set` answered 404 "table has no storage location to police", no `_protection/`
         # record was reachable and no FGA grant could name it, while the silver-media derived from it
-        # one hop later was governed the whole time. Registering here closes that in the movers' own
+        # one hop later was governed the whole time. Registering here closes that in the stage runners' own
         # order (`test_no_rows_without_a_catalog_record`): ask first, write second, so no window exists
         # in which media blobs sit on storage the catalog has no record of.
         #
         # IT TELLS RATHER THAN ASKS, exactly like the events head and for the same reason: this URI is a
         # DEPLOYMENT CONTRACT. `chart/templates/medallion.yaml` renders `MEDALLION_MEDIA_BRONZE_URI` and
-        # the media mover's `fromNamespace`-derived `MEDALLION_FROM_URI` from one `$mediaBronzeNs`
+        # the media stage runner's `fromNamespace`-derived `MEDALLION_FROM_URI` from one `$mediaBronzeNs`
         # expression, and the `medallion.media` trigger carries no `from_uri` — so a vended location
-        # would leave that mover opening a path nothing writes to, the media lane's first leg dead with
+        # would leave that stage runner opening a path nothing writes to, the media lane's first leg dead with
         # nothing red.
         #
         # A REFUSAL FAILS THE REQUEST, and it is deliberately NOT a new way to strand a media run: this
@@ -163,7 +163,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         # ONLY `catalog_url` GATES IT: `media_head_enabled` above already established compute and a
         # bronze URI, so unlike `/produce` there is no pure-emit shape here to exclude — a media ingest
         # that reaches this line always writes bytes worth governing. An empty catalog URL is the
-        # ungoverned dev/demo shape the movers keep the same escape hatch for.
+        # ungoverned dev/demo shape the stage runners keep the same escape hatch for.
         #
         # NO NEW CONTROL ACTION: this is the catalog's own register door, so the ownership seed, the
         # `table_registered` control event and the REGISTER_TABLE lineage marker are the ones that door
@@ -257,7 +257,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
             span.set_status(Status(StatusCode.ERROR, "publish_failed: emit"))
             log.warning("medallion_media_publish_failed", extra={"token": token, "stage": "emit", "error": str(exc)})
             return {"status": "publish_failed", "token": token}
-        # The media-chain trigger (consumed by the media mover's durable consumer). Published AFTER the
+        # The media-chain trigger (consumed by the media stage runner's durable consumer). Published AFTER the
         # lineage emit so the graph never shows a derived silver before its bronze head exists.
         landed = await dapr_publish.publish_json(
             dapr,
@@ -267,7 +267,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
                 "token": token,
                 "dataset": settings.media_bronze_dataset,
                 "namespace": settings.media_bronze_namespace,
-                # I2 FROM THE CONSUMING END. The mover composes `{root}/medallion/{namespace}` when the
+                # I2 FROM THE CONSUMING END. The stage runner composes `{root}/medallion/{namespace}` when the
                 # trigger names no upstream, and the catalog vends this table into whichever warehouse
                 # its namespace is BOUND to — a different bucket entirely once a binding exists. Without
                 # this field the media lane's first leg opens a path nothing wrote to, finds no rows,

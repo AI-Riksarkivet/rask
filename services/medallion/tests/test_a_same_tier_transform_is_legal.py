@@ -3,10 +3,10 @@
 the retired plan `open_medallion_workflow.md` (its rulings now live in `docs/architecture/medallion-cascade.md`) filed S6 as "silver→silver derivations, once S1's shape has run in
 anger", and §5's table reads "Not yet. Same shape as bronze→silver; adopt after that lands."
 
-Read as outstanding WORK that is wrong, and worth stating plainly: the mover is a namespace-PAIR
+Read as outstanding WORK that is wrong, and worth stating plainly: the stage runner is a namespace-PAIR
 machine. It reads `from_namespace/from_dataset`, writes `to_namespace/to_dataset`, and imposes no
 ordering between them — there is no tier ladder in the code, no "silver must follow bronze" check,
-nothing that inspects whether the two sides differ. A same-tier derivation is therefore a `movers[]`
+nothing that inspects whether the two sides differ. A same-tier derivation is therefore a `stage runners[]`
 entry in values.yaml (`fromNamespace: silver` → `toNamespace: silver`), not a feature.
 
 That generality is the multimodal design working as intended: the tiers are exactly bronze→silver→gold
@@ -60,7 +60,7 @@ def _same_tier_settings(tmp_path: Path) -> MedallionSettings:
         "MEDALLION_FROM_URI": str(tmp_path / "silver.lance"),
         "MEDALLION_TO_URI": str(tmp_path / "enriched.lance"),
         # REQUIRED since the second door was removed: publishing is the only way to promote, and it
-        # needs a catalog. Every mover the chart renders has one; a lane without one is the ungoverned
+        # needs a catalog. Every stage runner the chart renders has one; a lane without one is the ungoverned
         # mode, which writes and never promotes.
         "MEDALLION_CATALOG_URL": "http://catalog.invalid",
     }
@@ -70,7 +70,7 @@ def _same_tier_settings(tmp_path: Path) -> MedallionSettings:
 def _stub_catalog(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[dict[str, object]]:
     """Stand in for the catalog, which is now the ONLY door a stage may promote through.
 
-    Before the second enforcement point was removed these tests needed no catalog: the mover fired
+    Before the second enforcement point was removed these tests needed no catalog: the stage runner fired
     the next stage's topic itself. It cannot any more, so a stage promotes only by publishing — hence
     both this stub AND `MEDALLION_CATALOG_URL` on the settings, because `gate_decision` will not
     choose PUBLISH without a catalog and the stub would then never be called.
@@ -97,7 +97,7 @@ class TestTheMoverImposesNoTierLadder:
         result = asyncio.run(transform.handle_stage(cast("Any", dapr), _same_tier_settings(upstream), {"data": {"token": "t"}}))
 
         # NOT `== SUCCESS`, and the difference is the point. That assertion passed only because the
-        # mover used to fire the next topic itself, bypassing the gate. With one door the lane reaches
+        # stage runner used to fire the next topic itself, bypassing the gate. With one door the lane reaches
         # the gate like any other, and a destination with no predecessor is a FIRST PROMOTION -- a band
         # reason, so it HOLDs for a person ("a destination we cannot read is given a person's attention
         # rather than a silent promote", compute.py:272). What this test exists to prove is that a
@@ -115,13 +115,13 @@ class TestTheMoverImposesNoTierLadder:
 
     def test_it_feeds_its_own_downstream(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
         """A derivation is a cascade hop like any other, so it must be able to feed the next one —
-        otherwise a chain of derivations would need something outside the mover to drive it.
+        otherwise a chain of derivations would need something outside the stage runner to drive it.
 
-        THE MECHANISM CHANGED, THE PROPERTY DID NOT. This asserted the mover published
+        THE MECHANISM CHANGED, THE PROPERTY DID NOT. This asserted the stage runner published
         `medallion.silver.enriched` itself. That was the SECOND enforcement point: promoting without
         the catalog ruling. The hop is now fed by the catalog's tag move, which emits
         `table_published` for the publication head to route — so what must be asserted is that the
-        stage PUBLISHED, not that the mover fired a topic.
+        stage PUBLISHED, not that the stage runner fired a topic.
         """
         published = _stub_catalog(monkeypatch, upstream)
         dapr = _Dapr()
@@ -129,7 +129,9 @@ class TestTheMoverImposesNoTierLadder:
         asyncio.run(transform.handle_stage(cast("Any", dapr), _same_tier_settings(upstream), {"data": {"token": "t"}}))
 
         assert published, "a derivation must still feed its downstream — through the catalog's tag move"
-        assert dapr.topics == [] or "medallion.silver.enriched" not in dapr.topics, "the mover must not fire the next stage itself; that is the second door"
+        assert dapr.topics == [] or "medallion.silver.enriched" not in dapr.topics, (
+            "the stage runner must not fire the next stage itself; that is the second door"
+        )
 
 
 class TestTheTiersThemselvesAreStillThree:

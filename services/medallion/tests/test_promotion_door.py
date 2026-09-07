@@ -1,15 +1,15 @@
-"""The approval door, and WHY it lives on the producer rather than the mover that held the promotion.
+"""The approval door, and WHY it lives on the producer rather than the stage runner that held the promotion.
 
 `raise_workflow_event` resolves the workflow actor through the app-id of the process that CALLS it.
-The quality gate runs in the `silver-to-gold` mover, so the obvious design hosts `promotion_review`
+The quality gate runs in the `silver-to-gold` stage runner, so the obvious design hosts `promotion_review`
 there — and then the approve route has to be there too, on a bus-only worker with no gateway row and
 no Ingress path. Putting only the ROUTE on `medallion-producer` (which has both, and already runs the
 dual-auth door for `/produce` and `/train`) does not work either: the producer's sidecar looks for the
 instance under its own app-id, does not find it, and **accepts the call anyway**. Not an error — a
 success, for an approval that will never be delivered, with the promotion left to expire on its timer.
 
-So the producer hosts the workflow AND the door, and the mover reaches it over the bus like every
-other cascade hop. Movers stay bus-only, which is what they are.
+So the producer hosts the workflow AND the door, and the stage runner reaches it over the bus like every
+other cascade hop. Stage runners stay bus-only, which is what they are.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ class TestTheHoldReachesTheProducerOverTheBus:
     @pytest.mark.asyncio
     async def test_the_instance_id_is_derived_from_the_TOKEN(self) -> None:
         """The id is what makes re-attach possible, and it is the only handle the door has: nothing
-        carries an instance id back from the mover."""
+        carries an instance id back from the stage runner."""
         client = _WorkflowClient()
 
         await handle_promotion_held({"data": _held()}, client=client)

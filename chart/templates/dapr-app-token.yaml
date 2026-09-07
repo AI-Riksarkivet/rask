@@ -6,7 +6,7 @@
      — and that use is gated on `auth.enabled`.
 
      So `dapr.sidecars=false` with auth on left THIRTEEN Deployments (all seven zones, maintenance, the
-     producer, three movers and lineage) carrying a secretKeyRef to a Secret nothing created. Each of
+     producer, three stage runners and lineage) carrying a secretKeyRef to a Secret nothing created. Each of
      them fails to start with CreateContainerConfigError — a documented, supported toggle producing a
      dead estate, and the render is green so nothing says why.
 

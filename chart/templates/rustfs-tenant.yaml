@@ -3,7 +3,7 @@
 # Tenant wins; ... keep-PVC posture via Tenant spec"). Gated by rustfs.enabled ALONE — the toggle gates
 # the operator subchart (Chart.yaml condition), this Tenant CR, and the bucket-init hook
 # (templates/rustfs.yaml) as one unit. Deliberately NOT gated by singleTenant: the lakehouse apps,
-# medallion movers, compaction, backups and GreptimeDB all resolve the Tenant's S3 Service
+# medallion stage runners, compaction, backups and GreptimeDB all resolve the Tenant's S3 Service
 # (`<tenant>-io:9000` = `lance.rustfsHost`) regardless of singleTenant, so the endpoint must exist
 # whenever any of them renders.
 apiVersion: rustfs.com/v1alpha1

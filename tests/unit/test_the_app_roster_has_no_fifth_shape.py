@@ -80,7 +80,7 @@ FAMILIES: dict[str, Family] = {
 }
 
 #: The roster: every uvicorn target the chart runs, and the family that owns it. Keyed by target
-#: because the target is what the chart writes — three mover Deployments share `medallion.mover:app`,
+#: because the target is what the chart writes — three stage runner Deployments share `medallion.stage_runner:app`,
 #: and they are one app, not three.
 ROSTER: dict[str, str] = {
     "compute:app": "fleet",
@@ -92,7 +92,7 @@ ROSTER: dict[str, str] = {
     "catalog.main:app": "lance",
     "lineage.main:app": "lance",
     "medallion.producer:app": "lance",
-    "medallion.mover:app": "lance",
+    "medallion.stage_runner:app": "lance",
     "maintenance.service:app": "lance",
     "viewer.main:app": "media",
     "search.main:app": "media",

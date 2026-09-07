@@ -1,6 +1,6 @@
 """Medallion secret consumption from the Dapr secret store (Batch 7, 2026-07-11).
 
-The movers/producer were the LAST real S3 consumers still shipping the key in plaintext pod env —
+The stage runners/producer were the LAST real S3 consumers still shipping the key in plaintext pod env —
 worse, the chart ALREADY omitted the env when the store was on, but nothing told the service to
 consume the store, so a store-on deployment left medallion credential-less. This is the service
 half, symmetric with catalog/lineage/compaction: flag off → env exactly as today (no fetch, no

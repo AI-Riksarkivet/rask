@@ -7,10 +7,10 @@
      what that costs: "emitting the URI would name a node no grant matches, hiding the run from every
      recipient". A hidden run acks SUCCESS, so nothing anywhere reports the loss.
   2. `RUN_ID` — the run the job's own OpenLineage events are keyed on. Unset, the runner emits an
-     empty run id, so the job's COMPLETE/FAIL cannot MERGE onto the run the mover already emitted for
+     empty run id, so the job's COMPLETE/FAIL cannot MERGE onto the run the stage runner already emitted for
      the same hop; the graph holds two half-runs instead of one.
 
-The mover HAS all three at the dispatch site (`resolve_stage_identity` names the tables,
+The stage runner HAS all three at the dispatch site (`resolve_stage_identity` names the tables,
 `lineage_doc.run_id` is the run) and drops them one layer down, exactly as `BASE_VERSION` was dropped
 before `test_delta_boundary_reaches_the_job.py` — same chain, same three files, same shape of test:
 drive the whole chain rather than any one link, because each link looks correct alone.
@@ -101,7 +101,7 @@ def test_the_dispatch_hands_the_WORKFLOW_the_identity(monkeypatch: pytest.Monkey
 
     Carried on the SPEC rather than read off the round-tripped trigger, because the trigger does not
     carry it: `from_id`/`to_id` are resolved by `resolve_stage_identity` (env, or the declared
-    transform record) and the run id is minted by the mover, so neither exists on the payload the
+    transform record) and the run id is minted by the stage runner, so neither exists on the payload the
     publisher sent.
     """
     scheduled: dict[str, Any] = {}
@@ -137,7 +137,7 @@ def test_the_dispatch_hands_the_WORKFLOW_the_identity(monkeypatch: pytest.Monkey
 
 @pytest.mark.asyncio
 async def test_the_handler_dispatches_with_the_identity_IT_resolved(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    """Link 1, and the one the whole finding turns on: the mover holds these names and dropped them.
+    """Link 1, and the one the whole finding turns on: the stage runner holds these names and dropped them.
 
     Driven through `handle_stage` rather than asserted on `resolve_stage_identity`, because the defect
     is not that the names are wrong — it is that the dispatch never passed them on.
@@ -172,7 +172,7 @@ async def test_the_handler_dispatches_with_the_identity_IT_resolved(monkeypatch:
     status = await transform.handle_stage(cast(Any, _Dapr()), settings, {"data": {"token": "tok-1"}})
 
     assert status == {"status": "SUCCESS"}
-    assert dispatched.get("from_id") == "bronze$events", f"the mover kept its resolved input id to itself: {sorted(dispatched)}"
+    assert dispatched.get("from_id") == "bronze$events", f"the stage runner kept its resolved input id to itself: {sorted(dispatched)}"
     assert dispatched.get("to_id") == "silver$features"
     assert dispatched.get("run_id"), "the run the job will emit under was never handed over"
 

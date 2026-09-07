@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Seed the medallion service-identity grants into OpenFGA, so the FGA-enforced movers
+# Seed the medallion service-identity grants into OpenFGA, so the FGA-enforced stage runners
 # (chart value medallion.fgaEnabled=true) are authorized to produce their target stage (R23: the
 # governed tiers are bronze/silver/gold — raw is the external world and owns no namespace):
-#   - the bronze ingest head (medallion-producer, the producer) + the bronze→silver / media movers get `writer`
+#   - the bronze ingest head (medallion-producer, the producer) + the bronze→silver / media stage runners get `writer`
 #     on the warehouse (→ can_create_table)
-#   - the silver→gold mover gets `validator` on the gold namespace (→ can_promote)
+#   - the silver→gold stage runner gets `validator` on the gold namespace (→ can_promote)
 # Revoke the last grant (`fga tuple delete ... validator namespace:gold`) to SEE the enforcement: the
-# silver→gold mover is then denied and the cascade stops at silver — a plain writer cannot promote.
+# silver→gold stage runner is then denied and the cascade stops at silver — a plain writer cannot promote.
 #
 # Prereq: the catalog has provisioned the model, and OpenFGA is reachable. Port-forward first:
 #   kubectl port-forward svc/lance-ns-openfga 8081:8080 &
@@ -59,7 +59,7 @@ link() {
 }
 
 # medallion stage namespaces under the warehouse (so the rung cascade reaches them) — the MEDIA lane's
-# namespaces included: without them the media mover's can_create_table check on namespace:silver-media
+# namespaces included: without them the media stage runner's can_create_table check on namespace:silver-media
 # finds no parent chain and the governed cascade silently DROPs every media trigger (audit blocker).
 link "$WAREHOUSE" namespace:bronze
 link "$WAREHOUSE" namespace:silver
@@ -67,8 +67,8 @@ link "$WAREHOUSE" namespace:gold
 link "$WAREHOUSE" namespace:bronze-media
 link "$WAREHOUSE" namespace:silver-media
 # The cascade DATASETS' table→namespace parent links. The catalog seeds these for tables it creates, but
-# the movers write Lance DIRECTLY — without a parent tuple on table:<dataset> nothing cascades to it, so
-# under RASK_FGA_ENABLED no human (not even a warehouse owner) can can_get_metadata a mover-produced
+# the stage runners write Lance DIRECTLY — without a parent tuple on table:<dataset> nothing cascades to it, so
+# under RASK_FGA_ENABLED no human (not even a warehouse owner) can can_get_metadata a stage runner-produced
 # dataset: the whole medallion estate is invisible in /runs, /datasets/*, /graph. Linking each dataset to
 # its stage namespace restores the normal rung inheritance (warehouse reader → stage reader → table reader).
 # INTENDED SIDE EFFECT (say it where the tuples are written): the parent links extend the FULL warehouse
@@ -81,8 +81,8 @@ link namespace:silver 'table:silver$features'
 link namespace:gold 'table:gold$catalog'
 link namespace:bronze-media 'table:bronze-media$objects'
 link namespace:silver-media 'table:silver-media$features'
-# writers → can_create_table on their stage; the promoter mover → can_promote on gold. The bronze
-# ingest head writes as the PRODUCER's identity (medallion-producer) — the retired raw→bronze mover's writer
+# writers → can_create_table on their stage; the promoter stage runner → can_promote on gold. The bronze
+# ingest head writes as the PRODUCER's identity (medallion-producer) — the retired raw→bronze stage runner's writer
 # rung moved here with the collapse (R23).
 w user:service-medallion-producer writer "$WAREHOUSE"
 # The INGEST plane writes bronze too, and it was never seeded. `services/ingest` is the P7a
@@ -98,7 +98,7 @@ w user:service-media-to-silver writer "$WAREHOUSE"
 # "The first attempt granted `validator` ... and it failed identically, three more 403s. `publish` is
 # guarded by `can_update_tag`, and the model says `define can_update_tag: owner`; `validator` buys
 # `can_promote`, which is the OTHER door on that route." Measured again 2026-08-26 on the live estate:
-# the silver->gold mover was refused `describe` AND `create` on its own tier, because `can_create_table`
+# the silver->gold stage runner was refused `describe` AND `create` on its own tier, because `can_create_table`
 # is `writer` and `validator` is neither. Two seeders disagreeing about one identity's rung is how that
 # denial read as a permissions mystery for an hour.
 w user:service-silver-to-gold owner namespace:gold
@@ -110,10 +110,10 @@ w user:service-medallion-producer owner namespace:gold
 
 # --- Ray TRAIN (#115c, docs/RAY-TRAIN.md D5): the trainer's OWN identity + rung. Feature READER on the
 # stages it consumes + WRITER on namespace:models ONLY — never the medallion writer rung (a trainer must
-# not write stages; a mover must not write models). The models namespace parents under the warehouse so
+# not write stages; a stage runner must not write models). The models namespace parents under the warehouse so
 # humans' warehouse-reader rung cascades to model registry datasets; per-model table→namespace parent
 # links (namespace:models parent table:models$<name>) are written by the TRAINER CONSUMER at trigger
-# time (#115b — idempotent, before the submit ack), exactly like the pre-seeded mover links above.
+# time (#115b — idempotent, before the submit ack), exactly like the pre-seeded stage runner links above.
 # Model PROMOTION (#17 candidate→blessed) stays behind the validator rung (not writer): the trainer WRITES
 # candidate versions (writer namespace:models) but blessing one moves the `blessed` tag via the catalog
 # POST /v1/model/<model>/promote endpoint, gated on can_promote = validator. A writer (incl. the trainer)
@@ -129,17 +129,17 @@ w user:service-blesser validator namespace:models
 # on the warehouse so its rung cascades to can_get_metadata on every dataset, exactly like a warehouse
 # reader human. Read-only; never a writer. Pairs with LINEAGE_SERVICE_SUBJECTS + web.serviceIdentity.
 
-echo "✓ seeded medallion grants (mover writers + media lane, silver→gold validator, trainer reader/models-writer, stage/table parent links) into store $SID"
+echo "✓ seeded medallion grants (stage runner writers + media lane, silver→gold validator, trainer reader/models-writer, stage/table parent links) into store $SID"
 
 # --- Per-TENANT enablement (#84, optional args: PROJECT [ZONE_WAREHOUSE]) -------------------------------
 # A tenant cascade (`/produce?project=<p>`) targets the project-QUALIFIED namespaces (`<p>-bronze` …),
-# which inherit NOTHING from the estate seed above — the movers are correctly denied and the trigger is
+# which inherit NOTHING from the estate seed above — the stage runners are correctly denied and the trigger is
 # dead-lettered (fail-closed, live-proven 2026-07-23). Enabling a tenant is exactly three tuple groups:
 #   1. parent each `<p>-<stage>` namespace under the tenant's ZONE warehouse (its medallion bucket —
 #      the registry resolves multiple actives to the LOWEST warehouse id; pass that one), so the
 #      project's own admins/readers inherit visibility over their zone data;
-#   2. the mover service rungs on the qualified target stages (same rungs as the estate seed);
-#   3. the table→namespace parent links (movers write Lance directly; nothing else seeds tables).
+#   2. the stage runner service rungs on the qualified target stages (same rungs as the estate seed);
+#   3. the table→namespace parent links (stage runners write Lance directly; nothing else seeds tables).
 # Media lanes stay estate-only (the media pipeline is not project-qualified — #84 scope).
 PROJECT="${1:-}"
 if [ -n "$PROJECT" ]; then
@@ -165,5 +165,5 @@ if [ -n "$PROJECT" ]; then
   link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$${INGEST_TABLE:-pages}"
   link "namespace:$PROJECT-silver" "table:$PROJECT-silver\$features"
   link "namespace:$PROJECT-gold" "table:$PROJECT-gold\$catalog"
-  echo "✓ enabled tenant '$PROJECT' medallion (zone warehouse:$ZONE_WH — stage parents, mover rungs, table links)"
+  echo "✓ enabled tenant '$PROJECT' medallion (zone warehouse:$ZONE_WH — stage parents, stage runner rungs, table links)"
 fi

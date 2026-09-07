@@ -37,7 +37,7 @@ Two properties make it safe:
 | ---------- | ------------- | ------ |
 | **Pull `lineage` (scale 0), publish 3 events, restart** | events buffered in JetStream (70→73); on restart the **ephemeral consumer replayed** them | **3/3 ingested** — no loss |
 | **Kill `AGE` (Postgres) mid-ingest, restart** | ingest returned `RETRY`; Dapr redelivered per `backOff` until the DB was back | **ingested on redelivery** — no loss |
-| **Pull `bronze-to-silver` mover, fire `/produce`, restart** | cascade **stalled at bronze** (trigger buffered in the MEDALLION stream); restart replayed it | **cascade resumed to gold** |
+| **Pull `bronze-to-silver` stage runner, fire `/produce`, restart** | cascade **stalled at bronze** (trigger buffered in the MEDALLION stream); restart replayed it | **cascade resumed to gold** |
 | **Idempotency** (replays re-deliver old events) | fixed `run_id`s re-MERGE | `gaptest1` has **exactly 1** producer run — no duplication |
 
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** Transient dependency
@@ -49,15 +49,15 @@ handler; the ~8.5 min total window covers a realistic dependency blip).
 
 > ⚠️ **Semantics changed by the §2 bus fixes (re-verify live on next deploy).** Each subscriber now has
 > its **own** pubsub component with `queueGroupName=<app-id>` (replicas = competing consumers → single
-> delivery per app; scaling movers past 1 is now safe) and a split `deliverPolicy`: **`all` for lineage**
+> delivery per app; scaling stage runners past 1 is now safe) and a split `deliverPolicy`: **`all` for lineage**
 > (the restart-replay row above still holds — replay into the idempotent MERGE is the durability story)
-> but **`new` for the cascade head + movers** — a full-stream replay there would *re-fire every cascade
+> but **`new` for the cascade head + stage runners** — a full-stream replay there would *re-fire every cascade
 > in the retention window* on each restart. Consequence: the third row changes — a trigger published
-> while a mover is down **beyond the ephemeral consumer's inactivity window** is no longer replayed on
+> while a stage runner is down **beyond the ephemeral consumer's inactivity window** is no longer replayed on
 > restart (quick restarts rejoin the surviving queue-group consumer and keep its pending messages).
-> **CLOSED 2026-07-06:** the `new` subscribers (cascade head + movers) now carry a `durableName`, so the
+> **CLOSED 2026-07-06:** the `new` subscribers (cascade head + stage runners) now carry a `durableName`, so the
 > consumer cursor survives pod death AND redeploys — chaos-verified live: a trigger published while the
-> mover was scaled to 0 sat as `Unprocessed: 1` on the durable and was delivered on recovery, and a
+> stage runner was scaled to 0 sat as `Unprocessed: 1` on the durable and was delivered on recovery, and a
 > rollout restart re-attached with zero `consumer name already in use` errors (that orphan mode applies
 > to durables *without* a queue group). See gap #3 for what remains.
 
@@ -99,10 +99,10 @@ handler; the ~8.5 min total window covers a realistic dependency blip).
    ships together and the escape hatch restores the chaos-verified schedule. Live check remaining:
    the runbook 6.5 poison-inject. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
 
-3. **Trigger loss on mover death: FIXED (durable cursors, 2026-07-06); lineage full-stream-replay
-   remains by design.** The cascade head + movers now pair `deliverPolicy: new` with a `durableName`
+3. **Trigger loss on stage runner death: FIXED (durable cursors, 2026-07-06); lineage full-stream-replay
+   remains by design.** The cascade head + stage runners now pair `deliverPolicy: new` with a `durableName`
    (`chart/templates/dapr-component.yaml`): the consumer cursor survives pod death and redeploys, so a
-   trigger published while a mover is down is **delivered on recovery** instead of skipped —
+   trigger published while a stage runner is down is **delivered on recovery** instead of skipped —
    chaos-verified live (publish-while-scaled-to-0 → `Unprocessed: 1` retained → processed on scale-up;
    post-redeploy consumption clean). Lineage deliberately stays ephemeral + `deliverPolicy: all`: each
    restart replays the retained stream into the idempotent MERGE (O(stream size) load, zero loss) —
@@ -140,7 +140,7 @@ handler; the ~8.5 min total window covers a realistic dependency blip).
    while the pods stay **Ready** and **nothing is delivered** (a silent outage — the probes are
    process-level, not delivery-level). Concrete trigger: the resiliency+DLQ default-ON change
    (maxDeliver 5→3, backOff `30s,60s,120s,300s` → `720s,720s`) — durables created 2026-07-06 under
-   the old config blocked all 4 movers + medallion-producer after the image roll. It **self-heals**:
+   the old config blocked all 4 stage runners + medallion-producer after the image roll. It **self-heals**:
    JetStream reaps the old unbound durables at their `inactive_threshold` (~20–25 min observed —
    rollout 06:53–07:00 UTC → reaped + recreated 07:19–07:20), the sidecars recreate them with the
    new config, and delivery resumes with **no manual intervention**. *Fast cutover (operators):*
@@ -176,7 +176,7 @@ chart and live-verified on kind.
   with a writable `/tmp` emptyDir for scratch (`lance.securityContext`, `security.readOnlyRootFilesystem`).
 - **Single-flight writes + reconcile.** The cascade stage write is serialized by a process-wide lock so a
   redelivered trigger can't race a second `mode="overwrite"` onto the same target
-  (`transform.py:_write_lock`, moverReplicas=1). The B4 reconcile sweep runs under a Postgres
+  (`transform.py:_write_lock`, stageRunnerReplicas=1). The B4 reconcile sweep runs under a Postgres
   advisory lock (`repository.reconcile_lock`) so the per-replica cron can't double-drive a back-fill. And a
   **UNIQUE index on every AGE vertex label's MERGE key** (`ensure_graph_constraints` at boot + the age-init
   SQL) makes AGE's MATCH-then-CREATE safe under concurrency — a racing duplicate `CREATE` is rejected by the

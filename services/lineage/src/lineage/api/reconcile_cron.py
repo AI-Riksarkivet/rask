@@ -96,7 +96,7 @@ def log_sweep(report: SweepReport) -> None:
     * ``dangling_blobs`` — payloads gone from under a version-wise-healthy table; the bytes are lost.
     * ``stale`` — data stopped arriving inside the freshness budget; the fix is upstream.
     * ``contract_violations`` — a dataset's CURRENT schema lost a column a consumer declared, i.e. a
-      write that bypassed the mover skipped the gate.
+      write that bypassed the stage runner skipped the gate.
     """
     if report.storage_loss:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": report.storage_loss, "count": len(report.storage_loss)})

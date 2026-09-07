@@ -1,4 +1,4 @@
-"""The dummy mover's job body — CDF delta in, merge_insert out, commit registered.
+"""The dummy stage runner's job body — CDF delta in, merge_insert out, commit registered.
 
 Shaped like `scripts/ray_stage_job.py`: a script executed to completion, parameterised entirely by
 env vars, never shipping code at submit time. "Jobs are scripts baked into images" is the estate's
@@ -49,7 +49,7 @@ def write_silver(to_uri: str, rows: pa.Table, run_id: str) -> dict[str, Any]:
 
     NOT append: a redelivered publication event must converge, not duplicate. merge_insert maps to
     Lance's Update transaction, so concurrent merges are retryable at the application level rather
-    than auto-rebased (file_format.md:5155-5159) — which is why the mover holds a per-dataset
+    than auto-rebased (file_format.md:5155-5159) — which is why the stage runner holds a per-dataset
     single-flight (E3) and why this function does not try to be clever about concurrency itself.
     """
     try:
@@ -64,7 +64,7 @@ def write_silver(to_uri: str, rows: pa.Table, run_id: str) -> dict[str, Any]:
 
 
 def run(env: dict[str, str] | None = None) -> dict[str, Any]:
-    """Execute one dummy silver hop. Returns the result the mover records as its completion."""
+    """Execute one dummy silver hop. Returns the result the stage runner records as its completion."""
     e = env if env is not None else dict(os.environ)
     from_uri = e.get("FROM_URI", "")
     to_uri = e.get("TO_URI", "")

@@ -5,13 +5,13 @@ Q17-5, the estate's one MISSING zero-trust control of nineteen. Measured on the 
 
     rask-maintenance          MAINTENANCE_S3_ACCESS_KEY_ID = rask-maintenance      scoped
     rask-medallion-producer   MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
-    the three movers' own     MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
+    the three stage runners' own     MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
 
-THE RAY LANE IS NOT A MOVER ENV AND IS NOT THIS FILE'S SUBJECT. No credential rides `runtime_env` —
+THE RAY LANE IS NOT A STAGE RUNNER ENV AND IS NOT THIS FILE'S SUBJECT. No credential rides `runtime_env` —
 `ray_submit.py` says why: the Jobs API echoes it back on `GET /api/jobs/<id>`, an unauthenticated
 dashboard published at the edge. The stage job therefore reads `S3_KEY`/`S3_SECRET` from the RAY
 POD's own environment, which `chart/templates/rayservice.yaml` mounts by `secretKeyRef` off
-infra-credentials. A mover env naming the Ray lane's key would bind to no setting and read as a
+infra-credentials. A stage runner env naming the Ray lane's key would bind to no setting and read as a
 control while being decoration, so its ABSENCE from the assertions below is deliberate.
 
 THE PAIR IS THE WHOLE TEST. `dapr_secret_s3_field` defaults to `rustfs-secret-key`, which IS the
@@ -39,7 +39,7 @@ from test_invariants import _rendered_docs  # noqa: E402
 
 
 SCOPED = ("rustfs.medallionAccessKey=rask-medallion", "rustfs.medallionSecretKey=d-secret")
-#: The producer plus every mover — one identity, because `medallion.yaml` renders their S3 env from
+#: The producer plus every stage runner — one identity, because `medallion.yaml` renders their S3 env from
 #: one values pair and they do one class of work.
 MEDALLION_DEPLOYMENTS = ("medallion-producer", "bronze-to-silver", "silver-to-gold")
 
@@ -68,7 +68,7 @@ def test_the_default_is_unchanged_and_still_the_root_credential() -> None:
 
 
 def test_every_medallion_deployment_takes_the_scoped_identity() -> None:
-    """Not just the producer. A mover left on the root credential keeps the whole plane at root, since
+    """Not just the producer. A stage runner left on the root credential keeps the whole plane at root, since
     the credential a cascade writes with is whichever of them is widest."""
     envs = _medallion_envs(*SCOPED)
     covered = {name for name in envs if any(d in name for d in MEDALLION_DEPLOYMENTS)}

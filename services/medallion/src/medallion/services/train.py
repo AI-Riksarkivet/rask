@@ -250,7 +250,7 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         # Seeded BEFORE the submit and before the ack: an FGA outage then RETRYs rather than acking with
         # the link missing. Idempotent (duplicate writes are swallowed), so redelivery is free, and a
         # link left dangling by a job that later fails is harmless — the same posture the seed script's
-        # pre-linked mover datasets take.
+        # pre-linked stage runner datasets take.
         try:
             await fga.write_tuples(
                 fga_client,

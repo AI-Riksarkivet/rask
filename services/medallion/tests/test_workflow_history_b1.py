@@ -25,7 +25,7 @@ import pytest
 from medallion.workflow import MAX_POLLS, POLL_INTERVAL_SECONDS, StageJobOutcome, StageJobSpec
 
 
-#: A realistic spec — the shape the mover actually dispatches, including a full trigger envelope and
+#: A realistic spec — the shape the stage runner actually dispatches, including a full trigger envelope and
 #: a consume-layer provenance document.
 def _spec(**over: Any) -> StageJobSpec:
     base: dict[str, Any] = {

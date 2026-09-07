@@ -1,6 +1,6 @@
 """Two seeders may not grant one identity different rungs on the same medallion tier.
 
-MEASURED on the live estate 2026-08-26. A silver->gold mover was refused its own tier::
+MEASURED on the live estate 2026-08-26. A silver->gold stage runner was refused its own tier::
 
     POST /v1/table/bind86-gold$catalog/describe  -> 403
     POST /v1/table/bind86-gold$catalog/create    -> 403
@@ -23,7 +23,7 @@ runs its authorization gate BEFORE existence resolution and a 403 is what both l
 
 WHY A TEST AND NOT A COMMENT. The two files are in different languages, live in different directories,
 and are run by different people at different times; nothing reads both. A divergence between them is
-invisible in review by construction, and its symptom appears hours later in a mover log. The rung is
+invisible in review by construction, and its symptom appears hours later in a stage runner log. The rung is
 also the kind of thing a well-meaning least-privilege edit will "tighten" back to `validator` — the
 comment explains why that fails, and this makes the explanation enforceable.
 """
@@ -39,7 +39,7 @@ _SHELL = REPO / "scripts/seed_medallion_fga.sh"
 _PYTHON = REPO / "scripts/seed_estate.py"
 
 #: The cascade identities whose rung decides whether a tier can be written at all.
-_MOVERS = ("service-silver-to-gold", "service-bronze-to-silver", "service-medallion-producer")
+_STAGE_RUNNERS = ("service-silver-to-gold", "service-bronze-to-silver", "service-medallion-producer")
 
 #: Rungs that actually carry `can_create_table` (= writer) and `can_update_tag` (= owner). `validator`
 #: is deliberately absent: it yields `can_promote` and nothing else, which is the whole finding.
@@ -81,15 +81,15 @@ def test_both_seeders_are_actually_parsed() -> None:
     shell, python = _shell_grants(), _python_grants()
     assert shell, f"parsed no tier grants out of {_SHELL.name} — its grant syntax moved"
     assert python, f"parsed no tier grants out of {_PYTHON.name} — its Grant() shape moved"
-    assert "service-silver-to-gold" in shell, f"{_SHELL.name} no longer grants the gold mover anything"
-    assert "service-silver-to-gold" in python, f"{_PYTHON.name} no longer grants the gold mover anything"
+    assert "service-silver-to-gold" in shell, f"{_SHELL.name} no longer grants the gold stage runner anything"
+    assert "service-silver-to-gold" in python, f"{_PYTHON.name} no longer grants the gold stage runner anything"
 
 
-def test_a_cascade_mover_is_granted_a_rung_that_can_actually_write_its_tier() -> None:
+def test_a_cascade_stage_runner_is_granted_a_rung_that_can_actually_write_its_tier() -> None:
     """`validator` yields `can_promote` only — it can neither describe nor create the table it promotes."""
     offenders: list[str] = []
     for source, grants in ((_SHELL.name, _shell_grants()), (_PYTHON.name, _python_grants())):
-        for identity in _MOVERS:
+        for identity in _STAGE_RUNNERS:
             rungs = grants.get(identity)
             if rungs and not (rungs & _SUFFICIENT):
                 offenders.append(f"{source}: {identity} gets {sorted(rungs)}, none of which carries can_create_table/can_update_tag")

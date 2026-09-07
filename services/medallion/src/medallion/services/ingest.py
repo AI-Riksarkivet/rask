@@ -4,7 +4,7 @@ Reads a provider-agnostic ``SourceAdapter`` (:mod:`service_kit.lakehouse.sources
 managed blob-v2 column at file format 2.2, keeping the object's source URI as a column so provenance
 survives in the data itself (the caller emits the ``source -> bronze`` lineage edge from ``source_uris``).
 Bronze is the FIRST governed tier (R23 — raw is the external world): the ``stage`` provenance stamp the
-retired raw→bronze mover used to apply is written here at ingest, and ``source_rowid`` roots at these
+retired raw→bronze stage runner used to apply is written here at ingest, and ``source_rowid`` roots at these
 bronze rows (minted by the first downstream derive from bronze's stable ``_rowid``). The per-stage ML
 then flows the blob forward (``compute._carry_forward``) and derives the silver artifacts.
 """
@@ -25,7 +25,7 @@ from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
 #: The ``stage`` provenance stamp every governed dataset carries — bronze gets it AT INGEST (R23: the
-#: bronze head absorbed the retired raw→bronze mover); downstream movers re-stamp it per stage.
+#: bronze head absorbed the retired raw→bronze stage runner); downstream stage runners re-stamp it per stage.
 _STAGE_COLUMN = "stage"
 _BRONZE_STAGE = "bronze"
 
@@ -76,7 +76,7 @@ def ingest_schema_for(extra_columns: ExtraColumns | None) -> pa.Schema:
     fields = list(_INGEST_SCHEMA)
     for name in extra_columns or {}:
         fields.append(pa.field(name, pa.string()))
-    fields.append(pa.field(_STAGE_COLUMN, pa.string()))  # last, mirroring the movers' stamp position
+    fields.append(pa.field(_STAGE_COLUMN, pa.string()))  # last, mirroring the stage runners' stamp position
     return pa.schema(fields)
 
 

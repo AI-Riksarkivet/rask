@@ -9,7 +9,7 @@
  * author, exactly as the estate insists) while naming BOB in `lance.originator`. Bob therefore
  * receives a row for a run he did not author and does not watch, which is possible under no other
  * targeting source in the plane. In production the same shape occurs with a SERVICE as the author —
- * a medallion mover authoring as `data_eng` — and that case is unreachable from a drive holding only
+ * a medallion stage runner authoring as `data_eng` — and that case is unreachable from a drive holding only
  * human credentials.
  *
  *   ALICE  author     -> a row, reason `author`     (v1, unchanged — the control)

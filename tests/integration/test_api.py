@@ -411,7 +411,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
 
 
 def test_merge_insert_emits_version_pinned_source_and_run_facets(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # Phase 2: a mover's merge from source@N. The `source` + `source_version` query params and the
+    # Phase 2: a stage runner's merge from source@N. The `source` + `source_version` query params and the
     # `X-Lance-Run-Facets` header must reach the emit trailer as a version-pinned InputPin + spec-shaped
     # run facets — training-shaped OpenLineage, with the catalog un-opinionated about the facet payload.
     from catalog.core.lineage_emit import InputPin, shape_run_facets

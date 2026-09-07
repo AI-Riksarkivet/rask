@@ -1,6 +1,6 @@
 """Medallion service settings (pydantic-settings, ``MEDALLION_*`` env vars).
 
-The movers run the **same** module (``medallion.mover:app``) and differ only by env — each is one stage
+The stage runners run the **same** module (``medallion.stage_runner:app``) and differ only by env — each is one stage
 edge of the DAG (from-dataset → to-dataset, subscribe-topic → publish-topic). The producer
 (``medallion.producer:app``) reads its own ``MEDALLION_BRONZE_*`` / producer fields. Both publish through
 the shared Dapr ``pubsub.jetstream`` component the catalog/lineage already use.
@@ -8,7 +8,7 @@ the shared Dapr ``pubsub.jetstream`` component the catalog/lineage already use.
 R23: raw is NOT a governed tier — it is the external world (image APIs, external object
 storage). The governed medallion is exactly bronze → silver → gold; the producer harvests external raw
 and writes BRONZE directly (the bronze ingest head), so there is no raw dataset, raw topic, or
-raw-to-bronze mover anywhere in this config.
+raw-to-bronze stage runner anywhere in this config.
 """
 
 from __future__ import annotations
@@ -52,15 +52,15 @@ class RayTaskDeclaration(BaseModel):
     cardinalities: list[str] = Field(default_factory=list)
     #: Which of O1..O12 this task CLAIMS. A claim, never a proof: the platform re-derives them.
     obligations: list[str] = Field(default_factory=list)
-    #: Defaults to the mover's own ``ray_code_version`` when empty, so one build stamp governs both.
+    #: Defaults to the stage runner's own ``ray_code_version`` when empty, so one build stamp governs both.
     code_version: str = ""
 
 
-class MoverGate(BaseModel):
+class StageRunnerGate(BaseModel):
     """One cascade edge's authorization facts, as the CHART declares them.
 
     Two fields because the check needs both and neither is derivable from the other: the FGA object is
-    `namespace:<project>-<to_namespace>` and the relation is that mover's own required action. A
+    `namespace:<project>-<to_namespace>` and the relation is that stage runner's own required action. A
     re-run that guessed either would either refuse a legitimate operator or, worse, accept one who
     could not have driven the hop themselves.
     """
@@ -74,11 +74,11 @@ class MoverGate(BaseModel):
 
 
 class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
-    """Config for one medallion service (a mover stage, or the medallion-producer producer).
+    """Config for one medallion service (a stage runner, or the medallion-producer producer).
 
     Mixes the two auth halves DIRECTLY rather than the composed `GovernedAuthSettings`, because this
     one class serves two roles and only one of them has a human door. The producer runs the #64 admin
-    trigger (OIDC bearer + `can_administer`); a MOVER authorizes as its own `fga_service_identity` and
+    trigger (OIDC bearer + `can_administer`); a STAGE RUNNER authorizes as its own `fga_service_identity` and
     the chart renders it FGA with no OIDC at all — which `GovernedAuthSettings`' authz-needs-authn
     coupling would refuse at boot. The field-set is still declared exactly once, in the mixins.
     """
@@ -97,13 +97,13 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # #4: durable object-store outbox for lineage events — stage each event here BEFORE the fire-and-forget
     # publish so a crash between the Lance commit and the publish can't lose it (the lineage relay drains any
     # survivor, idempotent on run_id). Empty = disabled (plain publish, pre-#4). A shared prefix both the
-    # movers and the lineage service can reach, e.g. ``s3://<bucket>/_lineage_outbox``.
+    # stage runners and the lineage service can reach, e.g. ``s3://<bucket>/_lineage_outbox``.
     lineage_outbox_uri: str = Field(default="", alias="MEDALLION_LINEAGE_OUTBOX_URI")
-    # Bound every Dapr publish so a hung sidecar raises TimeoutError → the mover's RETRY path fires (the
+    # Bound every Dapr publish so a hung sidecar raises TimeoutError → the stage runner's RETRY path fires (the
     # handler contract expects a prompt return), instead of pinning the worker until the ack window lapses.
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MEDALLION_PUBLISH_TIMEOUT_SECONDS")
     job_namespace: str = Field(default="lance-medallion", alias="MEDALLION_JOB_NAMESPACE")
-    # Behind a Dapr sidecar? — when true, a mover fails closed at boot if the app-token is unset (its
+    # Behind a Dapr sidecar? — when true, a stage runner fails closed at boot if the app-token is unset (its
     # /medallion-event route would otherwise be an open forged-trigger path). Symmetric with the lineage
     # service. Off in dev (no sidecar); the producer's plain-HTTP /produce carries no such route.
     dapr_enabled: bool = Field(default=False, alias="MEDALLION_DAPR_ENABLED")
@@ -128,12 +128,12 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # Gold SERVING warehouse (DECISIONS "Medallion tiers — hybrid physical layout", opt-in): when set, a
     # ``project``-carrying trigger's TARGET root becomes the project's gold serving warehouse (the registry
     # record carrying ``"serving": "gold"``) when one exists — the chart wires this env ONLY onto the
-    # terminal silver→gold mover (medallion.goldWarehouse), so bronze/silver stay in the work
+    # terminal silver→gold stage runner (medallion.goldWarehouse), so bronze/silver stay in the work
     # warehouse. Absent gold warehouse or flag off → byte-identical work-warehouse behavior; the
     # projectless path never retargets (it has no registry resolution at all).
     gold_warehouse_enabled: bool = Field(default=False, alias="MEDALLION_GOLD_WAREHOUSE_ENABLED")
 
-    # --- mover stage config (the movers share medallion.mover:app, differ only by these; defaults
+    # --- stage-runner config (the stage runners share medallion.stage_runner:app, differ only by these; defaults
     # describe the first edge of the governed cascade, bronze→silver) ----------------------------
     from_dataset: str = Field(default="bronze$events", alias="MEDALLION_FROM_DATASET")
     from_namespace: str = Field(default="bronze", alias="MEDALLION_FROM_NAMESPACE")
@@ -180,23 +180,23 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: SAFE misconfiguration. The unsafe direction — a value that quietly promotes everything — is the
     #: failure this setting exists to end, so it is not reachable.
     promotion_review_band: float = Field(default=0.25, ge=0, alias="MEDALLION_PROMOTION_REVIEW_BAND")
-    #: Where a mover publishes a promotion it is HOLDING, and where the producer listens for one.
+    #: Where a stage runner publishes a promotion it is HOLDING, and where the producer listens for one.
     #:
     #: The hold travels over the bus rather than being reviewed in place because the review must be
     #: ANSWERABLE: `raise_workflow_event` resolves the instance through the calling app's app-id, so
     #: the workflow has to live in the app that serves the approve route — and that is the producer,
-    #: which already has a gateway row and the dual-auth door. A mover has neither.
+    #: which already has a gateway row and the dual-auth door. A stage runner has neither.
     promotion_topic: str = Field(default="medallion.promotion", alias="MEDALLION_PROMOTION_TOPIC")
-    #: SOURCE NAMESPACE -> the topic whose mover consumes it, for the publication head.
+    #: SOURCE NAMESPACE -> the topic whose stage runner consumes it, for the publication head.
     #:
     #: The head used to discard the published table's namespace and stamp `bronze_namespace` /
-    #: `bronze_topic` on every trigger, so a silver publication fired a BRONZE trigger that no mover's
+    #: `bronze_topic` on every trigger, so a silver publication fired a BRONZE trigger that no stage runner's
     #: `from_dataset` matched and every non-bronze publication was dropped as another lane's. That is
     #: what stops `table_published` becoming the single cascade trigger.
     #:
     #: Keyed on the namespace rather than the tier: the cascade names lanes (`bronze-media`), and
     #: reducing one to its tier would merge two cascades onto a topic neither owns. Derived in the
-    #: chart from `medallion.movers[]`, so a lane cannot exist that the head cannot route.
+    #: chart from `medallion.stageRunners[]`, so a lane cannot exist that the head cannot route.
     #:
     #: Empty means drive nothing. A deployment that declares no lanes has no cascade to wake, and
     #: guessing bronze is the defect this replaces.
@@ -210,27 +210,29 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: constructing settings by field name silently yields the default. Found by a test, which had
     #: been passing the name and getting the chart's entrypoint back.
     transform_routes: dict[str, str] = Field(default_factory=dict, validation_alias=AliasChoices("transform_routes", "MEDALLION_TRANSFORM_ROUTES"))
-    #: Where each MOVER answers, by mover name — the producer proxies the cascade's operator routes
-    #: (`/movers/{name}/stages/...`) to these. Movers are deliberately bus-only, with no gateway row
+    #: Where each STAGE RUNNER answers, by stage runner name — the producer proxies the cascade's operator routes
+    #: (`/stage-runners/{name}/stages/...`) to these. Stage runners are deliberately bus-only, with no gateway row
     #: and no Ingress, so the producer is the only door a person can reach; it authenticates and
-    #: authorizes, then forwards, and the MOVER runs the terminate under its own app-id — which is the
+    #: authorizes, then forwards, and the STAGE RUNNER runs the terminate under its own app-id — which is the
     #: whole reason the routes cannot simply live on the producer.
-    mover_urls: dict[str, str] = Field(default_factory=dict, validation_alias=AliasChoices("mover_urls", "MEDALLION_MOVER_URLS"))
+    stage_runner_urls: dict[str, str] = Field(default_factory=dict, validation_alias=AliasChoices("stage_runner_urls", "MEDALLION_STAGE_RUNNER_URLS"))
     #: Each cascade edge's AUTHORIZATION, keyed by the edge's SOURCE namespace — what the re-run verb
     #: gates on.
     #:
-    #: Keyed by source rather than by mover name because that is what the caller can name: an operator
-    #: re-running a missed hop has the published table, whose namespace IS the source. The mover's own
+    #: Keyed by source rather than by stage runner name because that is what the caller can name: an operator
+    #: re-running a missed hop has the published table, whose namespace IS the source. The stage runner's own
     #: name is an implementation detail of the deployment.
     #:
-    #: The RUNG IS THE MOVER'S OWN, not `/produce`'s. `promotions.py` records why: `authorize_produce`'s
+    #: The RUNG IS THE STAGE RUNNER'S OWN, not `/produce`'s. `promotions.py` records why: `authorize_produce`'s
     #: `can_administer` is "coarser AND different, and would lock out exactly the non-admin validator
-    #: the rung exists for". So a silver->gold re-run asks `can_promote`, exactly as the mover does
+    #: the rung exists for". So a silver->gold re-run asks `can_promote`, exactly as the stage runner does
     #: when it runs the hop itself. The sibling verb `terminate` DOES sit on `authorize_produce`
     #: ("whoever may start this tenant's pipeline may stop it") — two verbs on one plane, two rungs,
     #: which is defensible because stopping is not re-driving, and is written down here rather than
     #: discovered.
-    mover_gates: dict[str, MoverGate] = Field(default_factory=dict, validation_alias=AliasChoices("mover_gates", "MEDALLION_MOVER_GATES"))
+    stage_runner_gates: dict[str, StageRunnerGate] = Field(
+        default_factory=dict, validation_alias=AliasChoices("stage_runner_gates", "MEDALLION_STAGE_RUNNER_GATES")
+    )
 
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
@@ -243,9 +245,9 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # the bus never carries payload bytes.
     ingest_chunk_bytes: int = Field(default=64 << 20, alias="MEDALLION_INGEST_CHUNK_BYTES")
 
-    # --- Optional FGA gate (ReBAC enforcement) — the mover checks it is AUTHORIZED to produce the target
-    # stage before emitting. The silver→gold mover checks `can_promote` (validator-only); the others check
-    # `can_create_table` (writer). It checks as its own service identity, so a mover not granted the role
+    # --- Optional FGA gate (ReBAC enforcement) — the stage runner checks it is AUTHORIZED to produce the target
+    # stage before emitting. The silver→gold stage runner checks `can_promote` (validator-only); the others check
+    # `can_create_table` (writer). It checks as its own service identity, so a stage runner not granted the role
     # is DENIED — the cascade then ENFORCES the model, not just describes it. Off by default. -------------
     # The client knobs are `FgaSettings`' (`RASK_FGA_*`). Pinned store/model ids (production posture,
     # same as catalog/lineage): set → no boot-time provision, no model rewrite, read-only OpenFGA
@@ -253,7 +255,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # BARE subject (no ``user:`` prefix) — ``service_kit.governed.fga.check`` adds ``user:`` itself, so ``user:service-*``
     # here would double-prefix (``user:user:service-*``) and the gate would always deny. Matches the
     # catalog's convention (it passes the bare OIDC sub to fga.check).
-    fga_service_identity: str = Field(default="service-mover", alias="MEDALLION_FGA_SERVICE_IDENTITY")
+    fga_service_identity: str = Field(default="service-stage runner", alias="MEDALLION_FGA_SERVICE_IDENTITY")
     fga_required_action: str = Field(default="can_create_table", alias="MEDALLION_FGA_REQUIRED_ACTION")
 
     # --- Produce-trigger admin auth (#64): ``/produce`` accepts EITHER the Dapr app-api-token (service-to-
@@ -265,7 +267,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     produce_admin_project: str = Field(default="acme", alias="MEDALLION_PRODUCE_ADMIN_PROJECT")
 
     def fga_object(self, to_namespace: str | None = None) -> str:
-        """The FGA object the mover must be authorized on — the target stage namespace.
+        """The FGA object the stage runner must be authorized on — the target stage namespace.
 
         ``to_namespace`` overrides the env value for the per-project path (#84), where the target is the
         project-QUALIFIED namespace (``acme-bronze``) and needs its own FGA tuples; default ``None`` keeps
@@ -273,21 +275,21 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
         """
         return f"namespace:{to_namespace or self.to_namespace}"
 
-    # --- Fake-Ray in-process compute (the medallion-producer SEAM) — OFF by default (movers stay dummy-emitters).
-    # When on, each stage does a REAL Lance write: the producer seeds bronze$events; each mover reads its
+    # --- Fake-Ray in-process compute (the medallion-producer SEAM) — OFF by default (stage runners stay dummy-emitters).
+    # When on, each stage does a REAL Lance write: the producer seeds bronze$events; each stage runner reads its
     # upstream Lance dataset, applies a stage transform, and writes the downstream one — so the emitted
     # lineage carries the REAL version and the whole event-driven loop produces actual versioned data, not
     # just provenance. Same read→transform→write→version contract a distributed Ray Data job fills at rask;
     # here it runs in-process so the loop is end-to-end testable without a Ray cluster. (#25 / P1 #6 seam.)
     compute_enabled: bool = Field(default=False, alias="MEDALLION_COMPUTE_ENABLED")
-    from_uri: str = Field(default="", alias="MEDALLION_FROM_URI")  # upstream Lance dataset (mover input)
-    to_uri: str = Field(default="", alias="MEDALLION_TO_URI")  # downstream Lance dataset (mover output)
+    from_uri: str = Field(default="", alias="MEDALLION_FROM_URI")  # upstream Lance dataset (stage runner input)
+    to_uri: str = Field(default="", alias="MEDALLION_TO_URI")  # downstream Lance dataset (stage runner output)
 
-    # --- EVENT-DRIVEN real-Ray compute (opt-in, requires compute_enabled). When on, the mover submits its
+    # --- EVENT-DRIVEN real-Ray compute (opt-in, requires compute_enabled). When on, the stage runner submits its
     # stage transform as a `ray job submit` to the ray-lance cluster (via the Ray Jobs REST API, httpx-only —
-    # no ray package in the mover image) IN RESPONSE TO its Dapr trigger, instead of the in-process fake-Ray
+    # no ray package in the stage runner image) IN RESPONSE TO its Dapr trigger, instead of the in-process fake-Ray
     # write. The submitted job (scripts/ray_stage_job.py, baked in the ray-lance image) reads upstream, stamps
-    # the stage column across Ray workers, and writes downstream at 2.2 + stable row ids; the mover then reads
+    # the stage column across Ray workers, and writes downstream at 2.2 + stable row ids; the stage runner then reads
     # the written version/stats for the same lineage emit. OFF by default — fake-Ray stays the default path.
     # This is the production shape (KubeRay RayCluster at the rask merge; a raw Ray head on kind here).
     ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")
@@ -304,7 +306,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: THE WORKLOAD'S OWN PARAMETERS — the channel that makes ``ray_entrypoint`` usable.
     #:
     #: A per-lane JSON object, forwarded into the job's ``runtime_env.env_vars`` under the
-    #: ``RASK_PARAM_`` prefix. Without it a mover row can name a workload's entrypoint and then has no
+    #: ``RASK_PARAM_`` prefix. Without it a stage runner row can name a workload's entrypoint and then has no
     #: way to configure it: the submit built a FIXED env dict, so a second workload either reused the
     #: first one's variables or required a platform edit — which is exactly the coupling the agnostic
     #: ruling forbids.
@@ -335,7 +337,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: empty value reproduces the previous submission id byte-for-byte, so a deployment that has not
     #: wired it is unchanged rather than quietly re-attaching across builds under a new scheme.
     ray_code_version: str = Field(default="", alias="MEDALLION_RAY_CODE_VERSION")
-    #: WHICH DECLARED LANE this mover runs — the name of a ``TransformSpec`` in the catalog.
+    #: WHICH DECLARED LANE this stage runner runs — the name of a ``TransformSpec`` in the catalog.
     #:
     #: Set it, and the DECLARED record supplies ``ray_entrypoint``, ``ray_job_params`` and
     #: ``ray_code_version`` instead of the three settings above: what a lane runs then changes through
@@ -350,7 +352,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: ``medallion.services.transform_spec``. A fallback would run the old program under the declaration's name
     #: while an operator believed the record governed it, with nothing anywhere red.
     transform: str = Field(default="", validation_alias=AliasChoices("transform", "MEDALLION_TRANSFORM"))
-    # The catalog service a mover ASKS where its output table lives (`ensure_stage_output`) and then
+    # The catalog service a stage runner ASKS where its output table lives (`ensure_stage_output`) and then
     # PUBLISHES that version through. Empty by default: the lane fails at the seam naming the env
     # var, never guessing — a gold table the catalog cannot govern must not report success.
     catalog_url: str = Field(default="", alias="MEDALLION_CATALOG_URL")
@@ -376,23 +378,23 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     lane_destination_datasets: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_DESTINATION_DATASETS")
     #: The catalog's own CONNECTION ROOT — read by the producer, which registers rather than asks.
     #:
-    #: A mover needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER
+    #: A stage runner needs no root: `ensure_stage_output` takes the location the catalog vends. The PRODUCER
     #: cannot, because where it writes is a deployment contract — `chart/templates/medallion.yaml`
-    #: renders `MEDALLION_BRONZE_URI` and the bronze->silver mover's `MEDALLION_FROM_URI` from one
+    #: renders `MEDALLION_BRONZE_URI` and the bronze->silver stage runner's `MEDALLION_FROM_URI` from one
     #: expression, so the location is stated by the chart rather than asked for. The head therefore
     #: keeps its URI and ATTACHES it through `register_table`, which on the dir backend refuses
     #: an absolute location and accepts only a path RELATIVE to this root (the #75 lesson, re-measured
     #: 2026-08-29: `"Absolute URIs are not allowed for register_table"`).
     #:
     #: This setting was deleted once, correctly, when its last reader went — and the chart kept
-    #: rendering it (producer and both movers). It has a reader again, and only the producer's.
+    #: rendering it (producer and both stage runners). It has a reader again, and only the producer's.
     #: Empty with a catalog URL set is a REFUSAL, not a guess: an unaddressable registration means an
     #: ungoverned bronze tier, which is the defect this closes.
     catalog_root: str = Field(default="", alias="MEDALLION_CATALOG_ROOT")
     # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
     # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
     catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")
-    #: The subject this mover claims at the catalog's SERVICE door — a name, never a secret, so it is
+    #: The subject this stage runner claims at the catalog's SERVICE door — a name, never a secret, so it is
     #: ordinary chart env. Preferred over the bearer above: the catalog verifies OIDC JWTs and a static
     #: string cannot be one (the lesson `ingest/catalog_service.py` records).
     #:
@@ -408,14 +410,14 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDALLION_DELIMITER")
     ray_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_RAY_REQUEST_TIMEOUT_SECONDS")
     ray_poll_interval_seconds: float = Field(default=2.0, gt=0, alias="MEDALLION_RAY_POLL_INTERVAL_SECONDS")
-    # The mover BLOCKS its Dapr handler until the job finishes. Redelivery is safe (the submission id is
+    # The stage runner BLOCKS its Dapr handler until the job finishes. Redelivery is safe (the submission id is
     # deterministic per (stage, token), so a redelivered trigger re-attaches to the same job — not a second
     # one), but a job that outlives the trigger stream's ack window (dapr-component backOff first value, 30s)
     # WILL be concurrently redelivered; that only wastes a duplicate poll (re-attach), it does not double-run
     # the job. For jobs expected to run much longer than the ack window, raise both together.
     ray_job_timeout_seconds: float = Field(default=180.0, gt=0, alias="MEDALLION_RAY_JOB_TIMEOUT_SECONDS")
 
-    # --- Optional quality GATE — when on, after the compute writes the downstream dataset the mover runs
+    # --- Optional quality GATE — when on, after the compute writes the downstream dataset the stage runner runs
     # data-quality assertions on it (row_count > 0, key column non-null) and BLOCKS promotion on a failure:
     # the failed run + its dataQualityAssertions facet are still emitted (auditable in lineage), but the next
     # stage is NOT triggered, so a bad batch can't cascade. The automated *validator* half of governance —
@@ -432,7 +434,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # SecretStr so it's redacted in repr/model_dump (parity with the catalog) — .get_secret_value() to read.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="MEDALLION_S3_SECRET_ACCESS_KEY")
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage +
-    # compaction (Batch 7, 2026-07-11: the movers/producer were the LAST real S3 consumers still shipping
+    # compaction (Batch 7, 2026-07-11: the stage runners/producer were the LAST real S3 consumers still shipping
     # the key in plaintext pod env). When on, the S3 secret comes from the store at boot as the STRICT
     # sole source (the chart omits the plaintext env entirely); a store miss FAILS CLOSED — an env
     # fallback would contradict "OpenBao is the sole source" (the audit's original finding).
@@ -468,22 +470,22 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
         """Refuse the combination that would cascade nothing, at boot rather than per event.
 
         Publishing moves data by advancing the `published` tag on what this stage WROTE. With compute
-        off the mover is a pure lineage emitter and has no output to offer, and with no catalog URL it
+        off the stage runner is a pure lineage emitter and has no output to offer, and with no catalog URL it
         has nowhere to offer it — in both cases the run would look healthy and the cascade would simply
         stop. Falling back to the old trigger instead would be the silent fallback this seam exists to
         avoid; saying so at startup is the honest version.
         """
-        # The catalog's tag move is the ONLY way a stage promotes, so a mover that writes nothing or
+        # The catalog's tag move is the ONLY way a stage promotes, so a stage runner that writes nothing or
         # cannot reach the catalog stops the cascade -- silently, which is the failure class this
         # estate keeps producing. Say it at startup instead. This used to be conditional on
         # MEDALLION_CASCADE_VIA_PUBLISH; that flag chose between two enforcement points and is gone.
-        # NO CATALOG REQUIREMENT HERE, deliberately. This used to refuse a mover that had
+        # NO CATALOG REQUIREMENT HERE, deliberately. This used to refuse a stage runner that had
         # MEDALLION_CASCADE_VIA_PUBLISH on without a reachable catalog -- a real invariant while the
         # flag chose between two enforcement points. The flag is gone, and generalising the check to
-        # "every writing mover needs a catalog" would delete a mode the estate supports and pins:
+        # "every writing stage runner needs a catalog" would delete a mode the estate supports and pins:
         # an UNGOVERNED deployment writes to its configured URIs with no catalog at all
         # (`test_an_ungoverned_deployment_still_uses_its_configured_URI`,
-        # `test_no_catalog_url_still_writes_to_its_configured_uri`). Such a mover writes and never
+        # `test_no_catalog_url_still_writes_to_its_configured_uri`). Such a stage runner writes and never
         # promotes, which is correct: promotion is a tag move and there is no tag without a catalog.
         return self
 
@@ -505,7 +507,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
             )
         if self.ray_enabled and not self.compute_enabled:
             # ray submits the STAGE transform (from_uri -> to_uri); with compute off there is no data path and
-            # the mover would silently fall through to the dummy version-1 emit. Fail fast, don't degrade.
+            # the stage runner would silently fall through to the dummy version-1 emit. Fail fast, don't degrade.
             raise ValueError(
                 "MEDALLION_RAY_ENABLED requires MEDALLION_COMPUTE_ENABLED — the Ray path submits the stage's "
                 "read->transform->write, which the compute config (from/to URIs + S3) provides."
@@ -566,10 +568,10 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # triggers the media chain. The head reads an external S3 source prefix through the provider-agnostic
     # SourceAdapter seam (a real deployment points bucket/prefix at an image API / GCS / HF export; the demo seeds
     # sample PNGs there first). Requires compute (there is no dummy media): media_bronze_uri is where the
-    # bronze blob-v2 table lands; the trigger on media_topic drives the media mover (bronze -> silver
+    # bronze blob-v2 table lands; the trigger on media_topic drives the media stage runner (bronze -> silver
     # derive). Empty media_bronze_uri = the media head is off (POST /ingest-media -> 409). ----------------
     # The media lane gets its OWN namespaces (bronze-media → silver-media): the chart derives each
-    # mover's from/to URI from the NAMESPACE (s3://<bucket>/medallion/<namespace>), so reusing the events
+    # stage runner's from/to URI from the NAMESPACE (s3://<bucket>/medallion/<namespace>), so reusing the events
     # chain's bronze/silver would collide with bronze$events / silver$features on the same paths.
     media_source_bucket: str = Field(default="", alias="MEDALLION_MEDIA_SOURCE_BUCKET")
     media_source_prefix: str = Field(default="media-src/batch", alias="MEDALLION_MEDIA_SOURCE_PREFIX")
@@ -600,12 +602,12 @@ def _dedicated_token_resolver(store: str, key: str) -> Callable[[str], str | Non
 
 
 def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | None] | None:
-    """The resolver a mover uses to present its OWN credential, or ``None`` when it cannot.
+    """The resolver a stage runner uses to present its OWN credential, or ``None`` when it cannot.
 
     THE CLIENT HALF of the dedicated-credential binding. `service_kit.governed.dapr_auth` binds a
     privileged subject to `service-token-<identity>` at the DOOR; a caller that goes on presenting the
     shared `APP_API_TOKEN` is simply refused. Measured on the live estate 2026-08-26: rendering the
-    server-side expectation alone 401'd every mover call to the catalog until it was reverted.
+    server-side expectation alone 401'd every stage runner call to the catalog until it was reverted.
 
     Returns ``None`` when secrets do not come from Dapr — a dev stack with no secret store keeps the
     shared-token path exactly as before. A store that is READABLE but has no entry for this identity

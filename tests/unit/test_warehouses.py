@@ -669,7 +669,7 @@ def test_create_serving_gold_round_trips(tmp_path: Any, monkeypatch: pytest.Monk
 def test_recreate_without_serving_does_not_demote_gold(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # Idempotent re-create carries serving FORWARD (like status/created_at): a GitOps reconcile
     # re-POSTing the gold warehouse without the field must not silently demote it to a work warehouse —
-    # the silver→gold mover would quietly fall back to the work root.
+    # the silver→gold stage runner would quietly fall back to the work root.
     from catalog.schemas import CreateWarehouseRequest
 
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)

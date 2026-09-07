@@ -111,7 +111,7 @@ def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pyte
         }
     )
     tracer = TracerProvider().get_tracer("test")
-    with tracer.start_as_current_span("mover") as span:
+    with tracer.start_as_current_span("stage runner") as span:
         asyncio.run(ray_submit.submit_stage_job(settings, from_uri="a", to_uri="b", stage="bronze", token="t"))
     env = captured[0]["runtime_env"]["env_vars"]
     ctx = span.get_span_context()

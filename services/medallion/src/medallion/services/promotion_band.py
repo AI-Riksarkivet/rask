@@ -66,7 +66,7 @@ def review_reasons(*, row_count: int, previous_row_count: int | None, band: floa
 
     This used to read "zero or less", and negative is not reachable: `MedallionSettings` declares
     `promotion_review_band` with `ge=0`, so `MEDALLION_PROMOTION_REVIEW_BAND=-1` fails validation and
-    CRASH-LOOPS the mover — measured 2026-08-23, after that sentence invited exactly that value. The
+    CRASH-LOOPS the stage runner — measured 2026-08-23, after that sentence invited exactly that value. The
     constraint is right (a band that quietly promotes everything is the failure this exists to end);
     the sentence describing a value it forbids was not.
     """
@@ -82,7 +82,7 @@ def resolve_previous_row_count(*, observed: int | None, carried: int | None) -> 
 
     Two sources exist because two lanes measure at different moments. An in-process write observes the
     destination immediately before overwriting it, and is authoritative. The RAY lane cannot: its job
-    writes out-of-process, so by the time the mover measures, the predecessor is gone — which made
+    writes out-of-process, so by the time the stage runner measures, the predecessor is gone — which made
     `observed` None on every Ray run and turned the band into a review that fired every time. A review
     that always fires carries no signal, so the band was effectively off for that whole lane while
     looking configured.
@@ -95,7 +95,7 @@ def resolve_previous_row_count(*, observed: int | None, carried: int | None) -> 
     a destination whose history genuinely cannot be read.
 
     PURE, and extracted for the reason `gate_decision` was: this is policy, and a policy reachable only
-    by standing up a mover, a Ray cluster and an object store is a policy nobody re-checks.
+    by standing up a stage runner, a Ray cluster and an object store is a policy nobody re-checks.
     """
     return observed if observed is not None else carried
 

@@ -68,7 +68,7 @@ honoured, and never silently dropped.
 
 A scanned descriptor's `blob_uri` is **base-relative** (`page-000.bin`), and pylance exposes no way
 to read a dataset's registered bases back. So ingest stamps `rask.blob.external_base` into schema
-metadata at create — the #21 self-describing-data precedent — and a mover that has never met the
+metadata at create — the #21 self-describing-data precedent — and a stage runner that has never met the
 service that wrote it resolves the pointer from the dataset alone.
 
 Two silent failure modes live between the read and write shapes, both handled in
@@ -97,13 +97,13 @@ stored. Fetching to hash is not copying into the lakehouse.
 
 ```
 bronze write → OpenLineage bronze-write event → /bronze-arrival → medallion.bronze
-   → mover: forwards pointers, adds columns
+   → stage runner: forwards pointers, adds columns
        → gate_decision
            → catalog PUBLISH ── the ONLY door ── assertions, then the tag moves
                → table_published → /publication-arrival → the next tier's trigger
 ```
 
-**One enforcement point.** The mover used to publish the next tier's topic itself — a second door,
+**One enforcement point.** The stage runner used to publish the next tier's topic itself — a second door,
 and the default one. `catalog/services/publication.py` states the rule: every writer must publish the
 same way or each reimplements the contract and they drift. It is also the only place a concurrent
 advance is detectable, because `UpdateTableTag` returns `ConcurrentModification` while a tag file has
@@ -140,7 +140,7 @@ The catalog treats it as **opaque** — it echoes the value and interprets nothi
 
 ## 6. What a stage actually writes
 
-| upstream shape | what the mover does |
+| upstream shape | what the stage runner does |
 | --- | --- |
 | external blob column | forwards the descriptor; the bytes are never re-persisted |
 | managed blob column | copies — the payload exists at no URI, so there is nothing to point at |

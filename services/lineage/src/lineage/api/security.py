@@ -52,7 +52,7 @@ class Principal(Protocol):
 class ServicePrincipal:
     """A non-human, in-cluster producer authenticated by the shared app token (NOT OIDC).
 
-    **Why this exists.** Services in this system are not OIDC identities: the movers/catalog/compaction
+    **Why this exists.** Services in this system are not OIDC identities: the stage runners/catalog/compaction
     reach lineage over the Dapr subscription route, which is guarded by the app-api-token and attributes
     the run to the producer-stamped author (``lineage/api/dapr.py``). OIDC is the *human/external* door.
     The Ray TRAIN job is an internal producer that simply has no sidecar (docs/RAY-TRAIN.md D2), so it

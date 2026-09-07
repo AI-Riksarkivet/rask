@@ -88,10 +88,10 @@ class TestTheGateNamesItsSource:
 
     Change 6 asked for the chart fallback to be DROPPED instead. That is not the right fix and the
     reason is measured, not argued: a `GateSpec` is scoped per PROJECT (`project: str`,
-    `extra="forbid"`) while `chart/values.yaml` carries `requiredColumns` per MOVER — `"id"` for
+    `extra="forbid"`) while `chart/values.yaml` carries `requiredColumns` per STAGE RUNNER — `"id"` for
     bronze-to-silver against `"id,thumbnail,embedding"` for media-to-silver, because one derives
     artifacts the other does not. Dropping the fallback would either un-gate those columns or force
-    one list across movers with different outputs. See `docs/architecture/medallion-data-flow.md` item 6.
+    one list across stage runners with different outputs. See `docs/architecture/medallion-data-flow.md` item 6.
     """
 
     def test_the_chart_gate_says_chart(self, tmp_path: Path) -> None:

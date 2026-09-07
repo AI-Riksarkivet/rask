@@ -471,7 +471,7 @@ tests:
         alertname: LineageIngestDeadLettering
         exp_alerts: []
 
-  # C4 a. A mover with registry resolution OFF halts every tenant trigger it ever receives. The code
+  # C4 a. A stage runner with registry resolution OFF halts every tenant trigger it ever receives. The code
   # calls this permanent, so the rule is critical and must fire on a steady dribble, not a burst.
   - interval: 1m
     input_series:
@@ -485,9 +485,9 @@ tests:
               severity: "critical"
               service: "medallion"
             exp_annotations:
-              summary: "Medallion mover has registry resolution OFF — every tenant trigger it receives halts here"
+              summary: "Medallion stage runner has registry resolution OFF — every tenant trigger it receives halts here"
               description: >-
-                A tenant trigger arrived with no control root configured. The code calls this "a DEPLOYMENT gap, and therefore permanent": it is not a transient fault and will not clear on its own, so every trigger this mover ever receives is dropped and the cascade stops for that tenant with every pod green. Set MEDALLION_CONTROL_ROOT on the mover. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+                A tenant trigger arrived with no control root configured. The code calls this "a DEPLOYMENT gap, and therefore permanent": it is not a transient fault and will not clear on its own, so every trigger this stage runner ever receives is dropped and the cascade stops for that tenant with every pod green. Set MEDALLION_CONTROL_ROOT on the stage runner. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # C4 b. routing_disabled must NOT also fire the generic refusal alert — the two are exclusive, or an
   # operator gets paged twice for one halt and learns to mute the pair.
@@ -517,7 +517,7 @@ tests:
             exp_annotations:
               summary: "Medallion pre-flight is dropping triggers (unconfined_uri)"
               description: >-
-                A deterministic refusal before any byte was read — malformed, unconfined_uri, bad_project or unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending token, URI and dataset are on the mover's WARNING log line; this alert carries only the bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+                A deterministic refusal before any byte was read — malformed, unconfined_uri, bad_project or unresolvable_lane. Redelivery cannot repair any of them, so the work is gone. The offending token, URI and dataset are on the stage runner's WARNING log line; this alert carries only the bounded reason. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # C3 a. A LOST hop, which no refusal counter can see. The lag rises and STAYS up: a tier that is
   # merely mid-run catches up within the `for:`, while one whose trigger never arrived does not.
@@ -537,7 +537,7 @@ tests:
             exp_annotations:
               summary: "Cascade edge silver->gold is behind its source"
               description: >-
-                A destination tier has not consumed versions its source has published, and has stayed behind for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost trigger, a publish that did not land, a mover that was down — which no counter can see. The repair is edge-addressed: POST /api/movers/stages/rerun with the published table, the range, and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+                A destination tier has not consumed versions its source has published, and has stayed behind for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost trigger, a publish that did not land, a stage runner that was down — which no counter can see. The repair is edge-addressed: POST /api/stage-runners/stages/rerun with the published table, the range, and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # C3 b. A tier that CATCHES UP inside the window must not page. Lag is normal mid-cascade; only a
   # lag that persists is a lost hop, which is the entire reason this rule carries a `for:`.
@@ -550,7 +550,7 @@ tests:
         alertname: MedallionCascadeLag
         exp_alerts: []
 
-  # M24 e. A mover denied its grant stalls the cascade at that stage → fires on the first denial.
+  # M24 e. A stage runner denied its grant stalls the cascade at that stage → fires on the first denial.
   - interval: 1m
     input_series:
       - series: "medallion_stage_denied_total"
@@ -564,7 +564,7 @@ tests:
               service: "medallion"
             exp_annotations:
               summary: "Medallion stage FGA-denied — the cascade may stall at this stage"
-              description: "A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              description: "A stage runner lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # M24 f. Sweep failures accumulating over 30m → MaintenanceDatasetsFailing fires.
   - interval: 1m

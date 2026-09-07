@@ -49,7 +49,7 @@ ENTRYPOINTS: list[tuple[str, str]] = [
     ("catalog.main", "app"),
     ("lineage.main", "app"),
     ("medallion.producer", "app"),
-    ("medallion.mover", "app"),
+    ("medallion.stage_runner", "app"),
     ("maintenance.service", "app"),
     ("compute", "app"),
     ("controlplane", "app"),

@@ -2,7 +2,7 @@
 
 The catalog writes a :class:`~service_kit.lakehouse.gate_specs.GateSpec` through an admin-gated
 door; this is where the medallion reads one back. Object-store-backed for the same reason
-``lane.resolve_transform`` is: the gate runs on a path that holds no catalog client, and a mover pod that
+``lane.resolve_transform`` is: the gate runs on a path that holds no catalog client, and a stage runner pod that
 has never met the catalog must still be able to resolve the record from the control root alone.
 
 **Opt-in, and the default is load-bearing.** No declared record means ``None``, and the chart's
@@ -99,10 +99,10 @@ def effective_gate(settings: object, spec: GateSpec | None) -> EffectiveGate:
 
     Change 6 asked for the fallback to be DROPPED instead, and that is not the right fix; the
     measurement is recorded in `docs/architecture/medallion-data-flow.md`. A `GateSpec` is scoped per PROJECT
-    (`project: str`, `extra="forbid"`) while the chart carries `requiredColumns` per MOVER — `"id"`
+    (`project: str`, `extra="forbid"`) while the chart carries `requiredColumns` per STAGE RUNNER — `"id"`
     for bronze-to-silver against `"id,thumbnail,embedding"` for media-to-silver, because one derives
     artifacts the other does not. Dropping the fallback would either un-gate those columns or force
-    one list across movers with different outputs. The drift it feared is also already prevented by
+    one list across stage runners with different outputs. The drift it feared is also already prevented by
     the whole-not-merged rule above. What was genuinely missing was ATTRIBUTION, so that is what this
     adds.
     """

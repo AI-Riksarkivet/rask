@@ -9,7 +9,7 @@ the wiring has to be asserted at render time rather than observed at runtime.
 **TWO independent lineage paths exist**, and both are asserted here because either one failing is
 invisible from outside:
 
-1. **Dapr pub/sub** — what the medallion producer/movers, compaction and the catalog use TODAY. Each
+1. **Dapr pub/sub** — what the medallion producer/stage runners, compaction and the catalog use TODAY. Each
    publishes to ``<APP>_LINEAGE_TOPIC`` through its own per-subscriber pubsub component
    (``lance.subPubsub``); ``services/lineage`` subscribes on ``LINEAGE_DAPR_TOPIC``. Component names
    differ per app on purpose (each carries its own queueGroupName); the TOPIC must match.

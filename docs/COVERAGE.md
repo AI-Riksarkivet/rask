@@ -60,7 +60,7 @@ Rust `DirectoryNamespace` (rename/backfill/transaction/batch-version) or a real 
 thin in-process fill.
 
 ## Durable-artifact + recovery
-- **The medallion movers write provenance by default, and real Lance data when `MEDALLION_COMPUTE_ENABLED`.**
+- **The medallion stage runners write provenance by default, and real Lance data when `MEDALLION_COMPUTE_ENABLED`.**
   Off (default): they emit OpenLineage only. On: the in-process **fake-Ray compute** (`compute.transform_stage`)
   does a real `lance.write_dataset` per stage (incl. gold) — proven by `test_medallion_cascade.py`. What
   stays demo-only is the **gold whole-history JSONB embed** (`medallion_demo.py: write_gold`); the fake-Ray

@@ -9,7 +9,7 @@ it, which is the behaviour that keeps one unreadable table from blanking the est
 sentinel here would defeat a decision made one layer up.
 
 THE EDGES COME FROM THE PRODUCER'S OWN LANE MAP. `transform_routes` is the declared source-namespace
-set, which is why C3 is homed here: a mover knows only its own lane, and lineage can only infer an edge
+set, which is why C3 is homed here: a stage runner knows only its own lane, and lineage can only infer an edge
 from a run that already happened — so neither can see a first-ever hop, which is the case this detector
 most needs to report.
 """
@@ -81,7 +81,7 @@ def _registry_projects(settings: Any) -> list[str]:  # noqa: ANN401 — the sett
 
 
 def _destination(settings: Any, source: str) -> str:  # noqa: ANN401 — the settings seam
-    """The tier a lane feeds. Read from the mover declaration rather than derived from the tier name,
+    """The tier a lane feeds. Read from the stage runner declaration rather than derived from the tier name,
     because a lane may fan out (``bronze-media`` -> ``silver-media``) and a naming convention would
     quietly mislabel it."""
     lanes = getattr(settings, "lane_destinations", {}) or {}
@@ -113,7 +113,7 @@ def _service_headers(settings: Any) -> dict[str, str]:  # noqa: ANN401 — the s
 def _lane_table(settings: Any, lane: str, *, table_map: str) -> str | None:  # noqa: ANN401 — the settings seam
     """One lane's SOURCE or DESTINATION table id, project-unqualified, or ``None`` when undeclared.
 
-    Read from the mover declarations (`movers[].fromDataset` / `.toDataset`, rendered by
+    Read from the stage runner declarations (`stage runners[].fromDataset` / `.toDataset`, rendered by
     `chart/templates/medallion.yaml`) rather than composed from the tier name. A lane's table is a NAME
     the deployment chooses — `bronze$events`, `bronze-media$objects` — and nothing about the namespace
     predicts it, which is why the first version's `f"{project}-{source}"` could name no table at all.

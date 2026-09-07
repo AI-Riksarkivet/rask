@@ -34,6 +34,7 @@ from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
 
+from medallion.services import engine_names
 from medallion.services.compute import transform_stage
 from service_kit.lakehouse.executor import Capability, RunFailure, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.task_registry import TaskRegistration
@@ -46,7 +47,7 @@ log = logging.getLogger(__name__)
 #: because they are the same string doing the same job — a task registered for `inprocess` is a task
 #: this executor runs, and the chooser and the runner disagreeing about that spelling would route work
 #: to an engine that then refuses it.
-IN_PROCESS_ENGINE = "inprocess"
+IN_PROCESS_ENGINE = engine_names.IN_PROCESS_ENGINE
 
 
 class WrongEngineError(ValueError):

@@ -46,7 +46,7 @@ spec:
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
 {{- if .Values.medallion.enabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId) }}
-{{- range .Values.medallion.movers }}
+{{- range .Values.medallion.stageRunners }}
 {{- $subscribers = append $subscribers (dict "appId" .daprAppId) }}
 {{- end }}
 {{- end }}

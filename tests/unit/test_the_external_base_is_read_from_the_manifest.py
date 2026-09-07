@@ -9,7 +9,7 @@ IT IS FALSE ON THE PINNED LIBRARY. Probed on pylance 10.0.0:
     ds._ds.base_paths()
     -> {1: DatasetBasePath(id=1, name=Some("blobs"), path=/tmp/…/external, is_dataset_root=false)}
 
-and it survives a reopen from disk, which is the case a mover actually has.
+and it survives a reopen from disk, which is the case a stage runner actually has.
 
 WHY THE STAMP STILL EXISTS rather than being deleted: the two answer different questions. The manifest
 says which bases this dataset REGISTERED; the stamp says which base its `blob_uri` values are RELATIVE
@@ -54,8 +54,7 @@ def test_the_registered_base_is_recoverable_without_a_stamp(tmp_path: Path) -> N
     assert blobs.EXTERNAL_BASE_KEY not in (ds.schema.metadata or {}), "fixture stamped the schema — it must not"
 
     assert blobs.external_base_of(ds) == base, (
-        "the base was registered in the manifest and the resolver could not see it — the stamp is "
-        "still the only source of truth"
+        "the base was registered in the manifest and the resolver could not see it — the stamp is still the only source of truth"
     )
 
 
@@ -89,9 +88,7 @@ def test_the_manifest_wins_over_a_disagreeing_stamp(tmp_path: Path) -> None:
         data_storage_version="2.2",
         initial_bases=[lance.DatasetBasePath(str(base), "source")],
     )
-    assert blobs.external_base_of(lance.dataset(uri)) == str(base), (
-        "a stamp inherited from an upstream dataset outranked this dataset's own registered base"
-    )
+    assert blobs.external_base_of(lance.dataset(uri)) == str(base), "a stamp inherited from an upstream dataset outranked this dataset's own registered base"
 
 
 def test_no_module_still_claims_the_bases_are_unreadable() -> None:
