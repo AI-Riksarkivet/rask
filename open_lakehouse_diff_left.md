@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 146 open, 76 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 145 open, 77 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -730,10 +730,30 @@ is what would make the coupling durable enough to rely on.
 **Closes it.** After C3: silver = shallow clone of bronze@N + `add_columns`; measure bytes and latency
 against the copying path on one corpus before adopting.
 
-### C7 · Descriptor-first reads (R8) and `read_blob_ranges`
-**What.** rask's `/blobs` door streams `take_blobs` chunks with Range/ETag; query responses do not expose
-the descriptor struct by default. **Closes it.** Descriptor struct on Arrow responses, `all_binary` on
-opt-in; document `read_blob_ranges` as the batched client path once creds are vended.
+### ~~C7 · Descriptor-first reads (R8) and `read_blob_ranges`~~ — **THE MAIN CLAUSE IS REFUTED 2026-09-07**
+**"Query responses do not expose the descriptor struct by default" IS NOT TRUE.** Driven against the
+deployed catalog — `POST /v1/table/acme-bronze$agnostic/query` asking for a blob column — and the
+Arrow response carries the descriptor, not the bytes:
+
+    payload  struct<kind: uint8, position: uint64, size: uint64, blob_id: uint32, blob_uri: string>
+             metadata {'lance-encoding:blob': 'true', 'lance-encoding:packed': 'true'}
+    a row -> {'kind': 0, 'position': 0, 'size': 16, 'blob_id': 0, 'blob_uri': ''}
+
+So R8's headline — descriptor-first reads, where a query hands back WHERE the bytes are rather than
+the bytes — is already the default on the query door, and the response is 3,058 bytes for three rows
+rather than the payloads themselves. The `lance-encoding:blob` field metadata rides along, so a client
+can tell a descriptor column from an ordinary struct without out-of-band knowledge.
+
+**A NOTE FOR THE NEXT READER, because it cost several 422s:** `columns` and `vector` are generated
+`oneOf` WRAPPERS, not the bare list and array the row's shape suggests. The body is
+`{"k": 3, "vector": {"single_vector": []}, "columns": {"column_names": [...]}}`; a bare
+`"columns": ["id"]` answers 422 *"Input should be a valid dictionary or object"*. An empty
+`single_vector` is the non-vector scan.
+
+**WHAT ACTUALLY REMAINS is the smaller half of the close condition:** `all_binary` as an opt-in on the
+query door (today the descriptor is the only shape it serves), and documenting `read_blob_ranges` as
+the batched client path. The `/blobs` door already streams `take_blobs` with Range/ETag, so the
+byte-fetch path exists — what is missing is the BATCHED one and its documentation.
 
 ### C8 · Repack and branch maintenance in the sweep — **BRANCH HALF DONE AND VERIFIED LIVE 2026-09-07** (`236379fb`)
 **The branches were invisible, and it was a live leak.** `discover_datasets` treats a directory holding
