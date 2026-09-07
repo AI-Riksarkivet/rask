@@ -7,10 +7,11 @@ onto the stage trigger. From there the range dies quietly:
      while that model's own docstring cites `from_version`/`to_version` as its example of the
      additive fields a consumer must tolerate;
   2. `submit_stage` reads only `originator`/`project` off the trigger;
-  3. `submit_stage_job` never exports `BASE_VERSION`.
+  3. `submit_stage_job` never exported the floor at all.
 
-`runners/dummy/job.py` reads `BASE_VERSION` as "the delta boundary … from the publication event,
-which carries the exact range". It is never set, so the job reads the whole tier every time.
+The floor now rides `WorkOrder.to_env()` as `RASK_VERSION_FLOOR` — the platform's ONE serialization,
+which every engine's adapter renders, so the boundary reaches the job by the same route whether it was
+submitted in-process, through the dashboard Jobs API or as a `RayJob` CR.
 
 What this is and is not: the Ray stage-job entrypoint is per-stage runner OPT-IN and no stage runner row in
 `chart/values.yaml` declares one, so nothing pays the O(tier) cost in the shipped estate today. It is
@@ -72,7 +73,7 @@ def test_a_FIRST_publication_carries_no_floor_and_that_is_not_an_error() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_range_REACHES_the_submitted_job_as_BASE_VERSION(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_range_REACHES_the_submitted_job_as_the_orders_VERSION_FLOOR(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """Steps 2 and 3, and the assertion the whole finding turns on."""
 
     async def _resolve(_settings: Any, *, project: str = "") -> None:
@@ -90,13 +91,15 @@ async def test_the_range_REACHES_the_submitted_job_as_BASE_VERSION(captured: dic
     )
 
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert env.get("BASE_VERSION") == "7", f"the delta boundary never reached the job: {sorted(env)}"
+    assert env.get("RASK_VERSION_FLOOR") == "7", f"the delta boundary never reached the job: {sorted(env)}"
 
 
 @pytest.mark.asyncio
-async def test_NO_floor_is_an_EMPTY_string_which_the_runner_reads_as_everything(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    """Not omitted, and not a sentinel number. `job.py` strips the value and treats empty as a full
-    read, so an empty string is the one spelling that already has a defined meaning downstream."""
+async def test_NO_floor_is_OMITTED_which_the_job_reads_as_everything(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitted, not blanked, and not a sentinel number. The job strips the value and treats absent and
+    empty identically as a full read, so both spellings mean the same thing downstream — and omission
+    is the one that does not assert a prior version which may not exist. `WorkOrder.to_env` makes that
+    choice once for every engine rather than leaving each submitter to spell it."""
 
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None
@@ -112,4 +115,4 @@ async def test_NO_floor_is_an_EMPTY_string_which_the_runner_reads_as_everything(
     )
 
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert env.get("BASE_VERSION") == "", f"a first publication must say 'everything', not omit the key: {env.get('BASE_VERSION')!r}"
+    assert "RASK_VERSION_FLOOR" not in env, f"a first publication has no floor, so the order must omit it: {env.get('RASK_VERSION_FLOOR')!r}"

@@ -4,9 +4,9 @@ Shaped like `scripts/ray_stage_job.py`: a script executed to completion, paramet
 env vars, never shipping code at submit time. "Jobs are scripts baked into images" is the estate's
 rule — a transform change is an image rebuild, reproducible by construction.
 
-Env: FROM_URI TO_URI [BASE_VERSION] [RUN_ID] [LINEAGE_JSON]
+Env: RASK_SOURCE_URI RASK_DEST_URI [RASK_VERSION_FLOOR] [RASK_RUN_ID] [RASK_LINEAGE_DOCUMENT]
 
-BASE_VERSION is the delta boundary. It comes from the publication event, which carries the exact
+RASK_VERSION_FLOOR is the delta boundary. It comes from the publication event, which carries the exact
 version from the commit/tag-update RESPONSE — never from a DescribeTable read, which could race
 ahead and silently skip rows.
 """
@@ -66,23 +66,23 @@ def write_silver(to_uri: str, rows: pa.Table, run_id: str) -> dict[str, Any]:
 def run(env: dict[str, str] | None = None) -> dict[str, Any]:
     """Execute one dummy silver hop. Returns the result the stage runner records as its completion."""
     e = env if env is not None else dict(os.environ)
-    from_uri = e.get("FROM_URI", "")
-    to_uri = e.get("TO_URI", "")
+    from_uri = e.get("RASK_SOURCE_URI", "")
+    to_uri = e.get("RASK_DEST_URI", "")
     if not from_uri or not to_uri:
-        raise ValueError("FROM_URI and TO_URI are required")
+        raise ValueError("RASK_SOURCE_URI and RASK_DEST_URI are required")
 
-    raw_base = e.get("BASE_VERSION", "").strip()
+    raw_base = e.get("RASK_VERSION_FLOOR", "").strip()
     base_version = int(raw_base) if raw_base else None
-    run_id = e.get("RUN_ID", "")
+    run_id = e.get("RASK_RUN_ID", "")
     # PROVENANCE IDENTITY, separate from the URIs. `to_id`/`from_id` are the CATALOG identifiers the
     # lineage graph and the FGA objects are keyed by (`silver$dummy`), which a storage URI is not —
     # emitting the URI would name a node no grant matches, hiding the run from every recipient.
     # Defaulted from the URI's stem only so a lane that has not wired them still produces a
     # well-formed graph rather than crashing on provenance.
-    to_id = e.get("TO_ID", "") or _identifier_from(to_uri)
-    from_id = e.get("FROM_ID", "") or _identifier_from(from_uri)
-    originator = e.get("ORIGINATOR", "")
-    project = e.get("PROJECT", "")
+    to_id = e.get("RASK_DEST_TABLE", "") or _identifier_from(to_uri)
+    from_id = e.get("RASK_SOURCE_TABLE", "") or _identifier_from(from_uri)
+    originator = e.get("RASK_ORIGINATOR", "")
+    project = e.get("RASK_PROJECT", "")
 
     def _emit(event_type: str, **over: object) -> None:
         # Best effort, and deliberately AFTER the work: provenance must never fail a run that
@@ -101,7 +101,7 @@ def run(env: dict[str, str] | None = None) -> dict[str, Any]:
             _emit("COMPLETE", rows=0)
             return {"rows_in": 0, "rows_written": 0, "version": None, "skipped": True}
 
-        silver = transform_batch(delta, stage=e.get("STAGE", "silver"), lineage=e.get("LINEAGE_JSON", ""))
+        silver = transform_batch(delta, stage=e.get("RASK_STAGE", "silver"), lineage=e.get("RASK_LINEAGE_DOCUMENT", ""))
         result = write_silver(to_uri, silver, run_id)
     except Exception as exc:
         # A FAIL carries no version, because the run committed nothing. Re-raised so the job still

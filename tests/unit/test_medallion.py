@@ -686,7 +686,7 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
             "compute_enabled": True,
             "ray_enabled": True,
             "s3_secret_access_key": "the-real-secret",
-            "ray_job_params": {"S3_SECRET": "stolen", "LINEAGE_JSON": "forged", "OTEL_SERVICE_NAME": "spoofed"},
+            "ray_job_params": {"S3_SECRET": "stolen", "RASK_LINEAGE_DOCUMENT": "forged", "OTEL_SERVICE_NAME": "spoofed"},
         }
     )
     asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
@@ -696,7 +696,7 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
     # not ride the submission at all — the pod holds it — so the lane's collision target simply does
     # not exist, and a colliding name must not CREATE it either.
     assert "S3_SECRET" not in env, "a lane parameter smuggled a credential-shaped key into the submission"
-    assert env["LINEAGE_JSON"] == "{}", "a lane parameter overwrote the run's provenance document"
+    assert env["RASK_LINEAGE_DOCUMENT"] == "{}", "a lane parameter overwrote the run's provenance document"
     assert env["OTEL_SERVICE_NAME"] != "spoofed"
     assert env["RASK_PARAM_S3_SECRET"] == "stolen"
 
@@ -808,8 +808,8 @@ def test_the_stage_job_gets_the_ORIGINATOR_in_its_OWN_env_not_only_ray_metadata(
     )
 
     env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env["ORIGINATOR"] == "alice-sub", "the job cannot name the person in its own events without this"
-    assert env["PROJECT"] == "acme", "no lance.project means zero watchers, silently"
+    assert env["RASK_ORIGINATOR"] == "alice-sub", "the job cannot name the person in its own events without this"
+    assert env["RASK_PROJECT"] == "acme", "no lance.project means zero watchers, silently"
     # The post-mortem copy must SURVIVE — this is an addition, not a move.
     assert api.posts[0]["metadata"]["rask.originator"] == "alice-sub"
     assert api.posts[0]["metadata"]["rask.project"] == "acme"
@@ -825,7 +825,7 @@ def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.M
     asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t"))
 
     env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env.get("ORIGINATOR", "") == "", "a service-run cascade must not fabricate a principal"
+    assert env.get("RASK_ORIGINATOR", "") == "", "a service-run cascade must not fabricate a principal"
     assert "rask.originator" not in api.posts[0]["metadata"]
 
 

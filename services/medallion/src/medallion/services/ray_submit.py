@@ -32,6 +32,7 @@ from medallion.services.task_register import RAY_ENGINE
 from medallion.services.transform_spec import resolve_task_async, resolve_transform_async
 from ray_kit import submit as rk
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
 
 log = logging.getLogger(__name__)
@@ -178,17 +179,28 @@ async def submit_stage_job(
     # fans out to two tables of the same stage. from→to IS the transform's identity; a redelivered
     # trigger carries the same pair, so redelivery idempotency is unchanged.
     submission_id = stage_submission_id(stage, token, from_uri, to_uri, code=code_version)
+    # THE PLATFORM'S HALF OF THE CONTRACT, SERIALIZED ONCE. `WorkOrder.to_env()` is documented as
+    # "the ONE serialization, so no adapter hand-rolls it", and hand-rolling it here is precisely what
+    # made `service_kit.lakehouse.executor` unusable against this job: the port's Ray adapter renders
+    # `to_env()` into the CR's runtime_env, this submitter wrote six differently-spelled names, and the
+    # two shared ZERO keys — so a job submitted through the port would have started with none of its
+    # inputs bound. Measured 2026-09-07 and now pinned by
+    # `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`.
+    #
+    # The floor is OMITTED when there is none rather than blanked, which `to_env` does for us: the job
+    # reads a missing floor and an empty one identically ("read everything"), so the two spellings
+    # agree, and omission is the one that does not assert a version that may not exist.
+    order = WorkOrder(
+        task=spec.task if spec else stage,
+        source=WorkSource(uri=from_uri, table_id=from_id, version_floor=from_version),
+        destination=WorkDestination(uri=to_uri, table_id=to_id),
+        stamp=WorkStamp(stage=stage, cardinality=cardinality, lineage_document=lineage_json),
+        identity=WorkIdentity(run_id=run_id, project=project, originator=originator, code_version=code_version),
+        params=job_params,
+        idempotency_key=submission_id,
+    )
     env_vars = {
-        "FROM_URI": from_uri,
-        "TO_URI": to_uri,
-        "STAGE": stage,
-        # THE DELTA BOUNDARY. Always present, and EMPTY rather than omitted when there is no floor:
-        # the runner reads `e.get("BASE_VERSION", "").strip()` and already treats empty as "read
-        # everything", so an empty string is the one spelling that has a defined meaning downstream.
-        # A first publication genuinely has no floor; that is not a missing value.
-        "BASE_VERSION": "" if from_version is None else str(from_version),
-        "STAGE_CARDINALITY": cardinality,
-        "LINEAGE_JSON": lineage_json,
+        **order.to_env(),
         # ENDPOINT, KEY ID AND REGION ONLY — the SECRET is deliberately absent. It rode this dict,
         # and the Jobs API echoes runtime_env back to any reader of `GET /api/jobs/<id>` (P0, fixed
         # 2026-08-28). The Ray pods hold S3_SECRET themselves (chart: secretKeyRef onto
@@ -234,8 +246,6 @@ async def submit_stage_job(
         # The job emits its OWN OpenLineage (no Dapr sidecar on Ray pods), so it needs the identity
         # here as well as in `metadata` below — that one is read from outside after a failure, this
         # one is what the job stamps on its own events. Carrying only one loses the other lane.
-        **({"ORIGINATOR": originator} if originator else {}),
-        **({"PROJECT": project} if project else {}),
         # WHAT THIS RUN IS, as the graph names it — the other half of the same problem the two above
         # solve. `FROM_URI`/`TO_URI` say where to read and write; these say which governed TABLES those
         # locations are, and which run the job's events belong to. The runner documents all three as
@@ -244,9 +254,6 @@ async def submit_stage_job(
         #
         # OMITTED when empty, like `ORIGINATOR` and `PROJECT`: an unwired lane must reach the runner's
         # own stem fallback rather than a blank the platform asserted.
-        **({"FROM_ID": from_id} if from_id else {}),
-        **({"TO_ID": to_id} if to_id else {}),
-        **({"RUN_ID": run_id} if run_id else {}),
         # Unset URL => `emit()` returns early. The service TOKEN is deliberately absent from this
         # dict — it is the estate's shared credential and rode the echoed runtime_env (the same P0 as
         # S3_SECRET above); the Ray pods hold LINEAGE_SERVICE_TOKEN themselves and the job reads it

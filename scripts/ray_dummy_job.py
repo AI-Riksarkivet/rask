@@ -122,5 +122,5 @@ if __name__ == "__main__":
     # to discard it — so the estate's own GPU-free end-to-end prover ran untraced, and could not
     # demonstrate the one thing the production lanes depend on. Same shape as ray_stage_job's root:
     # continued when a valid context was handed over, never fabricated.
-    with _traced_root("ray.dummy_job", {"lance.medallion.stage": os.environ.get("STAGE", "")}):
+    with _traced_root("ray.dummy_job", {"lance.medallion.stage": os.environ.get("RASK_STAGE", "")}):
         sys.exit(main())

@@ -131,19 +131,25 @@ class WorkOrder(BaseModel):
         env: dict[str, str] = {
             "RASK_TASK": self.task,
             "RASK_SOURCE_URI": self.source.uri,
-            "RASK_SOURCE_TABLE": self.source.table_id,
             "RASK_DEST_URI": self.destination.uri,
-            "RASK_DEST_TABLE": self.destination.table_id,
             "RASK_MERGE_KEY": self.destination.merge_key,
             "RASK_WRITE_MODE": self.destination.write_mode,
             "RASK_STAGE": self.stamp.stage,
             "RASK_CARDINALITY": self.stamp.cardinality,
-            "RASK_RUN_ID": self.identity.run_id,
             "RASK_IDEMPOTENCY_KEY": self.idempotency_key,
         }
         if self.source.version_floor is not None:
             env["RASK_VERSION_FLOOR"] = str(self.source.version_floor)
         optional = (
+            # THE PROVENANCE IDENTITIES ARE OMITTED WHEN UNWIRED, not blanked, and the difference is
+            # not stylistic. A consumer's documented fallback is `e.get(NAME, "") or from_the_uri`, so
+            # absent and empty take the same branch TODAY — but the moment a consumer asks the natural
+            # question "was I wired?" by testing for the key's PRESENCE, a blank answers yes and the
+            # platform has asserted an identifier it does not have. An identifier the graph and the FGA
+            # objects are keyed by is the wrong field to guess at.
+            ("RASK_SOURCE_TABLE", self.source.table_id),
+            ("RASK_DEST_TABLE", self.destination.table_id),
+            ("RASK_RUN_ID", self.identity.run_id),
             ("RASK_LINEAGE_DOCUMENT", self.stamp.lineage_document),
             ("RASK_PROJECT", self.identity.project),
             ("RASK_ORIGINATOR", self.identity.originator),

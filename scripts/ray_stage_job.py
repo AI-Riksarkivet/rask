@@ -21,13 +21,14 @@ TWO paths, chosen by whether the upstream carries a blob-v2 column:
   were gone). Closes the Phase-3 gap that forced media stages onto the in-process fallback.
 
 Consume-layer provenance (R26): the submitting stage runner hands over this run's ``LineageDoc`` as
-``LINEAGE_JSON``, and every path below writes it as the ``lineage`` column (Arrow JSON → Lance JSONB) in
+``RASK_LINEAGE_DOCUMENT`` (the order's own field name), and every path below writes it as the ``lineage`` column (Arrow JSON → Lance JSONB) in
 the SAME commit as the data — a governed row must never be readable without its provenance, and the
 distributed path must not produce a dataset the in-process path would have stamped. Any upstream
 ``lineage`` cell is DROPPED first: it describes the parent's run, not this one. Unset/empty → no column
 (the pre-R26 shape), so the job stays runnable by hand.
 
-Env: FROM_URI TO_URI STAGE [LINEAGE_JSON]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
+Env: RASK_SOURCE_URI RASK_DEST_URI RASK_STAGE [RASK_LINEAGE_DOCUMENT RASK_VERSION_FLOOR
+     RASK_CARDINALITY]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
      [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
      when the submitting stage runner injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
@@ -386,16 +387,24 @@ def _traced_root(name: str, attributes: dict[str, str], *, span_processor: Any =
 
 def main() -> None:
     so = _storage_options()
-    from_uri, to_uri, stage = os.environ["FROM_URI"], os.environ["TO_URI"], os.environ["STAGE"]
-    lineage = os.environ.get("LINEAGE_JSON", "")  # this run's consume-layer provenance document (R26)
-    # THE DELTA BOUNDARY, finally read. `submit_stage_job` has exported it since the publication event
-    # started carrying {from_version, to_version}; this job ignored it, so every run rescanned the tier.
-    # Blank means a full run — a first stage has no boundary to be incremental against.
-    raw_base = os.environ.get("BASE_VERSION", "").strip()
+    # THE PLATFORM'S OWN VOCABULARY — `WorkOrder.to_env()`, which is documented as "the ONE
+    # serialization, so no adapter hand-rolls it". Reading these names is what lets ANY executor
+    # submit this job: the in-process lane, the dashboard Jobs API and a KubeRay `RayJob` CR all
+    # serialize the same order, so none of them needs a private translation table. A job reading a
+    # name no order supplies binds it to the empty string, and an empty source URI is not a crash —
+    # it is a run that scans nothing, writes nothing and reports success. Pinned by
+    # `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`, which compares what an order
+    # emits against what this file reads.
+    from_uri, to_uri, stage = os.environ["RASK_SOURCE_URI"], os.environ["RASK_DEST_URI"], os.environ["RASK_STAGE"]
+    lineage = os.environ.get("RASK_LINEAGE_DOCUMENT", "")  # this run's consume-layer provenance document (R26)
+    # THE DELTA BOUNDARY. An order OMITS the floor when there is none rather than blanking it, because
+    # a consumer reads a missing floor as "full scan" and `""` would be a different claim — and both
+    # spellings arrive here as absent, which is the same answer. A first stage has no boundary to be
+    # incremental against.
+    raw_base = os.environ.get("RASK_VERSION_FLOOR", "").strip()
     base_version = int(raw_base) if raw_base else None
-    # The lane's declared row cardinality. Absent means 1:1, which is what every default stage runner is and
-    # what the old unconditional assertion enforced — so an un-migrated lane behaves exactly as before.
-    cardinality = os.environ.get("STAGE_CARDINALITY", "").strip() or ONE_TO_ONE
+    # The lane's declared row cardinality. Absent means 1:1, which is what every default stage runner is.
+    cardinality = os.environ.get("RASK_CARDINALITY", "").strip() or ONE_TO_ONE
 
     # Continue the submitting stage runner's trace (P3): the whole stage transform runs as one child span of
     # the stage runner's medallion.transform span; without a handed-over context it runs exactly as before.

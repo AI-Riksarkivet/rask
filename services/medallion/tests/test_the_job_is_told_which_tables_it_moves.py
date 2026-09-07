@@ -2,11 +2,11 @@
 
 `runners/dummy/src/dummy_runner/job.py` reads three identity variables the platform sets nowhere:
 
-  1. `TO_ID` / `FROM_ID` — the CATALOG identifiers (`silver$features`), which the lineage graph and
+  1. `RASK_DEST_TABLE` / `RASK_SOURCE_TABLE` — the CATALOG identifiers (`silver$features`), which the lineage graph and
      the FGA objects are keyed by. The runner falls back to the URI's stem, and its own comment says
      what that costs: "emitting the URI would name a node no grant matches, hiding the run from every
      recipient". A hidden run acks SUCCESS, so nothing anywhere reports the loss.
-  2. `RUN_ID` — the run the job's own OpenLineage events are keyed on. Unset, the runner emits an
+  2. `RASK_RUN_ID` — the run the job's own OpenLineage events are keyed on. Unset, the runner emits an
      empty run id, so the job's COMPLETE/FAIL cannot MERGE onto the run the stage runner already emitted for
      the same hop; the graph holds two half-runs instead of one.
 
@@ -70,16 +70,16 @@ async def test_the_submitted_job_is_told_the_catalog_identifiers_it_moves(captur
     )
 
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert env.get("FROM_ID") == "acme-bronze$events", f"the job cannot name its input table: {sorted(env)}"
-    assert env.get("TO_ID") == "acme-silver$features", f"the job cannot name its output table: {sorted(env)}"
-    assert env.get("RUN_ID") == "0f9f1f1e-0000-4000-8000-000000000001", f"the job's own lineage events would key on a run nothing else knows: {sorted(env)}"
+    assert env.get("RASK_SOURCE_TABLE") == "acme-bronze$events", f"the job cannot name its input table: {sorted(env)}"
+    assert env.get("RASK_DEST_TABLE") == "acme-silver$features", f"the job cannot name its output table: {sorted(env)}"
+    assert env.get("RASK_RUN_ID") == "0f9f1f1e-0000-4000-8000-000000000001", f"the job's own lineage events would key on a run nothing else knows: {sorted(env)}"
 
 
 @pytest.mark.asyncio
 async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: dict[str, Any]) -> None:
-    """Same rule as `ORIGINATOR`/`PROJECT`: an empty value is not an identity.
+    """Same rule as `RASK_ORIGINATOR`/`RASK_PROJECT`: an empty value is not an identity.
 
-    The runner reads `e.get("TO_ID", "") or _identifier_from(to_uri)`, so an absent key takes the
+    The runner reads `e.get("RASK_DEST_TABLE", "") or _identifier_from(to_uri)`, so an absent key takes the
     documented stem fallback. Sending `""` would take the same branch today and pin a value the
     platform does not know — and the moment a runner tests for the key's PRESENCE (the natural way to
     ask "was I wired?"), a blank would answer yes.
@@ -93,7 +93,7 @@ async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: d
     )
 
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert "FROM_ID" not in env and "TO_ID" not in env and "RUN_ID" not in env, f"an unwired lane sent blank identities instead of none: {sorted(env)}"
+    assert "RASK_SOURCE_TABLE" not in env and "RASK_DEST_TABLE" not in env and "RASK_RUN_ID" not in env, f"an unwired lane sent blank identities instead of none: {sorted(env)}"
 
 
 def test_the_dispatch_hands_the_WORKFLOW_the_identity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,7 +199,7 @@ def test_the_submit_ACTIVITY_forwards_what_the_spec_carries(captured: dict[str, 
     workflow.submit_stage(cast(Any, None), cast(Any, spec.model_dump()))
 
     env = captured["body"]["runtime_env"]["env_vars"]
-    assert (env.get("FROM_ID"), env.get("TO_ID"), env.get("RUN_ID")) == (
+    assert (env.get("RASK_SOURCE_TABLE"), env.get("RASK_DEST_TABLE"), env.get("RASK_RUN_ID")) == (
         "acme-bronze$events",
         "acme-silver$features",
         "0f9f1f1e-0000-4000-8000-000000000003",
