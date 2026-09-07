@@ -69,6 +69,8 @@ def _render() -> str:
         "rustfs.maintenanceSecretKey=m-secret",
         "rustfs.rayComputeAccessKey=rask-ray-compute",
         "rustfs.rayComputeSecretKey=r-secret",
+        "rustfs.medallionAccessKey=rask-medallion",
+        "rustfs.medallionSecretKey=d-secret",
     )
 
 
@@ -144,6 +146,11 @@ def ray() -> dict:
 @pytest.fixture(scope="module")
 def maintenance() -> dict:
     return _policy(_render(), "maintenance")
+
+
+@pytest.fixture(scope="module")
+def medallion() -> dict:
+    return _policy(_render(), "medallion")
 
 
 # ---- the Ray compute lane -----------------------------------------------------------------------
@@ -359,3 +366,53 @@ def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attach
     creates = re.findall(r"mc admin policy create rfs \S+ \S+( \|\| true)?", job)
     assert creates, "no policy is created at all"
     assert not any(creates), "a policy create still swallows its failure — a bad policy renders as a successful hook"
+
+
+# ---- the medallion plane: the producer and the three movers --------------------------------------
+#
+# A THIRD SHAPE, and it had to be. Reusing `rask-ray-compute` here would have broken the cascade on
+# contact: that policy denies the control prefixes TOTALLY, which is right for a Ray stage job (it
+# reads FROM_URI, writes TO_URI and consults nothing) and wrong for the SERVICES that drive it. The
+# medallion reaches those records directly over S3, not through the catalog door — measured
+# 2026-09-07: `task_register.register_ray_tasks` WRITES `_tasks/`, and `transform_spec.resolve_task`
+# / `resolve_transform` / `gate_specs` / `project_root` READ `_tasks/`, `_transforms/`, `_gates/` and
+# the warehouse registry. So the deny is write-only like maintenance's, with `_tasks/` carved out
+# because this plane is that prefix's REGISTRAR rather than its consumer.
+
+
+def test_the_medallion_writes_a_runtime_minted_warehouse_bucket(medallion: dict) -> None:
+    """The cascade's whole job. A tenant's bucket is named by an operator at `POST /v1/warehouses`, so
+    no value in the chart can enumerate it."""
+    assert allowed(medallion, action="s3:PutObject", bucket="acme-bucket", key="medallion/silver/data/x.lance")
+    assert allowed(medallion, action="s3:GetObject", bucket="acme-bucket", key="medallion/bronze/data/y.lance")
+    assert allowed(medallion, action="s3:ListBucket", bucket="acme-bucket", prefix="medallion/")
+
+
+def test_the_medallion_may_REGISTER_a_task_because_it_owns_that_prefix(medallion: dict) -> None:
+    """THE ONE CARVE-OUT, and the reason this is not the Ray policy. `register_ray_tasks` writes
+    `_tasks/<hash>.json` at boot; the Ray lane is that prefix's untrusted consumer and is denied it
+    totally. Denying the registrar would leave `engine_choice` refusing every task nobody registered —
+    a cascade that cannot run anything, with the policy looking correct."""
+    assert allowed(medallion, action="s3:PutObject", bucket="lance-catalog", key="_tasks/abc123.json")
+    assert allowed(medallion, action="s3:GetObject", bucket="lance-catalog", key="_tasks/abc123.json")
+
+
+@pytest.mark.parametrize("prefix", ["_transforms", "_gates", "_warehouses", "_projects", "_protection"])
+def test_the_medallion_still_READS_the_records_it_resolves_against(medallion: dict, prefix: str) -> None:
+    """Blinding it here does not narrow what the cascade does — it stops the cascade resolving which
+    transform to run, which gate admits the output, and which warehouse a tenant's tiers live in."""
+    assert allowed(medallion, action="s3:GetObject", bucket="lance-catalog", key=f"{prefix}/acme.json")
+
+
+@pytest.mark.parametrize("prefix", ["_transforms", "_gates", "_warehouses", "_projects", "_protection", "_policies", "_trash", "__manifest"])
+def test_the_medallion_cannot_REWRITE_what_governs_it(medallion: dict, prefix: str) -> None:
+    """The point of the credential. A mover that can rewrite `_transforms/` re-points what it runs;
+    one that can rewrite `_gates/` admits its own blocked output; one that can rewrite `_warehouses/`
+    moves a tenant's data; one that can delete `_trash/` strands bytes behind an undrop that can no
+    longer find them. None of those is a write this plane ever makes."""
+    assert not allowed(medallion, action="s3:PutObject", bucket="acme-bucket", key=f"{prefix}/x.json")
+    assert not allowed(medallion, action="s3:DeleteObject", bucket="acme-bucket", key=f"{prefix}/x.json")
+
+
+def test_the_medallion_never_reaches_the_observability_store(medallion: dict) -> None:
+    assert not allowed(medallion, action="s3:GetObject", bucket="rask-observability", key="anything")

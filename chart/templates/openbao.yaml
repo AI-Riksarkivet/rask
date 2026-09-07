@@ -193,6 +193,15 @@ spec:
                 {{- if and $.Values.rustfs.maintenanceAccessKey $.Values.rustfs.maintenanceSecretKey }}
                 maintenance-s3-secret-key={{ $.Values.rustfs.maintenanceSecretKey }} \
                 {{- end }}
+                {{- /* THE MEDALLION PLANE'S SCOPED S3 SECRET, on the same terms as maintenance's: its own
+                       field rather than a second value on `rustfs-secret-key`, which IS the tenant root's
+                       secret that other services read. Seeded only when both halves of the pair are set,
+                       matching the Deployment's own `$medScoped` test — a field the service is told to
+                       read and nothing writes is a fail-closed boot, since `fetch_required_secrets`
+                       raises rather than degrading. */}}
+                {{- if and $.Values.rustfs.medallionAccessKey $.Values.rustfs.medallionSecretKey }}
+                medallion-s3-secret-key={{ $.Values.rustfs.medallionSecretKey }} \
+                {{- end }}
 
               echo "seeded secret/lance into OpenBao"
 {{- end }}{{/* devMode seed */}}

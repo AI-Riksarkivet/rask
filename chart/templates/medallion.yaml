@@ -299,14 +299,26 @@ spec:
             # server may not serve `full/max` (some cap at `full/2000,`), and a wrong derivative is a
             # per-page 404 rather than a boot failure.
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            {{- /* THE MEDALLION PLANE'S SCOPED IDENTITY (Q17-5). Empty values keep the tenant ROOT
+                 credential, which is what every install ran until this landed. `rask-medallion` reaches
+                 data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
+                 write-denied on every other control prefix — see `rustfs-scoped-users.yaml`. */}}
+            {{- $medScoped := and .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey }}
+            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.medallionAccessKey .Values.rustfs.accessKey (not (not $medScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary .Values.rustfs.medallionSecretKey .Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env
             # (Batch 7 closes the gap: the env was already omitted here but nothing told the service to
             # consume the store — a store-on deployment left medallion credential-less). Fails closed.
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
+            {{- if $medScoped }}
+            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `rustfs-secret-key` — the
+            # tenant ROOT's secret — so a scoped access key left on that default is signed with a
+            # mismatched pair and every operation fails `SignatureDoesNotMatch`. The Ray and maintenance
+            # pairs both paid for this; the field was already configurable, only the chart had to use it.
+            - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
+            {{- end }}
             {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
@@ -457,12 +469,22 @@ spec:
             - { name: MEDALLION_FROM_URI, value: "s3://{{ include "lance.stageBucket" (list $root .fromNamespace) }}/medallion/{{ .fromNamespace }}" }
             - { name: MEDALLION_TO_URI, value: "s3://{{ include "lance.stageBucket" (list $root .toNamespace) }}/medallion/{{ .toNamespace }}" }
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" $root }}" }
-            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ $root.Values.rustfs.accessKey | quote }} }
+            {{- /* THE MEDALLION PLANE'S SCOPED IDENTITY (Q17-5). Empty values keep the tenant ROOT
+                 credential, which is what every install ran until this landed. `rask-medallion` reaches
+                 data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
+                 write-denied on every other control prefix — see `rustfs-scoped-users.yaml`. */}}
+            {{- $medScoped := and $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.medallionSecretKey }}
+            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.accessKey (not (not $medScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" $root) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ $root.Values.rustfs.secretKey | quote }} }
+            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary $root.Values.rustfs.medallionSecretKey $root.Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
             # Store-on → sole source at boot (see the producer block above). Fails closed.
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
+            {{- if $medScoped }}
+            # The pair's other half — see the producer block. A scoped key on the default field signs
+            # with the root's secret and fails `SignatureDoesNotMatch` on every call.
+            - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
+            {{- end }}
             {{- end }}
             {{- if $root.Values.medallion.ray }}
             # Event-driven real-Ray: the mover submits its stage transform as a `ray job submit` to the

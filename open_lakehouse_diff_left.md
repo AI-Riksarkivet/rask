@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 207 tracked, 172 open, 35 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 208 tracked, 173 open, 35 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1225,3 +1225,4 @@ are gated. What is missing is callers.
 | Q17-14 | Audit records carry no request or trace id (§F2-10) | med | Lakekeeper stamps a uuid7 request id on every audit event; rask's `lance.audit` stream cannot correlate one decision to one request, and ships to no append-only sink |
 | Q17-15 | Root create is open by default (§F2-11) | med | `lockRootCreate: false`, and `fga_deps.py` reads a missing lock as "open top-level create" — any authenticated subject may mint a top-level namespace |
 | Q17-16 | No image signing, no SBOM (§F2-12) | low | Scanners only (osv-scanner, trivy, trufflehog). Lakekeeper lacks this too and even disables provenance, so this is parity, not a regression — but it is the last row of the zero-trust list |
+| Q17-17 | The estate's only two scoped identities are DRIFT that no chart renders | high | Measured 2026-09-07: `helm get manifest` renders `MAINTENANCE_S3_ACCESS_KEY_ID=rustfsadmin` while the live object holds `rask-maintenance`; same for the Ray lane. So the two controls Q17-5 credits the estate with exist only as a hand patch — `helm get values` carries no `rustfs` section at all. They survive today because Helm only patches fields that CHANGED between releases, which means they are one values edit away from silently reverting to the ROOT credential with nothing going red. The chart half landed for the medallion plane (values -> OpenBao -> both Deployments, gated by `test_the_medallion_runs_as_its_own_storage_identity`); maintenance and ray-compute still need their live drift turned into rendered values, and this estate's release is stuck at a FAILED revision 100 (post-upgrade hooks) so that upgrade is not a free action |

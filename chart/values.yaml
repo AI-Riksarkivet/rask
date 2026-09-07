@@ -1909,6 +1909,14 @@ rustfs:
   # hand-run session.
   maintenanceAccessKey: ""
   maintenanceSecretKey: ""
+  # THE MEDALLION PLANE'S SCOPED PAIR — the producer and all three movers share one identity,
+  # because `medallion.yaml` renders their S3 env from one pair and they do one class of work.
+  # Empty falls back to the tenant ROOT credential, which is what every install runs today
+  # (Q17-5). Provisioned by `rustfs-scoped-users.yaml` as `rask-medallion`: data in any
+  # warehouse, `_tasks/` writable because this plane REGISTERS them, every other control
+  # prefix read-only.
+  medallionAccessKey: ""
+  medallionSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog
