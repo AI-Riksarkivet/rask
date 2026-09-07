@@ -577,6 +577,27 @@ facets, and the branch/tag doors emitting no lineage.
 added as a QUERY parameter. Those routes declare no body, so the spec's `{"branch": …}` body is still
 dropped by FastAPI and answered from main. The e2e tests send `?branch=` and are green over that open
 channel. The fix is A1 — declare the request model as the body — not a second patch here.
+**THE SILENT-DOORS CLAUSE IS CONFIRMED AT ITS ROOT 2026-09-07, and the root is not a forgotten emit.**
+Driven against the deployed catalog: `tags/create` and `branches/create` both answered **200** and the
+control-event ring stayed at 10 with **zero** events naming the probe. Then the cause, which is one
+level below the doors — **`ControlAction` is a `Literal` of 38 values and not one of them is a tag or
+branch action.** There is nothing for those doors to emit. The contrast is what makes it a gap rather
+than a policy: `table_protected` / `table_unprotected`, `table_published`, `policy_set`,
+`namespace_dropped` are all there, so governance-relevant state changes on a table generally DO emit,
+and these two are the exception.
+
+**Why it is not fixed here.** Adding an action is a WIRE CONTRACT change in three files
+(`control_events.py` -> `docs/catalog-openapi.json` -> the generated TS client, `make openapi` +
+`gen:types`), which is mechanical — but the design question in front of it is not: a notification needs
+a TARGET, and `rask-notifications` is explicit that coverage is decided at the producer and that an
+event naming nobody is undeliverable rather than under-delivered. So "who is told when the `published`
+tag moves?" has to be answered before the action exists, and that answer is an owner's.
+
+**A SECOND MEASUREMENT, incidental but worth keeping:** the probe first asked for `version: 1` and was
+refused **404 / code 11** — "no such version for tag 'c2probe': version main:1 does not exist" — because
+the sweep had reclaimed it (`version/list` now answers `[13, 17, 18, 19, 20]`). That is §A5's mapping
+working in a scenario nobody constructed: before it, a tag pinned to a reclaimed version answered a 500.
+
 **What.** The model has `can_create_branch: owner` on `table` and nothing else; branch writes fall through
 to the table's `can_write_data`; update/delete write main; vending, protection, trash and lineage are
 branch-blind; the catalog's branch and tag doors **emit no lineage at all**, so no notification ever
