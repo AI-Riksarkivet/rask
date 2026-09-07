@@ -166,8 +166,19 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
            Sentry running, `lance-tracing` is the one shared Configuration. What it needs first is
            the actor plane characterised on a live estate, because no document answers it.
 
-Remaining with no verdict: the append-only-sink half of F2-10 alone. So §F2 stands at ELEVEN of
-twelve with a verdict, FOUR of them refutations rather than fixes.
+    F2-10's SECOND CLAUSE — CONFIRMED 2026-09-07, so the row is half refuted and half proven and both
+           halves needed DRIVING rather than reading. Audit records do reach GreptimeDB — 477,096 rows
+           in `opentelemetry_logs` — and that is the problem. Three measurements against the live
+           store: a `DELETE` on the audit stream is ACCEPTED (`affectedrows: 0`, the predicate simply
+           matched nothing); the table declares `ttl = '14days'`, so every audit record is destroyed a
+           fortnight after the decision it records; and both queries, the DELETE included, were issued
+           to `:4000/v1/sql` with NO credentials from inside the cluster. Audit also shares ONE table
+           with all other telemetry, so it can carry neither its own retention nor its own access
+           policy. What the row needs is a SEPARATE append-only sink, not a setting.
+
+**§F2 IS NOW TWELVE OF TWELVE WITH A VERDICT** — five fixed, four refuted or half-refuted, three
+measured-and-open with the measurement recorded. Nothing in this section is unexamined; what is left
+is work or an owner decision, never an unknown.
 
 **THE PATTERN, now with SIX members and recorded in docs/DECISIONS.md: a control's NAME is not
 evidence that it exists — and neither is its CONFIGURATION, nor a COUNT of its call sites.** Three
