@@ -505,8 +505,23 @@ relaxing `reconcile_body_id` to accept the unsplit spelling would be exactly the
 workaround for a library bug that `CLAUDE.md` forbids, and it would weaken the one check that stops a
 request naming two objects at once. The fix is upstream, and it is worth filing.
 
-**STILL OPEN:** lance-ray namespace mode, the third client. The suite is shaped to take it: one
-marker, one make target, one more client fixture.
+**THE THIRD CLIENT IS DEFERRED TO THE COMPUTE PASS, deliberately.** lance-ray's namespace mode is
+real and reachable — `read_lance(table_id=[...], namespace_impl="rest", namespace_properties=...)`
+takes a proper SEGMENT LIST, so it does not hit lancedb's single-string limit — but driving it needs a
+Ray runtime, which is the compute plane rather than the lakehouse. Under the owner's scope ruling
+(lakehouse FIRST, then compute) it waits for the compute pass. Two things measured on the way, so the
+next attempt does not rediscover them:
+
+* **`ray.init()` on this host attaches to a 41-DAY-OLD FOREIGN CLUSTER and then refuses.**
+  `/tmp/ray/ray_current_cluster` (dated 2026-08-05) points at a Ray 2.56.1 / Python 3.14.3 instance
+  running from `/opt/venv` under another user, with a Serve controller. This repo declares
+  `ray[default]>=2.58` and has 2.58.0, so every connect dies `Version mismatch` — a host defect, not a
+  code one, and the same shape as the stale dev gateway that squats `:8888`. `ray.init(address="local")`
+  with a private `_temp_dir` bypasses it.
+* **lance-ray reads the DATA PATH DIRECTLY, so the catalog's vended credentials are a precondition**,
+  not an afterthought: with none it fails `CredentialsNotLoaded` before any spec op is exercised.
+  `POST /v1/table/{id}/credentials` answers `{credentials, location, mode, read_version}` and is the
+  governed way in — the same client-direct seam the estate already proves elsewhere.
 
 **Closes it.** One suite that drives every op with the three stock clients. A1–A10 land behind it.
 

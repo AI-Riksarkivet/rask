@@ -41,6 +41,9 @@ REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     # supply what the script exists to derive.
     "live": (),
     "cas": ("LANCE_E2E_S3_ENDPOINT",),
+    # Only the CATALOG url gates it: the suite's own skipif is keyed on that alone, and
+    # `LANCE_E2E_DEX` has a working default, so demanding it would refuse a legitimate invocation.
+    "spec-conformance": ("LANCE_E2E_CATALOG_URL",),
     "compaction": ("LANCE_E2E_MAINTENANCE_URL", "LANCE_E2E_GREPTIME_URL"),
     "duckdb": ("LANCE_E2E_S3_ENDPOINT",),
     "dummy-lane": ("LANCE_E2E_CATALOG_URL",),
