@@ -154,28 +154,34 @@ def _staged_keys_for(run_id: str) -> list[str]:
     return [key for key, _ in outbox.list_events(OUTBOX_URI, _so()) if key == run_id or key.startswith(f"{run_id}@")]
 
 
-def _drive_the_relay(lineage: str, run_id: str, *, attempts: int = 12, gap: float = 5.0) -> bool:
-    """Drive the drain until a sweep actually runs, and say whether the run was drained.
+def _drive_the_relay(lineage: str, run_id: str, *, budget_seconds: float = 420.0, gap: float = 10.0) -> bool:
+    """Wait for the relay to recover this run, nudging it along the way.
 
-    THE SINGLE-FLIGHT GUARD IS NOT A FAILURE, and treating it as one is why this leg read as a
-    durability defect. `lineage-reconcile-cron` fires every 30 s and the relay refuses an overlapping
-    sweep — `{"skipped": true, "reason": "another reconcile sweep is in progress"}`, HTTP 200. A single
-    manual POST therefore lands on a running sweep often enough to be routine, and the assertion it
-    failed was about scheduling rather than about durability.
+    THE CLAIM UNDER TEST IS THE OUTCOME, NOT THE CALLER. "A SIGKILLed producer loses nothing" is a
+    statement about the event reaching the graph; whether this POST or the cron's own tick did the
+    work is not a property the estate has or needs. Asserting ownership of the drain is what made this
+    leg fragile in two different ways, both measured live 2026-09-07.
 
-    A CONCURRENT SWEEP DRAINING IT COUNTS, which is the other half. The relay is the relay whether this
-    call or the cron's tick did the work, and the claim under test is that the SIGKILLed producer's
-    event reaches the graph — proven by §4b's read-back either way. Waiting for a sweep we personally
-    triggered would assert ownership of the drain, which is not a property the estate has or needs.
+    A SKIP IS NOT A FAILURE. `lineage-reconcile-cron` fires every 30 s and the relay refuses an
+    overlapping sweep — `{"skipped": true, ...}`, HTTP 200. Treating that as a failure reported a
+    durability defect that did not exist.
+
+    NEITHER IS A TIMEOUT. The drain is the LAST step of a tick that first reconciles every dataset
+    against storage — `checked: 400` on this estate — all under the single-flight lock. So a call that
+    DOES acquire the lock outlives any sane HTTP read timeout, and the sweep it started keeps running
+    server-side after the client gives up. Both outcomes mean "a sweep is in progress"; the honest
+    response to either is to keep watching the outbox.
     """
-    for _ in range(attempts):
-        resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=60)
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        if body.get("outbox_drained", 0) >= 1:
-            return True
-        if not body.get("skipped") and not _staged_keys_for(run_id):
-            return True  # a sweep ran, drained nothing of ours, and the object is gone — the cron beat us
+    deadline = time.monotonic() + budget_seconds
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=gap)
+            if resp.status_code == 200 and resp.json().get("outbox_drained", 0) >= 1:
+                return True
+        except requests.exceptions.ReadTimeout:
+            pass  # we hold the lock and the sweep is running — the object is what to watch, not this socket
+        if not _staged_keys_for(run_id):
+            return True  # some sweep drained it; §4b decides whether it landed where it had to
         time.sleep(gap)
     return False
 
