@@ -55,23 +55,21 @@ def _qualified(tier: str, table: str) -> str:
     return f"{PROJECT}-{tier}${table}" if PROJECT else f"{tier}${table}"
 
 
-# Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same
-# read-only identity the web BFF uses). Auth-off → OIDC off → authenticate() pass-through (harmless);
-# auth-on → this is what lets the reads through instead of a 401.
-#: Governed lineage READS. On a projectless drive this is the app-token SERVICE door as `service-web`
-#: — a warehouse reader, the same read-only identity the web BFF uses.
+#: Governed lineage READS go as a USER, on every drive.
 #:
-#: A PROJECT-scoped drive reads as the project ADMIN instead, and that is not a convenience. A tenant's
-#: stages hang off its OWN zone warehouse (`seed_medallion_fga.sh` links
-#: `warehouse:<zone-wh> -> namespace:<project>-<tier>`), while `service-web` is granted reader on the
-#: ESTATE root — so it has no path to tenant data and every read comes back 403, or worse, an empty
-#: dataset list that reads as "the cascade never ran". Observed 2026-08-25: silver was published
-#: (`publish 200 OK`) while the lineage dataset list showed no `lakehouse-*` rows at all.
-_LINEAGE_HEADERS = (
-    {"Authorization": f"Bearer {ADMIN_TOKEN}"}
-    if PROJECT and ADMIN_TOKEN
-    else ({"dapr-api-token": DAPR_TOKEN, "x-lance-service-identity": "service-web"} if DAPR_TOKEN else {})
-)
+#: This used to fall back to the app-token SERVICE door as `service-web` whenever the drive carried no
+#: project. That identity is the ANONYMOUS principal — `bff.ts` and `runs-feed.ts` send it only when
+#: there is NO session — so a suite borrowing it was asserting what a logged-out visitor can see while
+#: believing it asserted governance. It also made the identity's cross-tenant reader grants look
+#: load-bearing, which is exactly why they survived (Q17-8).
+#:
+#: A PROJECT-scoped drive already read as the project admin, and for a reason worth keeping: a tenant's
+#: stages hang off its OWN zone warehouse (`seed_medallion_fga.sh` links `warehouse:<zone-wh> ->
+#: namespace:<project>-<tier>`), so an estate-root reader has no path to tenant data and every read
+#: comes back 403 — or worse, an empty dataset list that reads as "the cascade never ran". Observed
+#: 2026-08-25: silver was published (`publish 200 OK`) while the lineage dataset list showed no
+#: `lakehouse-*` rows at all. The projectless drive now reads as the same user rather than as nobody.
+_LINEAGE_HEADERS = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN else {}
 
 pytestmark = [pytest.mark.e2e, pytest.mark.medallion]
 

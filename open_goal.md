@@ -83,7 +83,11 @@ items 1-4 "decide whether the claim is honest":
           subjects too. LEFT: `service-ingest`, `service-maintenance`, `notifications` — each needs
           its CLIENT half first (all three have 0 `dedicated_token` refs), because naming a subject
           privileged before it can present its own credential 401s it outright.
-    F2-4  stop laundering ANONYMOUS browser reads into an allowlisted service identity.
+    F2-4  stop laundering ANONYMOUS browser reads into a service identity — DONE 2026-09-07,
+          fail closed by owner ruling. The subject held 7 reader grants across TWO tenants plus a
+          writer, seeded by a documented production prerequisite; all eight revoked, both seeds
+          gated, and the two e2e suites that read AS it (which is why it survived) now read as a
+          user. Live: anonymous 403 / signed-in 200.
 
 Then F2-5..12 (Dapr access control + NetworkPolicy on by default, TLS to every store, validate
 `register_table` locations, delete the dead `static` vending mode, refuse well-known defaults,

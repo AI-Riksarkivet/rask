@@ -264,15 +264,13 @@ DEMO_ESTATE = Estate(
         # says `define can_update_tag: owner`; `validator` buys `can_promote`, which is the OTHER door
         # on that route (the accept-assertions override). One rung per tier is enough because both
         # cascade: `owner from parent` on `table`, and `owner` already subsumes `validator` there.
-        # The READ half of the same omission. `service-web` is the read-only identity the web BFF and
-        # the live cascade proof both use; it holds grants on the shared datasets and had none on a
-        # TENANT's tiers, so `GET /datasets/acme-gold$catalog/upstream` answered
-        # `403 can_get_metadata required on table:acme-gold$catalog` — the lineage plane correctly
-        # refusing a reader with no grant. A tenant whose cascade runs but whose lineage nobody may
-        # read is governed correctly and observable by no one.
-        Grant("user:service-web", "reader", "namespace:acme-bronze"),
-        Grant("user:service-web", "reader", "namespace:acme-silver"),
-        Grant("user:service-web", "reader", "namespace:acme-gold"),
+        # NO READ GRANT FOR `service-web`, and its absence is the control (Q17-8 / §F2-2 F2-4).
+        # `bff.ts` and `runs-feed.ts` send that identity ONLY when there is no session, so it is the
+        # ANONYMOUS principal — granting it reader on a tenant's tiers is granting the public those
+        # tiers. It held 7 reader grants across two tenants before this, seeded here and by
+        # `seed_medallion_fga.sh`, which `values-prod.yaml` names as a production prerequisite.
+        # A human reads a tenant's lineage with their OWN bearer; if a surface needs to be public,
+        # grant this subject that surface explicitly and it becomes visible in the model.
         # The PRODUCER too, and its rung is not obvious from the cascade's shape: an approved promotion
         # is resumed by `publish_promotion`, which runs in the PRODUCER's process (the workflow instance
         # and the approve door must share an app-id for `raise_workflow_event` to resolve it). So the

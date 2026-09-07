@@ -33,10 +33,12 @@ DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 #: and a shared service credential deliberately cannot approve its own output.
 ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 
-# Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same
-# read-only identity the web BFF uses). On an auth-OFF stack OIDC is off → authenticate() pass-through,
-# so these headers are harmless; on the auth-ON stack they're what lets the reads through (else 401).
-_LINEAGE_HEADERS = {"dapr-api-token": DAPR_TOKEN, "x-lance-service-identity": "service-web"} if DAPR_TOKEN else {}
+#: Governed lineage READS go as a USER, not as the anonymous principal.
+#:
+#: `service-web` is the identity `bff.ts` sends only when there is NO session, so reading as it asserted
+#: what a logged-out visitor sees rather than what governance permits — and made its cross-tenant reader
+#: grants look load-bearing (Q17-8). Auth-off stacks send nothing and pass through as before.
+_LINEAGE_HEADERS = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN else {}
 
 #: NOT project-qualified, and that is the media lane's actual contract rather than an omission.
 #: `seed_medallion_fga.sh` says it outright — "media lanes stay estate-only (the media pipeline is not

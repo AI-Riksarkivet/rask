@@ -128,7 +128,6 @@ w user:service-blesser validator namespace:models
 # The web BFF reads the WHOLE lineage graph as a service (no per-user login on the auth-on stack) — READER
 # on the warehouse so its rung cascades to can_get_metadata on every dataset, exactly like a warehouse
 # reader human. Read-only; never a writer. Pairs with LINEAGE_SERVICE_SUBJECTS + web.serviceIdentity.
-w user:service-web reader "$WAREHOUSE"
 
 echo "✓ seeded medallion grants (mover writers + media lane, silver→gold validator, trainer reader/models-writer, stage/table parent links) into store $SID"
 
@@ -156,11 +155,10 @@ if [ -n "$PROJECT" ]; then
   # single-tenant rungs. Omitted here until 2026-08-26, so a TENANT's approved promotion 403'd.
   w user:service-medallion-producer owner "namespace:$PROJECT-silver"
   w user:service-medallion-producer owner "namespace:$PROJECT-gold"
-  # The READ half: `service-web` backs the BFF and the live cascade proof. A tenant whose cascade
-  # runs but whose lineage nobody may read is governed correctly and observable by no one.
-  w user:service-web reader "namespace:$PROJECT-bronze"
-  w user:service-web reader "namespace:$PROJECT-silver"
-  w user:service-web reader "namespace:$PROJECT-gold"
+  # NO READ GRANT FOR `service-web` — its absence is the control (Q17-8). That identity is what
+  # `bff.ts` sends when there is NO session, so granting it reader on a tenant's tiers grants the
+  # PUBLIC those tiers. Four such grants were seeded here, and this script is a documented
+  # production prerequisite (`values-prod.yaml`). A human reads with their own bearer.
   link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$events"
   # The ingest lane's table. `INGEST_TABLE` because the ETL form lets a user name it, unlike the
   # producer's fixed `events` lane — pass it when seeding a tenant whose first ingest is not `pages`.
