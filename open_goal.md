@@ -108,10 +108,18 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
            LANCE_FGA_LOCK_ROOT_CREATE=false, so any authenticated subject may mint a top-level
            namespace ON THIS ESTATE, not merely by chart default.
 
+    F2-7   validate `register_table` locations — LARGELY REFUTED (Q17-11), by driving the deployed
+           door rather than reading one layer of it: an ABSOLUTE location answers 400, a relative
+           TRAVERSAL answers 400, and a plain relative path resolves inside the caller's OWN
+           warehouse. §F2-7 read the Python door — which genuinely has no check — and concluded there
+           was none anywhere; the enforcement lives in the native lance-ns backend beneath it. What
+           remains is defence-in-depth, not the cross-tenant hole recorded.
+
 Remaining with no verdict yet: F2-5 (Dapr access control + NetworkPolicy — measured tractable: only
 TWO service-invocation callers exist, so a defaultAction:deny needs 11 allow entries and has ONE home
-in the shared `lance-tracing` Configuration), F2-7 (validate register_table locations), F2-10
-(correlate audit records), F2-12 (sign and attest images).
+in the shared `lance-tracing` Configuration), F2-10 (correlate audit records), F2-12 (sign and attest
+images). So §F2 stands at SEVEN of twelve with a verdict, two of them refutations rather than fixes —
+which is the point of demanding one per row.
 
 ---
 
