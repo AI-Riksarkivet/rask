@@ -946,9 +946,30 @@ insert). **Closes it.** Feed row inside the ingest transaction; time-based reten
 ### E5 · Unbounded growth, O(history) hot paths, no default pruning
 
 > MERGED into **Q3-10** — the same defect (unbounded list reads with no server-side LIMIT) was tracked here and in the Python-audit ledger under two ids. Q3-10 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
-**Where.** `values.yaml:404` (`runRetentionDays: 0`), `repository.py:352-354,660,711`, no index on
-`Run.event_time`, unbounded `*1..` traversals. **Closes it.** `latest_version` on the Dataset node;
-index on `event_time`; bounded paths; paginated `/runs`, `/producers`.
+**THE INDEX HALF IS DONE AND PROVEN ON THE LIVE GRAPH 2026-09-07** (`6d3cf663`). `lineage.Run`
+carried exactly one index — `lineage_run_uniq`, the MERGE key — while SIX `ORDER BY r.event_time DESC`
+sites in `cypher.py` sorted the whole label table, the runs board among them. Declared
+`("Run", ("event_time",))` in `VERTEX_LOOKUP_KEYS`, which `ensure_graph_constraints()` already
+materialises idempotently on every boot; no new machinery. Deployed and measured with the planner
+itself:
+
+    Limit  (cost=0.28..68.72 rows=200)
+      ->  Index Scan Backward using lineage_run_lookup on "Run"  (cost=0.28..1911.65 rows=5586)
+
+**BOUNDING A RESPONSE IS NOT BOUNDING THE WORK, and this register bounded the response first.**
+`/runs` was capped at 200 rows earlier the same day (the board was returning 5,122 runs / 2.65 MB) —
+that LIMIT bounds what crosses the wire, and the ORDER BY still read and sorted every row behind it.
+The morning's fix was half a fix; this is the other half, and the cost stops growing with the table.
+
+**THE RETENTION HALF IS STILL OPEN, and the finding is sharper than the row's phrasing.** It is not
+that there is no pruning — the mechanism EXISTS and ships OFF: `runRetentionDays: 0` in the chart and
+`LINEAGE_RUN_RETENTION_DAYS=0` on the deployed service. Growth is real and measured today: the graph
+went **5,514 -> 5,586 Run**, 1,230 -> 1,236 Dataset, 2,429 -> 2,460 Job over a single day, with
+`lineage.Run` at 4,176 kB. Turning it on is an owner decision about how much history the graph owes —
+`values.yaml:1534` already notes the flip side, that a recovered dataset's FAIL Run node lingers.
+
+**Where.** `values.yaml:404`, `repository.py:352-354,660,711`, unbounded `*1..` traversals.
+**Closes the rest.** `latest_version` on the Dataset node; bounded paths; paginated `/producers`.
 
 ### E6 · Model gaps
 **What.** Versions are `WROTE` edge properties (one per run+dataset); no branch/tag/clone/base
