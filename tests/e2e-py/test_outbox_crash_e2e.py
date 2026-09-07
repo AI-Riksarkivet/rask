@@ -141,6 +141,45 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
             proc.wait(timeout=5)
 
 
+def _staged_keys_for(run_id: str) -> list[str]:
+    """Every outbox object belonging to ONE run.
+
+    `list_events` yields the object KEY, and since `_object_key` widened that key is
+    ``<run_id>@<eventType>`` — one run stages a COMPLETE and a FAIL as separate objects precisely so
+    the second cannot truncate the first. Asserting `run_id in dict(...)` therefore compares an id to
+    a key and is false however well durability works: it reported a LOSS while the event sat in the
+    outbox, which is the loudest false alarm this suite could raise. The bare form is still matched
+    because `_object_key` falls back to it for a payload with no readable eventType.
+    """
+    return [key for key, _ in outbox.list_events(OUTBOX_URI, _so()) if key == run_id or key.startswith(f"{run_id}@")]
+
+
+def _drive_the_relay(lineage: str, run_id: str, *, attempts: int = 12, gap: float = 5.0) -> bool:
+    """Drive the drain until a sweep actually runs, and say whether the run was drained.
+
+    THE SINGLE-FLIGHT GUARD IS NOT A FAILURE, and treating it as one is why this leg read as a
+    durability defect. `lineage-reconcile-cron` fires every 30 s and the relay refuses an overlapping
+    sweep — `{"skipped": true, "reason": "another reconcile sweep is in progress"}`, HTTP 200. A single
+    manual POST therefore lands on a running sweep often enough to be routine, and the assertion it
+    failed was about scheduling rather than about durability.
+
+    A CONCURRENT SWEEP DRAINING IT COUNTS, which is the other half. The relay is the relay whether this
+    call or the cron's tick did the work, and the claim under test is that the SIGKILLed producer's
+    event reaches the graph — proven by §4b's read-back either way. Waiting for a sweep we personally
+    triggered would assert ownership of the drain, which is not a property the estate has or needs.
+    """
+    for _ in range(attempts):
+        resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=60)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        if body.get("outbox_drained", 0) >= 1:
+            return True
+        if not body.get("skipped") and not _staged_keys_for(run_id):
+            return True  # a sweep ran, drained nothing of ours, and the object is gone — the cron beat us
+        time.sleep(gap)
+    return False
+
+
 def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     # A FRESH token per invocation. `build_run_event` derives run_id as a deterministic UUID5 over the
     # event's identity, so a FIXED token made the run_id stable across runs — after the first run the event
@@ -164,7 +203,7 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     _kill_producer_mid_flight(event_json, run_id)
 
     # 3. The durable copy is all that survived the kill. If this fails, #4 does not work at all.
-    assert run_id in dict(outbox.list_events(OUTBOX_URI, _so())), "the SIGKILLed producer left NO staged event — the commit→publish loss window is still open"
+    assert _staged_keys_for(run_id), "the SIGKILLed producer left NO staged event — the commit→publish loss window is still open"
 
     # Nothing may have reached the graph yet — the producer died BEFORE publishing. If the run is already
     # there, the test is not proving recovery (something else delivered it) and every assert below is vacuous.
@@ -172,9 +211,8 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     assert not pre_graph and not pre_feed, "the run reached the graph without the relay — test is vacuous"
 
     # 4. The relay recovers it.
-    resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=60)
-    assert resp.status_code == 200, resp.text
-    assert resp.json().get("outbox_drained", 0) >= 1, resp.text  # increments only on a successful ingest
+    drained = _drive_the_relay(lineage, run_id)
+    assert drained, "the relay never drained this run — every sweep skipped and the run stayed staged"
 
     # 4b. ...into BOTH surfaces. `outbox_drained` only proves the relay COUNTED it. The graph and the durable
     # feed are separate writes, and one landing without the other is a bug this repo has actually shipped.
@@ -183,4 +221,4 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     assert feed, f"run {run_id} reached the graph but is ABSENT from the /events feed — the audit trail lies"
 
     # 5. ...and cleans up, so the object cannot be re-ingested forever.
-    assert run_id not in dict(outbox.list_events(OUTBOX_URI, _so()))
+    assert not _staged_keys_for(run_id), "the relay ingested the event and left it staged — it will be re-ingested every tick"

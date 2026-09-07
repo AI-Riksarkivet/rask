@@ -58,7 +58,21 @@ class SweepReport(BaseModel):
     stale: list[str] = Field(default_factory=list)
     contract_violations: dict[str, list[str]] = Field(default_factory=dict)
     outbox_drained: int = 0
+    outbox_stranded: int = 0
     pruned_runs: int = 0
+
+
+class DrainOutcome(BaseModel):
+    """What one outbox drain did — BOTH numbers, because either alone reads as the opposite of the truth.
+
+    ``drained`` alone says a tick succeeded while a specific event has been refused on every tick since
+    the estate came up; ``stranded`` alone says a tick failed while it recovered everything else. The
+    pair is what distinguishes "the relay is working and one event needs a human" from "the relay is
+    wedged", and those need different responses.
+    """
+
+    drained: int = 0
+    stranded: int = 0
 
 
 def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
@@ -119,6 +133,7 @@ def log_sweep(report: SweepReport) -> None:
             "stale": len(report.stale),
             "contract_violations": len(report.contract_violations),
             "outbox_drained": report.outbox_drained,
+            "outbox_stranded": report.outbox_stranded,
             "pruned_runs": report.pruned_runs,
         },
     )
@@ -201,7 +216,8 @@ async def _on_cron(
         # crashed before deleting) is a no-op. Runs inside the same single-flight lock — no double-drain.
         if settings.outbox_uri:
             try:
-                report.outbox_drained = await _drain_outbox(repository, settings, opts, publisher)
+                outcome = await _drain_outbox(repository, settings, opts, publisher)
+                report.outbox_drained, report.outbox_stranded = outcome.drained, outcome.stranded
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
         report.pruned_runs = await _prune_old_runs(repository, settings)
@@ -209,12 +225,24 @@ async def _on_cron(
     return report.model_dump()
 
 
-async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], publisher: object | None = None) -> int:
+async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], publisher: object | None = None) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
     An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is ingested
     idempotently (``ingest_event`` MERGEs on ``run_id``) and then deleted; a delete that fails just leaves
     the object for the next tick to re-ingest (a no-op) and retry the delete. Returns the count ingested.
+
+    PER-EVENT ISOLATION, and it is what makes the sentence above true. One event the graph refuses must
+    not decide anything about the others: the failure is caught around a SINGLE event's work, counted as
+    STRANDED and named, and the object is deliberately left staged for the next tick. Without it the only
+    guard was around the whole drain, so one un-ingestable event stranded every other staged event
+    permanently — measured live 2026-09-07 as `Entity failed to be updated: 3` on every sweep, with the
+    tick still answering 200 and depth climbing. That inverts the outbox's purpose: the thing built so a
+    committed write's lineage survives a crash instead loses every OTHER committed write's lineage.
+
+    STRANDED IS NOT POISON. Poison is unparseable and is dropped; a stranded event is intact and is
+    RETRIED, because dropping on a non-validation error destroys the event's only durable copy — the
+    2026-07-14 audit finding this module already carries.
 
     BOUNDED + OBSERVED (docs/DECISIONS.md P1.1/P1.2 — outbox observability + bounded drain). The drain reads
     at most ``outbox_drain_limit`` events per tick, OLDEST FIRST — it previously materialised the whole prefix
@@ -230,8 +258,8 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
 
     cap = settings.outbox_drain_limit or None  # 0 => unbounded (the pre-P1.2 behavior)
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=cap)))
-    drained = 0
-    for run_id, event_json in staged:
+    drained = stranded = 0
+    for key, event_json in staged:
         try:
             event = RunEvent.model_validate_json(event_json)
         except ValidationError as exc:
@@ -242,56 +270,71 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
             # so the strict model is unavailable exactly where the answer is needed. Destroying a
             # committed write's only durable copy without recording whose it was is the loss twice over.
             poison_author: str | None = None
+            poison_run: str | None = None
             with suppress(Exception):
-                poison_author = author_sub_from_payload(json.loads(event_json))
+                payload = json.loads(event_json)
+                poison_author = author_sub_from_payload(payload)
+                poison_run = str((payload.get("run") or {}).get("runId") or "") or None
+            # BOTH, and under names that mean what they say. The staged object's key is
+            # `<run_id>@<eventType>`, so stamping it as `run_id` makes this record — the ONE record of a
+            # committed write whose only durable copy is being destroyed — uncorrelatable with the run
+            # in the graph. The key is what was dropped; the run id is what it was about.
             log.warning(
                 "lineage_outbox_poison_dropped",
-                extra={"run_id": run_id, "error": str(exc), "author": poison_author},
+                extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author},
             )
             outbox_metrics.record_poison_dropped()
-            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, run_id)
+            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
             continue
-        await repository.ingest_event(event)  # idempotent — MERGE on run_id (authoritative AGE graph)
-        # Mirror BOTH live ingest paths (JetStream consumer + HTTP ingest): also project onto the durable
-        # `lineage_events` feed. Without this the drained run reaches /runs + /producers but is SILENTLY
-        # absent from the /events audit surface — exactly the run the outbox exists to save. The feed INSERT
-        # is ON CONFLICT DO NOTHING on the natural key, so a later genuine redelivery won't duplicate.
-        await record_event_best_effort(repository, event)
-        # RE-PUBLISH, then drop. Ingesting alone repairs the GRAPH and leaves every SUBSCRIBER unaware:
-        # medallion's `/bronze-arrival` reacts to this announcement, so a head event recovered but never
-        # re-published means provenance is restored while the bronze->silver->gold run it should have
-        # started stays halted forever. The relay is the only thing that can restart it.
-        #
-        # BEFORE the drop, never after: a publish that fails must leave the staged object for the next
-        # tick, which is the whole point of staging. The re-ingest on that tick is a no-op (MERGE on
-        # run_id), so retrying costs nothing.
-        #
-        # A duplicate is expected and safe. A staged object can mean "published, then the delete failed",
-        # so this may re-deliver something subscribers already saw — which is exactly the at-least-once
-        # contract they are built for: the graph MERGEs, the feed is ON CONFLICT DO NOTHING, the inbox
-        # keys on `runId@STATE`, and the cascade carries an idempotency token.
-        if publisher is not None:
-            await dapr_publish.publish_event(
-                publisher,
-                timeout_seconds=settings.dapr_publish_timeout_seconds,
-                pubsub_name=settings.dapr_pubsub,
-                topic_name=settings.dapr_topic,
-                # The STAGED BYTES, never `event.model_dump_json()`. The model is the parsed Python
-                # shape (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`). Round-
-                # tripping through the model re-publishes a document no subscriber can parse — a silent
-                # corruption of the very event this path exists to save. Byte-identical redelivery is
-                # also the honest thing: subscribers see exactly what they would have seen first time.
-                data=event_json,
-                data_content_type="application/json",
-            )
-        await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, run_id)
+        try:
+            await repository.ingest_event(event)  # idempotent — MERGE on run_id (authoritative AGE graph)
+            # Mirror BOTH live ingest paths (JetStream consumer + HTTP ingest): also project onto the durable
+            # `lineage_events` feed. Without this the drained run reaches /runs + /producers but is SILENTLY
+            # absent from the /events audit surface — exactly the run the outbox exists to save. The feed INSERT
+            # is ON CONFLICT DO NOTHING on the natural key, so a later genuine redelivery won't duplicate.
+            await record_event_best_effort(repository, event)
+            # RE-PUBLISH, then drop. Ingesting alone repairs the GRAPH and leaves every SUBSCRIBER unaware:
+            # medallion's `/bronze-arrival` reacts to this announcement, so a head event recovered but never
+            # re-published means provenance is restored while the bronze->silver->gold run it should have
+            # started stays halted forever. The relay is the only thing that can restart it.
+            #
+            # BEFORE the drop, never after: a publish that fails must leave the staged object for the next
+            # tick, which is the whole point of staging. The re-ingest on that tick is a no-op (MERGE on
+            # run_id), so retrying costs nothing.
+            #
+            # A duplicate is expected and safe. A staged object can mean "published, then the delete failed",
+            # so this may re-deliver something subscribers already saw — which is exactly the at-least-once
+            # contract they are built for: the graph MERGEs, the feed is ON CONFLICT DO NOTHING, the inbox
+            # keys on `runId@STATE`, and the cascade carries an idempotency token.
+            if publisher is not None:
+                await dapr_publish.publish_event(
+                    publisher,
+                    timeout_seconds=settings.dapr_publish_timeout_seconds,
+                    pubsub_name=settings.dapr_pubsub,
+                    topic_name=settings.dapr_topic,
+                    # The STAGED BYTES, never `event.model_dump_json()`. The model is the parsed Python
+                    # shape (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`). Round-
+                    # tripping through the model re-publishes a document no subscriber can parse — a silent
+                    # corruption of the very event this path exists to save. Byte-identical redelivery is
+                    # also the honest thing: subscribers see exactly what they would have seen first time.
+                    data=event_json,
+                    data_content_type="application/json",
+                )
+            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+        except Exception as exc:
+            # LEFT STAGED on purpose — see "STRANDED IS NOT POISON" above. Named with both the object key
+            # and the run it is about, because the two differ and only one of them finds the run in the graph.
+            stranded += 1
+            log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run.run_id, "error": str(exc)})
+            continue
         drained += 1
     # Always emit — adding 0 CREATES the series, so a dashboard/alert has data from the first tick instead
     # of reading "no data" until the first non-zero drain (the lesson the compaction metrics learned).
     outbox_metrics.record_drained(drained)
-    if drained:
-        log.info("lineage_outbox_drained", extra={"drained": drained})
-    return drained
+    outbox_metrics.record_stranded(stranded)
+    if drained or stranded:
+        log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded})
+    return DrainOutcome(drained=drained, stranded=stranded)
 
 
 async def _ack_binding() -> dict[str, str]:

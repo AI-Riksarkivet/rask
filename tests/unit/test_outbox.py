@@ -160,12 +160,64 @@ def test_relay_drain_reingests_valid_and_drops_poison(tmp_path: Any) -> None:
     outbox.stage_event(uri, {}, "poison-run", "{ not valid json")
 
     repo = _Repo()
-    drained = asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}))
+    outcome = asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}))
 
-    assert drained == 1  # the valid event ingested; the poison was dropped, not ingested
+    assert outcome.drained == 1  # the valid event ingested; the poison was dropped, not ingested
     assert repo.ingested == [run_id]
     assert repo.recorded == [run_id]  # ...AND projected onto the durable /events feed (finding 1 guard)
     assert list(outbox.list_events(uri, {})) == []  # both objects gone (ingested / dropped)
+
+
+def test_ONE_ungraphable_event_does_not_strand_every_other_staged_event(tmp_path: Any) -> None:
+    """MEASURED ON THE LIVE ESTATE 2026-09-07, and it is the loudest failure the outbox can have.
+
+    `rask-lineage` logged `lineage_outbox_drain_failed` on EVERY sweep with
+    `error="Entity failed to be updated: 3"` — one staged event the AGE graph refused. The per-event
+    work sat under a single `try` around the WHOLE drain (`_on_cron`), so that one event aborted the
+    loop and every other staged event stayed put, tick after tick, forever. Depth 3 and climbing while
+    the sweep answered HTTP 200 and the cron kept ticking: nothing red anywhere.
+
+    That inverts what the outbox is FOR. It exists so a committed write's lineage survives a crash;
+    a single un-ingestable event turning it into a write-only store loses the lineage of every OTHER
+    committed write instead.
+
+    The failing event STAYS STAGED — never dropped. Dropping on a non-validation error is the exact
+    2026-07-14 audit finding: a transient failure would destroy the event's only durable copy. It is
+    counted and named so it is visible, and the next tick retries it.
+    """
+    from lineage.api.reconcile_cron import _drain_outbox
+    from medallion.schemas.events import build_run_event
+
+    uri = _uri(tmp_path)
+    events = []
+    for token in ("refused", "healthy"):
+        event = build_run_event(
+            operation="ingest_events",
+            author="alice",
+            job_namespace="medallion",
+            inputs=[("bronze", "bronze$events")],
+            output_namespace="bronze",
+            output_name="bronze$events",
+            version=1,
+            token=token,
+        )
+        outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
+        events.append(event)
+    refused_run = events[0]["run"]["runId"]
+
+    class _RefusingRepo(_Repo):
+        async def ingest_event(self, event: Any) -> None:
+            if event.run.run_id == refused_run:
+                raise RuntimeError("Entity failed to be updated: 3")
+            await super().ingest_event(event)
+
+    repo = _RefusingRepo()
+    outcome = asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}))
+
+    assert outcome.drained == 1, "the healthy event was not drained — one refused event stranded the whole outbox"
+    assert outcome.stranded == 1, "the refused event was not counted as stranded, so nothing reports the wedge"
+    staged = {key for key, _ in outbox.list_events(uri, {})}
+    assert staged == {f"{refused_run}@COMPLETE"}, f"the outbox holds {staged} — the refused event must stay staged and the healthy one must be gone"
 
 
 def test_relay_drain_is_idempotent_on_reingest(tmp_path: Any) -> None:
@@ -187,10 +239,10 @@ def test_relay_drain_is_idempotent_on_reingest(tmp_path: Any) -> None:
     )
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
     repo = _Repo()
-    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {})) == 1
+    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
     # re-stage + drain again → still fine (the ingest is idempotent on run_id)
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
-    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {})) == 1
+    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
     assert repo.ingested.count(event["run"]["runId"]) == 2  # called twice; the GRAPH MERGE makes it a no-op
 
 
@@ -339,9 +391,9 @@ def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascad
 
     monkeypatch.setattr(reconcile_cron.dapr_publish, "publish_event", _fake_publish)
 
-    drained = asyncio.run(reconcile_cron._drain_outbox(cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
+    outcome = asyncio.run(reconcile_cron._drain_outbox(cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
 
-    assert drained == 1
+    assert outcome.drained == 1
     assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"
     assert published[0]["topic_name"] == "lineage.events.v1"
     assert published[0]["pubsub_name"] == "lineage-pubsub"
@@ -373,5 +425,5 @@ def test_the_drain_without_a_publisher_still_ingests(tmp_path: Any) -> None:
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
 
     repo = _Repo()
-    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}, None)) == 1
+    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}, None)).drained == 1
     assert repo.ingested == [event["run"]["runId"]]

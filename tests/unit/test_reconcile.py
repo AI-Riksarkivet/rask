@@ -459,6 +459,7 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
     assert body == {
         "checked": 0,
         "outbox_drained": 0,
+        "outbox_stranded": 0,
         "backfilled": [],
         "storage_loss": [],
         "unreadable": {},

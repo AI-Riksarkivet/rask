@@ -59,8 +59,9 @@ def _object_key(run_id: str, event_json: str) -> str:
 
 
 def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, event_json: str) -> None:
-    """Persist the event JSON at ``<outbox_uri>/<run_id>.json`` (overwrite — a redelivery re-stages the
-    same run_id). Blocking object-store IO; callers run it in a threadpool."""
+    """Persist the event JSON at ``<outbox_uri>/<key>.json``, where the key is :func:`_object_key` —
+    the run id AND the event type, so a run's COMPLETE cannot truncate its own FAIL. A redelivery of
+    the SAME event re-stages the same object. Blocking object-store IO; callers run it in a threadpool."""
     fs, base = fs_and_base(outbox_uri, storage_options)
     fs.create_dir(base, recursive=True)  # local FS needs the parent dir; an S3 prefix marker is harmless
     with fs.open_output_stream(f"{base}/{_object_key(run_id, event_json)}.json") as stream:
@@ -147,8 +148,14 @@ def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, floa
 
 
 def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int | None = None) -> Iterator[tuple[str, str]]:
-    """Yield ``(run_id, event_json)`` for staged events under the outbox prefix (the relay's input), OLDEST
+    """Yield ``(key, event_json)`` for staged events under the outbox prefix (the relay's input), OLDEST
     FIRST, at most ``limit`` of them.
+
+    THE FIRST ELEMENT IS THE DROP KEY, NOT A RUN ID, and the distinction is the whole reason
+    :func:`resolve_event` exists. Since `_object_key` widened, one run stages ``<run_id>@COMPLETE`` and
+    ``<run_id>@FAIL`` as separate objects, so the filename is ``<run_id>@<eventType>`` and a caller that
+    treats it as a run id is comparing a key to an id. A caller wanting the RUN reads it off the
+    parsed payload (``event.run.run_id``), the way `dlq._summary` does.
 
     BOUNDED (audit finding, docs/DECISIONS.md P1.2 (bounded drain)): the drain previously materialised the
     ENTIRE prefix into memory inside the single-flight lock, so a backlog (exactly the situation the outbox
@@ -162,7 +169,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
     if limit is not None:
         infos = infos[:limit]
     for info in infos:
-        run_id = info.path.rsplit("/", 1)[-1].removesuffix(".json")
+        key = info.path.rsplit("/", 1)[-1].removesuffix(".json")
         # TOCTOU: the medallion stage runner stages-then-drops on this SAME prefix continuously, so an object
         # listed above can vanish before we open it. A concurrently-dropped event was already published
         # (that's why it's being dropped) — skip it, don't let the race 500 the whole reconcile tick.
@@ -171,7 +178,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
         except FileNotFoundError:
             continue
         with stream:
-            yield run_id, stream.readall().decode("utf-8")
+            yield key, stream.readall().decode("utf-8")
 
 
 async def publish_with_outbox(

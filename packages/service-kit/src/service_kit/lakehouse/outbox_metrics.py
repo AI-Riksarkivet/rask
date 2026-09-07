@@ -49,6 +49,15 @@ _drained = _meter.create_counter(
     unit="{event}",
     description="Staged survivors the reconcile relay re-ingested into the graph + durable feed.",
 )
+_stranded = _meter.create_counter(
+    "outbox.events.stranded",
+    unit="{event}",
+    description=(
+        "Staged events the relay could not ingest this tick and deliberately LEFT staged. Distinct from "
+        "poison_dropped: the object is intact and is retried next tick, so a steady non-zero value means a "
+        "specific event the graph keeps refusing — which, before per-event isolation, wedged the whole drain."
+    ),
+)
 _poison_dropped = _meter.create_counter(
     "outbox.events.poison_dropped",
     unit="{event}",
@@ -119,6 +128,12 @@ def record_drained(count: int) -> None:
     from the first sweep instead of reading "no data" until the first non-zero drain (the same lesson the
     compaction metrics learned in the 2026-07-13 obs audit)."""
     _drained.add(count)
+
+
+def record_stranded(count: int) -> None:
+    """Always emit, for the same reason as ``record_drained``: a series that only appears once something is
+    already wedged cannot be alerted on before it wedges."""
+    _stranded.add(count)
 
 
 def record_poison_dropped() -> None:
