@@ -600,6 +600,34 @@ dataset, `report_is_clean` blocks every purge, and `protected_roots` protects th
 `cleanup_old_versions` reclaims external in-base blobs is unverified against pylance 10.0.0 (the post says
 yes, the docstring says nothing). **Where.** `ingest/adapters.py:296-306`, `lander.py:311-325`,
 `maintenance/.../orphans.py:294-295`, `purge.py:223-224`, `features.py:113-114`.
+**MEASURED ON THE DEPLOYED ESTATE 2026-09-07 — the row was right and is now quantified.** Read out of
+GreptimeDB (`opentelemetry_logs`), because the pod formatter drops every `extra=` field:
+
+    reconcile_report   total 611   incomplete 490   orphan_files 598   orphan_buckets 12
+
+**490 incomplete scans**, and every `orphan_scan_skipped` reason is the flag refusal
+(`unsupported manifest reader feature flags: 16 (base_paths …)`). So the coverage gap this row
+predicts is not theoretical: the orphan pass declines roughly as many datasets as it inspects.
+
+**The purge is blocked, but at the FIRST gate rather than the one the row names.**
+`report_is_clean` returns on `report.total` before it ever reaches `report.incomplete`, so with 611
+findings the estate would not purge even if every scan completed. Two independent brakes, and a third:
+`MAINTENANCE_TRASH_PURGE_ENABLED` is report-only by default, a recorded destruction posture. Nothing is
+wrongly deleting; nothing is being reclaimed either. Zero maintenance purge records in six hours.
+
+**THE ORPHAN SCAN'S WHOLESALE FLAG-16 REFUSAL IS DELIBERATE AND MUST NOT BE "FIXED" THE OBVIOUS WAY.**
+Compaction got the refinement — `gather_compaction_bases` distinguishes a base that is a dataset root
+from a bare external prefix — and the scan deliberately did NOT, with the measurement recorded:
+`add_bases` registers a base no `DataFile` resolves through yet, every `base_id` stays `None`, and the
+scan passed such a dataset as `checked=True` with orphans named. **A scan that names live data as
+garbage is a worse failure than one that declines.** So this row is closed by the per-base POLICY it
+already proposes, never by widening the scan's mask.
+
+**HONEST ACCOUNTING OF MY OWN CHANGE:** C8's branch discovery ADDS to `incomplete`. A branch sets flag
+16, so each of the estate's 114 branches is now discovered and then correctly refused by this scan. The
+report is more incomplete than it was and more truthful for it — those branches were never scanned
+before either; the difference is that the number now says so.
+
 **Closes it.** Parse `BasePath.is_dataset_root`; per-base `managed`/`reference-only` policy on the
 warehouse record; cleanup credentials without delete on reference-only bases; a RED test pinning
 pylance's behaviour on external blobs under a registered base.
