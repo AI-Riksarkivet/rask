@@ -100,6 +100,36 @@ def test_a_worker_executes_the_task_and_the_catalog_commits_the_result(tmp_path:
     assert after.has_stable_row_ids
 
 
+def test_the_commit_opens_the_dataset_ONCE(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ Q3-22 (`CAT-CORE-09`). A commit must not re-read the manifest to learn what it just did.
+
+    `commit_compaction` opened the dataset, committed, and then opened it AGAIN from the URI purely to
+    read `.version` — a second full manifest read over the object store, on the catalog's write path,
+    for a number the handle already holds.
+
+    MEASURED against pylance rather than assumed, because the answer decides whether this is a fix or
+    a behaviour change: a dataset at version 4, compacted, reports version 6 **on the same handle with
+    no reopen**, and `checkout_latest()` leaves it at 6. `Compaction.commit` advances the handle in
+    place, so the reopen was buying nothing at all.
+    """
+    uri = _seed(tmp_path, fragments=3)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    results = [_worker_executes(uri, task) for task in plan.tasks]
+
+    real_open = lance.dataset
+    opens: list[str] = []
+
+    def _counting_open(*args: object, **kwargs: object) -> object:
+        opens.append(str(args[0]) if args else "")
+        return real_open(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+
+    monkeypatch.setattr(lance, "dataset", _counting_open)
+    outcome = commit_compaction(uri, {}, results)
+
+    assert len(opens) == 1, f"the commit opened the dataset {len(opens)} times — the second read is a manifest fetch for a version the handle already has"
+    assert outcome.version == real_open(uri).version
+
+
 def test_a_policy_knob_this_door_does_not_honour_is_refused_not_dropped(tmp_path: Path) -> None:
     """Lance's option set is wider than the set this door forwards.
 

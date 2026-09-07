@@ -890,7 +890,12 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str])
     except OSError as exc:
         raise _classify_commit_error(exc, remedy=_COMPACTION_REMEDY) from exc
     return CompactionOutcome(
-        version=int(lance.dataset(location, storage_options=dict(so) if so else None).version),
+        # THE HANDLE, not a second open. `Compaction.commit` advances the dataset in place — measured
+        # against pylance 2026-09-07: a dataset at version 4 reports 6 on the same handle after the
+        # commit, and `checkout_latest()` leaves it at 6. Re-opening from the URI to read this number
+        # was a full manifest read over the object store, on the catalog's write path, for a value
+        # already in memory.
+        version=int(dataset.version),
         fragments_added=int(metrics.fragments_added),
         fragments_removed=int(metrics.fragments_removed),
         files_added=int(metrics.files_added),
