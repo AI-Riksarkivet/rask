@@ -76,9 +76,13 @@ items 1-4 "decide whether the claim is honest":
           the refusal is on the AMBIGUITY, not on being open. Landed for the three services that
           have a human door (catalog, lineage, the medallion producer); `maintenance`,
           `notifications` and the movers have none and were deliberately left out.
-    F2-3  kill the one shared service bearer — one token across an allowlist lets any holder claim
-          the most privileged name on it. The trainer 401 was this control working; the rest of the
-          allowlist is where it is not.
+    F2-3  kill the one shared service bearer — THE WIDEST HOLDER IS DONE 2026-09-07 (`bf273f07`):
+          seven web pods stop mounting it and `service-web` is privileged with its own credential.
+          The door already refuses a privileged name presented with the shared token, so the
+          "any holder can pick the highest-privileged name" warning is false for the five cascade
+          subjects too. LEFT: `service-ingest`, `service-maintenance`, `notifications` — each needs
+          its CLIENT half first (all three have 0 `dedicated_token` refs), because naming a subject
+          privileged before it can present its own credential 401s it outright.
     F2-4  stop laundering ANONYMOUS browser reads into an allowlisted service identity.
 
 Then F2-5..12 (Dapr access control + NetworkPolicy on by default, TLS to every store, validate
