@@ -606,11 +606,31 @@ fires for a branch or tag. **Where.** `model.fga:357,349`, `fga_deps.py:108`, `e
 cases; branch prefix in vending; lineage facets `parent_branch`/`parent_version`; per-branch protection
 and trash records.
 
-### C3 · Cross-dataset pins for clones and branches
-**What.** Maintenance's base-refs pre-pass protects a clone's source only when the clone sits in a
-maintained bucket (deactivated warehouses and unlisted buckets are invisible); **the catalog's on-demand
-`/maintenance/run` and `/compact` have no such guard and destroy a live shallow clone**; there is no
-lineage edge for a clone. **Where.** `catalog/services/maintenance.py:91-124`,
+### C3 · Cross-dataset pins for clones and branches — **THE DATA-LOSS CLAUSE IS REFUTED 2026-09-07**
+**"The catalog's on-demand `/maintenance/run` and `/compact` have no such guard and destroy a live
+shallow clone" IS NO LONGER TRUE, and it is the clause that made this row urgent.** Both doors compute
+the pre-pass and pass it: `endpoints/maintenance.py::run_maintenance` does
+`protected = await _base_refs(ds, so)` -> `maintenance.run_gc(..., protected=protected)`, and
+`compact_maintenance` does the same before `require_compactable`. The service functions take
+`protected: BaseRefs | None = None`, so the default WOULD be unguarded — which is exactly why the
+CALL SITES are the thing to read, not the signatures.
+
+**And the guard does real work, measured on the deployed estate rather than inferred:** in six hours
+the sweep recorded **43,604 `maintenance_base_ref`** observations and **220
+`maintenance_refused_protected_base`** refusals — 220 datasets it declined to touch because something
+resolves through their bytes. This is a live control, not a dormant one.
+
+**WHAT REMAINS IS THE ENUMERATION'S REACH, and the code says so in its own docstring.**
+`sibling_base_refs` is "one non-recursive call against a flat layout" — it collects referrers among
+SIBLINGS of the dataset in question. A clone whose referrer lives in another bucket, or in a
+deactivated warehouse the sweep does not walk, is invisible to it, and the evidence for a source is
+only ever on the referring side. So the row's real content is the second half of its own close
+condition: record the clone/branch -> (source, version) edge AT CREATION, and consult that registry
+from every GC door, rather than rediscovering referrers by listing. That also removes the reliance on
+a listing being complete, which `protected_roots` already has to report as `unreadable`.
+
+**Branches now ride the same protection**, as of C8: they are discovered, they set flag 16, and their
+parent is a sibling — so the pre-pass sees the reference. There is still no lineage edge for a clone. **Where.** `catalog/services/maintenance.py:91-124`,
 `maintenance/.../base_refs.py:38-42,90`, `sweep.py:145-155`. **Closes it.** Record the clone/branch →
 (source, version) edge at creation; tag-pin the source version; every GC door (sweep, purge, on-demand)
 consults the registry; enumerate referrers over all registered buckets including deactivated.
