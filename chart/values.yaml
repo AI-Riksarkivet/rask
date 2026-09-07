@@ -836,9 +836,14 @@ auth:
   # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that
   # is deliberately API-only — it must be a decision, never an omission.
   allowHeadless: false
-  # Lock root (top-level) namespace/table creation to warehouse-create-grant holders. Off in dev
-  # (open self-serve); values-prod sets it true so a token alone can't squat root namespaces.
-  lockRootCreate: false
+  # Lock root (top-level) namespace/table creation to warehouse-create-grant holders.
+  #
+  # DELIBERATELY UNSET, and that is what makes the control work. A key here is a key `hasKey` finds,
+  # so a default of `false` made the chart's own value win over the derivation and every estate that
+  # did not set it ran open — which is exactly what was measured on the live catalog 2026-09-07. With
+  # the key absent, `services.yaml` derives it from `rask.isRealDeployment`: locked wherever the
+  # deployment is real, open on the local loop that needs self-serve. Set it explicitly to override
+  # in either direction; `values-prod.yaml` does, so prod states its intent rather than inheriting it.
   # #41 compliance audit trail: structured who/what/outcome events for authn (success+failure), authz
   # (allow+deny), and credential vending on the dedicated `lance.audit` logger → OTLP → GreptimeDB. Rendered
   # into LANCE_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence

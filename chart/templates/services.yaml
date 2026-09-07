@@ -294,7 +294,15 @@ spec:
             # unlimited root namespaces in the shared warehouse bucket (assessment finding). hasKey+ternary
             # like LANCE_AUDIT_ENABLED above: a missing key under --reuse-values must render the default,
             # not "" (pydantic bool_parsing crash).
-            - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate false | quote }} }
+            {{- /* F2-11. LOCKED BY DEFAULT ON A REAL DEPLOYMENT, and the derivation is the point: this
+                   was an opt-in that only `values-prod.yaml` set, so every estate that did not think
+                   about it let ANY authenticated subject mint a top-level namespace — measured live
+                   2026-09-07, `LANCE_FGA_LOCK_ROOT_CREATE=false` on the running catalog. The same
+                   shape F2-9 already fixed for credentials: answer "is this a real deployment?" once,
+                   on a signal an operator cannot forget, rather than four times on a flag they can.
+                   An explicit `auth.lockRootCreate` still wins in BOTH directions — a real deployment
+                   that genuinely wants open self-serve says so, and says it deliberately. */}}
+            - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate (include "rask.isRealDeployment" . | eq "true") | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "catalog") | nindent 12 }}

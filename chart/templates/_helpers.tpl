@@ -509,6 +509,24 @@ dapr.io/config: "lance-tracing"
      --------------------------------------------------------------------------------------------- */}}
 {{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}
 
+{{/*
+IS THIS A REAL DEPLOYMENT? One definition, because two are two chances to answer it too narrowly at
+once — the argument `prod-credentials.yaml` makes for itself and which now has a second consumer.
+
+BOTH SIGNALS ARE FACTS THE DEPLOY ALREADY DEPENDS ON, never a flag someone must remember to arm. A
+guard reachable only by remembering an opt-in protects the installs that did not need protecting.
+`openbao.devMode=false` is the explicit prod signal; failing that, images pulled from a registry off
+this node means the deployment is not the local loop — `make k3s-up` renders `localImages=true` for
+side-loaded images, and the three dev-registry addresses are unroutable from anywhere but the node.
+
+Answers the string "true" or "" so a caller can use it in a `ternary` or an `if`.
+*/}}
+{{- define "rask.isRealDeployment" -}}
+{{- $repo := (.Values.image.repository | default "") -}}
+{{- $sideloaded := or .Values.image.localImages (hasPrefix "localhost:" $repo) (hasPrefix "127.0.0.1:" $repo) (hasPrefix "172.17.0.1:" $repo) -}}
+{{- if or (not .Values.openbao.devMode) (not $sideloaded) -}}true{{- end -}}
+{{- end -}}
+
 {{- define "lance.labels" -}}
 app.kubernetes.io/name: lance-ns
 app.kubernetes.io/instance: {{ .Release.Name }}
