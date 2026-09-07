@@ -45,6 +45,17 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # RECREATE, NOT ROLLINGUPDATE, and the one replica above is why. `bindings.cron` is stateless and
+  # uncoordinated — each replica runs the schedule independently — and this service holds no lease, so
+  # the pin IS the duplicate-tick guarantee. A rolling update spends it: Kubernetes rounds `maxSurge`
+  # UP, so the default 25% of one replica is one surge pod, and for the length of every rollout there
+  # are TWO maintenance pods each able to fire the sweep. Steady state was correct and the transition
+  # was not, which is why `replicas: 1` alone never proved the invariant.
+  #
+  # The cost is deliberate and small: a gap between the old pod stopping and the new one becoming
+  # ready, on a service whose work is an hourly cron with no request path to interrupt.
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:

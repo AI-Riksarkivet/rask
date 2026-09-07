@@ -1039,10 +1039,33 @@ than the signatures. Measured live: 220 `maintenance_refused_protected_base` ref
 ### H2 · Bucket-granular external bases freeze purge and protect whole buckets — **HIGH** (see C4)
 ### H3 · Clone protection bounded to maintained buckets — **MEDIUM-HIGH** (see C3)
 
-### H4 · No lease, no deployment strategy, unpersisted retry state
-**Where.** `routes.py:61`, `maintenance.yaml:41-66`, `trash.py:80-91`, `purge.py:442-445`, `sweep.py:204-206`.
-**Closes it.** Conditional-put lease per tick and per dataset (`records.create_json` exists); `attempts`
-and `last_refusal` on the trash record; `strategy: Recreate`.
+### H4 · No lease, no deployment strategy, unpersisted retry state — **THE STRATEGY CLAUSE IS DONE 2026-09-07**
+**`strategy: Recreate` — DONE, and measuring it is what showed the pin was never enough.** The steady
+state was already right: `rask-maintenance` is `replicas: 1`, and that is a CORRECTNESS constraint
+because `bindings.cron` is uncoordinated (each replica runs the schedule independently) and this
+service holds no lease. Measured on the deployed estate:
+
+    rask-maintenance   replicas 1   strategy RollingUpdate   maxSurge 25%
+
+**Kubernetes rounds `maxSurge` UP**, so 25% of one replica is one surge pod — for the length of every
+rollout there were TWO maintenance pods, each with a cron binding, each able to tick. The pin held in
+steady state and the transition spent it, which is exactly why `replicas: 1` alone never proved the
+invariant. `tests/unit/test_prod_ha_posture.py` reasons about how many replicas a service RUNS and
+records why three may not scale; it does not reach the rollout, and
+`test_a_correctness_pinned_replica_does_not_surge.py` is the other half — the pin has to survive the
+deploy that applies it. The cost is a short gap on a service whose work is an hourly cron with no
+request path to interrupt.
+
+**SCOPED TO THE CORRECTNESS PIN, deliberately.** Seven other deployments hardcode `replicas: 1` (dex,
+openbao, the collector, alerting, dapr-dashboard, age-postgres) and none was measured to have an
+unsafe-concurrency constraint — **and none mounts a PVC**, so the RWO-volume deadlock that usually
+motivates `Recreate` does not apply to them either. Forcing it there would trade zero-downtime
+rollouts for nothing, which the second test in that file refuses.
+
+**STILL OPEN — the other two clauses**, and they are the substantive ones: a conditional-put lease per
+tick and per dataset (`records.create_json` already exists), and `attempts` / `last_refusal` persisted
+on the trash record so a repeatedly-refused record is visible as a permanent exclusion rather than a
+transient one. **Where.** `routes.py:61`, `trash.py:80-91`, `purge.py:442-445`, `sweep.py:204-206`.
 
 ### H5 · No per-object GC audit
 **Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`. **Closes it.**
