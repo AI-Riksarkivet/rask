@@ -389,7 +389,7 @@ automation — so nothing says which spec version they describe, and a reader ci
 standing CONSTRAINTS require) cannot tell whether they are current. Re-vendoring should land a
 provenance line with them, or the next reader is in exactly this position.
 
-### A11 · The conformance test that defines "verbatim"
+### A11 · The conformance test that defines "verbatim" — **FIRST CLIENT PROVEN LIVE 2026-09-07**, two to go
 **CONFIRMED AND SHARPENED 2026-09-07, and it is the estate's own recurring trap.** Grepping for the
 stock clients finds them: `RestNamespace` and `namespace_client_impl` appear in
 `tests/integration/test_spec_response_shapes.py` and `test_bodyless_handlers_read_the_spec_body.py`.
@@ -400,6 +400,33 @@ recorded in `docs/DECISIONS.md`: verify where a control's value LANDS, not where
 **What.** `tests/integration/test_spec_conformance.py` pins (method, path) only; no test constructs
 `lance.namespace.RestNamespace`, lancedb `namespace_client_impl="rest"` or lance-ray namespace mode
 against a running catalog (the urllib3 client is exercised through rask's own transport wrapper only).
+**THE STOCK PYLANCE CLIENT NOW DRIVES THE DEPLOYED CATALOG** —
+`tests/e2e-py/test_the_stock_lance_client_drives_the_catalog.py`, `make e2e-spec-conformance`. It
+constructs `lance_namespace.connect("rest", …)`, which resolves to pylance's Rust-backed
+`lance.namespace.RestNamespace` — the client an outside Lance user gets — against the running catalog
+with a real Dex token, and **imports no rask module anywhere**: if the estate is idiomatic, a stock
+client needs none. Measured 2026-09-07: **10 of 10 read ops answer** (list/describe/exists on
+namespaces and tables, `count_table_rows`, `list_table_tags`, `list_table_versions`,
+`list_table_indices`).
+
+**The half a curl cannot check is the one worth having.** A wire body can be perfect problem+json
+while the client still fails to rebuild the typed exception a caller catches — and `code` is what a
+generated client dispatches on. Driven: a missing tag comes back as `TableTagNotFoundError` with
+`.code == 8`, so §A5's fix survives the round trip into the stock client's own hierarchy rather than
+merely into a JSON field. The suite carries its own control — an uncredentialed client must answer
+`UnauthenticatedError` code 16 — because a conformance suite that would pass against an open door is
+measuring the door's absence.
+
+**A CLIENT-SIDE QUIRK, PINNED HERE BECAUSE IT LOOKS EXACTLY LIKE A BROKEN SERVER.** The connect
+property that carries a bearer is `headers.Authorization`. The spec's OWN spelling for this —
+`auth_token`, `spec.yaml:2452`, "passed via the `Authorization` header with the Bearer scheme" — is
+accepted by `connect()` and then silently ignored, and every call answers `UnauthenticatedError`. So
+are `bearer_token`, `api_key` and `additional_headers`. Costs an hour to rediscover.
+
+**STILL OPEN, and the row stays open for it:** the WRITE ops through the stock client, and the other
+two clients the row names — lancedb `namespace_client_impl="rest"` and lance-ray namespace mode. The
+suite is shaped to take them: one marker, one make target, one more client fixture.
+
 **Closes it.** One suite that drives every op with the three stock clients. A1–A10 land behind it.
 
 ---

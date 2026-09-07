@@ -872,7 +872,7 @@ e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled s
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (governed-union, gateway, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = auth cas compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability track-a user-state ray-batch ray-train
+E2E_SUITES = auth cas compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability spec-conformance track-a user-state ray-batch ray-train
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
@@ -891,6 +891,10 @@ e2e-compaction:     ## Maintenance sweep / compaction / GC proofs (needs LANCE_E
 e2e-duckdb:         ## DuckDB-over-Lance proof (needs LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-duckdb needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m duckdb -v
+e2e-spec-conformance:     ## The STOCK lance_namespace client against a live catalog (needs LANCE_E2E_CATALOG_URL)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-spec-conformance needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m spec_conformance -v
+
 e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m dummy_lane -v
