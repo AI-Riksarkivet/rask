@@ -1154,6 +1154,23 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
      so a service with no gated route is unaffected and cannot quietly 401 a surface nobody gated.
      (explorer.yaml's reasoning, from #90, where scoping the block to one service left the one that
      streams page IMAGE BYTES wide open.) */}}
+{{/*
+The acknowledgement a service needs when authentication is deliberately OFF.
+
+`assert_authentication_configured` refuses to boot a governed service whose auth is off with nobody
+having said so (Q17-6 / §F2-2), because "off because I meant it" and "off because nothing set it" are
+indistinguishable and only the second is a vulnerability. `auth.enabled: false` is a SUPPORTED
+toggle — the open dev/demo profile — so the chart says which one it means rather than leaving the
+pod to refuse.
+
+Emitted in the `else` of every `if .Values.auth.enabled` that includes `governedOidcEnv`, so the two
+can never drift into a profile that sets neither.
+*/}}
+{{- define "lance.governedAuthAck" -}}
+- { name: RASK_INSECURE_ALLOW_UNAUTHENTICATED, value: "true" }
+{{- end -}}
+
+
 {{- define "lance.governedOidcEnv" -}}
 {{- $root := . }}
 - { name: RASK_OIDC_ENABLED, value: "true" }

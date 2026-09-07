@@ -26,6 +26,7 @@ from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.settings import assert_authentication_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -56,6 +57,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # reconcile-route follow-up: the two flags can diverge, so the assert must cover both mounts).
     # No-op in dev (both off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled or bool(settings.reconcile_binding_name))
+    # Q17-6 / §F2-2: the CODE default is anonymous while the chart flips auth ON, so a service
+    # started any other way serves every route to whoever reaches the port. Refused on the
+    # AMBIGUITY — an operator declares which they meant. See `assert_authentication_configured`.
+    assert_authentication_configured(
+        oidc_enabled=settings.oidc_enabled,
+        insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
+    )
     # Consume the S3 secret + AGE DB password from the Dapr secret store (OpenBao) before opening the pool,
     # so neither lives in plaintext pod env — the audit's secret-consumption fix, symmetric with the
     # catalog. No-op (and no Dapr dependency) when secrets_from_dapr is off; fails closed on the S3 secret.

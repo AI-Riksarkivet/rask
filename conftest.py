@@ -79,6 +79,24 @@ def _strip_harness_otlp() -> None:
 _strip_harness_otlp()
 
 
+# ── THE HARNESS IS A SERVICE RUN OUTSIDE THE CHART, AND IT SAYS SO ────────────────────────────────
+# `assert_authentication_configured` refuses to boot a governed service whose authentication is off
+# with nobody having acknowledged it (Q17-6 / §F2-2): "off because I meant it" and "off because
+# nothing set it" are indistinguishable, and only the second is a vulnerability. A test harness is
+# squarely the first — hundreds of integration tests build a real catalog app with `RASK_OIDC_ENABLED`
+# unset ON PURPOSE, to exercise routing, identifier parsing and error mapping rather than auth.
+#
+# Declaring it here is what makes the control mean something. The alternative considered and rejected
+# was exempting tests inside the assertion itself, which would leave the estate's own suites proving
+# the behaviour of a path no deployment can take.
+#
+# AT IMPORT, for the same reason the OTLP strip is: apps are built at MODULE scope during collection,
+# long before any fixture runs. `setdefault` rather than an assignment, so a test that wants the
+# refusal — or wants auth genuinely ON — still decides for itself; the suite proving this guard
+# depends on exactly that.
+os.environ.setdefault("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _no_harness_telemetry() -> None:
     """Re-strip once for the session, AFTER every conftest and plugin has had its turn.

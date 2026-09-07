@@ -158,6 +158,12 @@ class OidcSettings:
     oidc_cache_ttl: int = Field(default=3600, alias="RASK_OIDC_CACHE_TTL")
     oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
+    #: AN ACKNOWLEDGEMENT, NOT A SWITCH — it turns nothing off. `oidc_enabled` already decides whether
+    #: this service authenticates; this says an operator MEANT the answer to be "no". Without it,
+    #: "auth off because I meant it" and "auth off because nothing set it" are indistinguishable, and
+    #: only the second is a vulnerability. `assert_authentication_configured` refuses to boot on that
+    #: ambiguity alone (Q17-6 / §F2-2, Lakekeeper Plus's shape).
+    insecure_allow_unauthenticated: bool = Field(default=False, alias="RASK_INSECURE_ALLOW_UNAUTHENTICATED")
 
     @model_validator(mode="after")
     def _validate_oidc(self) -> Self:
@@ -192,3 +198,32 @@ class GovernedAuthSettings(OidcSettings, FgaSettings):
         if self.fga_enabled and not self.oidc_enabled:
             raise ValueError("RASK_OIDC_ENABLED is required when RASK_FGA_ENABLED is set (authz needs a verified subject)")
         return self
+
+
+def assert_authentication_configured(*, oidc_enabled: bool, insecure_allow_unauthenticated: bool) -> None:
+    """Fail closed at startup: a service that authenticates nobody must SAY SO.
+
+    `oidc_enabled` defaults to False and `authenticate()` returns `None` when it is off, so every
+    route opens. The chart flips it on, which leaves the DEPLOYED estate closed and the CODE open —
+    and the gap is any service run another way: a `uv run`, a compose stack, an image started outside
+    the chart. Lakekeeper OSS has the identical shape and only its Plus edition refuses to boot
+    without an authenticator; this is that refusal.
+
+    THE REFUSAL IS ON THE AMBIGUITY, NOT ON BEING OPEN. Flipping the default would change what an
+    explicitly-configured deployment does and would red every suite that constructs settings without
+    naming auth. What is actually indefensible is that "off because I meant it" and "off because
+    nothing set it" look identical, so an operator resolves it by saying which they meant. No-op once
+    either is true.
+
+    A sibling of `dapr_auth.assert_app_token_configured` on purpose — same shape, same reasoning,
+    called from the same place in each service's boot. A second shape for one class of problem is how
+    one of them ends up wrong.
+    """
+    if oidc_enabled or insecure_allow_unauthenticated:
+        return
+    raise RuntimeError(
+        "this service would start with NO authentication: RASK_OIDC_ENABLED is off and nothing "
+        "acknowledged it, so every route would serve any caller that can reach the port. Set "
+        "RASK_OIDC_ENABLED=true (with RASK_OIDC_ISSUER + RASK_OIDC_AUDIENCE), or set "
+        "RASK_INSECURE_ALLOW_UNAUTHENTICATED=true to declare that an open service is what you meant."
+    )

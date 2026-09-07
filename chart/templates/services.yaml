@@ -180,6 +180,9 @@ spec:
             # Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
             # every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
+            {{- if not .Values.auth.enabled }}
+            {{- include "lance.governedAuthAck" . | nindent 12 }}
+            {{- end }}
             {{- if .Values.auth.enabled }}
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
             {{- include "lance.governedFgaEnv" . | nindent 12 }}
@@ -454,6 +457,9 @@ spec:
             - { name: LINEAGE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            {{- end }}
+            {{- if not .Values.auth.enabled }}
+            {{- include "lance.governedAuthAck" . | nindent 12 }}
             {{- end }}
             {{- if .Values.auth.enabled }}
             - { name: RASK_OIDC_ENABLED, value: "true" }

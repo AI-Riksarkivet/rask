@@ -1096,6 +1096,12 @@ def test_pool_closed_when_bootstrap_fails(monkeypatch: pytest.MonkeyPatch) -> No
     settings = types.SimpleNamespace(
         audit_enabled=False,
         dapr_enabled=False,
+        # The boot refuses to start a service that authenticates nobody with nobody having said so
+        # (Q17-6). This double bypasses `Settings` entirely, so the root conftest's env declaration
+        # cannot reach it — the acknowledgement is named here instead. Added rather than patching the
+        # assertion out: keeping it on the real boot path is what makes this a boot test.
+        oidc_enabled=False,
+        insecure_allow_unauthenticated=True,
         reconcile_binding_name=None,
         database_url="postgresql://x",
         age_statement_timeout_seconds=30.0,

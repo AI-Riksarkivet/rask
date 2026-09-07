@@ -35,6 +35,7 @@ from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
+from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
@@ -93,6 +94,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
     # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
     assert_app_token_configured(dapr_enabled=settings.control_emit_enabled or bool(settings.control_relay_binding_name))
+    # Q17-6 / §F2-2: the CODE default is anonymous and the chart flips it on, so a catalog started
+    # any other way serves every route to anyone who can reach the port. Refused on the AMBIGUITY —
+    # an operator declares which they meant. See `assert_authentication_configured`.
+    assert_authentication_configured(
+        oidc_enabled=settings.oidc_enabled,
+        insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
+    )
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
     # of truth, NOT a fallback. With secrets_from_dapr on, the chart does not put the secret in pod env,

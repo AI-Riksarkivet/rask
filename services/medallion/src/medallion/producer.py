@@ -44,6 +44,7 @@ from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
+from service_kit.governed.settings import assert_authentication_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -62,6 +63,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.shutting_down = False
     configure_audit(enabled=get_settings().audit_enabled)  # #41 gate the compliance audit stream
     assert_app_token_configured(dapr_enabled=get_settings().dapr_enabled)
+    # Q17-6 / §F2-2: the CODE default is anonymous while the chart flips auth ON, so a service
+    # started any other way serves every route to whoever reaches the port. Refused on the
+    # AMBIGUITY — an operator declares which they meant. See `assert_authentication_configured`.
+    assert_authentication_configured(
+        oidc_enabled=get_settings().oidc_enabled,
+        insecure_allow_unauthenticated=get_settings().insecure_allow_unauthenticated,
+    )
     # Consume the S3 secret from the Dapr secret store when configured (strict sole source, fails closed;
     # no-op in dev). Threadpool: the fetch blocks + retries while the store seeds. The splice mutates the
     # `@lru_cache`d settings IN PLACE — deliberately, so every later `get_settings()` read sees the key;

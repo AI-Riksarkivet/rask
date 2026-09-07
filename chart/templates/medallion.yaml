@@ -145,6 +145,9 @@ spec:
             - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
             {{- end }}
             {{- end }}
+            {{- if not .Values.auth.enabled }}
+            {{- include "lance.governedAuthAck" . | nindent 12 }}
+            {{- end }}
             {{- if .Values.auth.enabled }}
             # #64 human trigger door: a signed-in project admin (OIDC bearer + can_administer) may fire
             # /produce or /train WITHOUT the service token. The web BFF forwards the user's bearer here; the
