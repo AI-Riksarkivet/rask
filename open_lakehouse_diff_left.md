@@ -1080,10 +1080,21 @@ every dataset in the estate and leaves no per-object trace of what it rewrote or
 `table_maintained` is absent from `ControlAction`'s 38 values, so as with §C2 there is nothing for the
 sweep to emit even if it wanted to.
 
-**The structure already exists**, which makes the first clause cheap: `DatasetResult` is a per-dataset
-model already carrying `uri`, `compaction_mode`, `fragments_removed`, `old_versions_removed`,
-`bytes_removed`, `indices_optimized`, `refused` and `trashed`. It is aggregated into the sweep summary
-and never emitted per object. A per-dataset structured log is a call site, not a design.
+**THE FIRST CLAUSE IS DONE 2026-09-07.** `maintenance_dataset_outcome` — one structured line per
+dataset per tick, carrying `DatasetResult`'s own fields (`dataset`, `table_id`, `mode`,
+`fragments_removed`, `fragments_added`, `old_versions_removed`, `bytes_removed`, `indices_optimized`)
+plus the three NON-outcomes kept separate on purpose: `refused` is about the dataset's LAYOUT,
+`skipped` about this tick's cadence, `trashed` about its governance state — folding them into one
+"reason" is what made a shallow clone's silent materialisation invisible.
+
+EVERY outcome is logged, the uneventful one included, because a dataset the sweep looked at and left
+alone answers a real question; this module's own docstrings call the alternative *"the 0 that means we
+did not look"*. Logged at BOTH returns — the cadence-skip early return bypasses the tail one, and
+omitting it would make the record answer only for datasets that ran.
+
+Read it where structured fields actually live, not in `kubectl logs`:
+
+    SELECT log_attributes FROM opentelemetry_logs WHERE body = 'maintenance_dataset_outcome'
 
 **The control-event half needs the same decision §C2 needs**, and should land with it rather than
 separately: a new `ControlAction` is a wire contract across three files, and — per `rask-notifications`

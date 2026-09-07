@@ -510,7 +510,12 @@ def _maintain_one(
         span.set_attribute("lance.maintenance.dataset_uri", uri)
         if plan.skipped:
             span.set_attribute("lance.maintenance.policy_skipped", plan.skipped)
-            return DatasetResult(uri=uri, skipped=plan.skipped)
+            # LOGGED HERE TOO, because this return bypasses the one at the bottom. A cadence skip is an
+            # outcome a reader asks about — "why did this dataset not move this tick" — so omitting it
+            # would make the per-dataset record answer only for the datasets that ran.
+            skipped_result = DatasetResult(uri=uri, skipped=plan.skipped)
+            _record_dataset_outcome(skipped_result)
+            return skipped_result
         result = compact_one(
             uri,
             options,
@@ -535,7 +540,51 @@ def _maintain_one(
             span.set_status(StatusCode.ERROR, result.error)
             if result.error_type:  # error.type: stable class name so error spans aggregate
                 span.set_attribute("error.type", result.error_type)
+        _record_dataset_outcome(result)
         return result
+
+
+def _record_dataset_outcome(result: DatasetResult) -> None:
+    """One structured line per dataset per tick — §H5's first clause.
+
+    THE SWEEP WAS THE ONE PATH IN THIS SERVICE THAT LEFT NO PER-OBJECT TRACE. The purge emits a
+    `table_purged` control event; compaction and version reclamation emitted nothing per dataset, so an
+    hourly pass over the whole estate was visible only as an aggregate — and "reclaimed 0 versions
+    across 440 datasets" cannot be told apart from "declined 440 datasets" without opening the code.
+
+    EVERY outcome is logged, including the uneventful one, because a dataset the sweep looked at and
+    left alone is the answer to a real question. This module's own docstrings call the alternative "the
+    0 that means we did not look".
+
+    The fields are `DatasetResult`'s, which already carried them — this is a call site, not a new
+    model. They ride `extra=`, so they are absent from `kubectl logs` (the pod formatter renders
+    `%(message)s` only) and present in GreptimeDB as `log_attributes`, which is where a per-dataset
+    question is actually asked:
+
+        SELECT log_attributes FROM opentelemetry_logs WHERE body = 'maintenance_dataset_outcome'
+    """
+    log.info(
+        "maintenance_dataset_outcome",
+        extra={
+            "dataset": result.uri,
+            "table_id": result.declared_table_id,
+            "mode": result.compaction_mode,
+            "fragments_removed": result.fragments_removed,
+            "fragments_added": result.fragments_added,
+            "old_versions_removed": result.old_versions_removed,
+            "bytes_removed": result.bytes_removed,
+            "indices_optimized": result.indices_optimized,
+            # The three NON-outcomes are carried separately on purpose: a refusal is about the
+            # dataset's LAYOUT, a skip about this tick's cadence, a trash exclusion about its
+            # governance state — folding them into one "reason" is what made a shallow clone's
+            # silent materialisation invisible.
+            "refused": result.refused,
+            "skipped": result.skipped,
+            "trashed": result.trashed,
+            "error": result.error,
+            "error_type": result.error_type,
+        },
+    )
 
 
 def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, options: dict[str, str], now: datetime) -> DatasetResult:
