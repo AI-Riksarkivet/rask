@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 221 tracked, 146 open, 75 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 147 open, 75 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -388,6 +388,27 @@ records no source version at all.** Six files, hand-vendored, no manifest, no pi
 automation — so nothing says which spec version they describe, and a reader citing them (as the
 standing CONSTRAINTS require) cannot tell whether they are current. Re-vendoring should land a
 provenance line with them, or the next reader is in exactly this position.
+
+### A12 · `insert_into_table` answers null counts on MAIN and real ones on a BRANCH
+**FOUND 2026-09-07 by driving the stock client** (§A11's write leg), which is the only reason it was
+seen: our own transport never reads those fields. The third main/branch asymmetry in this file and the
+only one where the BRANCH path is the better half —
+
+    branch  dataplane.insert_into_table   version=<n>  num_inserted_rows=<n>   (computed, hot path pays for it)
+    main    native.call(...)              version=null num_inserted_rows=null
+
+**Not currently a spec violation, and that is why it is a row rather than a fix.** The VENDORED
+`spec.yaml` declares only `context` and `transaction_id` on `InsertIntoTableResponse` — so null is
+conformant today. Upstream declares `num_inserted_rows` and `version`, and the vendored 0.11.1 MODEL
+already carries both fields (checked against `model_fields`), so the response model is ahead of the
+schema this repo holds. It becomes a real gap the moment A10's bump lands.
+
+**The trade-off is why it is not fixed here.** The native path returns no dataset handle, so filling
+the fields costs an extra `open_dataset` plus two `count_rows` on EVERY main-path insert — the hot
+write path, where nearly every insert has no branch. The branch path already pays exactly that and is
+the reason the asymmetry exists at all. Fixing it blind on a hot path to populate a field the current
+contract does not require is the shortcut this estate refuses; the measurement it needs is the cost of
+that open against a large table. **Land it WITH A10**, where the field stops being optional.
 
 ### A11 · The conformance test that defines "verbatim" — **FIRST CLIENT PROVEN LIVE 2026-09-07**, two to go
 **CONFIRMED AND SHARPENED 2026-09-07, and it is the estate's own recurring trap.** Grepping for the
