@@ -607,15 +607,21 @@ spec:
             {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
               {{- $lineagePrivileged = append $lineagePrivileged . }}
             {{- end }}
-            {{- /* notifications carries its identity's CODE DEFAULT as the fallback, for the reason the
-                   allowlist above already records: `env` is a values KEY, so `--reuse-values` against an
-                   older chart drops a key that did not exist then, and `IngressSettings.service_identity`
-                   defaults to `notifications` regardless. Defaulting the PRIVILEGED set to the same
-                   literal the app defaults to is what keeps the two halves agreeing with no values at
-                   all. */}}
-            {{- if .Values.services.notifications }}
-              {{- $lineagePrivileged = append $lineagePrivileged ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
-            {{- end }}
+            {{- /* `notifications` IS ABSENT, and not for want of a client half — it has one
+                   (`notifications.api.service_identity`), which resolves its dedicated token correctly.
+                   It cannot PRESENT it. Measured live 2026-09-07 (release 107, reverted in 108): the
+                   reconciler reaches lineage through DAPR SERVICE INVOCATION
+                   (`127.0.0.1:3500/v1.0/invoke/lineage/method/events`), and daprd stamps its own
+                   `dapr-api-token` on every request it delivers — so the credential lineage's door sees
+                   is the estate's shared one no matter what the caller sets. Naming the subject
+                   privileged therefore made the door demand a token the transport cannot carry, and
+                   every walk answered `401 the presented credential may not claim 'notifications'`.
+
+                   THE DISTINCTION THAT MATTERS: ingest holds a dedicated credential at this same door
+                   because it calls lineage DIRECTLY over HTTP. A dedicated credential is a property of
+                   the TRANSPORT, not only of the service — so this subject needs its call moved off
+                   service invocation before the server half can land, which is a design change rather
+                   than a credential one. */}}
             - { name: LINEAGE_PRIVILEGED_SUBJECTS, value: {{ compact $lineagePrivileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
             {{- end }}

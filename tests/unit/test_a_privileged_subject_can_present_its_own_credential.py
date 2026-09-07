@@ -155,25 +155,39 @@ def test_every_privileged_subject_has_its_token_SEEDED() -> None:
     )
 
 
-def test_notifications_is_privileged_now_that_it_can_present_one() -> None:
-    """F2-3's LAST subject, and the row closes with it. Notifications calls ONE door — lineage's feed —
-    so unlike ingest there is no second list to agree with; what makes it worth the same treatment is
-    the direction its refusal fails. The reconciler walks `GET /events` to catch what the bus provably
-    misses, and a refused walk returns no rows rather than an error, so a 401 there is a quietly
-    incomplete inbox rather than a failure anyone sees."""
+def test_notifications_has_a_client_half_and_is_NOT_privileged() -> None:
+    """THE THIRD ORDERING CASE, and the estate paid for it live before this test existed.
+
+    The rule was: the client half alone is inert, the server half alone is an outage, so they land
+    together. Notifications is the case where landing them TOGETHER is also an outage — because the
+    credential never reaches the door. Its reconciler calls lineage through DAPR SERVICE INVOCATION,
+    and daprd stamps its own `dapr-api-token` on everything it delivers, so lineage sees the estate's
+    shared token whatever the caller sets. Naming the subject privileged made the door demand a token
+    the transport cannot carry: measured live 2026-09-07, every walk answered
+    `401 the presented credential may not claim 'notifications'`.
+
+    So A DEDICATED CREDENTIAL IS A PROPERTY OF THE TRANSPORT, not only of the service. Ingest holds
+    one at this same door because it calls lineage DIRECTLY over HTTP. This asserts the pair that is
+    actually correct today — the client half present and unused, the subject ordinary — so that
+    "notifications has a client half, therefore make it privileged" reds here rather than in a
+    reconcile loop nobody is watching."""
     assert "notifications" in _services_with_a_client_half(), "notifications lost its client half"
-    assert "notifications" in _privileged("LINEAGE_PRIVILEGED_SUBJECTS"), "notifications has a client half nothing demands"
+    assert "notifications" not in _privileged("LINEAGE_PRIVILEGED_SUBJECTS"), (
+        "notifications is privileged, but it reaches lineage through Dapr service invocation and daprd "
+        "overwrites `dapr-api-token` on delivery — the door will demand a credential the transport "
+        "cannot carry, and every reconcile walk 401s while returning no rows and no error"
+    )
 
 
-def test_NO_SUBJECT_holds_the_shared_bearer_any_more() -> None:
-    """THE ROW ITSELF. F2-3 is "kill the one shared service bearer", and it is closed when every
-    privileged subject's service can present its own — asserted over the RENDERED set rather than a
-    written list, so a subject added later is covered by this file existing."""
+def test_EVERY_PRIVILEGED_SUBJECT_can_present_its_own() -> None:
+    """F2-3's invariant, which is NOT the same as the row being closed. Every subject the doors demand
+    a dedicated credential from must be able to send one; `notifications` is deliberately not among
+    them (see above), so this passes with the row still open. Asserted over the RENDERED set rather
+    than a written list, so a subject added later is covered by this file existing."""
     have = _services_with_a_client_half()
     owners = {
         "service-maintenance": "maintenance",
         "service-ingest": "ingest",
-        "notifications": "notifications",
         "service-web": None,  # the BFF reads its token from env; it needs no client half
     }
     subjects = _privileged("LANCE_PRIVILEGED_SUBJECTS") | _privileged("LINEAGE_PRIVILEGED_SUBJECTS")
