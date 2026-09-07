@@ -1067,9 +1067,32 @@ tick and per dataset (`records.create_json` already exists), and `attempts` / `l
 on the trash record so a repeatedly-refused record is visible as a permanent exclusion rather than a
 transient one. **Where.** `routes.py:61`, `trash.py:80-91`, `purge.py:442-445`, `sweep.py:204-206`.
 
-### H5 · No per-object GC audit
-**Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`. **Closes it.**
-Per-dataset structured log plus a `table_maintained` control event from sweep and doors.
+### H5 · No per-object GC audit — **CONFIRMED AND SHARPENED 2026-09-07: the PURGE emits, the SWEEP does not**
+**Both clauses hold, and the asymmetry between two paths in the same service is the finding.**
+
+    sweep / optimize   audit() calls          0
+    sweep / optimize   control events         0
+    purge              control event          table_purged / namespace_purged  (emitted)
+
+So the DESTRUCTIVE path is auditable and the ROUTINE one is not — the reverse of what an operator
+would guess, and the reason nobody noticed: a purge is rare and visible, a sweep runs hourly over
+every dataset in the estate and leaves no per-object trace of what it rewrote or reclaimed.
+`table_maintained` is absent from `ControlAction`'s 38 values, so as with §C2 there is nothing for the
+sweep to emit even if it wanted to.
+
+**The structure already exists**, which makes the first clause cheap: `DatasetResult` is a per-dataset
+model already carrying `uri`, `compaction_mode`, `fragments_removed`, `old_versions_removed`,
+`bytes_removed`, `indices_optimized`, `refused` and `trashed`. It is aggregated into the sweep summary
+and never emitted per object. A per-dataset structured log is a call site, not a design.
+
+**The control-event half needs the same decision §C2 needs**, and should land with it rather than
+separately: a new `ControlAction` is a wire contract across three files, and — per `rask-notifications`
+— an event that names nobody is undeliverable rather than under-delivered. "Who is told that a table
+was compacted?" plausibly answers "nobody, this is an audit record not a notification", which is
+exactly why the two halves of this row want different mechanisms: a log/audit line for the sweep, a
+control event only if a person should hear it.
+
+**Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
