@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 220 tracked, 161 open, 59 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 220 tracked, 159 open, 61 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -852,7 +852,7 @@ services", and eight services now import `GovernedAuthSettings` while none re-de
 | # | Finding | Sev | What remains |
 | --- | --- | --- | --- |
 | Q3-1 | `CAT-CORE-13` **OPEN** | med | One 340-line `Settings` carries every domain's configuration |
-| Q3-2 | `DUP-15` **OPEN** | med | The Dapr-workflow scheduler is written twice and the copies' timeouts disagree |
+| ~~Q3-2~~ | `DUP-15` **OPEN** | med | The Dapr-workflow scheduler is written twice and the copies' timeouts disagree — **REFUTED — measured at HEAD 2026-09-07.** The claim is that the copies' timeouts disagree. They cannot: `StageJobSpec` (`workflow.py:166-167`) and `TrainJobSpec` (`879-880`) both default `poll_interval_seconds` / `max_polls` from the SAME module constants, `POLL_INTERVAL_SECONDS = 30` and `MAX_POLLS = 2880`. One pair of numbers, one place |
 | ~~Q3-3~~ | `VS-07` | med | Five silent swallows in the search path render real failures as empty results — **CLOSED — verified at HEAD 2026-09-06 (C3).** `1f770a5d` (2026-08-31) closed the last of the five swallows. No `except Exception: pass` and no `except Exception: return []` remains anywhere in `services/search/src/`; every cited site now logs or re-raises |
 | ~~Q3-4~~ | `PS-02` | med | `storage`'s error taxonomy is half-applied — `s3_errors` wraps nothing inside the package — **REFUTED — measured at HEAD 2026-09-07.** The claim is that `s3_errors` "wraps nothing inside the package". It wraps everything: `s3.py` carries three `with s3_errors(...)` blocks around its `get_object`/`put_object`/client construction and `errors.py` a fourth around its own `head_object`, and `s3.py`'s module docstring states the rule it follows ("Every S3 call is wrapped in `storage.errors.s3_errors`"). The taxonomy is applied where the row says it is absent |
 | ~~Q3-5~~ | `MAINT-08` | med | `reconcile()`'s `control_root` falls back to the POLICY root, not the control root — **CLOSED — verified at HEAD 2026-09-06 (C3).** `e4e73b68` (2026-08-16) replaced `control_root or settings.resolved_policy_root`, the exact expression audited at `reconcile.py:701`. Two doc-only residues survive and are worth a separate low row, neither of which is the defect |
@@ -1115,7 +1115,7 @@ first re-derive.
 | # | Finding | Sev | What remains |
 | --- | --- | --- | --- |
 | Q12-1 | One Q3 row could not be measured | low | 38 of 39 returned; the 39th agent did not complete. Re-run before § Q3 is called fully verified |
-| Q12-2 | `DUP-15` is worse than recorded | med | Carried as "the Dapr-workflow scheduler is written twice and the copies' timeouts disagree". Measured at HEAD: the bounded schedule is implemented FIVE times with no shared seam. The row's severity was set against the smaller number |
+| ~~Q12-2~~ | `DUP-15` is worse than recorded | med | Carried as "the Dapr-workflow scheduler is written twice and the copies' timeouts disagree". Measured at HEAD: the bounded schedule is implemented FIVE times with no shared seam. The row's severity was set against the smaller number — **REFUTED 2026-09-07, and the count is the finding.** There are FOUR `ctx.create_timer` call sites, not five: the fifth was DOCSTRING PROSE — `ray_jobs_api.py` and `workflow.py`'s module header both mention `ctx.create_timer` while calling nothing. Counting a mention as an implementation is the same error as counting a comment as a reader, which this estate has now made three times in one day. **AND THE FOUR ARE TWO PATTERNS, so a shared seam would merge things that differ**: two poll-WATCH loops (`stage_run`, `train_run` — timer, poll, watch-lost/vanished/never-registered, `continue_as_new` under `max_polls`) and two DEADLINE RACES (`when_any` over an external event and a timer — ingest's run limit, the medallion's approval gate). Only the two watch loops are genuinely duplicated, and **one of them is the TRAIN lane, which the 2026-09-07 scope ruling puts out of scope** — so the in-scope remainder is a single implementation with nothing to share it with. Re-open if the cascade grows a second in-scope watch loop |
 
 ## Q13. The audit's 54 WRONG findings, adversarially refuted (2026-09-06, C2)
 
