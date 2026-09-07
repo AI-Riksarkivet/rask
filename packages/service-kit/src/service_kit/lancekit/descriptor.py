@@ -166,7 +166,7 @@ class Declared(BaseModel):
         data.setdefault("searches", [legacy])
         return data
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field
     @property
     def search(self) -> Search | None:
         """The DEFAULT searchable table, or None.

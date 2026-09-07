@@ -180,11 +180,11 @@ def test_a_scan_batch_size_reaches_compaction_and_still_compacts(tmp_path: Path)
         seen.update(kwargs)
         return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
 
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
     try:
         result = compact_one(uri, {}, timedelta(0), scan_batch_size=64)
     finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+        lance.dataset(uri).optimize.__class__.compact_files = real
 
     assert result.error is None, result.error
     assert seen.get("batch_size") == 64, f"scan_batch_size never reached compact_files: {seen}"
@@ -208,11 +208,11 @@ def test_no_batch_size_leaves_lance_defaulting(tmp_path: Path) -> None:
         seen.update(kwargs)
         return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
 
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
     try:
         compact_one(uri, {}, timedelta(0))
     finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+        lance.dataset(uri).optimize.__class__.compact_files = real
 
     assert "batch_size" not in seen, f"an unset policy pinned a batch size anyway: {seen}"
 

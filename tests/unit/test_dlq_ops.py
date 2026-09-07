@@ -117,9 +117,7 @@ def test_list_surfaces_a_poison_object(tmp_path: Path) -> None:
 
 def test_list_empty_when_no_outbox_configured() -> None:
     s = LineageSettings.model_validate({"database_url": "postgresql://x/y"})  # outbox_uri = ""
-    out = asyncio.run(
-        dlq.list_dlq(s, None, _filter(_request(), s, None), limit=100)  # type: ignore[arg-type]
-    )
+    out = asyncio.run(dlq.list_dlq(s, None, _filter(_request(), s, None), limit=100))
     assert out.depth == 0 and out.events == []
 
 

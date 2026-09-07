@@ -139,7 +139,7 @@ def _app_with_a_run() -> FastAPI:
 def test_the_defaults_leave_the_read_door_open(open_client: TestClient) -> None:
     """Same as the write door: with every knob off the subject is `anon` and the checker is
     permissive, so a dev stack reads its runs exactly as before the gate existed."""
-    open_client.app.state.runs["run-abc"] = RunState(run_id="run-abc", status="succeeded")  # type: ignore[attr-defined]
+    open_client.app.state.runs["run-abc"] = RunState(run_id="run-abc", status="succeeded")
     assert open_client.get("/api/flows/runs/run-abc").status_code == 200
 
 

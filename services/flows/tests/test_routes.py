@@ -89,7 +89,7 @@ def client() -> Iterator[TestClient]:
 
 
 def _runs(client: TestClient) -> dict[str, Any]:
-    return client.app.state.runs  # type: ignore[attr-defined]  — the ASGI app is a FastAPI here
+    return client.app.state.runs  # the ASGI app is a FastAPI here
 
 
 # ---- catalog ---------------------------------------------------------------------------------
@@ -230,7 +230,7 @@ def test_the_durable_lane_takes_over_when_a_scheduler_is_present(client: TestCli
     """With a sidecar the route SCHEDULES instead of executing: `running`, no node states, and the
     engine owns the run from there. The lane is decided at startup, never by the caller."""
     scheduler = _RecordingScheduler()
-    client.app.state.workflow_scheduler = scheduler  # type: ignore[attr-defined]
+    client.app.state.workflow_scheduler = scheduler
 
     state = client.post("/api/flows/runs", json=CHAIN).json()
     assert state["status"] == "running"
@@ -258,7 +258,7 @@ def test_an_unconfirmed_schedule_refuses_instead_of_running_the_graph_twice(clie
     Serve is mocked but must never be called: the assertion is that NOTHING executed.
     """
     route = respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
-    client.app.state.workflow_scheduler = _RefusingScheduler(ScheduleUnconfirmed("the workflow engine neither started nor refused run run-x within 7s"))  # type: ignore[attr-defined]
+    client.app.state.workflow_scheduler = _RefusingScheduler(ScheduleUnconfirmed("the workflow engine neither started nor refused run run-x within 7s"))
 
     resp = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "k-1"})
 
@@ -274,7 +274,7 @@ def test_a_confirmed_refusal_still_degrades_to_the_inline_lane(client: TestClien
     the scheduler has ESTABLISHED that no instance exists (a sidecar whose state store is not scoped
     to this app), the graph is still perfectly runnable here and now."""
     respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
-    client.app.state.workflow_scheduler = _RefusingScheduler(RuntimeError("the state store is not configured to use the actor runtime"))  # type: ignore[attr-defined]
+    client.app.state.workflow_scheduler = _RefusingScheduler(RuntimeError("the state store is not configured to use the actor runtime"))
 
     resp = client.post("/api/flows/runs", json=CHAIN)
 
@@ -301,7 +301,7 @@ def test_a_key_less_post_still_gets_a_fresh_run_each_time(client: TestClient) ->
     """No key means nothing to converge ON. Inventing one would make every retry a new run while
     pretending otherwise, so the randomness stays in the key and the id derivation stays single."""
     scheduler = _RecordingScheduler()
-    client.app.state.workflow_scheduler = scheduler  # type: ignore[attr-defined]
+    client.app.state.workflow_scheduler = scheduler
 
     ids = {client.post("/api/flows/runs", json=CHAIN).json()["run_id"] for _ in range(3)}
 
@@ -391,7 +391,7 @@ def test_a_durable_run_can_be_TERMINATED(client: TestClient) -> None:
     consumer — it fans out activities and returns — so there is no cleanup a skipped path could leak.
     """
     reader = _RecordingReader()
-    client.app.state.workflow_reader = reader  # type: ignore[attr-defined]
+    client.app.state.workflow_reader = reader
 
     resp = client.post("/api/flows/runs/run-abc/terminate")
 
@@ -404,7 +404,7 @@ def test_a_durable_run_can_be_TERMINATED(client: TestClient) -> None:
 
 def test_terminate_without_an_engine_is_UNAVAILABLE_not_a_silent_success(client: TestClient) -> None:
     """No reader means no sidecar. Answering 202 would tell an operator the runaway was stopped."""
-    client.app.state.workflow_reader = None  # type: ignore[attr-defined]
+    client.app.state.workflow_reader = None
 
     resp = client.post("/api/flows/runs/run-abc/terminate")
 

@@ -249,7 +249,7 @@ def test_record_owned_by_another_subject_is_refused(store: UserStateStore, sidec
     forged = StoredState(
         subject="alice",
         document=UserStateDocument.WORKFLOW_GRAPH,
-        updated_at="2026-07-26T00:00:00Z",  # type: ignore[arg-type]
+        updated_at="2026-07-26T00:00:00Z",
         value={"nodes": []},
     )
     sidecar.rows[sidecar.stored_key(bob_key)] = forged.model_dump(mode="json")

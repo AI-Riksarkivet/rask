@@ -33,7 +33,7 @@ class _Catalog:
 
 
 @pytest.fixture
-def dataset_uri(tmp_path) -> str:  # type: ignore[no-untyped-def]
+def dataset_uri(tmp_path) -> str:
     uri = str(tmp_path / "bronze.lance")
     lance.write_dataset(BRONZE_SCHEMA.empty_table(), uri, data_storage_version="2.2", enable_stable_row_ids=True)
     return uri

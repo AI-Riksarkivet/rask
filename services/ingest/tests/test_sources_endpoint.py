@@ -41,7 +41,7 @@ def sources(monkeypatch: pytest.MonkeyPatch) -> list[SourceDescriptor]:
 
     Parsed back through `SourceDescriptor` rather than kept as raw JSON: the tests below read
     `entry.options[i].name` and `.required`, which on a `dict[str, object]` are untyped subscripts
-    that no gate can check — the reason two of them carried a `# type: ignore`. Validating here
+    that no gate can check — the reason two of them carried a `  # `. Validating here
     also asserts the served shape IS the model the endpoint declares, which was previously assumed.
 
     Through `create_app()` rather than by calling `describe_sources()` directly, because the registry

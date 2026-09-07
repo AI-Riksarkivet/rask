@@ -90,7 +90,7 @@ def test_s3_versioned_listing_yields_uri_and_UNQUOTED_etag() -> None:
         bucket="b",
         prefix="p/",
         client=_StubClient(
-            [  # type: ignore[arg-type]
+            [
                 {"Key": "p/one.tif", "ETag": '"abc123"'},
                 {"Key": "p/two.tif", "ETag": '"def456"'},
             ]

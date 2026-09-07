@@ -73,11 +73,11 @@ def _run(
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=list(uris)))
-    lance.dataset(uris[0]).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    lance.dataset(uris[0]).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
     try:
         results = sweep_mod.run_sweep(settings)
     finally:
-        lance.dataset(uris[0]).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+        lance.dataset(uris[0]).optimize.__class__.compact_files = real
     return results, compacted
 
 

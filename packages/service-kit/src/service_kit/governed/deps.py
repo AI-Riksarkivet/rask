@@ -135,7 +135,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
     RETURNS is typed (see `AuthDeps`).
 
     The inner dependencies annotate a parameter with `settings_dep`, a local NAME, which is not a type
-    expression. They used to carry `# type: ignore[valid-type]` for it — mypy's syntax, which this
+    expression. They used to carry `  # ` for it — mypy's syntax, which this
     estate does not run and `ty` does not honour, so the comments suppressed nothing and only asserted
     a diagnostic that never existed. `ty` accepts these as written; the notes are gone rather than
     translated.

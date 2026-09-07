@@ -35,8 +35,8 @@ def _task(state: TaskState = TaskState.UNASSIGNED) -> Task:
     return Task(
         project_id="p1",
         state=state,
-        source={"kind": "chunks", "keys": ["doc_1"]},  # type: ignore[arg-type]
-        media={"kind": "image", "image_url": "s3://bucket/page.jpg"},  # type: ignore[arg-type]
+        source={"kind": "chunks", "keys": ["doc_1"]},
+        media={"kind": "image", "image_url": "s3://bucket/page.jpg"},
     )
 
 

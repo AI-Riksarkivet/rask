@@ -91,7 +91,7 @@ def test_the_pre_commit_and_post_commit_gates_agree_on_the_same_batch(tmp_path: 
     from service_kit.lakehouse.quality import assert_quality
 
     batch = _batch([1, 2, 3])
-    uri = str(tmp_path) + "/q.lance"  # type: ignore[operator]
+    uri = str(tmp_path) + "/q.lance"
     lance.write_dataset(batch, uri, mode="create")
 
     pre = assert_quality_on_batch(batch, key_column="id", required_columns=("id",))

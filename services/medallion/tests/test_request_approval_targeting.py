@@ -35,7 +35,7 @@ class _StubActivityContext:
 def _ctx() -> WorkflowActivityContext:
     """The stub, typed as the real context.
 
-    A `cast` rather than a subclass or a `# type: ignore`: `WorkflowActivityContext` takes a live
+    A `cast` rather than a subclass or a `  # `: `WorkflowActivityContext` takes a live
     workflow instance to construct, the activity provably never touches the parameter, and `ty` does
     not honour `type: ignore` anyway — it is another tool's syntax. This is the same shape
     `test_producer_targeting_contract.py` uses for its unused resolved dependencies.

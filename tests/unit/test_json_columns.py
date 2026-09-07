@@ -25,7 +25,7 @@ from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
 
 
 def _schema(fields: object) -> pa.Schema:
-    return fields if isinstance(fields, pa.Schema) else pa.schema(fields)  # type: ignore[arg-type]
+    return fields if isinstance(fields, pa.Schema) else pa.schema(fields)
 
 
 ANNOTATIONS = _schema(EMPTY_SCHEMA)

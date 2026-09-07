@@ -344,7 +344,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     assert conditional_reads["n"] >= 1, "the conditional write never re-read — the guard refused, not the store"
     assert reads["n"] == 1, "the guard read more than once; the blinding no longer models the race"
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
-    assert wh_svc.get_warehouse(f"file://{tmp_path}", {}, "wh-race")["project"] == "acme"  # type: ignore[index]
+    assert wh_svc.get_warehouse(f"file://{tmp_path}", {}, "wh-race")["project"] == "acme"
 
 
 def test_create_warehouse_lost_race_same_project_converges(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

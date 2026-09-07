@@ -47,7 +47,7 @@ def _decide(**over: object) -> GateOutcome:
         "has_pub_topic": True,
     }
     base.update(over)
-    return gate_decision(**base)  # type: ignore[arg-type]
+    return gate_decision(**base)
 
 
 def test_there_is_no_trigger_outcome_at_all() -> None:

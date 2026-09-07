@@ -157,7 +157,7 @@ def test_the_http_ingress_transcribes_the_posted_bytes() -> None:
         seen.update(data=data, name=name)
         return "<alto/>"
 
-    deployment.transcribe_bytes = fake_transcribe  # type: ignore[method-assign]
+    deployment.transcribe_bytes = fake_transcribe
 
     class _Request:
         query_params: typing.ClassVar[dict[str, str]] = {"name": "vol/00012.jpg"}

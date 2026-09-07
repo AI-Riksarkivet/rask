@@ -153,7 +153,7 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
             ns=ns,  # structural stand-in, recorded not mocked
             settings=settings,
             client=None,
-            emitter=_NoopLineage(),  # type: ignore[arg-type]
+            emitter=_NoopLineage(),
             control=NoopControlEmitter(),
             token=None,
             authorization=None,
@@ -203,7 +203,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
                 ns=ns,
                 settings=settings,
                 client=None,
-                emitter=_NoopLineage(),  # type: ignore[arg-type]
+                emitter=_NoopLineage(),
                 control=NoopControlEmitter(),
                 token=None,
                 authorization=None,
@@ -419,11 +419,11 @@ def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
     ns: Any = _TrashableNamespace()
     revoked = AsyncMock()
     original = deps.revoke_ownership
-    deps.revoke_ownership = revoked  # type: ignore[assignment]
+    deps.revoke_ownership = revoked
     try:
         _drop_table(settings, ns)
     finally:
-        deps.revoke_ownership = original  # type: ignore[assignment]
+        deps.revoke_ownership = original
     revoked.assert_not_awaited()
 
 
@@ -437,11 +437,11 @@ def test_a_DESTRUCTIVE_drop_still_revokes(tmp_path: Any) -> None:
     ns: Any = _TrashableNamespace()
     revoked = AsyncMock()
     original = deps.revoke_ownership
-    deps.revoke_ownership = revoked  # type: ignore[assignment]
+    deps.revoke_ownership = revoked
     try:
         _drop_table(settings, ns)
     finally:
-        deps.revoke_ownership = original  # type: ignore[assignment]
+        deps.revoke_ownership = original
     revoked.assert_awaited_once()
 
 

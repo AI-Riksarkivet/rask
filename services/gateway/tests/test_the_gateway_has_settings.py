@@ -64,7 +64,7 @@ def test_the_route_table_and_the_prefix_come_from_one_read(tmp_path, monkeypatch
     gw = importlib.reload(gateway)
 
     with TestClient(gw.app) as client:
-        state = client.app.state  # type: ignore[attr-defined]
+        state = client.app.state
         assert state.settings.api_prefix == state.api_prefix
         assert all(row.public_prefix.startswith(state.api_prefix) for row in state.routes)
 

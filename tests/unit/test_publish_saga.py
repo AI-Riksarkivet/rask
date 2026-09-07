@@ -93,8 +93,8 @@ class _Task:
             submitted_by="gina",
             reviewed_by="carol",
             review_action="accepted",
-            source={"kind": "chunks", "keys": [task_id]},  # type: ignore[arg-type]
-            media={"kind": "image", "image_url": "s3://b/x.jpg"},  # type: ignore[arg-type]
+            source={"kind": "chunks", "keys": [task_id]},
+            media={"kind": "image", "image_url": "s3://b/x.jpg"},
         ).model_dump(mode="json")
         # Shape ids are minted at SAVE time by the real actor and PERSISTED, so a re-read returns
         # the same ids. Minting them here per read would make the double lie about replay stability

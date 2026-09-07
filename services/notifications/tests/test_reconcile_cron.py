@@ -247,7 +247,7 @@ def test_the_lifespan_builds_the_clients_the_route_depends_on() -> None:
     get_ingress_settings.cache_clear()
     module = importlib.reload(importlib.import_module("notifications"))
     with TestClient(module.app) as client:
-        state = client.app.state  # type: ignore[attr-defined]
+        state = client.app.state
         assert isinstance(state.lineage_feed, LineageFeedClient)
         assert isinstance(state.lineage_cursor, LineageCursorStore)
 
@@ -414,7 +414,7 @@ def test_the_lifespan_wires_the_feed_client_from_settings_not_from_defaults(monk
     module = importlib.reload(importlib.import_module("notifications"))
     try:
         with TestClient(module.app) as client:
-            feed = client.app.state.lineage_feed  # type: ignore[attr-defined]
+            feed = client.app.state.lineage_feed
             assert feed._base == "http://lineage.test:8000"
             assert feed._identity == "notifications-under-test"
     finally:

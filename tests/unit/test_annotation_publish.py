@@ -363,8 +363,8 @@ def _pin_task(task_id: str, dataset: str | None, version: int | None) -> Task:
         project_id="p1",
         state=TaskState.ACCEPTED,
         submitted_by="gina",
-        source={"kind": "chunks", "keys": [task_id], "where": dataset, "dataset_version": version},  # type: ignore[arg-type]
-        media={"kind": "image"},  # type: ignore[arg-type]
+        source={"kind": "chunks", "keys": [task_id], "where": dataset, "dataset_version": version},
+        media={"kind": "image"},
     )
 
 
@@ -436,8 +436,8 @@ def _replica_task(task_id: str, replica_of: str, labels: list[str]) -> tuple[Tas
         state=TaskState.ACCEPTED,
         submitted_by=f"annotator-{task_id}",
         replica_of=replica_of,
-        source={"kind": "chunks", "keys": ["k1"]},  # type: ignore[arg-type]
-        media={"kind": "image"},  # type: ignore[arg-type]
+        source={"kind": "chunks", "keys": ["k1"]},
+        media={"kind": "image"},
     )
     draft = Draft(
         task_id=task_id,
@@ -525,7 +525,7 @@ def _adjudicated_project(**picks: str) -> AnnotationProject:
         tenant="acme",
         slug="vasa",
         consensus_n=2,
-        adjudications={g: {"task_id": t, "by": "meg", "at": NOW} for g, t in picks.items()},  # type: ignore[arg-type]
+        adjudications={g: {"task_id": t, "by": "meg", "at": NOW} for g, t in picks.items()},
     )
 
 

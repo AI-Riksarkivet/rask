@@ -57,9 +57,9 @@ def run_transcribe(
     ``chunk_size``-second windows. Both pass straight through to easytranscriber.
     """
     try:
-        from easyaligner.text import load_tokenizer  # type: ignore[import-not-found]
-        from easytranscriber.pipelines import pipeline  # type: ignore[import-not-found]
-        from easytranscriber.text.normalization import (  # type: ignore[import-not-found]
+        from easyaligner.text import load_tokenizer
+        from easytranscriber.pipelines import pipeline
+        from easytranscriber.text.normalization import (
             text_normalizer,
         )
     except ImportError as e:

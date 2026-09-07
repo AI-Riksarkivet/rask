@@ -17,7 +17,7 @@ import os
 from typing import Any
 
 import worker
-from ray import serve  # type: ignore[import-not-found]
+from ray import serve
 
 
 # The estate's standard sizing knobs (open_ray-kernel.md move 3): the NAMES are uniform across

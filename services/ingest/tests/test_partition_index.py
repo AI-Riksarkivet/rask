@@ -23,7 +23,7 @@ from ingest.lander import PARTITION_INDEX, PARTITION_INDEX_NAME, _ensure_partiti
 
 
 @pytest.fixture
-def dataset(tmp_path):  # type: ignore[no-untyped-def]
+def dataset(tmp_path):
     """A bronze-shaped dataset with two partitions — enough for an equality filter to have a choice."""
     table = pa.table(
         {
@@ -84,7 +84,7 @@ def test_running_it_TWICE_is_a_no_op(dataset: lance.LanceDataset) -> None:
     assert len(dataset.describe_indices()) == before, "the second call built a duplicate index"
 
 
-def test_it_NEVER_fails_a_commit_that_already_landed(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_it_NEVER_fails_a_commit_that_already_landed(tmp_path) -> None:
     """A run that committed its data must not fail because an optimisation could not be built.
 
     Same reasoning as I8 for lineage, and it costs nothing: the index is recoverable at any later

@@ -48,10 +48,10 @@ class _Actor(AnnotationProjectActor):
         self.reminders_registered: list[str] = []
         self.reminders_unregistered: list[str] = []
 
-    async def register_reminder(self, name: str, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+    async def register_reminder(self, name: str, *args: Any, **kwargs: Any) -> None:
         self.reminders_registered.append(name)
 
-    async def unregister_reminder(self, name: str) -> None:  # type: ignore[override]
+    async def unregister_reminder(self, name: str) -> None:
         self.reminders_unregistered.append(name)
 
 
@@ -65,8 +65,8 @@ def _item(task_id: str) -> dict[str, Any]:
     return Task(
         task_id=task_id,
         project_id="p1",
-        source={"kind": "chunks", "keys": [task_id]},  # type: ignore[arg-type]
-        media={"kind": "image", "image_url": f"s3://b/{task_id}.jpg"},  # type: ignore[arg-type]
+        source={"kind": "chunks", "keys": [task_id]},
+        media={"kind": "image", "image_url": f"s3://b/{task_id}.jpg"},
     ).model_dump(mode="json")
 
 

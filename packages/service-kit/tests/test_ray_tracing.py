@@ -34,7 +34,7 @@ def _module_tree(module_name: str) -> ast.Module:
     """The parsed AST of an importable module.
 
     `module.__file__` is `str | None` (a namespace package has none), so it is narrowed rather than
-    ignored — `ty` is right to reject `Path(str | None)`, and a `# type: ignore` here would be the
+    ignored — `ty` is right to reject `Path(str | None)`, and a `  # ` here would be the
     wrong tool's syntax for a real hole.
     """
     module = __import__(module_name, fromlist=["x"])

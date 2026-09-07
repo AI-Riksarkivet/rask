@@ -24,7 +24,7 @@ from flows.models import NodeResult, NodeRunState, RunJob, RunState
 SERVE = "http://serve.test:8000"
 
 JOB = RunJob(
-    graph={  # type: ignore[arg-type]  — pydantic coerces the dicts; writing the models out adds nothing
+    graph={  # pydantic coerces the dicts; writing the models out adds nothing
         "nodes": [
             {"id": "t", "kind": "text"},
             {"id": "m", "kind": "model", "config": {"app": "htrflow"}},
@@ -131,7 +131,7 @@ def test_the_orchestrator_fans_out_per_wave_and_blocks_on_upstream_failure(monke
 
 def test_the_orchestrator_refuses_a_cycle_before_dispatching_anything() -> None:
     job = RunJob(
-        graph={  # type: ignore[arg-type]
+        graph={
             "nodes": [{"id": "a", "kind": "text"}, {"id": "b", "kind": "inspect"}],
             "edges": [{"source": "a", "target": "b"}, {"source": "b", "target": "a"}],
         },

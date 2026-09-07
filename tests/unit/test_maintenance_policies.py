@@ -371,11 +371,11 @@ def _sweep_kwargs(monkeypatch: pytest.MonkeyPatch, settings: MaintenanceSettings
     # `discover_datasets` returns a Discovery (uris + the prefixes the depth bound stopped at), not a
     # bare list — the truncation must not be droppable, so the stub returns the model too.
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=[uri]))
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
     try:
         sweep_mod.run_sweep(settings)
     finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+        lance.dataset(uri).optimize.__class__.compact_files = real
     return seen
 
 

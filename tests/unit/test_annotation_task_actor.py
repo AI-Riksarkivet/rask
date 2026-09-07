@@ -88,8 +88,8 @@ class _Actor(AnnotationTaskActor):
 def _task(**kw: Any) -> dict[str, Any]:
     base = Task(
         project_id="p1",
-        source={"kind": "chunks", "keys": ["doc_1"]},  # type: ignore[arg-type]
-        media={"kind": "image", "image_url": "s3://b/p.jpg"},  # type: ignore[arg-type]
+        source={"kind": "chunks", "keys": ["doc_1"]},
+        media={"kind": "image", "image_url": "s3://b/p.jpg"},
     ).model_dump(mode="json")
     base.update(kw)
     return base

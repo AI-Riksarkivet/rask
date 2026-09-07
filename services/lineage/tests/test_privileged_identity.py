@@ -44,7 +44,7 @@ def _settings(*, privileged: str = "") -> LineageSettings:
     return LineageSettings(
         LINEAGE_SERVICE_SUBJECTS="service-trainer,service-web",
         LINEAGE_PRIVILEGED_SUBJECTS=privileged,
-    )  # type: ignore[call-arg]
+    )
 
 
 @pytest.fixture(autouse=True)

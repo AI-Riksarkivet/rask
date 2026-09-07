@@ -246,7 +246,7 @@ def test_a_corpus_with_NO_search_declaration_is_denied_under_authz() -> None:
     never governs, and a check against a nonexistent object reads as a grant.
     """
     registry = _Registry({"vasa": "chunks"})
-    registry.strip_search.add("vasa")  # type: ignore[attr-defined]
+    registry.strip_search.add("vasa")
     client = TestClient(_app(registry, allow=True, fga_enabled=True))
 
     assert client.get("/api/datasets").json()["datasets"] == []
@@ -255,7 +255,7 @@ def test_a_corpus_with_NO_search_declaration_is_denied_under_authz() -> None:
 def test_the_same_corpus_still_lists_when_authz_is_OFF() -> None:
     """The deny above must not become a behaviour change for a dev stack that never turned FGA on."""
     registry = _Registry({"vasa": "chunks"})
-    registry.strip_search.add("vasa")  # type: ignore[attr-defined]
+    registry.strip_search.add("vasa")
     client = TestClient(_app(registry, allow=True, fga_enabled=False))
 
     assert [d["id"] for d in client.get("/api/datasets").json()["datasets"]] == ["vasa"]

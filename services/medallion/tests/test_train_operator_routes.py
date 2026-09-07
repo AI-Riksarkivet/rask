@@ -68,7 +68,7 @@ def client() -> Iterator[TestClient]:
     live = _Client({LIVE: _State({"submission_id": "ray-train-tok-1", "token": "tok-1", "model": "churn"}, WorkflowStatus.RUNNING)})
     app = _app(live)
     with TestClient(app, raise_server_exceptions=False) as test_client:
-        test_client.app.state.workflow_client = live  # type: ignore[attr-defined]
+        test_client.app.state.workflow_client = live
         yield test_client
 
 

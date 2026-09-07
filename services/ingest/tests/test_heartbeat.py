@@ -46,7 +46,7 @@ async def test_HELD_messages_are_heartbeat_so_the_queue_does_not_redeliver_live_
         and nothing committed. A fake that is easier than the real thing tests the fake.
         """
 
-        __hash__ = None  # type: ignore[assignment]
+        __hash__ = None
 
         def __init__(self, name: str) -> None:
             self.name = name
