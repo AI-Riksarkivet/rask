@@ -3,7 +3,7 @@
 The estate's distributed trace went dark at ``ray job submit``: neither submission site propagated W3C
 context, so the Ray-side spans were orphans or absent. Covers both halves + the degradation contract:
 
-- SUBMITTER (``ray_kit.submit.trace_env``, used by medallion's wrappers): the span's traceparent is injected
+- SUBMITTER (``medallion.services.ray_jobs_api.trace_env``, used by medallion's wrappers): the span's traceparent is injected
   into the submitted ``runtime_env`` at both sites (stage + train), and nothing is injected when no span
   is active — the trace is continued, never fabricated.
 - JOB (``scripts/ray_stage_job.py`` + ``ray_train_job.py``): the inlined ``_traced_root`` extracts the
@@ -32,8 +32,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from medallion.core.config import MedallionSettings
+from medallion.services import ray_jobs_api as ray_submit_kit
 from medallion.services import ray_submit
-from ray_kit import submit as ray_submit_kit
 
 
 _SCRIPTS = Path(__file__).parents[2] / "scripts"

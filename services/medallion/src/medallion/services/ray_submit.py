@@ -28,9 +28,9 @@ from contextlib import suppress
 import httpx
 
 from medallion.core.config import MedallionSettings, get_settings
+from medallion.services import ray_jobs_api as rk
 from medallion.services.task_register import RAY_ENGINE
 from medallion.services.transform_spec import resolve_task_async, resolve_transform_async
-from ray_kit import submit as rk
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
@@ -421,7 +421,7 @@ async def submit_train_job(
     # THROUGH THE KERNEL, with D2 as the explicit policy: `on_terminal_failure="report"` is the one
     # deliberate divergence from the stage contract (the kernel's docstring names both). This
     # replaced an inline copy of the same POST-then-reattach dance — the "second implementation"
-    # ray_kit.submit's header warns about, written before the kernel existed and never collapsed.
+    # ray_jobs_api's header warns about, written before the kernel existed and never collapsed.
     outcome = await rk.submit_or_reattach(client, submission_id, body, on_terminal_failure="report")
     if outcome == "submitted":
         log.info("ray_train_job_submitted", extra={"submission_id": submission_id, "model": model})
@@ -429,6 +429,6 @@ async def submit_train_job(
     return "attached" if outcome == "reattached" else outcome
 
 
-#: Re-exported. The generic submitter moved to `ray_kit.submit` (R2) so `compute` — the execution
+#: Re-exported. The generic submitter lives in `ray_jobs_api` — this service's Ray ADAPTER — so `compute` — the execution
 #: plane — can start jobs without importing the medallion. Callers keep this name.
 RayJobError = rk.RayJobError

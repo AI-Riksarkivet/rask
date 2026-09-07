@@ -7,7 +7,7 @@ the work — the tier behind it still waited for a `publish_stage_ready` that on
 reaches.
 
 Resubmitting is safe here because the submission id is deterministic in `(stage, token, from->to,
-code)` and `ray_kit.submit_or_reattach` already takes `on_terminal_failure="resubmit"` for the STAGE
+code)` and `medallion.services.ray_jobs_api_or_reattach` already takes `on_terminal_failure="resubmit"` for the STAGE
 contract: the same id either creates a fresh job (the record is genuinely gone) or re-attaches to the
 one that turned out to be alive. So a spurious 404 costs a re-attach, not a duplicate job.
 

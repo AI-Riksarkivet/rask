@@ -106,7 +106,7 @@ MAX_UNSEEN_POLLS: Final = 4
 #: How many times a STAGE whose job the head lost may be submitted again.
 #:
 #: Safe because the submission id is deterministic in ``(stage, token, from->to, code)`` and
-#: ``ray_kit.submit_or_reattach`` runs the STAGE contract (``on_terminal_failure="resubmit"``): the same
+#: ``ray_jobs_api.submit_or_reattach`` runs the STAGE contract (``on_terminal_failure="resubmit"``): the same
 #: id either creates a fresh job, when the record is genuinely gone, or re-attaches to the one that
 #: turned out to be alive. A spurious 404 therefore costs a re-attach, never a duplicate job.
 #:
@@ -523,8 +523,8 @@ def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     payload = PollInput.model_validate(payload)
+    from medallion.services.ray_jobs_api import job_status
     from medallion.services.ray_submit import ray_client
-    from ray_kit.submit import job_status
 
     submission_id = payload.submission_id
 
@@ -703,8 +703,8 @@ def _read_stage_failure(submission_id: str) -> Any:
     workflow history on every tick, so changing its shape breaks replay for in-flight instances, and
     no poll needs a traceback. This costs one extra read, only when a job has actually failed.
     """
+    from medallion.services.ray_jobs_api import job_failure
     from medallion.services.ray_submit import ray_client
-    from ray_kit.submit import job_failure
 
     async def _read() -> Any:
         # The pooled client, for the reason `poll_stage` records (DUP-21).
@@ -798,11 +798,11 @@ _TERMINAL_BAD: Final = ("FAILED", "STOPPED")
 
 
 def _is_terminal(status: str | None) -> bool:
-    """Terminality, decided WITHOUT importing ray_kit into the workflow body.
+    """Terminality, decided WITHOUT importing the engine adapter into the workflow body.
 
     The workflow module is imported by the replay path; keeping this a pure comparison over two
     literals means the body has no import-time behaviour to be non-deterministic about. The literals
-    are asserted equal to `ray_kit`'s in the tests, so the duplication cannot drift silently.
+    are asserted equal to the adapter's in the tests, so the duplication cannot drift silently.
     """
     return status == _TERMINAL_OK or status in _TERMINAL_BAD
 
@@ -973,8 +973,8 @@ def poll_train(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     payload = PollInput.model_validate(payload)
+    from medallion.services.ray_jobs_api import job_status
     from medallion.services.ray_submit import ray_client
-    from ray_kit.submit import job_status
 
     submission_id = payload.submission_id
 

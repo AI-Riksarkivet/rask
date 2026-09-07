@@ -5,7 +5,7 @@ landed on ONE id, and ``submit_or_reattach`` read the duplicate as a successful 
 second transform's work silently never ran.
 """
 
-from ray_kit.submit import submission_id
+from medallion.services.ray_jobs_api import submission_id
 
 
 def test_tokenless_submissions_of_DIFFERENT_work_get_DIFFERENT_ids() -> None:

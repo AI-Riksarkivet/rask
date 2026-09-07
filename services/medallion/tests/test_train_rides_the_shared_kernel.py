@@ -1,7 +1,7 @@
-"""The train path submits through `ray_kit.submit`, with its D2 divergence as a PARAMETER.
+"""The train path submits through `medallion.services.ray_jobs_api`, with its D2 divergence as a PARAMETER.
 
 open_ray-kernel.md move 14. `submit_train_job` carried its own inline copy of the kernel's
-POST-then-reattach dance — the second implementation `ray_kit.submit`'s own header calls "the sort
+POST-then-reattach dance — the second implementation `medallion.services.ray_jobs_api`'s own header calls "the sort
 of thing a second implementation gets wrong", written before the kernel existed and never collapsed
 onto it. The estate has already measured what a mirrored submission seam costs twice over: the
 credential fix that landed in one and not the other, and the work-axis fix that landed in three
@@ -97,7 +97,7 @@ def test_train_has_no_inline_copy_of_the_kernel() -> None:
     """The single-seam assertion. The inline dance (POST, then GET-and-branch, then re-raise) is
     exactly what `submit_or_reattach` is; a second copy is where the next one-sided fix lands."""
     source = inspect.getsource(ray_submit.submit_train_job)
-    assert "submit_or_reattach" in source, "submit_train_job does not ride ray_kit.submit — it still carries its own copy of the submission dance"
+    assert "submit_or_reattach" in source, "submit_train_job does not ride medallion.services.ray_jobs_api — it still carries its own copy of the submission dance"
     assert 'post("/api/jobs/"' not in source, "an inline POST remains beside the kernel call — the copy was added to, not collapsed"
 
 

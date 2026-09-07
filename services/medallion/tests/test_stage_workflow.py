@@ -231,7 +231,7 @@ def test_the_workflow_body_yields_ONLY_ctx_actions() -> None:
 def test_terminality_agrees_with_ray_kits_own_constants() -> None:
     """The workflow body compares against local literals so it has no import-time behaviour. That
     duplication is only safe while it AGREES — this is what stops it drifting."""
-    from ray_kit.submit import TERMINAL_BAD, TERMINAL_OK, is_terminal
+    from medallion.services.ray_jobs_api import TERMINAL_BAD, TERMINAL_OK, is_terminal
 
     for status in (TERMINAL_OK, *TERMINAL_BAD):
         assert _is_terminal(status) is True
@@ -315,8 +315,8 @@ def test_a_FAILED_job_carries_RAYS_OWN_REASON_into_the_graph(monkeypatch: pytest
     asked for them. `driver_exit_code` 137 is SIGKILL, i.e. a host-RAM OOM, which is the single most
     common way a stage dies and the one an operator can act on immediately.
     """
+    from medallion.services.ray_job_failure import RayJobFailure
     from medallion.workflow import report_stage_outcome
-    from ray_kit.schemas import RayJobFailure
 
     published: list[dict[str, Any]] = []
     monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda e, _s: published.append(e))
@@ -345,8 +345,8 @@ def test_the_failure_reason_is_BOUNDED_so_a_traceback_cannot_size_a_lineage_even
     facet on an event published through the claim-check funnel — which WARNs past 64 KiB and REFUSES
     past 900 KiB (`service_kit/dapr_publish.py`). An unbounded upstream string must not be able to
     decide the size of a governed event, so it is truncated here rather than at the broker."""
+    from medallion.services.ray_job_failure import RayJobFailure
     from medallion.workflow import _STAGE_FAIL_MESSAGE_CAP, report_stage_outcome
-    from ray_kit.schemas import RayJobFailure
 
     published: list[dict[str, Any]] = []
     monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda e, _s: published.append(e))
@@ -575,7 +575,7 @@ def test_poll_answers_NONE_for_an_id_the_dashboard_has_not_registered(monkeypatc
     async def _unknown(_client: Any, _sub: str) -> str | None:
         return None
 
-    monkeypatch.setattr("ray_kit.submit.job_status", _unknown)
+    monkeypatch.setattr("medallion.services.ray_jobs_api.job_status", _unknown)
 
     assert poll_stage(cast("Any", None), PollInput(submission_id="not-registered-yet")) is None
 
@@ -588,12 +588,12 @@ def test_poll_RAISES_on_transport_failure_rather_than_reporting_no_status(monkey
     The activity's retry policy is the right owner of a transport blip.
     """
 
-    from ray_kit.submit import RayJobError
+    from medallion.services.ray_jobs_api import RayJobError
 
     async def _down(_client: Any, _sub: str) -> str | None:
         raise RayJobError("dashboard unreachable")
 
-    monkeypatch.setattr("ray_kit.submit.job_status", _down)
+    monkeypatch.setattr("medallion.services.ray_jobs_api.job_status", _down)
 
     with pytest.raises(RayJobError):
         poll_stage(cast("Any", None), PollInput(submission_id="sub"))

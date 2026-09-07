@@ -4,7 +4,7 @@
 Two of its fields used to be read straight off the wire with no shape check at all:
 
 * **`token`** — which seeds the deterministic lineage run id, rides the `lance` run facet into the
-  graph, and folds into a Ray submission id. `ray_kit.submit.submission_id` builds
+  graph, and folds into a Ray submission id. `medallion.services.ray_jobs_api.submission_id` builds
   `ray-<stage>-<token>-<digest>` and then replaces every character outside `[A-Za-z0-9_-]` with `-`,
   so the hazard there is not injection but COLLISION: two different tokens land on one id, and
   `submit_or_reattach` reads that as a successful re-attach — the second stage's work never runs;

@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #: cascade actually carries (a ``uuid4().hex`` and a dashed UUID) and excludes what matters — path
 #: separators, ``$``, whitespace, control characters, and anything unbounded. The token SEEDS the
 #: deterministic lineage run id (``schemas/events.build_run_event``), rides the ``lance`` run facet
-#: into the graph, and reaches ``ray_kit.submit.submission_id``. That last one is not an injection
+#: into the graph, and reaches ``ray_jobs_api.submission_id``. That last one is not an injection
 #: sink — it folds every character outside ``[A-Za-z0-9_-]`` to ``-`` and truncates at 200 — but
 #: folding is exactly why the shape matters: two different tokens can land on ONE submission id, and
 #: ``submit_or_reattach`` reads that collision as a successful re-attach, so the second stage's work

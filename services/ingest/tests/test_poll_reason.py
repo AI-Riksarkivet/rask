@@ -141,7 +141,7 @@ _BANNED_POLL = "await" + "_success"
 @pytest.mark.parametrize("forbidden", [_BANNED_POLL, f"ray_kit.{_BANNED_POLL}"])
 def test_the_named_ANTI_PATTERN_did_not_survive_the_move(forbidden: str) -> None:
     """A13 names one function outright: today's only production `while True: sleep()`, held inside an
-    HTTP request (`ray_kit/submit.py`). It "does not survive the move in any form" — so this asserts
+    HTTP request (`services/medallion/src/medallion/services/ray_jobs_api.py`). It "does not survive the move in any form" — so this asserts
     the ingest plane never grew a caller of it."""
     hits = [str(p) for p in SRC.rglob("*.py") if forbidden in p.read_text(encoding="utf-8")]
 

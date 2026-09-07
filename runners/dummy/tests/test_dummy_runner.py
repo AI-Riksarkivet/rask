@@ -140,7 +140,7 @@ def test_an_empty_delta_is_a_no_op_not_an_empty_version(tmp_path: Path) -> None:
     """
     uri = _bronze(tmp_path, [1])
     latest = lance.dataset(uri).version
-    out = run({"FROM_URI": uri, "TO_URI": str(tmp_path / "s.lance"), "BASE_VERSION": str(latest)})
+    out = run({"RASK_SOURCE_URI": uri, "RASK_DEST_URI": str(tmp_path / "s.lance"), "RASK_VERSION_FLOOR": str(latest)})
 
     assert out["skipped"] is True
     assert out["version"] is None
@@ -150,7 +150,7 @@ def test_an_empty_delta_is_a_no_op_not_an_empty_version(tmp_path: Path) -> None:
 def test_the_job_runs_end_to_end_from_env(tmp_path: Path) -> None:
     """The whole hop as the Ray job runs it — env in, silver out."""
     uri = _bronze(tmp_path, [1, 2, 3, 4])
-    out = run({"FROM_URI": uri, "TO_URI": str(tmp_path / "silver.lance"), "RUN_ID": "run-xyz"})
+    out = run({"RASK_SOURCE_URI": uri, "RASK_DEST_URI": str(tmp_path / "silver.lance"), "RASK_RUN_ID": "run-xyz"})
 
     assert out["rows_in"] == 4
     assert out["rows_written"] == 4
@@ -161,7 +161,7 @@ def test_the_job_runs_end_to_end_from_env(tmp_path: Path) -> None:
 
 
 def test_missing_env_refuses_loudly() -> None:
-    with pytest.raises(ValueError, match="FROM_URI and TO_URI"):
+    with pytest.raises(ValueError, match="RASK_SOURCE_URI and RASK_DEST_URI"):
         run({})
 
 

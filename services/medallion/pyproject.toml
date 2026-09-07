@@ -10,7 +10,6 @@ dependencies = [
     "lineage-kit",
     # The generic Ray submitter (R2). It moved OUT of this service so `compute` — the execution
     # plane — can start jobs without importing the medallion; the wrappers here still use it.
-    "ray-kit",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
@@ -21,7 +20,7 @@ dependencies = [
     "pillow>=12.3.0",
     "pyarrow",
     "pylance[otel]>=10.0.0",
-    "lance-namespace>=0.11.0",
+    "lance-namespace>=0.11.0,<0.12",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
     # S1's stage watcher (`medallion/workflow.py`): the Ray lane waits for a submitted job to reach a
@@ -51,4 +50,3 @@ lineage-kit = { workspace = true }
 # Every workspace member used as a dependency needs its source pinned here too — uv refuses to
 # resolve the WHOLE workspace otherwise ("included as a workspace member, but is missing an entry
 # in tool.uv.sources"), so one missing line takes down `uv run` for every package, not just this one.
-ray-kit = { workspace = true }

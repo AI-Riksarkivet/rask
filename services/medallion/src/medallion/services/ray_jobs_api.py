@@ -1,29 +1,18 @@
-"""Submitting a Ray job — the generic half, with no workload's settings in it (R2).
+"""The Ray dashboard Jobs API, spoken directly — medallion's adapter for the Ray engine.
 
-``ray_kit`` was read-only: schemas plus a dashboard wrapper. Everything that could START a job lived in
-``medallion/services/ray_submit.py``, so the medallion owned job submission for the whole estate — which
-is backwards: the mechanics of submission belong to no one workload. (An earlier version of this header
-claimed ``compute`` "submits" and that R2 would move ETL there — corrected 2026-08-28: compute holds the
-Ray Job SDK client for INTROSPECTION only and deliberately submits nothing, verified by call-site sweep.
-The kernel's consumers are the workload wrappers, medallion's stage and train paths both included since
-open_ray-kernel.md move 14 collapsed train's inline copy onto ``submit_or_reattach``.)
+MOVED HERE FROM `ray-kit` rather than copied, and the move is what lets `services/medallion` declare
+no compute engine at all. Measured 2026-09-07: this module is pure HTTPX plus OpenTelemetry
+propagation and imports no Ray, while the `ray-kit` PACKAGE declares `ray[default]` for its SDK half
+(`build_client`, `JobSubmissionClient`, the dashboard wrapper). Medallion consumed only this module
+and paid for the whole engine to get it; `services/compute` — the estate's Ray-facing service —
+consumes only the other half and is unaffected. One consumer each, so the split is clean and nothing
+is duplicated.
 
-**What moved and what did not.** Of the eight functions in that module, five read no settings at all —
-they are the submitter. The other three (``submit_stage_job``, ``submit_ingest_job``,
-``submit_train_job``) are workload wrappers that read 9-11 fields of ``MedallionSettings`` each, and they
-stay with their workloads: a wrapper's job is to know which entrypoint and which env its transform needs.
-Only the mechanics move here, and they take explicit arguments rather than a settings object, so no
-caller has to own the medallion's config shape to submit a job.
-
-The pieces this owns are the ones that are hard to get right twice:
-
-- **Deterministic submission ids**, so a redelivered trigger re-attaches instead of starting a duplicate.
-- **Reattach-or-retry**: an id that already exists re-attaches, UNLESS the prior job terminally failed —
-  then it is deleted and resubmitted, because otherwise every redelivery re-observes the same failure
-  until maxDeliver silently drops the trigger. That is the deterministic-id poison, and it is the sort of
-  thing a second implementation gets wrong.
-- **Trace continuity across the Ray boundary**: without it the estate's distributed trace goes dark at
-  submit and every job-side span is an orphan.
+WHY ENGINE KNOWLEDGE MAY LIVE HERE. It is an ADAPTER, not a consumer: the cascade reaches it through
+`service_kit.lakehouse.executor`, so swapping the engine means adding a sibling adapter rather than
+editing a workflow. That is the same role `services/compute` plays for the dashboard, and the rule
+`tests/unit/test_no_service_depends_on_a_compute_engine.py` encodes — a service may adapt an engine,
+and must not depend on one.
 """
 
 from __future__ import annotations
@@ -37,7 +26,7 @@ from typing import Literal
 import httpx
 from opentelemetry import propagate
 
-from ray_kit.schemas import RayJobFailure
+from medallion.services.ray_job_failure import RayJobFailure
 
 
 log = logging.getLogger(__name__)

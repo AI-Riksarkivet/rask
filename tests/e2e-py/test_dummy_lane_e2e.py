@@ -375,17 +375,22 @@ def driven() -> Iterator[dict[str, Any]]:
     bronze, silver = f"{base}/bronze.lance", f"{base}/silver.lance"
 
     _exec_on_head(_SEED.format(bronze=bronze))
-    # The identity and the provenance target. TO_ID/FROM_ID are CATALOG identifiers, not URIs:
-    # the graph node and the FGA object are keyed by `silver$dummy`, and emitting a storage path
-    # would name a node no grant matches — every recipient HIDDEN rather than denied.
+    # THE PLATFORM'S VOCABULARY — `WorkOrder.to_env()`'s names, because this fixture submits to the
+    # Jobs API DIRECTLY and is therefore a fourth author of the contract the medallion's submitter and
+    # the job programs share. It hand-rolled the pre-0.12 spellings and went on passing until the
+    # other three converged; that is exactly how a contract with several authors drifts.
+    #
+    # RASK_DEST_TABLE/RASK_SOURCE_TABLE are CATALOG identifiers, not URIs: the graph node and the FGA
+    # object are keyed by `silver$dummy`, and emitting a storage path would name a node no grant
+    # matches — every recipient HIDDEN rather than denied.
     env = {
-        "FROM_URI": bronze,
-        "TO_URI": silver,
-        "RUN_ID": run_id,
-        "TO_ID": f"{PROJECT}-silver$dummy",
-        "FROM_ID": f"{PROJECT}-bronze$events",
-        "PROJECT": PROJECT,
-        "ORIGINATOR": _subject_of(ADMIN_TOKEN),
+        "RASK_SOURCE_URI": bronze,
+        "RASK_DEST_URI": silver,
+        "RASK_RUN_ID": run_id,
+        "RASK_DEST_TABLE": f"{PROJECT}-silver$dummy",
+        "RASK_SOURCE_TABLE": f"{PROJECT}-bronze$events",
+        "RASK_PROJECT": PROJECT,
+        "RASK_ORIGINATOR": _subject_of(ADMIN_TOKEN),
         "LINEAGE_URL": LINEAGE_IN_CLUSTER,
         "LINEAGE_TOKEN": ADMIN_TOKEN,
     }

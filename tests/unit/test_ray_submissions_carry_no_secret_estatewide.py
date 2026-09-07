@@ -145,10 +145,11 @@ async def test_the_medallion_train_seam_is_clean(medallion_bodies: dict[str, Any
 #: Files KNOWN to build a Ray Jobs submission body, each represented by a test above.
 _REPRESENTED = {
     "services/medallion/src/medallion/services/ray_submit.py",
-    # ray-kit is the shared kernel: it SHIPS bodies callers build, and builds none itself —
-    # `submit_or_reattach(client, sub_id, body)` takes the body as an argument. The callers are the
-    # seams. If it ever grows an env-building helper, it joins the list and gets a test.
-    "packages/ray-kit/src/ray_kit/submit.py",
+    # `ray_jobs_api` is the medallion's Ray ADAPTER and the kernel the seam above rides: it SHIPS
+    # bodies its caller builds and builds none itself — `submit_or_reattach(client, sub_id, body)`
+    # takes the body as an argument. The callers are the seams. If it ever grows an env-building
+    # helper it stops being a shipper, and it already has a test here to grow into.
+    "services/medallion/src/medallion/services/ray_jobs_api.py",
 }
 
 

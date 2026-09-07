@@ -3,7 +3,7 @@
 docs/DECISIONS.md "The compute plane is decoupled" (§2.4), step 1 of the owner-ordered §7.4.
 
 `UNKNOWN` REPLACES AN OVERLOADED `None`, and that is the substantive change rather than a rename.
-`ray_kit.submit.job_status` returns `None` for a 404, and `medallion/workflow.py` disentangles THREE
+`medallion.services.ray_jobs_api.job_status` returns `None` for a 404, and `medallion/workflow.py` disentangles THREE
 distinct meanings from it by hand — not-yet-registered, record-lost, and a transport blip — using
 `seen` / `vanished` / `never_registered` / `MAX_UNSEEN_POLLS`. A port that returns `None` forces every
 caller to re-derive that.

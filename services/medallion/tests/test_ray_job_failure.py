@@ -12,8 +12,8 @@ from typing import Any
 import httpx
 import pytest
 
-from ray_kit.schemas import RayJobFailure
-from ray_kit.submit import RayJobError, job_failure
+from medallion.services.ray_job_failure import RayJobFailure
+from medallion.services.ray_jobs_api import RayJobError, job_failure
 
 
 def _client(handler: Any) -> httpx.AsyncClient:
