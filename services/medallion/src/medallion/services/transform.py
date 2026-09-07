@@ -540,11 +540,30 @@ class StageRoots(BaseModel):
     read_root: str
 
 
-async def _resolve_roots(settings: MedallionSettings, *, project: str) -> StageRoots:
+async def _resolve_roots(settings: MedallionSettings, *, project: str, from_dataset: str = "") -> StageRoots:
     """This stage's physical locations, for the tenant when there is one.
 
     Raises :class:`UnresolvableProjectError` for a project with no active warehouse — deterministic,
     and handled by the caller's dedicated except, never by falling back to the shared default roots.
+
+    THE UPSTREAM IS ASKED FOR, NOT COMPOSED (rule I2, write side answered below the read side). Every
+    path in this function composes `{root}/medallion/{namespace}` — a layout the catalog vends only by
+    coincidence. It resolves a table into the warehouse its NAMESPACE IS BOUND TO, and
+    `lance-catalog` is a reserved bucket no warehouse may claim, so a bound top-level namespace lands
+    in a different bucket entirely. Measured 2026-09-06: `bronze-media$objects` lives at
+    `s3://lakehouse-wh/medallion/bronze-media` while the chart renders
+    `s3://lance-catalog/medallion/bronze-media`.
+
+    The catalog's answer becomes the upstream AND the confinement root, which NARROWS rather than
+    widens what a trigger may name: a specific dataset URI in place of everything under a root. That
+    is the tighter half of the choice `_confine_from_uri` records as open ("the catalog's connection
+    root is the candidate, and it is not free, because `lance.stageBucket` can zone a namespace into a
+    bucket that root does not contain") — a per-table answer has no such hole.
+
+    Three answers, three behaviours. A stated location IS the upstream; a table the catalog does not
+    govern (4xx -> ``None``) keeps the composed path, which is correct for an external producer; a
+    catalog that cannot be ASKED raises, so the handler RETRIES rather than reading a path that may
+    not be the governed copy.
     """
     # #84: resolve THIS stage's roots for a tenant trigger — the registry read is blocking IO
     # (threadpool). No active warehouse is deterministic → the dedicated except below records the
@@ -571,6 +590,23 @@ async def _resolve_roots(settings: MedallionSettings, *, project: str) -> StageR
         gold_root = await run_in_threadpool(project_gold_root, settings.control_root, settings.storage_options(), project)
         if gold_root is not None:
             to_uri = f"{gold_root}/medallion/{settings.to_namespace}"
+
+    # ASKED LAST, so it overrides every composed answer above — including the tenant one, where the
+    # catalog vends `{warehouse}/{hash}_{ns}${name}` and this composed `{root}/medallion/{tier}`.
+    if settings.catalog_url and from_dataset:
+        vended = await run_in_threadpool(
+            partial(
+                catalog_register.describe_table_location,
+                catalog_url=settings.catalog_url,
+                table_id=from_dataset,
+                token=settings.catalog_token,
+                app_token=settings.app_api_token,
+                service_identity=settings.catalog_service_identity,
+                dedicated_token=dedicated_token_for(settings),
+            )
+        )
+        if vended:
+            from_uri = read_root = vended
 
     return StageRoots(from_uri=from_uri, to_uri=to_uri, read_root=read_root)
 
@@ -1567,7 +1603,7 @@ async def handle_stage(
     # lane runs this handler TWICE for one run, so a fresh stamp on the second pass is a second clock.
     event_time = trigger.event_time or datetime.now(UTC).isoformat()
     try:
-        roots = await _resolve_roots(settings, project=project)
+        roots = await _resolve_roots(settings, project=project, from_dataset=identity.from_dataset)
         from_uri = _confine_from_uri(trigger, from_uri=roots.from_uri, read_root=roots.read_root, transition=transition, token=token, project=project)
         if from_uri is None:
             return _DROP

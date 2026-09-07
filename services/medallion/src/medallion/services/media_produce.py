@@ -24,6 +24,7 @@ import json
 import logging
 from functools import partial
 
+import pyarrow as pa
 import pyarrow.fs as pafs
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
@@ -34,7 +35,7 @@ from PIL import Image
 from medallion.core.config import MedallionSettings, dedicated_token_for
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register
-from medallion.services.ingest import IngestResult, ingest_to_bronze
+from medallion.services.ingest import IngestResult, ingest_schema_for, ingest_to_bronze
 from service_kit import dapr_publish
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.objectfs import s3_filesystem
@@ -71,9 +72,21 @@ def _png(color: tuple[int, int, int]) -> bytes:
     return buffer.getvalue()
 
 
-def _seed_and_ingest(settings: MedallionSettings) -> IngestResult:
+def media_bronze_schema() -> pa.Schema:
+    """The schema the media bronze table is created with — what `ingest_to_bronze` will land.
+
+    `ensure_stage_output` only needs A schema (its `overwrite` replaces it wholesale), but handing it
+    the real one means the table the catalog mints never briefly describes a shape nothing writes.
+    """
+    return ingest_schema_for(None)
+
+
+def _seed_and_ingest(settings: MedallionSettings, bronze_uri: str) -> IngestResult:
     """Blocking half (S3 + Lance IO — callers threadpool it): optionally seed the demo samples into the
-    source prefix, then land every source object as a bronze blob-v2 row."""
+    source prefix, then land every source object as a bronze blob-v2 row at ``bronze_uri``.
+
+    The URI is PASSED rather than read off settings: it is the catalog's answer, and the configured
+    `MEDALLION_MEDIA_BRONZE_URI` is only the fallback for an estate with no catalog at all."""
     fs = _filesystem(settings)
     if settings.media_seed_samples:
         for name, color in _SAMPLES:
@@ -83,7 +96,7 @@ def _seed_and_ingest(settings: MedallionSettings) -> IngestResult:
     source = S3FileSystemSource(fs, settings.media_source_bucket, settings.media_source_prefix)
     return ingest_to_bronze(
         source,
-        settings.media_bronze_uri,
+        bronze_uri,
         settings.storage_options(),
         max_objects=settings.ingest_max_objects,
         max_total_bytes=settings.ingest_max_total_bytes,
@@ -156,15 +169,15 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         # `table_registered` control event and the REGISTER_TABLE lineage marker are the ones that door
         # already emits. `_bronze_write_dataset` excludes `register_table` as byte-free, so the marker
         # fires no cascade on either lane.
+        bronze_uri = settings.media_bronze_uri
         if settings.catalog_url:
             try:
-                await run_in_threadpool(
+                bronze_uri = await run_in_threadpool(
                     partial(
-                        catalog_register.register_written_dataset,
+                        catalog_register.ensure_stage_output,
                         catalog_url=settings.catalog_url,
-                        catalog_root=settings.catalog_root,
                         table_id=settings.media_bronze_dataset,
-                        dataset_uri=settings.media_bronze_uri,
+                        schema=media_bronze_schema(),
                         delimiter=settings.delimiter,
                         token=settings.catalog_token,
                         app_token=settings.app_api_token,
@@ -173,15 +186,19 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
                     )
                 )
             except catalog_register.RegisterError as exc:
-                span.set_status(Status(StatusCode.ERROR, "register_failed"))
+                span.set_status(Status(StatusCode.ERROR, "resolve_failed"))
                 log.warning(
-                    "medallion_media_register_failed",
+                    "medallion_media_resolve_failed",
                     extra={"token": token, "dataset": settings.media_bronze_dataset, "error": str(exc)},
                 )
                 return {"status": "register_failed", "token": token}
         # Idempotency: reuse a caller-supplied key (its 503-retry contract) so a retry MERGEs on the same
         # deterministic run_ids instead of double-firing the media chain (bug hunt 2026-07-13).
-        result = await run_in_threadpool(_seed_and_ingest, settings)
+        #
+        # WRITTEN WHERE THE CATALOG SAID, not where the chart composed. `mode="overwrite"` in
+        # `ingest_to_bronze` replaces the schema wholesale, so the empty table the create minted exists
+        # only to give this URI an owner and a `table:` object.
+        result = await run_in_threadpool(_seed_and_ingest, settings, bronze_uri)
         span.set_attribute("lance.write.version", result.version)
         span.set_attribute("lance.write.row_count", result.row_count)
         event = build_run_event(
@@ -202,7 +219,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
             output_name=settings.media_bronze_dataset,
             version=result.version,
             row_count=result.row_count,
-            source_uri=settings.media_bronze_uri,
+            source_uri=bronze_uri,
             schema_fields=result.fields,  # blob-aware: the graph shows payload:blob at the media head (#24)
             token=token,
             # `author` is the SERVICE that performed the ingest; `originator` is the person who asked for
@@ -250,6 +267,13 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
                 "token": token,
                 "dataset": settings.media_bronze_dataset,
                 "namespace": settings.media_bronze_namespace,
+                # I2 FROM THE CONSUMING END. The mover composes `{root}/medallion/{namespace}` when the
+                # trigger names no upstream, and the catalog vends this table into whichever warehouse
+                # its namespace is BOUND to — a different bucket entirely once a binding exists. Without
+                # this field the media lane's first leg opens a path nothing wrote to, finds no rows,
+                # and acks 200: dead, with nothing red. `/bronze-arrival` already carries it for the
+                # tabular lane; this is the media lane's half of the same rule.
+                "from_uri": bronze_uri,
                 # The human the chain is for, threaded past the head. `/produce`'s cascade reads this
                 # back off the bronze event in `_cascade_originator`; the media head fires its own
                 # trigger instead, so without it the sub died at bronze and every derive below authored

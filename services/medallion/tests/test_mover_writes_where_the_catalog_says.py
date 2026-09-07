@@ -77,6 +77,10 @@ def wrote_to(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
         "ensure_stage_output",
         lambda **k: str(upstream / VENDED),
     )
+    # The mover asks the catalog TWICE: where to WRITE (above) and where its UPSTREAM lives. `None` is
+    # the catalog's "I govern no such table", which keeps this suite on its composed upstream — the
+    # subject here is the WRITE location, and a vended upstream would change what is read, not where.
+    monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
     return written
 
 
@@ -135,6 +139,7 @@ class TestThereIsNothingLeftToRegister:
 
         asked: list[dict[str, Any]] = []
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **k: asked.append(k) or str(upstream / "vended.lance"))
+        monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
 
         asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream), _event()))
 

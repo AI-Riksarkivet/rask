@@ -85,6 +85,7 @@ def order(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
         return real_write(from_uri, str(upstream / "actual.lance"), *a, **k)
 
     monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", _ask)
+    monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
     monkeypatch.setattr(inprocess_executor, "transform_stage", _write)
     return seen
 

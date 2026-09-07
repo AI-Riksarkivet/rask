@@ -14,7 +14,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from ingest.runtime import BRONZE_SCHEMA
-from medallion.services.ingest import _ingest_schema  # noqa: PLC2701 — the writer's real schema, not a copy
+from medallion.services.ingest import ingest_schema_for  # the writer's real schema, not a copy
 
 
 #: What every bronze page row must carry regardless of which plane wrote it: identity, provenance,
@@ -23,7 +23,7 @@ _GOVERNED_CORE = {"id", "source_uri", "payload", "sha256", "stage"}
 
 
 def test_the_governed_core_is_present_in_BOTH_writers() -> None:
-    medallion_schema = _ingest_schema(None)
+    medallion_schema = ingest_schema_for(None)
     for name in sorted(_GOVERNED_CORE):
         assert name in BRONZE_SCHEMA.names, f"ingest plane bronze lacks {name!r}"
         assert name in medallion_schema.names, f"medallion bronze lacks {name!r}"
@@ -33,7 +33,7 @@ def test_shared_columns_agree_on_type() -> None:
     """Same name, same type — a reader that projects a shared column must not care which head wrote
     the dataset. Compared as name→type (column ORDER already differs between the writers and no
     reader depends on it)."""
-    medallion_schema = _ingest_schema(None)
+    medallion_schema = ingest_schema_for(None)
     ingest_types = {f.name: f.type for f in BRONZE_SCHEMA}
     medallion_types = {f.name: f.type for f in medallion_schema}
     shared = set(ingest_types) & set(medallion_types)
@@ -46,4 +46,4 @@ def test_the_fixity_column_is_a_string_in_both() -> None:
     """The digest is a hex STRING (the medallion's #92 shape) — not binary, not nullable-by-accident
     in one plane only. Pinned separately because fixity is the column #99 exists for."""
     assert BRONZE_SCHEMA.field("sha256").type == pa.string()
-    assert _ingest_schema(None).field("sha256").type == pa.string()
+    assert ingest_schema_for(None).field("sha256").type == pa.string()

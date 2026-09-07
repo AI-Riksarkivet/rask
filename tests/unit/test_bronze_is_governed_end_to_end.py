@@ -258,11 +258,16 @@ async def _ingest_media_once(catalog: Any, tmp_path: Path, monkeypatch: pytest.M
     # Two distinct payloads: bronze `id` is positional and the blob column must round-trip both.
     (source / "img-a.bin").write_bytes(b"\x89PNG-a" * 64)
     (source / "img-b.bin").write_bytes(b"\x89PNG-b" * 128)
-    bronze_uri = f"file://{catalog.root}/medallion/bronze-media"
+    composed_uri = f"file://{catalog.root}/medallion/bronze-media"
+    #: Where the head ACTUALLY wrote — the catalog's answer, which this fixture does not predict. The
+    #: composed URI above is only what the chart would render; asserting against it would assert the
+    #: guess rather than the resolution, and the two differ the moment a namespace is warehouse-bound.
+    resolved: list[str] = []
 
-    def seed_and_ingest(_settings: MedallionSettings) -> IngestResult:
+    def seed_and_ingest(_settings: MedallionSettings, bronze_uri: str) -> IngestResult:
         # The SHIPPED ingest, with only the byte source's protocol swapped — same blob_field schema,
         # same data_storage_version="2.2", same single atomic overwrite commit.
+        resolved.append(bronze_uri)
         return ingest_to_bronze(LocalDirSource(source), bronze_uri, {})
 
     monkeypatch.setattr(media_module, "_seed_and_ingest", seed_and_ingest)
@@ -278,14 +283,15 @@ async def _ingest_media_once(catalog: Any, tmp_path: Path, monkeypatch: pytest.M
             "MEDALLION_S3_ENDPOINT": "http://127.0.0.1:9",
             "MEDALLION_S3_SECRET_ACCESS_KEY": "x",
             "MEDALLION_MEDIA_SOURCE_BUCKET": "lance-catalog",
-            "MEDALLION_MEDIA_BRONZE_URI": bronze_uri,
+            "MEDALLION_MEDIA_BRONZE_URI": composed_uri,
             "MEDALLION_CATALOG_ROOT": f"file://{catalog.root}",
             "MEDALLION_CATALOG_URL": catalog.url,
         }
     )
     dapr = _FakeDapr()
     result = await media_module.ingest_media(cast("Any", dapr), settings, token="idem-media-e2e", originator=None)
-    return result, dapr, bronze_uri
+    assert resolved, f"the head never reached the write: {result}"
+    return result, dapr, resolved[0]
 
 
 @pytest.fixture
@@ -308,10 +314,15 @@ def test_an_ingested_media_bronze_holds_a_catalog_record(catalog: Any, ingested_
 
 def test_the_media_policy_door_that_404d_now_answers(catalog: Any, ingested_media: tuple[dict[str, str], _FakeDapr, str]) -> None:
     """The measured symptom on this lane: retention/legal-hold was unreachable for the media head's tier."""
+    _, _, bronze_uri = ingested_media
     response = _post(catalog.url, "/v1/table/bronze-media$objects/policy/set", {"retain_versions": 5})
 
     assert response.status_code == 200, f"no retention override is reachable for an ingested media bronze: {response.text[:300]}"
-    assert response.json()["path"].endswith("/medallion/bronze-media")
+    # THE POLICY MUST GOVERN THE BYTES THAT WERE WRITTEN, so this compares against the location the
+    # head resolved rather than a composed suffix. The `dir` backend vends the FLAT
+    # `<root>/<hash>_<ns>$<name>` layout, never `{root}/medallion/{tier}` — asserting the latter
+    # asserted the guess the head used to make, and would pass again the day it stopped asking.
+    assert response.json()["path"] == bronze_uri, "the policy governs a different copy than the media head wrote"
 
 
 def test_the_media_doors_are_shut_until_the_head_registers(catalog: Any) -> None:
@@ -334,9 +345,10 @@ def test_registering_the_media_bronze_seeds_the_ownership_tuples(catalog: Any, i
 def test_registration_left_the_blob_typing_alone(ingested_media: tuple[dict[str, str], _FakeDapr, str]) -> None:
     """Concern 3, measured rather than argued: this tier holds blob-v2 columns, and the media lane
     round-trips them natively precisely because nothing in the write path goes through `lance_ray`
-    (whose write strips blob typing). Registration is a metadata-only HTTP call made BEFORE the write,
-    so the committed dataset must still carry the blob encoding on `payload` — and the bytes must come
-    back."""
+    (whose write strips blob typing). Resolving the location is a metadata-only HTTP exchange made
+    BEFORE the write — and the empty table the catalog's create mints is replaced wholesale by the
+    ingest's `mode="overwrite"` — so the committed dataset must still carry the blob encoding on
+    `payload`, and the bytes must come back."""
     import lance
 
     from service_kit.lancekit import blobs

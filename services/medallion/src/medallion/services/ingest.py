@@ -66,7 +66,13 @@ _INGEST_SCHEMA = pa.schema(
 type ExtraColumns = Mapping[str, Callable[[SourceObject], str]]
 
 
-def _ingest_schema(extra_columns: ExtraColumns | None) -> pa.Schema:
+def ingest_schema_for(extra_columns: ExtraColumns | None) -> pa.Schema:
+    """The bronze ingest schema, with any lane-specific extra string columns appended.
+
+    PUBLIC because it has consumers outside this module: the media head creates its bronze table
+    through the catalog and hands it this, and `test_bronze_writers_compat` compares the writers
+    against the writer's real schema rather than a copy of it.
+    """
     fields = list(_INGEST_SCHEMA)
     for name in extra_columns or {}:
         fields.append(pa.field(name, pa.string()))
@@ -102,7 +108,7 @@ def _chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraC
     for name, extract in (extra_columns or {}).items():
         columns[name] = pa.array([extract(obj) for obj in chunk], pa.string())
     columns[_STAGE_COLUMN] = pa.array([_BRONZE_STAGE] * len(chunk), pa.string())
-    return pa.record_batch(columns, schema=_ingest_schema(extra_columns))
+    return pa.record_batch(columns, schema=ingest_schema_for(extra_columns))
 
 
 def ingest_to_bronze(
@@ -193,7 +199,7 @@ def ingest_to_bronze(
         dataset = lance.write_dataset(
             batches(),
             bronze_uri,
-            schema=_ingest_schema(extra_columns),
+            schema=ingest_schema_for(extra_columns),
             mode="overwrite",
             storage_options=storage_options,
             data_storage_version="2.2",

@@ -198,7 +198,7 @@ async def test_the_media_head_span_goes_ERROR_when_its_emit_fails(monkeypatch: p
 
     tracer, exporter = _recording_tracer()
     monkeypatch.setattr(media_module, "tracer", tracer)
-    monkeypatch.setattr(media_module, "_seed_and_ingest", lambda settings: _SeedResult())
+    monkeypatch.setattr(media_module, "_seed_and_ingest", lambda settings, bronze_uri: _SeedResult())
     monkeypatch.setattr(media_module.outbox, "publish_lineage_with_outbox", _failing_publish)
 
     result = await media_module.ingest_media(cast("Any", None), _media_settings(), token="idem-media")

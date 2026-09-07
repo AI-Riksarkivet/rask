@@ -57,7 +57,7 @@ def _emit_and_capture(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Run the head and return the lineage event it published."""
     import medallion.services.media_produce as mod
 
-    monkeypatch.setattr(mod, "_seed_and_ingest", lambda _s: _RESULT)
+    monkeypatch.setattr(mod, "_seed_and_ingest", lambda _s, _uri: _RESULT)
     dapr = _FakeDapr()
     asyncio.run(ingest_media(cast(DaprClient, dapr), _settings(), token="idem-test"))
     return dapr.published[0][1]
@@ -75,7 +75,7 @@ def test_disabled_head_refuses_instead_of_dummying() -> None:
 def test_ingest_emits_lineage_then_publishes_media_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
     import medallion.services.media_produce as mod
 
-    monkeypatch.setattr(mod, "_seed_and_ingest", lambda _s: _RESULT)
+    monkeypatch.setattr(mod, "_seed_and_ingest", lambda _s, _uri: _RESULT)
     dapr = _FakeDapr()
     settings = _settings()
 
@@ -100,7 +100,7 @@ def test_ingest_emits_lineage_then_publishes_media_trigger(monkeypatch: pytest.M
 def test_publish_failure_surfaces_as_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
     import medallion.services.media_produce as mod
 
-    monkeypatch.setattr(mod, "_seed_and_ingest", lambda _s: _RESULT)
+    monkeypatch.setattr(mod, "_seed_and_ingest", lambda _s, _uri: _RESULT)
     result = asyncio.run(ingest_media(cast(DaprClient, _FakeDapr(fail=True)), _settings(), token="idem-test"))
     assert result["status"] == "publish_failed"  # → the route's 503 + Retry-After
 

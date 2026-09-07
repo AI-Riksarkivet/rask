@@ -82,6 +82,7 @@ def published(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
     # catalog URL would make a real HTTP call; the stub hands back a path under tmp_path so the
     # compute still lands somewhere writable.
     monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(tmp_path / "vended.lance"))
+    monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
     return asks
 
 
@@ -117,6 +118,7 @@ class TestARefusalBecomesTheHold:
         holds: list[Any] = []
 
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
+        monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
         monkeypatch.setattr(
             transform.catalog_register,
             "publish_stage_output",
@@ -163,6 +165,7 @@ class TestTheDefaultIsUntouched:
         """
         called: list[Any] = []
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
+        monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
         monkeypatch.setattr(transform.catalog_register, "publish_stage_output", lambda **k: called.append(k))
         dapr = _Dapr()
 

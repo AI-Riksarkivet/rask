@@ -84,6 +84,7 @@ def _stub_catalog(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[dict[
     # The lane's REAL output URI. Returning a path the lane never writes makes the predecessor
     # unreadable and the stage RETRY -- a stub that lies about the vended location tests nothing.
     monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "enriched.lance"))
+    monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
     monkeypatch.setattr(transform.catalog_register, "publish_stage_output", lambda **k: published.append(k))
     return published
 
