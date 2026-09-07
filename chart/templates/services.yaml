@@ -598,12 +598,23 @@ spec:
                    env. Ingest joins it through `ingest.service_identity`, which is ONE builder for both
                    of its doors — a subject privileged at one door and ordinary at the other cannot
                    satisfy both, since `service_principal` refuses the shared token from a privileged
-                   name AND a dedicated one from an ordinary name. `notifications` remains on the shared
-                   token: it needs a service change first, and naming a subject privileged before it can
-                   present its own credential 401s it outright (measured 2026-08-26). */}}
+                   name AND a dedicated one from an ordinary name. `notifications` joins them through
+                   `notifications.api.service_identity` — the LAST holder of the shared bearer, and the
+                   one whose refusal hides best: its reconciler WALKS `GET /events` to catch what the
+                   bus provably misses, and a refused walk returns no rows rather than an error, so a
+                   401 there is a quietly incomplete inbox rather than a failure. */}}
             {{- $lineagePrivileged := concat (compact $lineageWriters | uniq) (list .Values.medallion.train.trainerIdentity .Values.frontend.serviceIdentity) }}
             {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
               {{- $lineagePrivileged = append $lineagePrivileged . }}
+            {{- end }}
+            {{- /* notifications carries its identity's CODE DEFAULT as the fallback, for the reason the
+                   allowlist above already records: `env` is a values KEY, so `--reuse-values` against an
+                   older chart drops a key that did not exist then, and `IngressSettings.service_identity`
+                   defaults to `notifications` regardless. Defaulting the PRIVILEGED set to the same
+                   literal the app defaults to is what keeps the two halves agreeing with no values at
+                   all. */}}
+            {{- if .Values.services.notifications }}
+              {{- $lineagePrivileged = append $lineagePrivileged ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
             {{- end }}
             - { name: LINEAGE_PRIVILEGED_SUBJECTS, value: {{ compact $lineagePrivileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}

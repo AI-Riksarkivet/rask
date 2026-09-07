@@ -195,6 +195,7 @@ spec:
                 {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
+                {{- if $.Values.services.notifications }}{{- $privileged = append $privileged ((get ($.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
                 service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) }} \
                 {{- end }}

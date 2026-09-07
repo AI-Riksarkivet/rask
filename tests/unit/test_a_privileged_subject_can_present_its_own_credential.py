@@ -66,7 +66,7 @@ def _privileged(env_name: str) -> set[str]:
 def test_the_discovery_finds_the_services_that_have_one() -> None:
     """A grep matching nothing would make the assertions below vacuous."""
     have = _services_with_a_client_half()
-    assert {"medallion", "maintenance", "ingest"} <= have, f"only {sorted(have)} define dedicated_token_for — has it been renamed?"
+    assert {"medallion", "maintenance", "ingest", "notifications"} <= have, f"only {sorted(have)} define dedicated_token_for — has it been renamed?"
 
 
 def test_every_catalog_privileged_subject_belongs_to_a_service_that_can_present_one() -> None:
@@ -87,12 +87,13 @@ def test_every_catalog_privileged_subject_belongs_to_a_service_that_can_present_
 
 
 def test_the_services_with_NO_client_half_are_NOT_privileged() -> None:
-    """The other direction, and the one that would actually break the estate. `notifications` reads no
-    dedicated token; naming it privileged refuses it outright.
+    """The other direction, and the one that would actually break the estate: a subject named
+    privileged before it can present its own credential is refused outright.
 
-    Written as a RULE over the pair rather than a list of the services that happen to lack one, so a
-    service that gains a client half is admitted by this test without editing it, and one that loses
-    it is caught."""
+    EVERY subject now has a client half, so this passes vacuously today — and it is kept for exactly
+    that reason. It is written as a RULE over the pair rather than a list of services that happen to
+    lack one, so the next service to be named privileged is checked by this file already existing
+    rather than by someone remembering to add it."""
     have = _services_with_a_client_half()
     subjects = _privileged("LANCE_PRIVILEGED_SUBJECTS") | _privileged("LINEAGE_PRIVILEGED_SUBJECTS")
     for service, subject in (("ingest", "service-ingest"), ("notifications", "notifications")):
@@ -152,3 +153,29 @@ def test_every_privileged_subject_has_its_token_SEEDED() -> None:
         f"privileged but unseeded: {sorted(missing)} — each resolves to None, falls back to the shared "
         "bearer, and is refused by the door that demands its dedicated one"
     )
+
+
+def test_notifications_is_privileged_now_that_it_can_present_one() -> None:
+    """F2-3's LAST subject, and the row closes with it. Notifications calls ONE door — lineage's feed —
+    so unlike ingest there is no second list to agree with; what makes it worth the same treatment is
+    the direction its refusal fails. The reconciler walks `GET /events` to catch what the bus provably
+    misses, and a refused walk returns no rows rather than an error, so a 401 there is a quietly
+    incomplete inbox rather than a failure anyone sees."""
+    assert "notifications" in _services_with_a_client_half(), "notifications lost its client half"
+    assert "notifications" in _privileged("LINEAGE_PRIVILEGED_SUBJECTS"), "notifications has a client half nothing demands"
+
+
+def test_NO_SUBJECT_holds_the_shared_bearer_any_more() -> None:
+    """THE ROW ITSELF. F2-3 is "kill the one shared service bearer", and it is closed when every
+    privileged subject's service can present its own — asserted over the RENDERED set rather than a
+    written list, so a subject added later is covered by this file existing."""
+    have = _services_with_a_client_half()
+    owners = {
+        "service-maintenance": "maintenance",
+        "service-ingest": "ingest",
+        "notifications": "notifications",
+        "service-web": None,  # the BFF reads its token from env; it needs no client half
+    }
+    subjects = _privileged("LANCE_PRIVILEGED_SUBJECTS") | _privileged("LINEAGE_PRIVILEGED_SUBJECTS")
+    unready = [s for s in sorted(subjects) if (owner := owners.get(s)) is not None and owner not in have]
+    assert not unready, f"privileged with no client half: {unready} — every call they make will 401"

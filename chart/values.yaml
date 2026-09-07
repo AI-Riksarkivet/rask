@@ -377,6 +377,10 @@ services:
       # grants allow. A deployment that admits it and grants it nothing gets a reconciler that runs
       # cleanly and reconciles nothing — the quiet failure this whole lane exists to prevent.
       RASK_LINEAGE_SERVICE_IDENTITY: notifications
+      # notifications presents its OWN `service-token-notifications` at lineage's door, resolved from
+      # the store by `notifications.api.service_identity`. Explicitly opt-in like its siblings: a dev
+      # stack has no store, and reading one unconditionally fails closed on a working configuration.
+      RASK_NOTIFICATIONS_SECRETS_FROM_DAPR: "true"
     waitFor: []
   gateway:
     module: "gateway:app"

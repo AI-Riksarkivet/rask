@@ -20,6 +20,7 @@ from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI, Request
 
 from notifications.api.reconciler import LineageCursorStore, LineageFeedClient
+from notifications.api.service_identity import feed_token
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
@@ -95,7 +96,10 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             client=app.state.http,
             base_url=ingress.feed_base_url,
             identity=ingress.service_identity,
-            token=ingress.app_api_token,
+            # ITS OWN CREDENTIAL WHEN THE STORE HAS ONE (F2-3). Resolved here rather than in the
+            # client, because the lifespan is where a store read belongs: once per process, not once
+            # per cron tick, and a failure surfaces at boot instead of as a quietly empty walk.
+            token=feed_token(ingress),
             timeout_seconds=ingress.feed_timeout_seconds,
             page_limit=ingress.feed_page_limit,
         )

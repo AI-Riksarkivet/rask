@@ -93,6 +93,22 @@ class IngressSettings(BaseSettings):
     #: `SecretStr` so it cannot land in a log line or a repr by accident.
     app_api_token: SecretStr | None = Field(default=None, alias="APP_API_TOKEN")
 
+    #: Whether this deployment's DEDICATED credential comes from the store
+    #: (`service_identity.dedicated_token_for`). Symmetric with `MAINTENANCE_SECRETS_FROM_DAPR` and
+    #: `RASK_INGEST_SECRETS_FROM_DAPR`, and OFF by default for the same reason: a dev stack has no
+    #: store, and a service that reads one unconditionally fails closed on a configuration that works.
+    secrets_from_dapr: bool = Field(default=False, alias="RASK_NOTIFICATIONS_SECRETS_FROM_DAPR")
+    #: THE ONE STORE, NAMED ONCE. `RASK_SECRET_STORE` is the estate-wide name every governed service
+    #: already reads; the per-service alias stays FIRST so one service can be moved on its own.
+    secret_store: str = Field(
+        default="lance-secrets",
+        validation_alias=AliasChoices("RASK_NOTIFICATIONS_SECRET_STORE", "RASK_SECRET_STORE"),
+    )
+    secret_key: str = Field(
+        default="lance",
+        validation_alias=AliasChoices("RASK_NOTIFICATIONS_SECRET_KEY", "RASK_SECRET_KEY"),
+    )
+
     #: Rows per `GET /events` page. 500 is the server's own hard cap (`runs.py` `_EVENTS_RETURN`), so a
     #: larger value here would be silently truncated and the walk would think it had reached the floor.
     feed_page_limit: int = Field(default=500, ge=1, le=500, alias="RASK_NOTIFICATIONS_FEED_PAGE_LIMIT")
