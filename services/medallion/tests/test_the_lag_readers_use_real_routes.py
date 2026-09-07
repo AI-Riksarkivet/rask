@@ -100,10 +100,25 @@ def test_a_catalog_error_RAISES_so_the_tick_counts_it_failed(monkeypatch: pytest
         published_reader(_Settings())("bronze->silver", "acme")
 
 
-def test_the_consumed_reader_asks_the_RUNS_board(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = _capture(monkeypatch, {"runs": [{"outputs": ["acme-silver$features"], "consumed_to_version": 5, "consumed_from_version": 2}]})
+def test_the_consumed_reader_asks_ABOUT_THE_DATASET_not_the_whole_board(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lag verdict must not depend on how many runs the estate happens to hold.
+
+    This read answered "what has this lane consumed?" by downloading the entire run board and
+    filtering it for runs whose outputs named the lane's destination. That is O(estate) for a
+    per-dataset question, and once `/runs` was bounded to its newest page (2026-09-07) it became
+    SILENTLY PARTIAL: a lane whose consuming runs have aged off the page reports fewer ranges than it
+    has, and `lag_for_edge` turns a short answer into a confident number.
+
+    So it asks the dataset. `/datasets/{name}/producers` is answered from
+    `MATCH (r:Run)-[:WROTE]->(d:Dataset {name:$name})`, which is the question, and it carries the
+    run's consumed range because that range is a property of the run that wrote this dataset.
+    """
+    seen = _capture(monkeypatch, {"dataset": "acme-silver$features", "producers": [{"run_id": "r1", "consumed_to_version": 5, "consumed_from_version": 2}]})
+
     assert consumed_reader(_Settings())("bronze->silver", "acme") == [ConsumedRange(from_version=2, to_version=5)]
-    assert seen and seen[0].endswith("/runs"), seen
+    assert seen, "the reader asked lineage nothing"
+    assert seen[0].endswith("/producers"), f"the reader fetched {seen[0]!r} — a per-dataset question must not be answered by the run board"
+    assert "acme-silver%24features" in seen[0] or "acme-silver$features" in seen[0], f"the dataset is not named in the URL: {seen[0]!r}"
 
 
 def test_the_published_reader_asks_for_a_TABLE_THAT_EXISTS(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,18 +153,21 @@ def test_the_consumed_reader_MATCHES_ONE_TENANT_not_every_lookalike(monkeypatch:
     `silver-media$features`. Measured against the real reader, one tenant's edge read another tenant's
     consumed version and a fan-out lane's as its own: with acme at 3 and beta at 9, acme reported 9 —
     ahead of its own source, which `lag_for_edge` then reports UNKNOWN, so the edge went dark.
+
+    THE ISOLATION NOW LIVES IN THE QUERY rather than in a filter this reader applies, so this asserts
+    the URL: `/datasets/{name}/producers` matches `{name:$name}` exactly, and a request that named the
+    bare namespace would be answered about a different dataset. Naming the wrong thing is the failure
+    mode that survives moving the match server-side.
     """
-    _capture(
-        monkeypatch,
-        {
-            "runs": [
-                {"outputs": ["acme-silver$features"], "consumed_from_version": None, "consumed_to_version": 3},
-                {"outputs": ["beta-silver$features"], "consumed_from_version": None, "consumed_to_version": 9},
-                {"outputs": ["acme-silver-media$features"], "consumed_from_version": None, "consumed_to_version": 42},
-            ]
-        },
-    )
+    seen = _capture(monkeypatch, {"dataset": "acme-silver$features", "producers": [{"consumed_from_version": None, "consumed_to_version": 3}]})
+
     assert consumed_reader(_Settings())("bronze->silver", "acme") == [ConsumedRange(from_version=None, to_version=3)]
+    asked = seen[0]
+    assert asked.endswith("/producers")
+    assert "acme-silver%24features/producers" in asked or "acme-silver$features/producers" in asked, (
+        f"the reader asked about {asked!r} — a project-qualified dataset, not a bare namespace, is what keeps one tenant's lag out of another's"
+    )
+    assert "beta" not in asked
 
 
 def test_the_consumed_reader_returns_EVERY_range_not_just_the_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,10 +176,11 @@ def test_the_consumed_reader_returns_EVERY_range_not_just_the_ceiling(monkeypatc
     _capture(
         monkeypatch,
         {
-            "runs": [
-                {"outputs": ["acme-silver$features"], "consumed_from_version": None, "consumed_to_version": 3},
-                {"outputs": ["acme-silver$features"], "consumed_from_version": 5, "consumed_to_version": 8},
-            ]
+            "dataset": "acme-silver$features",
+            "producers": [
+                {"consumed_from_version": None, "consumed_to_version": 3},
+                {"consumed_from_version": 5, "consumed_to_version": 8},
+            ],
         },
     )
     assert consumed_reader(_Settings())("bronze->silver", "acme") == [

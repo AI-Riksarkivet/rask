@@ -555,7 +555,7 @@ class LineageRepository:
 
     async def producers(self, name: str) -> Producers:
         """The runs that wrote (or failed to write) ``name`` — who / when / how / version / error."""
-        rows = await fetch(self._pool, self._graph, cy.PRODUCERS, {"name": name}, columns=12)
+        rows = await fetch(self._pool, self._graph, cy.PRODUCERS, {"name": name}, columns=14)
         return Producers(
             dataset=name,
             producers=[
@@ -578,6 +578,10 @@ class LineageRepository:
                     # The catalog op (drop_table/rename_table/create_table/…) so a reader can tell a drop from
                     # a plain versionless write without cross-referencing /events; "" maps back to None.
                     operation=(r[11] or None),
+                    # The range this run CONSUMED. Guarded like the board's copy: AGE answers -1 for an
+                    # absent integer property, and a negative version is not a version.
+                    consumed_from_version=(r[12] if len(r) > 12 and isinstance(r[12], int) and not isinstance(r[12], bool) and r[12] >= 0 else None),
+                    consumed_to_version=(r[13] if len(r) > 13 and isinstance(r[13], int) and not isinstance(r[13], bool) and r[13] >= 0 else None),
                 )
                 for r in rows
             ],

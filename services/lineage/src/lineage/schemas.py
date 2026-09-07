@@ -73,9 +73,16 @@ class ProducerInfo(BaseModel):
     the checks it ran (from the standard ``dataQualityAssertions`` facet); ``quality_passed=False`` with a
     real ``dataset_version`` is the auditable record of a batch the gate blocked from promotion. Both are
     ``None`` / empty when the quality gate did not run.
+
+    ``consumed_from_version`` / ``consumed_to_version`` are the Lance version RANGE this run consumed
+    to produce the write, when it pinned one. They ride the per-dataset read so "what has this lane
+    consumed?" is a question about the DATASET — a scan of the whole run board answers it only while
+    every relevant run is still on the board, which is a property of the data rather than of the code.
     """
 
     run_id: str
+    consumed_from_version: int | None = None
+    consumed_to_version: int | None = None
     author: str | None = None
     event_time: str | None = None
     event_type: str | None = None

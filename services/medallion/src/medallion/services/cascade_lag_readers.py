@@ -179,22 +179,28 @@ def consumed_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings seam
         if dataset is None:
             raise LookupError(f"lane {lane!r} declares no destination dataset; set MEDALLION_LANE_DESTINATION_DATASETS")
         wanted = project_namespace(project, dataset)
-        # `/runs`, NOT `/api/v1/runs`. Lineage mounts its run board at the root — measured live
-        # 2026-09-04 by probing all three spellings against the deployed service: `/v1/runs` 404,
-        # `/api/v1/runs` 404, `/runs` 401 (present, and asking for the credential below). This is the
-        # SECOND instance of the same defect in this file's short history, the first being a catalog
-        # route that did not exist; a route is not a thing to derive from a prefix convention.
-        url = f"{str(settings.train_lineage_url).rstrip('/')}/runs"
+        # ASK ABOUT THE DATASET, not about the estate. `/datasets/{name}/producers` is answered from
+        # `MATCH (r:Run)-[:WROTE]->(d:Dataset {name:$name})` — the question this reader is actually
+        # asking — and carries each run's consumed range, because that range is a property of the run
+        # that wrote this dataset. Scanning the run board for the same answer is O(estate), and once
+        # the board became bounded it went silently PARTIAL: a lane whose consuming runs have aged off
+        # the newest page reports fewer ranges than it has, and `lag_for_edge` publishes a confident
+        # number from a short answer.
+        #
+        # ROUTE SPELLING IS MEASURED, NOT DERIVED. Lineage mounts these routers at the ROOT: probing
+        # the deployed service 2026-09-04 gave `/v1/runs` 404, `/api/v1/runs` 404, `/runs` 401. That
+        # was the second route defect in this file's short history, the first being a catalog path
+        # that did not exist — a route is not a thing to infer from a prefix convention. `/datasets`
+        # mounts the same way (`datasets.router`, no version prefix).
+        url = f"{str(settings.train_lineage_url).rstrip('/')}/datasets/{quote(wanted, safe='')}/producers"
         response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=_service_headers(settings))
         response.raise_for_status()
         ranges: list[ConsumedRange] = []
-        for run in response.json().get("runs", []):
-            ceiling = run.get("consumed_to_version")
+        for producer in response.json().get("producers", []):
+            ceiling = producer.get("consumed_to_version")
             if not isinstance(ceiling, int) or isinstance(ceiling, bool):
                 continue
-            if not any(str(output) == wanted for output in run.get("outputs", [])):
-                continue
-            floor = run.get("consumed_from_version")
+            floor = producer.get("consumed_from_version")
             ranges.append(ConsumedRange(from_version=floor if isinstance(floor, int) and not isinstance(floor, bool) else None, to_version=ceiling))
         return ranges
 
