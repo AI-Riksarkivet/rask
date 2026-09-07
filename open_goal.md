@@ -14,22 +14,22 @@ deleted when its work lands. Pause it by creating `.claude/GOAL.paused`.
 
 **The lakehouse is IDIOMATIC LANCE and its provenance survives a write. Two conditions, in order.**
 
-**G1 — CLOSE C4.** Every live e2e failure classified, and the estate defects fixed. Drift is repaired
-in the SUITE; a defect is repaired in the ESTATE; neither is left as "failing". Two items remain:
+**~~G1 — CLOSE C4.~~ DONE 2026-09-07.** `test_governed_union_e2e` went **5 failed -> 5 passed** live,
+built with Dagger and deployed to k3s. Both items below are struck; the five causes and what each
+turned out to be are § Q16.
 
   * ~~**The trainer's dedicated credential reaches the live Ray head.**~~ **DONE 2026-09-07.** Code
     (`96e6885f`), the key in `rask-infra-credentials`, and the head repointed at it and rolled. Proven
     live: `test_train_lineage_lands_attributed_under_governance` passes, and the newest train job's
     log carries ZERO `lineage emit attempt … rejected: HTTP 401` lines where every previous run
     carried four.
-  * **`POST /ingest-media` stops answering 503.** The cascade HEAD must ASK the catalog where its
-    bronze lives and write there, putting that location on the `medallion.media` trigger as
-    `from_uri` — which is what `/bronze-arrival` already does for the tabular lane. The head cannot
-    dictate its own location: the catalog resolves a registered RELATIVE path against the namespace's
-    warehouse binding and refuses an absolute one, and `lance-catalog` is a reserved bucket no
-    warehouse may claim, so a bound top-level namespace can never resolve into the platform root.
+  * ~~**`POST /ingest-media` stops answering 503.**~~ **DONE 2026-09-07** (`a86f5407`). The head asks
+    (`ensure_stage_output`), writes where told, and names that location on the `medallion.media`
+    trigger as `from_uri`; the mover asks where its own upstream lives and takes that as both the
+    upstream and the confinement root, which NARROWS what a trigger may name rather than widening it.
+    Proven live: `test_media_lane_derives_under_governance` passes.
 
-**G1b — THE TWO SEAMS STAY BYO, AND THE DEPLOYED PATH MUST USE THEM.** Measured 2026-09-07:
+**G1b — THE TWO SEAMS STAY BYO, AND THE DEPLOYED PATH MUST USE THEM.** Tracked as Q17-1..4. Measured 2026-09-07:
 
     catalog / lineage / maintenance / service-kit   0 `import ray`, 0 declared ray dependency
     medallion                                       2 files, declared dependency
