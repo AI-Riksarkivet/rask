@@ -619,7 +619,40 @@ against the copying path on one corpus before adopting.
 the descriptor struct by default. **Closes it.** Descriptor struct on Arrow responses, `all_binary` on
 opt-in; document `read_blob_ranges` as the batched client path once creds are vended.
 
-### C8 · Repack and branch maintenance in the sweep
+### C8 · Repack and branch maintenance in the sweep — **BRANCH HALF DONE AND VERIFIED LIVE 2026-09-07** (`236379fb`)
+**The branches were invisible, and it was a live leak.** `discover_datasets` treats a directory holding
+`_versions/` as a dataset and stops there — it never recursed into what a dataset CONTAINS. A branch
+lives at `<dataset>/tree/<branch>/` with its own `_versions/` and `_transactions/`, so every branch in
+the estate was never version-cleaned and never index-optimized. Measured before the fix: **85 of 250
+catalog tables carried at least one branch, 114 branches in total.**
+
+**DISCOVERY ONLY, and the measurement is what says that is enough.** A branch is exactly the
+shallow-clone shape — pylance 10.0.0: flags `(16, 16)`, data files identical to the parent's at
+`base_id` 0, and `tree/<name>/` holding only `_versions` and `_transactions` with no `data/` of its
+own. So the three existing gates already answer correctly for flag 16 and none was touched: compaction
+REFUSES it (rewriting a clone materialises the parent's data into it), the orphan scan REFUSES it
+(list-the-prefix-subtract-referenced would call the parent's live files garbage), and root-scoped
+`cleanup_old_versions` / `optimize_indices` PERMIT it via `SUPPORTED_FOR_GC`. Finding branches buys
+exactly the maintenance that is safe on one, enforced where it already was. Only `tree/` is descended
+into — a dataset's `data/`, `_indices/`, `_deletions/` and `_transactions/` are not datasets, and
+probing each would be a wasted round trip per directory per dataset on the hot discovery path.
+
+**PROVEN ON THE DEPLOYED ESTATE, not inferred from the unit tests.** Built with Dagger, rolled onto
+`rask-maintenance`, and a sweep driven through the same `POST /maintenance-cron` the hourly binding
+calls: `planned: 440, skipped: 12` across 93 buckets. The decisive per-bucket number —
+**`advbr1-wh` reports `datasets = 6`, and that bucket holds ONE table carrying FIVE branches** (1 + 5),
+where the old walk found 1. Zero new errors and zero `tree`-related access denials.
+
+**READ THE COUNTS IN GREPTIME, NOT IN `kubectl logs`.** The pod formatter is
+`"… — %(message)s"` (`service_kit/app.py`), so every structured field the fleet logs through `extra=`
+is absent from the pod log — `compaction_bucket_discovered` prints its name and nothing else. The
+fields are not lost, they ride the OTel path: `SELECT timestamp, log_attributes FROM
+opentelemetry_logs WHERE body = 'compaction_bucket_discovered'` returns `{bucket, datasets, truncated}`
+per bucket. Anyone verifying a discovery change by tailing the pod will conclude nothing happened.
+
+**STILL OPEN — the REPACK half:** `compact_files` never passes a `compaction_mode`, and nothing repacks
+packed sidecars.
+
 **What.** `compact_files` never passes a `compaction_mode`; nothing repacks packed sidecars; datasets
 under `tree/<branch>/` are never compacted, optimized or cleaned (`optimize.py:123-127`).
 **Closes it.** Discover branch datasets; add repack; pin that compaction does not rewrite dedicated blobs.
