@@ -128,4 +128,18 @@ VERTEX_UNIQUE_KEYS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 # abort/retry churn + a lock-ordering obligation to the hot column path — see the DATASET_COLUMN_NODES
 # comment). Without ANY index though, every column MERGE seq-scans a label table that grows with the
 # estate (§4) — this closes the perf half while preserving the concurrency semantics.
-VERTEX_LOOKUP_KEYS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (("Column", ("dataset", "field")),)
+VERTEX_LOOKUP_KEYS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("Column", ("dataset", "field")),
+    # `Run.event_time` is what the run queries SORT by — six `ORDER BY r.event_time DESC` sites in
+    # `cypher.py`, the runs board among them — and without an index each one reads and sorts the whole
+    # label table. Measured on the deployed graph 2026-09-07: 5,586 Run nodes, 4,176 kB, carrying only
+    # `lineage_run_uniq` (the MERGE key).
+    #
+    # NOTHING BOUNDS THAT TABLE: `runRetentionDays` ships 0 and the deployed service carries
+    # `LINEAGE_RUN_RETENTION_DAYS=0`, so the pruning mechanism exists and is off. And BOUNDING THE
+    # RESPONSE DID NOT BOUND THE WORK — `/runs` was capped at 200 rows the same day, which limits what
+    # crosses the wire while the ORDER BY still reads every row behind it.
+    #
+    # NON-UNIQUE, necessarily: many runs share an `event_time`, and it is not part of the MERGE key.
+    ("Run", ("event_time",)),
+)
