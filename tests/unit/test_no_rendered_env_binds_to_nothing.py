@@ -24,10 +24,16 @@ the catalog, flows and notifications alike; asking whether one particular class 
 accuse a variable that its own service reads perfectly well. The union under-reports and never
 falsely accuses, which is the right trade for a gate whose whole subject is "binds to NOTHING".
 
-THE WEB ZONES ARE OUT OF SCOPE AND THAT IS NOT AN EXEMPTION. Their `LINEAGE_SERVICE_TOKEN`,
-`LINEAGE_API`, `LINEAGE_SERVICE_ID` and `LANCE_GATEWAY_URL` are read by SvelteKit (`bff.ts`), a
-plane with no `BaseSettings` at all. Measured 2026-09-07: those four are the ONLY prefixed envs on a
-zone pod, and they are the whole reason this gate names the Python plane in its title.
+THE WEB ZONES ARE OUT OF SCOPE OF THE PYTHON GATE AND THAT IS NOT AN EXEMPTION. Their
+`LINEAGE_SERVICE_TOKEN`, `LINEAGE_API`, `LINEAGE_SERVICE_ID` and `LANCE_GATEWAY_URL` are read by
+SvelteKit (`bff.ts`), a plane with no `BaseSettings` at all — which is why the gate above names the
+Python plane in its title. That left the zone and runner planes checked by NOTHING, so
+:func:`test_no_rendered_env_on_ANY_plane_is_read_only_by_prose` covers them by a different mechanism,
+below: it asks whether any first-party SOURCE reads the name.
+
+PROSE IS NOT A READER, and that is the whole difference between that second gate and a text search.
+Q17-20's variable WAS present in the tree — in the docstring that wrongly credited it — so a grep
+would have found it and passed. A mention inside a comment or a docstring therefore does not count.
 """
 
 from __future__ import annotations
@@ -147,3 +153,104 @@ def test_the_gate_would_have_caught_Q17_20() -> None:
         )
     # ...and the set is not empty in the other direction, which would make it reject everything.
     assert "MEDALLION_S3_ACCESS_KEY_ID" in accepted["MEDALLION_"], "the medallion's own scoped identity is not recognised"
+
+
+# --------------------------------------------------------------------------------------------- #
+# THE OTHER TWO PLANES. The gate above can only ask a question pydantic can answer, so the zones and
+# the sealed runners — which have no BaseSettings at all — were checked by nothing.
+# --------------------------------------------------------------------------------------------- #
+
+#: The prefixes this estate names its OWN configuration with. Outside these, the variable belongs to a
+#: third-party image (OpenFGA, GreptimeDB, Dapr, Postgres) and is read by code this repo does not hold.
+_FIRST_PARTY = ("RASK_", "LANCE_", "MEDALLION_", "LINEAGE_", "MAINTENANCE_", "INGEST_", "CATALOG_", "NOTIFICATIONS_", "FLOWS_", "COMPUTE_")
+#: Every plane that may READ an env, which is the correction this section exists to make.
+_SOURCE_ROOTS = ("services", "packages", "scripts", "frontend", "runners")
+_PY_COMMENT = re.compile(r"#.*$", re.MULTILINE)
+_JS_LINE_COMMENT = re.compile(r"//.*$", re.MULTILINE)
+_JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _python_code_only(path: pathlib.Path) -> str:
+    """The file's source with every DOCSTRING and comment removed.
+
+    Docstrings go by walking the AST, not by matching triple quotes: a docstring is a POSITION in the
+    tree rather than a spelling, and the mention this gate must refuse sat in an ordinary one.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(path.read_bytes())
+    except SyntaxError:
+        return _PY_COMMENT.sub("", path.read_text(encoding="utf-8", errors="replace"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+            first.value.value = ""
+    return ast.unparse(tree)
+
+
+def _code_only(path: pathlib.Path) -> str:
+    if path.suffix == ".py":
+        return _python_code_only(path)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix in {".ts", ".js", ".svelte", ".mjs", ".cjs"}:
+        return _JS_LINE_COMMENT.sub("", _JS_BLOCK_COMMENT.sub("", text))
+    return text
+
+
+def _read_by_code(name: str) -> pathlib.Path | None:
+    """The first first-party file that names ``name`` in CODE rather than in prose, or ``None``."""
+    import subprocess
+
+    argv = ["git", "grep", "-lF", "--", name, "--", *_SOURCE_ROOTS]
+    out = subprocess.run(argv, capture_output=True, text=True, cwd=REPO, check=False).stdout  # noqa: S603
+    for line in out.split():
+        path = REPO / line
+        if path.is_file() and name in _code_only(path):
+            return path
+    return None
+
+
+def _every_rendered_env() -> list[tuple[str, str]]:
+    """`(workload, env name)` across EVERY plane — zones and runners included."""
+    out: list[tuple[str, str]] = []
+    for doc in _rendered_docs():
+        if doc.get("kind") not in {"Deployment", "StatefulSet"}:
+            continue
+        spec = doc["spec"]["template"]["spec"]
+        for container in spec.get("containers", []) + (spec.get("initContainers") or []):
+            for env in container.get("env") or []:
+                out.append((doc["metadata"]["name"], env["name"]))
+    return out
+
+
+def test_no_rendered_env_on_ANY_plane_is_read_only_by_prose() -> None:
+    """A first-party env delivered to ANY container is read by some first-party CODE.
+
+    Complementary to the gate above rather than a second copy of it: that one asks pydantic whether a
+    field accepts the name, which is the strongest answer available and only available for Python.
+    This one asks whether any source in any plane reads it, which is weaker per-variable and is the
+    only question the zones and the sealed runners can answer at all.
+    """
+    unread = sorted({env for _, env in _every_rendered_env() if env.startswith(_FIRST_PARTY) and _read_by_code(env) is None})
+
+    assert not unread, (
+        f"the chart renders {unread} into containers and no first-party CODE reads them — a mention in a "
+        "comment or a docstring does not count. An env nobody reads is indistinguishable from a control "
+        "when read, which is how MEDALLION_RAY_S3_ACCESS_KEY_ID was cited as a storage identity by three "
+        "documents while binding to nothing. Delete it, or wire the reader it implies."
+    )
+
+
+def test_a_DOCSTRING_mention_does_not_count_as_a_reader() -> None:
+    """The half that makes the gate above different from a grep, asserted rather than assumed."""
+    probe = REPO / "tests" / "unit" / "test_invariants.py"
+    prose = "Inert-if-absent settings the chart deliberately does not set"
+    original = probe.read_text(encoding="utf-8")
+    stripped = _python_code_only(probe)
+
+    assert prose in original, "the sample prose moved — point this at another docstring to prove the stripper"
+    assert prose not in stripped, "docstring text survived the stripper, so prose would count as a reader"
+    assert "_UNWIRED_BY_DESIGN" in stripped, "the stripper removed CODE as well as prose — live readers would read as absent"
