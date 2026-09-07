@@ -115,11 +115,21 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
            was none anywhere; the enforcement lives in the native lance-ns backend beneath it. What
            remains is defence-in-depth, not the cross-tenant hole recorded.
 
+    F2-10  correlate audit records — REFUTED (Q17-14), and instructive because the row is literally
+           true and practically false. True of the CALL SITES: 118 `audit()` calls and not one passes
+           a request or trace id. False of the RECORDS, which is what a compliance query reads —
+           `CorrelationFilter` stamps `request_id` and `trace_id` on every record and `app.py:84`
+           installs it on the ROOT handler, so `lance.audit` is stamped like any other logger that
+           propagates there. Counting where a field is PASSED rather than where it is STAMPED reports
+           a control missing that is present — the mirror of Q17-20, where a field that WAS passed
+           turned out to be read by nothing. Its second clause survives: whether GreptimeDB satisfies
+           an append-only compliance sink is unanswered.
+
 Remaining with no verdict yet: F2-5 (Dapr access control + NetworkPolicy — measured tractable: only
 TWO service-invocation callers exist, so a defaultAction:deny needs 11 allow entries and has ONE home
-in the shared `lance-tracing` Configuration), F2-10 (correlate audit records), F2-12 (sign and attest
-images). So §F2 stands at SEVEN of twelve with a verdict, two of them refutations rather than fixes —
-which is the point of demanding one per row.
+in the shared `lance-tracing` Configuration) and F2-12 (sign and attest images). So §F2 stands at
+EIGHT of twelve with a verdict, THREE of them refutations rather than fixes — which is the point of
+demanding one per row, and a reason to measure a row before scheduling it.
 
 ---
 
