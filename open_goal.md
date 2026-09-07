@@ -36,12 +36,25 @@ in the SUITE; a defect is repaired in the ESTATE; neither is left as "failing". 
 
   So the LAKEHOUSE has no notion of a compute engine, and that is not to regress — the ports
   (`service_kit.lakehouse.executor` for compute, `.saga` for the workflow engine) name no engine and
-  are gated by `test_the_executor_port_names_no_engine.py`. What is NOT true yet is that the deployed
-  path goes through them: `medallion/workflow.py` mentions `Executor` ZERO times and imports
-  `ray_submit` / `ray_kit.submit` directly at six sites, so the Ray lane the estate actually runs
-  bypasses the port `transform.py` already uses. `maintenance/services/compaction_executor.py` does
-  not use it either. A port with two adapters and no caller on the live path is a decoupling claim,
-  not a decoupled system.
+  are gated by `test_the_executor_port_names_no_engine.py`.
+
+  **WHY MEDALLION STILL KNOWS ABOUT RAY: the port was built and the callers were never migrated.**
+  Measured 2026-09-07:
+
+      RayJobExecutor constructed outside tests   NOWHERE — dead on the deployed path
+      the only adapter anyone builds             InProcessExecutor (transform.py:760)
+      the live Ray path                          ray_submit.py, a SECOND, older submission seam
+      direct ray_submit callers                  9 sites / 4 modules — workflow.py x4, train.py x3,
+                                                 transform.py x1, mover.py x1
+      `ray` imports inside rayjob_executor.py    0 — it submits a RayJob CR over HTTPX
+
+  So the decoupling is real for the IN-PROCESS lane and fictional for the lane the estate runs. The
+  last row is the point: the port adapter needs no Ray import at all, so migrating those nine call
+  sites lets `services/medallion/pyproject.toml` drop `ray-kit` — and then NO service in the estate
+  depends on a compute engine, and BYO stops being a claim about ports and becomes a property of the
+  dependency graph. `maintenance/services/compaction_executor.py` does not use the port either.
+
+  A port with two adapters, one of them dead, is a decoupling claim rather than a decoupled system.
 
 **G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md` — 191 tracked, 158 open,
 33 struck as of 2026-09-07. Order: anything provably wrong on the LIVE ESTATE first (the shape the
