@@ -137,6 +137,24 @@ Then F2-5..12, ALL of which now have verdicts (2026-09-07):
            StatefulSet, NOT CloudNativePG — zero `Cluster` objects exist, `age.cnpgCluster.enabled`
            defaults false, and the CNPG OPERATOR is installed with nothing to reconcile. An enabled
            operator toggle is not evidence the resource exists.
+           **AND THAT IS ALSO THE ANSWER, which is why hand-rolling TLS here would be the wrong fix.**
+           The estate has no cert-manager and the chart has never generated a certificate — but the
+           CHARTED path already issues them: a CNPG Cluster gets server TLS automatically. So the AGE
+           half of F2-6 is the CNPG cutover the chart already anticipates, not a StatefulSet patched
+           with `genSelfSignedCert`. **Its stated blockers were re-measured and TWO OF THREE NO LONGER
+           HOLD** — the note was written when they did and nobody re-checked:
+
+               K8s 1.33+ with ImageVolume     required   ->  v1.36.2 (gate default-on at 1.35)  MET
+               CNPG >= 1.27                   required   ->  operator 1.29.1                    MET
+               containerd >= 2.1              required   ->  containerd 2.3.2-k3s2              MET
+               the AGE extension image        required   ->  NOT BUILT                          the only gap
+
+           `.docker/cnpg-age-ext.dockerfile` builds it and `scripts/dagger-image.sh --name
+           cnpg-age-ext` is the invocation; `docs/CNPG-AGE.md` carries the design. **What stays an
+           OWNER decision is the cutover itself, because it is a DATA MIGRATION**: the lineage graph
+           and OpenFGA's tables live in the StatefulSet's PVC, and `age-cluster.yaml` deliberately
+           fails the render if both stores are on. Building the image is cheap and reversible; moving
+           the data is not.
     F2-11  lock root create — DONE 2026-09-07 (`e6f4ce37`). THE SHIPPED DEFAULT WAS THE DEFECT, not
            its value: `hasKey` finds a key whether or not anyone chose it, so `values.yaml`'s
            `lockRootCreate: false` beat any derivation and the control could only be armed by an
