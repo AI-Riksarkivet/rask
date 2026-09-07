@@ -124,10 +124,18 @@ class Discovery(BaseModel):
     truncated: list[str] = []
 
 
+#: Lance's own name for the directory a dataset keeps its branches in — `<dataset>/tree/<branch>/`,
+#: each a full dataset with its own `_versions/`. Named rather than inlined so the discovery walk and
+#: any future branch-aware pass cannot disagree about the spelling.
+_BRANCH_CONTAINER = "tree"
+
+
 def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> Discovery:
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
     (the Lance table-layout marker); any other directory is a namespace prefix and is recursed into
-    (bounded by ``max_depth``). Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
+    (bounded by ``max_depth``). A dataset's own ``tree/`` is descended into as well, because a BRANCH
+    is a full dataset the parent contains rather than part of it; none of a dataset's other children
+    is walked. Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
     control-plane registries (``_warehouses``, ``_policies``, ``_protection``, ``_trash``) — no dataset ever
     lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
 
@@ -152,6 +160,23 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
             marker = fs.get_file_info(f"{info.path}/_versions")
             if marker.type == pafs.FileType.Directory:
                 found.uris.append(f"s3://{info.path}")
+                # A BRANCH IS A WHOLE DATASET THIS ONE CONTAINS, and stopping here made every branch in
+                # the estate invisible: `tree/<name>/` carries its own `_versions/` and `_transactions/`,
+                # so it accumulates versions with nothing ever reclaiming them. Measured 2026-09-07:
+                # 85 of the deployed estate's 250 tables carry at least one.
+                #
+                # ONLY `tree/`, never the dataset's other children. `data/`, `_indices/`, `_deletions/`
+                # and `_transactions/` are not datasets, and probing each for a marker is a wasted round
+                # trip per directory per dataset on the hot discovery path.
+                #
+                # Descending buys exactly the maintenance that is SAFE on a branch, and buys it without
+                # a new rule: a branch sets `base_paths` (measured (16, 16), data files identical to the
+                # parent's at `base_id` 0, no `data/` of its own), so compaction and the orphan scan
+                # already refuse it on that flag while root-scoped `cleanup_old_versions` and
+                # `optimize_indices` already permit it via `SUPPORTED_FOR_GC`.
+                branches = fs.get_file_info(f"{info.path}/{_BRANCH_CONTAINER}")
+                if branches.type == pafs.FileType.Directory:
+                    _walk(branches.path, depth + 1)
             elif depth < max_depth:
                 _walk(info.path, depth + 1)
             else:
