@@ -2073,6 +2073,20 @@ def test_the_chart_REFUSES_to_render_oidc_without_a_session_secret() -> None:
     assert "sessionSecret" in result.stderr, f"it refused for the wrong reason: {result.stderr[-300:]}"
 
 
+#: A render whose images come from a registry off this node — which `prod-credentials.yaml` reads as a
+#: real deployment and refuses while any well-known dev credential survives. Supplying real values here
+#: keeps a test about IMAGE PINNING testing its own subject, exactly as `_helm_template` does for the
+#: OIDC identity; the refusal itself is asserted by `test_a_real_registry_refuses_dev_credentials.py`.
+_REAL_REGISTRY = (
+    "image.localImages=false",
+    "image.repository=reg.example",
+    "openbao.devMode=false",
+    "age.password=a-real-secret-value-32-chars-long",
+    "rustfs.secretKey=a-real-secret-value-32-chars-long",
+    "dapr.appToken=a-real-secret-value-32-chars-long",
+)
+
+
 def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -> None:
     """#135 — the chart must be able to describe a fleet that is NOT one tag.
 
@@ -2084,12 +2098,12 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     Precedence is asserted end to end, because a pin that is merely ACCEPTED and then overridden is
     worse than no pin: it reads as safety while the deploy still rewrites the image.
     """
-    pinned = _helm_template("image.localImages=false", "image.repository=reg.example", "image.tags.gateway=PINNED")
+    pinned = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=PINNED")
     assert 'image: "reg.example/gateway:PINNED"' in pinned, "a per-component tag did not reach the render"
     assert 'image: "reg.example/compute:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
-    both = _helm_template("image.localImages=false", "image.repository=reg.example", "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")
+    both = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")
     assert 'image: "reg.example/gateway@sha256:abc"' in both, "a per-component tag overrode a digest"
 
 

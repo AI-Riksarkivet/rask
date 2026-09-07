@@ -58,6 +58,18 @@ def test_side_loaded_images_remain_supported_but_only_as_an_explicit_opt_in() ->
     assert 'image: "gateway:dev"' in proc.stdout
 
 
+#: What a render must ALSO say once its images come from a registry off this node: `prod-credentials.yaml`
+#: reads that as a real deployment and refuses it while any well-known dev value survives. Supplying real
+#: ones keeps a GitOps test testing image references rather than re-testing that guard, which
+#: `test_a_real_registry_refuses_dev_credentials.py` asserts directly.
+_REAL_CREDENTIALS = (
+    "openbao.devMode=false",
+    "age.password=a-real-secret-value-32-chars-long",
+    "rustfs.secretKey=a-real-secret-value-32-chars-long",
+    "dapr.appToken=a-real-secret-value-32-chars-long",
+)
+
+
 def test_a_digest_pins_every_first_party_image_and_beats_the_tag() -> None:
     """A tag is a mutable pointer; a digest is what an image-automation controller writes back into
     git, and the only reference that cannot drift under the commit that claims it."""
@@ -65,6 +77,7 @@ def test_a_digest_pins_every_first_party_image_and_beats_the_tag() -> None:
         "image.repository=ghcr.io/example/rask",
         "image.digest=sha256:abc123",
         "frontend.enabled=true",
+        *_REAL_CREDENTIALS,
     )
     assert proc.returncode == 0, proc.stderr
     assert "ghcr.io/example/rask/gateway@sha256:abc123" in proc.stdout
@@ -104,6 +117,7 @@ def test_the_CATALOG_FAMILY_honours_the_estate_image_contract_too() -> None:
         "image.digest=sha256:abc123",
         "explorer.enabled=true",
         "medallion.enabled=true",
+        *_REAL_CREDENTIALS,
     )
     assert proc.returncode == 0, proc.stderr
     assert "ghcr.io/example/rask/lance-rest-catalog@sha256:abc123" in proc.stdout

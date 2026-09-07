@@ -22,14 +22,9 @@
 # rask.daprAnnotations helper — is gated on exactly `.Values.dapr.sidecars`, the SAME key that gates
 # this Secret. Keep it that way: a pod annotated with app-token-secret whose Secret doesn't render
 # wedges its sidecar at injection (per-plane gates here or extra conditions there would reopen that).
-{{- /* Fail the render on a known-constant app token — it authenticates EVERY sidecar-delivered route
-     (lineage ingest, medallion triggers, the cron sweeps), so a public value makes them all forgeable.
-     TWO cases, keyed like the infra-credentials guards: the values-prod placeholder always aborts, AND
-     the base-chart dev default aborts on the prod signal (openbao.devMode=false) — so a hand-rolled prod
-     overlay that flips devMode without layering values-prod can't silently ship the dev token. */}}
-{{- if or (eq .Values.dapr.appToken "REPLACE-ME-with-a-real-secret") (and (not .Values.openbao.devMode) (eq .Values.dapr.appToken "lance-dev-dapr-app-token-override-me")) }}
-{{- fail "dapr.appToken is still a known-constant dev/placeholder value on a prod render — it authenticates EVERY sidecar-delivered route, so it must be a real secret. Set --set dapr.appToken=... (from your secret manager); do not commit it." }}
-{{- end }}
+{{- /* The refusal that stops a known-constant app token reaching a real deployment is in
+     `prod-credentials.yaml`, which always renders — this Secret does not, and a guard that lives
+     inside the thing it protects is absent exactly when the render skips it. */}}
 apiVersion: v1
 kind: Secret
 metadata:
