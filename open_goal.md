@@ -68,9 +68,10 @@ trainer 401 had — silent, data-losing, nothing red), then correctness, then ti
 reaches a verdict: fixed, or struck with the measurement that refutes it. The file is DELETED when it
 is empty, and not before — its header count is re-derived from its own rows, never asserted.
 
-**THE TOP OF THE BLAST-RADIUS ORDER IS §F2, ZERO TRUST — which this estate has NOT reached.** The
-sweep scores 19 controls: HAVE 6, STRONGER 3, PARTIAL 8, MISSING 1, and §F2 states outright that
-items 1-4 "decide whether the claim is honest":
+**§F2, ZERO TRUST, WAS THE TOP OF THE BLAST-RADIUS ORDER AND IS NOW FULLY EXAMINED** — twelve of
+twelve with a verdict as of 2026-09-07. The estate has not REACHED zero trust; what changed is that
+nothing in this section is unknown any more. The sweep scored 19 controls (HAVE 6, STRONGER 3,
+PARTIAL 8, MISSING 1) and said items 1-4 "decide whether the claim is honest":
 
     F2-1  per-workload storage identities — DONE for the medallion plane, and as of release 102/103
           they are RELEASE INTENT rather than drift: `helm get values` carries
@@ -105,7 +106,7 @@ items 1-4 "decide whether the claim is honest":
           gated, and the two e2e suites that read AS it (which is why it survived) now read as a
           user. Live: anonymous 403 / signed-in 200.
 
-Then F2-5..12, of which THREE now have verdicts (2026-09-07):
+Then F2-5..12, ALL of which now have verdicts (2026-09-07):
 
     F2-8   the dead `static` vending mode — DONE, DELETED (Q17-12). It could be selected and never
            got: `main.py` passes no `static_keys`, so it built an empty vendor that answered None for
@@ -139,8 +140,7 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
            installs it on the ROOT handler, so `lance.audit` is stamped like any other logger that
            propagates there. Counting where a field is PASSED rather than where it is STAMPED reports
            a control missing that is present — the mirror of Q17-20, where a field that WAS passed
-           turned out to be read by nothing. Its second clause survives: whether GreptimeDB satisfies
-           an append-only compliance sink is unanswered.
+           turned out to be read by nothing. ITS SECOND CLAUSE IS CONFIRMED, below.
 
     F2-12  sign and attest images — CONFIRMED (Q17-16), with a naming trap that makes the opposite
            easy to believe. `.dagger/images.go` has a helper called `provenance()`, and it emits three
