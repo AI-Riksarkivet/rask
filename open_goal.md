@@ -63,7 +63,20 @@ turned out to be are § Q16.
   are gated by `test_the_executor_port_names_no_engine.py`.
 
 **G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md` — re-read the file's own
-header, which re-derives its counts from its own rows; any number written here goes stale by design. Order: anything provably wrong on the LIVE ESTATE first (the shape the
+header, which re-derives its counts from its own rows; any number written here goes stale by design.
+
+**SCOPE, NARROWED BY OWNER RULING 2026-09-07 — THE LAKEHOUSE FIRST, THEN COMPUTE, AND NOTHING ELSE.**
+Verbatim: *"prio lakehouse and ignore other zones that are not the lakehouse or compute. I.e search,
+flows and model training and annotator should be ignored and focus only on lakehouse compute services,
+but priotize lakehouse."* IN: catalog, lineage, medallion's cascade, maintenance, ingest, the lakehouse
+halves of service-kit and storage, the `lakehouse` zone — then `services/compute`, ray-kit and the
+`compute` zone. OUT: `services/search`, `services/flows`, `services/annotator`, the TRAIN lane and the
+`models` zone. A row about them is STRUCK with this ruling as its reason rather than worked, and five
+were on 2026-09-07. **A row being PRESENT is not evidence it is in scope** — this register absorbed two
+drained ledgers that swept the whole estate, so its contents describe what was once audited rather than
+what is wanted now. **And a keyword match is not a classification**: the scan that found those five
+flagged nine, and reading them saved three live lakehouse rows that matched on Prometheus rule
+*annotations* and on the word "catalog" sitting beside a mention of flows. Order: anything provably wrong on the LIVE ESTATE first (the shape the
 trainer 401 had — silent, data-losing, nothing red), then correctness, then tidiness. Every row
 reaches a verdict: fixed, or struck with the measurement that refutes it. The file is DELETED when it
 is empty, and not before — its header count is re-derived from its own rows, never asserted.
