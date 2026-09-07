@@ -119,9 +119,12 @@ def test_the_commit_opens_the_dataset_ONCE(tmp_path: Path, monkeypatch: pytest.M
     real_open = lance.dataset
     opens: list[str] = []
 
-    def _counting_open(*args: object, **kwargs: object) -> object:
-        opens.append(str(args[0]) if args else "")
-        return real_open(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+    # TYPED to `lance.dataset`'s own shape rather than `*args: object`. An object-typed splat hands
+    # `object` to every keyword the real signature has, and ty reports that once PER PARAMETER — 15
+    # diagnostics from this one line, which is noise a genuinely wrong argument would hide in.
+    def _counting_open(uri: str, **kwargs: Any) -> lance.LanceDataset:
+        opens.append(uri)
+        return real_open(uri, **kwargs)
 
     monkeypatch.setattr(lance, "dataset", _counting_open)
     outcome = commit_compaction(uri, {}, results)
