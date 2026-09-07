@@ -44,7 +44,21 @@ pointing at the extension image, `shared_preload_libraries: [age]`, and `Databas
 `CREATE EXTENSION age` in the lineage DB (OpenFGA gets its own DB, plain SQL). CNPG auto-appends
 `/extensions/age/share` → `extension_control_path` and `/extensions/age/lib` → `dynamic_library_path`.
 
-### Proof status (verified 2026-07-20)
+### Proof status — RE-MEASURED 2026-09-07 on the rask k3s estate
+
+**All four layers are now demonstrable here.** The extension image is BUILT
+(`age-cnpg-ext:1.7.0-18`, digest `sha256:2b9572f1…`), verified from the registry manifest rather
+than a build log: three layers matching the three `COPY` lines — 8,559 B of `/share/extension/age*`,
+**1,497,689 B of `/lib/age.so`**, 4,667 B of the licence. Note for the next person: inspecting a
+`FROM scratch` image with `dagger core container … directory --path=/ entries` returns NOTHING and
+reads as an empty image; the same command lists `alpine:3.20` normally, so the manifest is the check
+to trust.
+
+What remains is the CUTOVER, which is a data migration rather than a proof: the lineage graph and
+OpenFGA's tables live in the StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render
+if both stores are on.
+
+### The 2026-07-20 proof status, kept as the record
 Two of the three layers are proven; the third (the CNPG operator reconciling a Cluster) hit an
 environment snag, not an AGE one.
 
@@ -56,8 +70,18 @@ environment snag, not an AGE one.
 2. **The ImageVolume infra prerequisites — PROVEN reachable.** Stood up a throwaway kind cluster on **K8s 1.34**
    with **containerd v2.1.3** (≥2.1, the CRI requirement) and the `ImageVolume` feature gate enabled — so a
    real cluster can do the mount.
-3. **The CNPG operator managing a real Cluster — NOT completed on this host** (deep-dived; it's a host
-   gremlin, not AGE). Findings from the investigation, tried across CNPG **1.30 + 1.28** and kind K8s
+3. **The CNPG operator managing a real Cluster — THE 2026-07-20 BLOCKER NO LONGER APPLIES HERE.**
+   Re-measured on the rask k3s estate 2026-09-07: the operator is `ghcr.io/cloudnative-pg/cloudnative-pg:1.29.1`,
+   **1/1 Running**, leader-elected and reconciling — its log carries hourly
+   `pki: Periodic TLS certificates maintenance`, which is the very machinery §F2-6 needs and is
+   currently idle for want of a `Cluster` to manage. Every environment requirement above is met on
+   this cluster: **K8s v1.36.2** (ImageVolume default-on since 1.35), **containerd 2.3.2-k3s2** (≥2.1),
+   **CNPG 1.29.1** (≥1.27). So the remaining gap is the extension image and then the CUTOVER ITSELF,
+   which is a data migration rather than a proof — the lineage graph and OpenFGA's tables live in the
+   StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render if both stores are on.
+
+   **The 2026-07-20 investigation below stands as the record of a KIND-HOST problem**, kept because it
+   is what a reader will otherwise re-derive: it was tried across CNPG **1.30 + 1.28** and kind K8s
    **1.31 / 1.33 / 1.34** (containerd 2.1.x, ImageVolume gate on):
    - The operator **binary is fine on this host** — run standalone (`docker run … controller` with an admin
      kubeconfig, as root, `OPERATOR_NAMESPACE=cnpg-system`, no `--leader-elect`) it starts clean and runs.
