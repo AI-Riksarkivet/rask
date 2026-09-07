@@ -2,8 +2,12 @@
 
 The spec settles the rule (``lance_docs/file_format.md`` "Feature Flags"): a reader checks
 ``reader_feature_flags``, a writer checks ``writer_feature_flags``, and "if either sees a flag they
-don't know, they should return an 'unsupported' error on any read or write operation". The
-maintenance pass is a **writer** — compaction commits, GC deletes manifests — so it checks both.
+don't know, they should return an 'unsupported' error on any read or write operation". Compaction and
+GC are **writers** — one commits, the other deletes manifests — so they check both fields. The ORPHAN
+SCAN writes nothing and checks the READER field alone, because the spec's own table gives a per-bit
+answer and one row is already asymmetric: ``FLAG_TABLE_CONFIG`` (8) is Reader-No / Writer-Yes, and
+pylance sets it that way (measured: ``update_config`` -> ``reader=0, writer=8``). ORing the fields for
+a read refuses a dataset over a bit only a writer must understand.
 
 **Why this exists, concretely.** Two flags were measured against real datasets on pylance 9.0.0:
 
@@ -328,7 +332,7 @@ def unsupported_features(ds: ManifestCarrier) -> str | None:
     needs to know it is looking at a shallow clone rather than at a broken dataset.
     """
     reader, writer = manifest_feature_flags(ds)
-    return describe_unsupported_flags(reader, writer)
+    return unsupported_read_flags(reader=reader, writer=writer)
 
 
 def describe_unsupported_flags(reader: int, writer: int) -> str | None:
@@ -346,11 +350,54 @@ def describe_unsupported_flags(reader: int, writer: int) -> str | None:
     here — they did, one check in front of every verb, which made the BUTTON stricter than the CRON
     while its refusal told the operator the two agreed. They now ask the same two gates the sweep
     asks, per verb (``catalog/services/maintenance.py::require_compactable`` / ``require_reclaimable``).
+
+    **It asks BOTH fields because it is the gate a WRITE takes.** A read-only pass is entitled to
+    ignore the writer field and asks :func:`describe_read_unsupported_flags` instead.
     """
     unknown = (reader | writer) & ~SUPPORTED
     if not unknown:
         return None
     return f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"
+
+
+def describe_read_unsupported_flags(reader: int) -> str | None:
+    """The refusal reason for a READ-ONLY pass, or ``None`` when every reader bit is understood.
+
+    **THE TWO FIELDS ARE ASKED SEPARATELY, AND THEY DO NOT CARRY THE SAME BITS.** The format spec is
+    explicit (``lance_docs/file_format.md``, "Format Versioning"): *"Readers should check the
+    ``reader_feature_flags`` to see if there are any flag it is not aware of. Writers should check
+    ``writer_feature_flags``."* Its table gives a per-bit answer, and one row is already asymmetric —
+    ``FLAG_TABLE_CONFIG`` (8) is **Reader Required: No, Writer Required: Yes**. Measured on pylance
+    10.0.0: ``update_config({"k": "v"})`` produces ``reader=0, writer=8``, so the asymmetry is what
+    Lance actually writes rather than a note in a table.
+
+    So ORing the fields — which every gate here used to do — refuses a read over a bit only a writer
+    must understand. Nothing is wrongly refused TODAY, because every bit through 16 is known; it bites
+    the day Lance adds a writer-only flag at 32 or above, and the spec says that is exactly where new
+    flags go. That failure would be silent in the worst way: the orphan scan is the estate's one
+    read-only, report-only pass, so it would simply stop seeing every dataset that sets the new bit
+    and go on reporting clean.
+
+    **This is not a weakening, and the direction matters.** An unknown bit in the READER field still
+    refuses, because that field is by definition the set a reader must understand — proceeding there
+    means enumerating a layout we cannot resolve, and a scan that names live data as garbage is a far
+    worse failure than one that declines. Only the writer field is dropped, and only for a caller that
+    writes nothing.
+    """
+    unknown = reader & ~SUPPORTED
+    if not unknown:
+        return None
+    return f"unsupported manifest reader feature flags: {_named(unknown)} (reader={reader})"
+
+
+def unsupported_read_flags(*, reader: int, writer: int) -> str | None:
+    """:func:`describe_read_unsupported_flags` for a caller that holds both fields.
+
+    Keyword-only, and it takes the writer field it then ignores, on purpose: the call site reads as a
+    deliberate choice about WHICH field a read-only pass consults rather than as a dropped argument.
+    """
+    del writer  # a reader is not entitled to care — see describe_read_unsupported_flags
+    return describe_read_unsupported_flags(reader)
 
 
 class BaseEvidence(BaseModel):
