@@ -74,6 +74,7 @@ from lance_namespace import (
     TableBranchNotFoundError,
     TableColumnNotFoundError,
     TableNotFoundError,
+    TableSchemaValidationError,
     TableTagAlreadyExistsError,
     TableTagNotFoundError,
     TableVersionNotFoundError,
@@ -1007,6 +1008,35 @@ def _user_sql(action: str) -> Iterator[None]:
         raise InvalidInputError(f"{action}: {detail}") from exc
 
 
+#: Lance's schema check on a write, raised as a bare `OSError`. A stable Rust error-variant prefix, not
+#: a path: "Append with different schema: `s` should have type string but type was int64" for a type
+#: mismatch, "…: fields did not match, missing=[], unexpected=[zz]" for a column the table lacks.
+_WRITE_SCHEMA_MARKER = "append with different schema:"
+
+
+@contextmanager
+def _write_schema_errors() -> Iterator[None]:
+    """Give the in-process write path the schema code the NATIVE path already answers.
+
+    `insert_into_table` and `merge_insert_into_table` split on `branch`: without one they delegate to
+    the native backend, which maps a schema mismatch to `TableSchemaValidationError` (20 -> 400); with
+    one they run pylance in-process, where the same mismatch escapes as a bare `OSError` and is
+    reported `Internal 18`. Measured 2026-09-07 across three payload shapes — wrong Arrow type, an
+    extra column, a wholly unrelated schema — main answered 20 for all three and the branch answered
+    500 for all three.
+
+    So this is PARITY with a correct implementation next door, not a fresh judgement about which code
+    a schema failure deserves: the branchless door already decided, and a caller must not get a
+    different answer for the same mistake because they staged it on a branch.
+    """
+    try:
+        yield
+    except OSError as exc:
+        if _WRITE_SCHEMA_MARKER not in str(exc).lower():
+            raise  # a storage / IO failure: a real 5xx, and it stays one
+        raise TableSchemaValidationError(_clean_lance_message(str(exc))) from exc
+
+
 #: A column op names a column that is not there. Lance says it four ways across three exception classes —
 #: ``Column nope does not exist in the dataset`` (drop, ValueError), ``Invalid user input: Column "nope"
 #: does not exist in the dataset`` (rename, OSError), ``Field 'nope' not found.\nAvailable fields: ['id']``
@@ -1118,7 +1148,8 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     # `mode` PASSES THROUGH UNTRANSFORMED, matching the main path exactly. Hand-lowering it here would
     # make the branch door accept spellings the branchless one rejects, which is a second vocabulary in
     # everything but name — and `test_constrained_values_are_enums.py` refuses that idiom on sight.
-    dataset.insert(reader, mode=req.mode or "append")
+    with _write_schema_errors():
+        dataset.insert(reader, mode=req.mode or "append")
     return InsertIntoTableResponse(version=dataset.version, num_inserted_rows=max(dataset.count_rows() - before, 0))
 
 
@@ -1137,16 +1168,20 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
     if req.branch is None:
         return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
-    builder = dataset.merge_insert(req.on)
-    if req.when_matched_update_all:
-        builder.when_matched_update_all(req.when_matched_update_all_filt)
-    if req.when_not_matched_insert_all:
-        builder.when_not_matched_insert_all()
-    if req.when_not_matched_by_source_delete:
-        builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
-    if req.use_index is not None:
-        builder.use_index(req.use_index)
-    with _user_sql("invalid merge_insert filter"):
+    # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
+    # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
+    # `_user_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
+    # for naming it wrongly — while the branchless path answered 13.
+    with _write_schema_errors(), _user_sql("invalid merge_insert filter"):
+        builder = dataset.merge_insert(req.on)
+        if req.when_matched_update_all:
+            builder.when_matched_update_all(req.when_matched_update_all_filt)
+        if req.when_not_matched_insert_all:
+            builder.when_not_matched_insert_all()
+        if req.when_not_matched_by_source_delete:
+            builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
+        if req.use_index is not None:
+            builder.use_index(req.use_index)
         stats = builder.execute(pa.ipc.open_stream(pa.BufferReader(data)))
     counts = stats if isinstance(stats, dict) else {}
     return MergeInsertIntoTableResponse(
