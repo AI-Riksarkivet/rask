@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 191 tracked, 157 open, 34 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 207 tracked, 173 open, 34 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -465,6 +465,10 @@ carries history.
 | 19 | Compute-plane auth (rask-specific) | N/A | Ray dashboard token auth required in prod, fails render otherwise (values-prod.yaml:128-135; tests/unit/test_ray_auth.py:176-191). | HAVE |
 
 ### F2 · What rask must add to honestly claim zero trust (ordered)
+
+> **TRACKED AS Q17-5..16.** These twelve are a markdown list, which this file's own counting gate
+> cannot see — so the estate's largest security gap sat outside every header count. The analysis
+> stays here; the countable rows are in § Q17.
 
 1. **Per-workload storage identities.** chart/templates/services.yaml:92-94, maintenance.yaml:123-125, medallion.yaml:234-236 & 389-391, services/maintenance/src/maintenance/core/config.py:88 — stop running catalog, maintenance and every mover as the RustFS root user; provision one least-privilege RustFS user/policy (or STS role) per service, scoped to its buckets/prefixes.
 2. **Fail closed in code, not only in the chart.** services/catalog/src/catalog/core/config.py:181 (`oidc_enabled=False`) and api/security.py:66-67 — default to enabled and add an explicit `LANCE_INSECURE_ALLOW_UNAUTHENTICATED` escape (LK Plus's shape, configuration.md:209), so a service run outside the chart is not anonymous.
@@ -1188,3 +1192,36 @@ hijack, and the reason a green suite is not evidence until each leg is shown abl
 | Q16-7 | `_DROP` renders every refusal reason identically | med | `{"status": "DROP"}` is the ack for a routing drop, an unresolvable lane, an FGA denial and a held promotion. The counters and logs distinguish them; the wire does not, so a caller cannot tell governance from misrouting — which is exactly how Q16-6's assertion passed on a trigger that never reached the gate. The ack contract is deliberate (Dapr neither redelivers nor dead-letters a DROP); the opacity of the REASON is not obviously load-bearing |
 | Q16-8 | The Ray lane's pass-1 ack cannot carry a stage verdict | low | A direct drive answers SUCCESS at dispatch; the gate runs at pass 2 and answers the sidecar. Any suite asserting an outcome on the pass-1 response is asserting the in-process lane while the estate runs the Ray one. Recorded rather than fixed — the asymmetry is real and the suite now accepts both acks and asserts the verdict from lineage |
 | Q16-9 | The media 503's mechanism, with the binding evidence | high | Q15-1 and Q9-4 restated with the measurement that settles which half is wrong. `bronze$events` → `s3://lance-catalog/medallion/bronze` (no binding; the head's TELL door works). `bronze-media$objects` → `s3://lakehouse-wh/medallion/bronze-media` (bound; the head writes to `lance-catalog` and `_require_same_location` correctly refuses). The catalog resolves a registered RELATIVE location against the namespace's WAREHOUSE binding, and `register_table` refuses an absolute one — so a caller cannot dictate its own location, and no re-registration can repair this while the binding stands. `lance-catalog` is a RESERVED bucket no warehouse may claim, so a bound top-level namespace can NEVER resolve into the platform root. **The head must ASK** (`ensure_stage_output` + `from_uri` on the `medallion.media` trigger, which `/bronze-arrival` already does for the tabular lane), or the binding must be removed — and Q15-2 is the missing door |
+
+## Q17. BYO and zero trust, made countable (2026-09-07)
+
+Two bodies of work that were ANALYSED but not TRACKED, which is how they stayed open without ever
+appearing in a count. §Q11 measured the two engine seams and §F scored 19 zero-trust controls, and
+neither produced a row this file's own gate can see: the gate counts `### A1 ·` headings and
+`| Q<n>-<n> |` rows, and §F2's twelve items are a markdown ordered list. So the single largest
+security gap in the estate — every service running as the storage ROOT user — was carried in prose
+that no header count included. §F2 stays as the analysis; these are its tracked rows.
+
+**BYO is TRUE of the lakehouse and FALSE of the lane the estate runs.** Measured 2026-09-07:
+`catalog`, `lineage`, `maintenance` and `service-kit` have zero `import ray` and zero declared ray
+dependency (their only matches are comments and one blocklist literal). The ports name no engine and
+are gated. What is missing is callers.
+
+| # | Finding | Sev | What remains |
+| --- | --- | --- | --- |
+| Q17-1 | The medallion bypasses its own `Executor` port on the deployed lane | high | 9 direct `ray_submit` call sites across 4 modules — `workflow.py` x4, `train.py` x3, `transform.py` x1, `mover.py` x1 — while `transform.py:760` builds the only adapter anyone constructs (`InProcessExecutor`). The decoupling is real for the in-process lane and fictional for the Ray one |
+| Q17-2 | `RayJobExecutor` is a DEAD adapter | high | Constructed nowhere outside tests. It conforms to the port, is tested by `test_a_stage_can_be_a_rayjob_custom_resource`, and nothing wires it up — so the port has two implementations and one caller, which is what let Q17-1 persist unnoticed |
+| Q17-3 | `services/medallion` declares `ray-kit` | med | And need not: `rayjob_executor.py` has ZERO ray imports — it submits a RayJob CR over httpx. Migrating Q17-1 lets the dependency go, and then NO service in the estate depends on a compute engine. BYO stops being a claim about ports and becomes a property of the dependency graph |
+| Q17-4 | `maintenance/services/compaction_executor.py` does not use the `Executor` port | med | The maintenance plane has its own worker lane (`work_queue.py`, `IndexWorkItem`/`DatasetWorkItem`, competing consumers on `queueGroupName`) but resolves its own execution rather than going through the port — so "BYO workers for maintenance" is true of the QUEUE and not of the EXECUTION |
+| Q17-5 | Per-workload storage identities (§F2-1) | high | THE ONE MISSING CONTROL of 19. `catalog`, `maintenance`, the medallion producer and EVERY mover run as the RustFS ROOT user (`rustfsadmin`); OpenBao changes only where that secret comes from, not which identity it is. One least-privilege user/policy per service, scoped to its buckets and prefixes |
+| Q17-6 | Fail closed in CODE, not only in the chart (§F2-2) | high | `oidc_enabled` defaults False and `authenticate()` returns None, so a service run outside the chart is anonymous. Default to enabled with an explicit `RASK_INSECURE_ALLOW_UNAUTHENTICATED` escape — Lakekeeper Plus's shape |
+| Q17-7 | Kill the one shared service bearer (§F2-3) | high | One Secret per release for every sidecar, and `dapr_auth.py` says it outright: with one shared token across an allowlist, any holder can pick the highest-privileged name on it. The trainer 401 was this control WORKING; the rest of the allowlist is where it is not. Either every allowlisted subject becomes privileged, or identity derives from Dapr's mTLS SPIFFE id under an `accessControl` policy |
+| Q17-8 | Anonymous browser reads are laundered into a service identity (§F2-4) | high | The BFF sends the shared token + `frontend.serviceIdentity` when there is NO session, and that subject is allowlisted at lineage. Anonymous must be 401, or an explicit `anonymous` FGA principal with visible grants |
+| Q17-9 | No Dapr access-control policy; NetworkPolicy off by default (§F2-5) | med | `grep accessControl chart/` returns 0, so any sidecar may invoke any app-id; `networkPolicy.enabled: false` in the base values |
+| Q17-10 | TLS to every store (§F2-6) | med | mTLS exists on the Dapr plane and NOTHING else: OpenFGA, RustFS, NATS, OpenBao, Dex and both Postgres DSNs are plaintext or `sslmode=disable` by default |
+| Q17-11 | `register_table` does not validate its location (§F2-7) | high | The door forwards `body.location` with no containment check, then the catalog opens it with ROOT credentials and vends session credentials scoped to that prefix — an attacker-chosen prefix becomes a credential. `warehouses.py` already does this check for warehouse create |
+| Q17-12 | The `static` vending mode is dead (§F2-8) | low | `make_vendor` never passes `static_keys`, so a configured mode silently returns `None`. A control that does nothing is worse than an absent one — delete it or wire it |
+| Q17-13 | Well-known defaults are refused only on `devMode=false` (§F2-9) | med | `rustfsadmin`, `age.password: lance`, the dev app token, `openbao.devMode: true` — generate at install or fail the render |
+| Q17-14 | Audit records carry no request or trace id (§F2-10) | med | Lakekeeper stamps a uuid7 request id on every audit event; rask's `lance.audit` stream cannot correlate one decision to one request, and ships to no append-only sink |
+| Q17-15 | Root create is open by default (§F2-11) | med | `lockRootCreate: false`, and `fga_deps.py` reads a missing lock as "open top-level create" — any authenticated subject may mint a top-level namespace |
+| Q17-16 | No image signing, no SBOM (§F2-12) | low | Scanners only (osv-scanner, trivy, trufflehog). Lakekeeper lacks this too and even disables provenance, so this is parity, not a regression — but it is the last row of the zero-trust list |
