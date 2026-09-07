@@ -1036,8 +1036,41 @@ The same claim as §C3's headline clause, and refuted by the same reading: `endp
 `compact_maintenance` does the same before `require_compactable`. Both doors carry the guard. The
 service functions default `protected` to `None`, which is why the CALL SITES had to be read rather
 than the signatures. Measured live: 220 `maintenance_refused_protected_base` refusals in six hours.
-### H2 · Bucket-granular external bases freeze purge and protect whole buckets — **HIGH** (see C4)
-### H3 · Clone protection bounded to maintained buckets — **MEDIUM-HIGH** (see C3)
+### H2 · Bucket-granular external bases freeze purge and protect whole buckets — **MEASURED via C4, 2026-09-07**
+A cross-reference carrying no content of its own, which is not a verdict — so here is C4's, in the
+terms this row states them.
+
+**"Freeze purge" — TRUE, and over-determined.** Measured on the deployed estate: `reconcile_report`
+answers `total 611, incomplete 490`, and `report_is_clean` returns on `report.total` BEFORE it reaches
+`report.incomplete`, so the purge is blocked by the findings alone. `MAINTENANCE_TRASH_PURGE_ENABLED`
+is report-only by default besides. Three independent brakes; zero maintenance purge records in six
+hours. Nothing is wrongly deleting and nothing is being reclaimed.
+
+**"Protect whole buckets" — TRUE, and the protection is live rather than theoretical**: 43,604
+`maintenance_base_ref` observations and **220 `maintenance_refused_protected_base`** refusals in six
+hours. A bucket-granular base makes the refusal coarse, which is the row's point — but the coarse
+refusal is doing real work, not sitting idle.
+
+**Closes it where C4 does**: a per-base `managed` / `reference-only` policy on the warehouse record,
+never by widening the orphan scan's mask — which the estate already measured as the wrong fix (an
+`add_bases` prefix through which no `DataFile` resolves let the scan pass a dataset as `checked=True`
+with live files named as orphans).
+### H3 · Clone protection bounded to maintained buckets — **THIS IS NOW THE LIVE HALF OF C3**
+C3's headline clause (the on-demand doors destroying a live clone) is REFUTED — both `run_maintenance`
+and `compact_maintenance` compute `_base_refs` and pass it, and the guard records 220 live refusals.
+**What survives is exactly this row**, and the code states the bound in its own docstring:
+`sibling_base_refs` is *"one non-recursive call against a flat layout"*, so it collects referrers among
+SIBLINGS. A clone whose referrer lives in another bucket, or in a deactivated warehouse the sweep does
+not walk, is invisible to it — and the evidence for a source only ever exists on the referring side, so
+nothing about the dataset in front of you reveals the danger.
+
+**Branches now ride this protection** (C8): they set flag 16 and their parent is a sibling, so the
+pre-pass sees the reference. That is the same-bucket case working; it does not extend the reach.
+
+**Closes it** with C3's second half — record the clone/branch -> (source, version) edge AT CREATION and
+consult that registry from every GC door, instead of rediscovering referrers by listing. That also
+removes the reliance on a listing being complete, which `protected_roots` already has to report as
+`unreadable`.
 
 ### H4 · No lease, no deployment strategy, unpersisted retry state — **THE STRATEGY CLAUSE IS DONE 2026-09-07**
 **`strategy: Recreate` — DONE, and measuring it is what showed the pin was never enough.** The steady
