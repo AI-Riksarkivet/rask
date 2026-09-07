@@ -1088,6 +1088,19 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
                 detail = f"{detail}. Valid fields are {', '.join(fields)}"
             log.info("column_op_rejected", extra={"action": action, "error": message})
             raise TableColumnNotFoundError(f"{action}: {detail}") from exc
+        if any(marker in message.lower() for marker in _COMMIT_CONFLICT_MARKERS):
+            # A LOST RACE, NOT A BAD REQUEST — and the difference is what the caller should do next.
+            # Measured 2026-09-07: six concurrent `add_columns` on one table, five lose with
+            # `OSError("Retryable commit conflict for version 2: This Merge transaction was preempted by
+            # concurrent transaction ...")`. Reported as Internal 18 that reads as "the server broke", so
+            # a client retries nothing and an operator is paged for contention that resolves itself.
+            # Code 14 says re-read and re-commit, which is exactly what Lance calls it: retryable.
+            #
+            # AFTER the missing-column test on purpose: `_COMMIT_CONFLICT_MARKERS` carries the bare word
+            # `concurrent`, so a column actually NAMED `concurrent` would match here — it is caught above
+            # as the 12 it really is, and a genuine conflict never looks like a missing column (both
+            # directions verified against the two regexes).
+            raise ConcurrentModificationError(f"{action}: {detail} — re-read the table version and retry") from exc
         if _USER_INPUT_MARKER in message or _COLUMN_BAD_REQUEST.search(message):
             log.info("column_op_rejected", extra={"action": action, "error": message})
             raise InvalidInputError(f"{action}: {detail}") from exc
