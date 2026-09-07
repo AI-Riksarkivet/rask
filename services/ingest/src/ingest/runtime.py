@@ -594,8 +594,11 @@ def _fragments_to_commit(uri: str, spec: RunSpec, carried: list[str], *, fallbac
             "ingest_staging_unreadable_using_carried_fragments",
             extra={"run_id": spec.run_id, "dataset_uri": uri, "carried": len(carried)},
         )
-        seen: set[str] = set()
-        return [f for f in carried if not (f in seen or seen.add(f))]
+        # dict.fromkeys DEDUPES IN FIRST-SEEN ORDER, which is the property that matters: a commit list
+        # must stay in the order the run wrote it. The `seen`-set comprehension that did this leaned on
+        # `set.add` returning None inside a boolean, which reads as a bug to anything checking the
+        # expression rather than the idiom — `uvx ty check` flags it, and that gate is error-on-warning.
+        return list(dict.fromkeys(carried))
 
     if not staged and fallback_dropped:
         # THE TWO EMPTIES ARE NOT THE SAME FACT. An empty `carried` normally means "this run wrote
