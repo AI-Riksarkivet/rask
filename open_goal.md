@@ -29,35 +29,41 @@ turned out to be are § Q16.
     upstream and the confinement root, which NARROWS what a trigger may name rather than widening it.
     Proven live: `test_media_lane_derives_under_governance` passes.
 
-**G1b — THE TWO SEAMS STAY BYO, AND THE DEPLOYED PATH MUST USE THEM.** Tracked as Q17-1..4. Measured 2026-09-07:
+**G1b — THE TWO SEAMS STAY BYO, AND THE DEPLOYED PATH MUST USE THEM.** Tracked as Q17-1..4.
+**THE DEPENDENCY-GRAPH HALF IS DONE 2026-09-07** — re-measured after the move:
 
     catalog / lineage / maintenance / service-kit   0 `import ray`, 0 declared ray dependency
-    medallion                                       2 files, declared dependency
+    medallion                                       0 `ray_kit` imports, 0 declared ray dependency
+    services/compute                                declares ray-kit — THE ONE ADAPTER, by role
+
+  `ray_kit.submit` was pure HTTPX with exactly ONE production consumer (medallion), while the ray-kit
+  PACKAGE declares `ray[default]` for its SDK half. So it MOVED to `medallion.services.ray_jobs_api`,
+  that service's Ray adapter, and `ray-kit` is now what `services/compute` alone needs. Gated by
+  `test_no_service_depends_on_a_compute_engine.py`, whose exemption for `compute` is a ROLE (a service
+  may ADAPT an engine and must not DEPEND on one) and is itself gated against becoming a blanket.
+
+  **WHY THIS FILE'S OWN EXPLANATION WAS WRONG, and it matters because it is the reason the work
+  stalled.** It said "the port was built and the callers were never migrated". They could not have
+  been: `RayJobExecutor` renders `WorkOrder.to_env()` into the job's runtime_env, and the job programs
+  read six differently-spelled names — **overlap 0 of 6**. Anything submitted through the port would
+  have started with NO inputs bound, and an empty source URI is not a crash: it is a run that scans
+  nothing, writes nothing and reports success. Converged 2026-09-07 (`32ff50cb`) across FIVE authors —
+  three job programs, the submitter, the sealed `runners/dummy`, plus an e2e fixture and a runner test
+  found only by grep because `runners/*` is in no root testpath. Gated whole-tree.
+
+  **WHAT REMAINS, and it is a decision rather than a refactor.** `executor_for(...)` is still called
+  nowhere outside its registry, so the deployed path reaches Ray through `ray_submit`. Putting the
+  PORT in front needs a durable adapter to bind to, and `RayJobExecutor` submits a `RayJob` CR that
+  KubeRay must reconcile against a `RayCluster` — of which this estate has **ZERO**: the live Ray is
+  `ray-lance-head`, a HAND-APPLIED plain Deployment with no ownerReferences. Chart-owned RayCluster,
+  or ephemeral per-job clusters, is an owner decision about job-record durability.
 
   So the LAKEHOUSE has no notion of a compute engine, and that is not to regress — the ports
   (`service_kit.lakehouse.executor` for compute, `.saga` for the workflow engine) name no engine and
   are gated by `test_the_executor_port_names_no_engine.py`.
 
-  **WHY MEDALLION STILL KNOWS ABOUT RAY: the port was built and the callers were never migrated.**
-  Measured 2026-09-07:
-
-      RayJobExecutor constructed outside tests   NOWHERE — dead on the deployed path
-      the only adapter anyone builds             InProcessExecutor (transform.py:760)
-      the live Ray path                          ray_submit.py, a SECOND, older submission seam
-      direct ray_submit callers                  9 sites / 4 modules — workflow.py x4, train.py x3,
-                                                 transform.py x1, stage_runner.py x1
-      `ray` imports inside rayjob_executor.py    0 — it submits a RayJob CR over HTTPX
-
-  So the decoupling is real for the IN-PROCESS lane and fictional for the lane the estate runs. The
-  last row is the point: the port adapter needs no Ray import at all, so migrating those nine call
-  sites lets `services/medallion/pyproject.toml` drop `ray-kit` — and then NO service in the estate
-  depends on a compute engine, and BYO stops being a claim about ports and becomes a property of the
-  dependency graph. `maintenance/services/compaction_executor.py` does not use the port either.
-
-  A port with two adapters, one of them dead, is a decoupling claim rather than a decoupled system.
-
-**G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md` — 207 tracked, 172 open,
-35 struck as of 2026-09-07 (re-read the file's own header; this line goes stale by design). Order: anything provably wrong on the LIVE ESTATE first (the shape the
+**G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md` — re-read the file's own
+header, which re-derives its counts from its own rows; any number written here goes stale by design. Order: anything provably wrong on the LIVE ESTATE first (the shape the
 trainer 401 had — silent, data-losing, nothing red), then correctness, then tidiness. Every row
 reaches a verdict: fixed, or struck with the measurement that refutes it. The file is DELETED when it
 is empty, and not before — its header count is re-derived from its own rows, never asserted.
@@ -79,13 +85,20 @@ items 1-4 "decide whether the claim is honest":
           the refusal is on the AMBIGUITY, not on being open. Landed for the three services that
           have a human door (catalog, lineage, the medallion producer); `maintenance`,
           `notifications` and the stage runners have none and were deliberately left out.
-    F2-3  kill the one shared service bearer — THE WIDEST HOLDER IS DONE 2026-09-07 (`bf273f07`):
-          seven web pods stop mounting it and `service-web` is privileged with its own credential.
-          The door already refuses a privileged name presented with the shared token, so the
-          "any holder can pick the highest-privileged name" warning is false for the five cascade
-          subjects too. LEFT: `service-ingest`, `service-maintenance`, `notifications` — each needs
-          its CLIENT half first (all three have 0 `dedicated_token` refs), because naming a subject
-          privileged before it can present its own credential 401s it outright.
+    F2-3  kill the one shared service bearer — THREE OF FOUR, all proven ON THE WIRE rather than in
+          a render. `service-web` (`bf273f07`), `service-maintenance` and `service-ingest`
+          (`9405b732`) each present their own credential; ingest's was driven both ways — the
+          dedicated token answers 200 at lineage and the SAME privileged name with the shared bearer
+          answers 401. A privileged credential has THREE halves (present, demand, SEED) and the third
+          nearly shipped a 401 twice.
+          `notifications` is the fourth and CANNOT, for a reason that is not about the service:
+          landed and reverted live 2026-09-07 (release 107 → 108). Its client half is correct and its
+          reconciler still 401'd — `the presented credential may not claim 'notifications'` — because
+          it reaches lineage through DAPR SERVICE INVOCATION and daprd stamps its own
+          `dapr-api-token` on every request it delivers. A DEDICATED CREDENTIAL IS A PROPERTY OF THE
+          TRANSPORT, NOT ONLY OF THE SERVICE: ingest holds one at the same door only because it calls
+          lineage directly over HTTP. The remainder is a design question — move that call off service
+          invocation, or accept that sidecar-invoked hops authenticate as the estate.
     F2-4  stop laundering ANONYMOUS browser reads into a service identity — DONE 2026-09-07,
           fail closed by owner ruling. The subject held 7 reader grants across TWO tenants plus a
           writer, seeded by a documented production prerequisite; all eight revoked, both seeds
@@ -104,9 +117,13 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
     F2-6   TLS to every store — MEASURED live, still open: every store is plaintext (RustFS S3 from
            five services plus STS, OpenFGA, the AGE DSN, OpenBao, NATS monitor, OTLP). Dapr mTLS is
            the estate's only transport security and every store sits outside it.
-    F2-11  lock root create — MEASURED live, still open: the running catalog carries
-           LANCE_FGA_LOCK_ROOT_CREATE=false, so any authenticated subject may mint a top-level
-           namespace ON THIS ESTATE, not merely by chart default.
+    F2-11  lock root create — DONE 2026-09-07 (`e6f4ce37`). THE SHIPPED DEFAULT WAS THE DEFECT, not
+           its value: `hasKey` finds a key whether or not anyone chose it, so `values.yaml`'s
+           `lockRootCreate: false` beat any derivation and the control could only be armed by an
+           operator who already knew to arm it. The key is deleted; `services.yaml` derives it from
+           `rask.isRealDeployment`, ONE helper now shared with `prod-credentials.yaml` so the two
+           cannot disagree about what "real" means. Rendered three ways: local loop false, real
+           deployment true with nobody arming it, explicit override winning in BOTH directions.
 
     F2-7   validate `register_table` locations — LARGELY REFUTED (Q17-11), by driving the deployed
            door rather than reading one layer of it: an ABSOLUTE location answers 400, a relative
@@ -131,13 +148,33 @@ Then F2-5..12, of which THREE now have verdicts (2026-09-07):
            attestation. A reader asking "do we have provenance?" finds a function by that name on the
            publish path.
 
-Remaining with no verdict: F2-5 alone (Dapr access control + NetworkPolicy — measured tractable: only
-TWO service-invocation callers exist, so a defaultAction:deny needs 11 allow entries and has ONE home
-in the shared `lance-tracing` Configuration), plus the append-only-sink half of F2-10. So §F2 stands
-at NINE of twelve with a verdict, THREE of them refutations rather than fixes.
+    F2-5   Dapr access control — ITS OWN PREMISE IS REFUTED (2026-09-07), and the refutation is what
+           stopped it shipping as an outage. This file said "only TWO service-invocation callers
+           exist, so a defaultAction:deny needs 11 allow entries". Both callers are real and both
+           are on the HTTP `/v1.0/invoke` path — the only surface that grep could see. The estate
+           invokes over THREE planes:
 
-**THE PATTERN BEHIND ALL THREE REFUTATIONS, recorded in docs/DECISIONS.md: a control's NAME is not
-evidence that it exists.** A field that WAS passed and was read by nothing (Q17-20); a field NEVER
+               HTTP /v1.0/invoke   gateway, notifications
+               ActorProxy          annotator, notifications      never counted
+               Dapr Workflow       flows, ingest, medallion      never counted; it IS actors
+
+           Dapr's own docs settle half and open the other half: "Service invocation access control
+           does not cover cross-app workflow scheduling" — there is a separate `WorkflowAccessPolicy`
+           this estate has never heard of, a SECOND unrecorded gap. Actor-to-actor is documented
+           neither way, and the estate has 28 `ActorProxy` refs behind the notifications inbox and
+           the annotator's projects. The PRECONDITION does hold, measured live: Dapr mTLS true,
+           Sentry running, `lance-tracing` is the one shared Configuration. What it needs first is
+           the actor plane characterised on a live estate, because no document answers it.
+
+Remaining with no verdict: the append-only-sink half of F2-10 alone. So §F2 stands at ELEVEN of
+twelve with a verdict, FOUR of them refutations rather than fixes.
+
+**THE PATTERN, now with SIX members and recorded in docs/DECISIONS.md: a control's NAME is not
+evidence that it exists — and neither is its CONFIGURATION, nor a COUNT of its call sites.** Three
+more landed 2026-09-07: notifications' credential, where all THREE halves rendered correctly and the
+transport overwrote it on the wire; F2-5's caller count, taken on one plane of three; and A10's
+dependency bump, which the catalog's own 320 tests passed because they mock the layer that refuses.
+**When a measurement is a COUNT, ask what surface the count could see.** The original three: A field that WAS passed and was read by nothing (Q17-20); a field NEVER
 passed that is stamped on every record anyway (Q17-14); a FUNCTION NAMED for the control it does not
 implement (Q17-16). Verify where a control's value LANDS — the request on the wire, the settings
 field that binds it, the record, the artifact — not where its name appears. Each took one command and
