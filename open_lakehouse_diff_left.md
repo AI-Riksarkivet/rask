@@ -304,6 +304,37 @@ written: `update`, `delete`, `insert`, `merge_insert`, the merge's index build, 
 and `count_rows` honour `branch`; `query`, `explain_plan`, `analyze_plan`, `create_index`,
 `create_scalar_index`, `stats`, `index/list`, `index/{n}/stats` refuse it (see C2). The rest of A7
 stands.
+**MEASURED THROUGH THE STOCK CLIENT 2026-09-07 (§A11's suite), and most of this row is already
+true.** The close condition is "each refusal re-expressed with the spec's own code", and four of the
+governance refusals were driven against the deployed catalog with pylance's own `RestNamespace` — the
+arbiter that matters, since the question is whether a spec client can UNDERSTAND a rask refusal.
+Every one arrived as a typed spec error rather than an untyped 4xx or an `Internal 18`:
+
+    create a table at the ROOT              InvalidInputError        13
+    create a TOP-LEVEL namespace            InvalidInputError        13
+    drop a PROTECTED table                  NamespaceNotEmptyError    3
+    drop a NON-EMPTY namespace              NamespaceNotEmptyError    3
+
+**The protection code is the one worth revisiting, and its recorded reason is FALSIFIED.**
+`fga_deps.py::require_not_protected` chooses `NamespaceNotEmptyError` and explains it as "the spec's
+own 'this container will not be deleted right now' error, reused rather than minting a status the
+client SDKs do not map". Measured: `InvalidTableStateError` — "Table is in an invalid state for the
+operation" — exists in the stock client with code 19 and maps to the SAME HTTP 409 in
+`ns_errors._STATUS`. So the alternative is mapped by both ends, and the stated reason for not using it
+does not hold.
+
+The consequence is bounded but real, and it is the §A5 shape: the DETAIL is perfect ("is protected
+against deletion. Pass force=true to override"), so a human is never misled — but a generated client
+dispatches on the CODE, and code 3 tells it the container has contents. For a protected TABLE that can
+never be made true, so a client that empties-and-retries loops forever.
+
+**NOT CHANGED HERE, and the reason is a genuine tie rather than reluctance.** Protection covers four
+object kinds (table, namespace, warehouse, project) through one shared guard. Code 19 is spelled
+`InvalidTableState`, so moving all four onto it puts "table" on a project refusal; splitting it (19 for
+tables, 3 for containers) mints two codes for one condition, which is the inconsistency this estate
+refuses elsewhere. Both readings are defensible, the status quo is a recorded decision, and what the
+row was missing is the measurement that its stated justification is wrong — which it now has.
+
 **What.** Warehouse-scoped namespace refusal, no root tables, trash soft-delete, protection 409/code 3,
 lineage keys injected into schema metadata, implicit BTREE on merge_insert, insert pre-coercion,
 maintenance 503 on POST reads, update/delete ignoring `branch`. **Closes it.** R2; each refusal
