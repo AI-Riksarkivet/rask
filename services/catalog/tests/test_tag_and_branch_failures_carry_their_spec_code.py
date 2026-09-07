@@ -147,6 +147,13 @@ def test_a_missing_version_mints_VERSION_NOT_FOUND(ns, door: str, call: _Call) -
         # One representative per rule, across both refs, because the wording differs per ref ("Branch
         # segment ... contains invalid characters" vs "Ref characters must be either alphanumeric") and
         # only the shared `Ref is invalid:` prefix is matched.
+        # BACKEND-DEPENDENT, and the estate takes the other path — measured 2026-09-07. On this `dir`
+        # dataset the ref-name validator runs first and says `Ref is invalid:`. On the DEPLOYED
+        # S3-backed catalog the identical call reaches Lance's clone path first and dies with the
+        # internal-error panic instead, which is the same text a collision produces, so a malformed
+        # BRANCH name still answers 18 there. The tag cases below are correct on both backends. Kept
+        # green here because the mapping is right and does fire wherever the validator runs; the
+        # residual is upstream (an invalid name must not panic) and is recorded in §A5.
         ("branch, invalid character", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a b"))),
         ("branch, .lock suffix", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="feat.lock"))),
         ("branch, leading slash", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="/lead"))),

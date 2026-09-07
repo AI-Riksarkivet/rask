@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 221 tracked, 147 open, 74 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 148 open, 74 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -181,7 +181,7 @@ canonicalisation designed.
 server delimiter too. **Closes it.** Request-scoped delimiter dependency feeding `parse_identifier` and
 `canonical_object_id`.
 
-### A5 · Error bodies without `code` — **HALF DONE 2026-09-02** (`f1ee42d3` framework 404/405 carry the spec code; `0699bac3` `Unsupported` answers 406). REMAINING: tag/branch dataplane failures still surface as unmapped 500s, so codes 8/9/11/22/23 stay unreachable, and the column/data ops never mint 14/20.
+### A5 · Error bodies without `code` — **TAG/BRANCH HALF DONE AND VERIFIED LIVE 2026-09-07** (`1be78b1c`, `e2a03129`; earlier: `f1ee42d3` framework 404/405, `0699bac3` `Unsupported` 406). REMAINING: the column/data ops never mint 14/20, and one branch-name case is upstream-blocked — both below.
 **MOSTLY DONE 2026-09-02.** Two halves landed. `f1ee42d3`: FastAPI's own 404/405 went out as
 `{"detail": ...}` with no `code`, so the reference client reported `InternalError 18` — a
 `StarletteHTTPException` handler now stamps `Unsupported` (the honest code for "this backend does
@@ -192,6 +192,68 @@ assertions and four prose sites that pinned 501 were rewritten. The 422 and the 
 already coded — the register was stale on those. **Remaining:** the tag/branch dataplane failures
 that surface as unmapped 500s (codes 8/9/11/22/23 unreachable), and column/data ops never minting
 14/20.
+**TAG/BRANCH: DONE 2026-09-07, driven against the deployed catalog before and after.** Only
+`get_tag_version` translated anything, which is why the gap read as absent rather than systematic —
+the one tag op anyone had driven by hand was the one already correct. Every other door let a bare
+pylance `ValueError`/`OSError` reach `install_problem_handlers`, which maps only the typed
+`lance_namespace` hierarchy, so all of them landed on `Internal 18`. Measured on `rask-catalog:2333`:
+
+    door                              before   after
+    tags/delete   tag missing         500/18   404/8
+    tags/update   tag missing         500/18   404/8
+    tags/create   tag exists          500/18   409/9
+    tags/create   version missing     500/18   404/11
+    tags/update   version missing     500/18   404/11
+    branches/delete branch missing    500/18   404/22
+    branches/create branch exists     500/18   409/23
+    branches/create bad from_version  500/18   404/11
+    branches/create missing source    500/18   404/22
+    tags/version  tag missing         404/8    404/8   (regression guard)
+
+The status map was never the defect: all 24 codes were already in `_STATUS` and every typed class
+already carries the right `.code`. What was missing is translation where the raw exception is raised.
+`_classify_ref_error` follows the `_classify_commit_error` precedent beside it and captures the
+failure's own NOUN, because a tag op scoped to a branch must report the BRANCH that is missing.
+
+**A COLLISION AND A MISSING SOURCE ARE ESTABLISHED BY READING, NOT BY MATCHING A MESSAGE**, and the
+first attempt got the second one wrong in a way only adversarial re-verification caught: pylance
+renders a missing source BRANCH and a missing source VERSION with the same object-store text, so
+matching it answered 11 for a branch that did not exist — the caller sent hunting a version when the
+branch was absent. Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py`.
+
+**RESIDUAL, UPSTREAM-BLOCKED: a malformed BRANCH name answers 18 on the deployed estate.** pylance's
+ref-name validator produces `Ref is invalid: ...` — mapped to `InvalidInput` 13 (400) and proven live
+for TAGS on both backends. But branch creation on the S3-backed estate reaches Lance's clone path
+BEFORE that validator and dies `OSError("Encountered internal error ... Clone operation should not
+enter build_manifest.")`, the same text a collision produces, which the door already re-reads to
+disambiguate. Measured both ways 2026-09-07: identical call, `dir` backend -> `Ref is invalid`,
+deployed S3 -> the internal-error panic. Duplicating Lance's validator here is refused deliberately —
+it accepts `über`, `HEAD`, `-x` and `x.LOCK`, disagreeing with its own message text, so a hand-rolled
+copy would reject names Lance accepts. The fix belongs upstream (an invalid name must not panic).
+
+### A12 · The vendored lance-ns spec is a MINOR VERSION BEHIND, and one drift is a capability gap
+**NEW 2026-09-07**, found by diffing `lance_docs/ns_catalog/spec.yaml` against upstream `main` rather
+than trusting it. The error contract is intact — the 24 codes are byte-identical and all 54 operations
+are present on both sides — so nothing in A5 above rests on stale ground. But the file is 79 lines
+short of upstream (101 changed lines) and `lance-namespace` is pinned at **0.11.1** against **0.12.0**
+on PyPI. Note Q3 above already cited "lance-namespace v0.12.0 `spec.yaml`" for its 406 decision while
+the vendored copy is older, so the two have been out of step for a while without anyone measuring it.
+
+**The one with teeth:** `merge_insert`'s `on` went from a single `string` to an `array` (`minItems: 1`,
+`style: form`, `explode: true`) — a COMPOSITE match key, "a row matches only when every listed field is
+equal". The vendored client still types it `Optional[str]`, so the catalog cannot express an upsert on
+`(tenant_id, doc_id)`; it can only match one column. That is a missing capability, not a cosmetic
+difference, and it is invisible to every test because they all pass a single column.
+
+Also upstream and absent here: `num_partitions` / `num_sub_vectors` / `num_bits` / `sample_rate` on
+create_index (IVF/PQ tuning), `num_inserted_rows` + `version` on a response, and `backfill_column`
+extended from UDF-backed columns to computed columns with an expression binding.
+
+**Close it by** bumping the dependency and re-vendoring the spec, then widening `on` end to end. Heed
+A10's lesson recorded in `open_goal.md`: a dependency bump passed the catalog's own tests because they
+mock the layer that refuses — so this one is proven by driving `merge_insert` with two `on` values
+against the deployed catalog, not by a green suite.
+
 **What.** 422, generic 500, FastAPI 404/405, maintenance 503, 413, 429 and draining 503 all collapse to
 `InternalError 18` in the client; tag/branch failures are unmapped 500s (codes 8/9/11/22/23 unreachable);
 column/data ops never mint 14/20; UNSUPPORTED answers 501 where the spec and Lance's reference server
