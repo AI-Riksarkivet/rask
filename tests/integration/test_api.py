@@ -317,6 +317,13 @@ def test_create_branch_maps_from_version_to_int_reference(client: TestClient, mo
 
 def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient, monkeypatch) -> None:
     dataset = MagicMock()
+    # The double must NAME the source branch, because the door now reads the branch list to establish
+    # it: pylance renders a missing source branch and a missing source version with the same
+    # object-store text, so a create from a source that does not exist answered 11 ("no such version")
+    # instead of 22. A bare MagicMock answers False to `in`, which is the honest reading of a double
+    # that models no branches — the request under test needs `exp` to exist for its mapping to be
+    # reached at all.
+    dataset.branches.list.return_value = {"exp": {"parent_version": 2}}
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/create", json={"name": "x", "from_branch": "exp", "from_version": 2})
     assert resp.status_code == 200
