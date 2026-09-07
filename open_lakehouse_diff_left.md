@@ -706,8 +706,27 @@ pylance's behaviour on external blobs under a registered base.
 connection swaps only `root`. **Closes it.** `initial_bases` + `base_<id>.<key>` options on the warehouse
 record; `target_bases` on the write doors; `aws_provider_scheme` once pylance ships it.
 
-### C6 · Tiers as shallow clones plus columns (R9)
+### C6 · Tiers as shallow clones plus columns (R9) — **ITS PREREQUISITE IS NOW MEASURED WORKING**
 **What.** `compute.py` re-materialises managed blob bytes per tier; external descriptors are forwarded.
+Confirmed at HEAD, and the code states both halves plainly: the external branch forwards the pointer
+("every tier that copied them was storing the corpus again to express a readiness state" — measured
+bronze 0.16% + silver 0.19% carried that way against ~100% per tier materialised), while the managed
+branch carries bytes because "the bytes exist nowhere else, so carrying them IS the only option".
+
+**THAT LAST CLAIM IS WHAT THIS ROW DISPUTES, and the dispute is now cheaper to settle.** A shallow
+clone IS the other option: silver would reference bronze's bytes rather than copy them. The row gates
+that on C3 because a referencing silver means bronze's bytes must never be reclaimed while silver
+exists — and **C3's base-refs protection is now measured live and active**: 43,604
+`maintenance_base_ref` observations and **220 `maintenance_refused_protected_base`** refusals in six
+hours, with both on-demand doors passing `protected` (§C3). The guard the redesign depends on is not
+hypothetical any more.
+
+**Still an owner decision, and the row already says why:** "measure bytes and latency against the
+copying path on one corpus before adopting". A clone-per-tier trades storage for a hard coupling —
+bronze can no longer be reclaimed independently of silver — and that is a lifecycle choice, not a
+performance one. C3's remaining half (a recorded clone -> source edge rather than a sibling listing)
+is what would make the coupling durable enough to rely on.
+
 **Closes it.** After C3: silver = shallow clone of bronze@N + `add_columns`; measure bytes and latency
 against the copying path on one corpus before adopting.
 
