@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 147 open, 75 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 146 open, 76 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -624,13 +624,39 @@ opt-in; document `read_blob_ranges` as the batched client path once creds are ve
 under `tree/<branch>/` are never compacted, optimized or cleaned (`optimize.py:123-127`).
 **Closes it.** Discover branch datasets; add repack; pin that compaction does not rewrite dedicated blobs.
 
-### C9 · Feature flags 32 / 64 / 128 (Q5 decided)
-**What.** `features.py` whitelists 1|2|4|8 (+16 for GC), names 64, does not know 32 or 128; comments say
-the spec stops at 16. Refusal is fail-closed and correct today. **Closes it.** Name the three bits with
-their reader/writer requirement; split `SUPPORTED` into a reader mask and a writer mask so report-only
-passes proceed on writer-only unknowns while compaction, cleanup and purge stay fail-closed; never set
-`LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES` in a deployed image; support 32 only with the pylance bump
-that reads manifest-recorded transactions (the replay marker and `/history` depend on `read_transaction`).
+### ~~C9 · Feature flags 32 / 64 / 128 (Q5 decided)~~ — **DONE 2026-09-07** (`2c04ad66`), one clause moot
+Its four clauses, each answered:
+
+**1. Name the three bits with their reader/writer requirement — DONE.** `FLAG_DISABLE_TRANSACTION_FILE`
+(32, writer-required only), `FLAG_DATA_OVERLAYS` (64), `FLAG_COVERED_INDEX_METADATA` (128, sticky), from
+`lance-table/src/feature_flags.rs` as Q5 recorded. The vendored `file_format.md` stops at 16 and calls
+32+ "unknown" — the same doc-lag the vendored `spec.yaml` shows against upstream — so the Rust source is
+the authority. **Naming is not supporting**: none enters `SUPPORTED`, so all three still refuse. What
+changed is that a refusal now says `32 (disable_transaction_file (writer-required only))` instead of
+`32 (unknown)`, which an operator can act on.
+
+**2. Split the whitelist so report-only passes proceed on writer-only unknowns — DONE, and the spec
+settles it rather than a preference.** `file_format.md`: *"Readers should check the
+`reader_feature_flags` … Writers should check `writer_feature_flags`"*, with a per-bit table in which
+one row is already asymmetric — `FLAG_TABLE_CONFIG` (8) is Reader-No / Writer-Yes. **Measured on pylance
+10.0.0: `update_config({"k": "v"})` produces `reader=0, writer=8`**, so the asymmetry is what Lance
+writes, not a note in a table. Every gate ORed the fields, so the ORPHAN SCAN — the estate's one
+read-only, report-only pass — refused datasets over bits only a writer must understand. `unsupported_features`
+now takes `describe_read_unsupported_flags` (reader field alone); compaction and GC are untouched and
+pinned, because they write. **32 is the concrete case**: writer-required only, so a dataset setting it
+is one a read-only pass may safely scan, where before it was refused outright.
+
+Not a weakening — an unknown bit in the READER field still refuses, since that field is by definition
+what a reader must understand and proceeding means enumerating a layout we cannot resolve.
+
+**3. Never set `LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES` in a deployed image — VERIFIED, not merely
+intended:** zero occurrences anywhere in the repo (outside this register's own prose) and zero in the
+live Deployments.
+
+**4. Support 32 with the pylance bump — MOOT for now, and correctly so.** pylance 10.0.0 carries no
+symbol for 32 or 128, so refusal is the only correct answer today. It lands with A10's joint bump, not
+before; the replay marker and `/history` read `.txn` files through `read_transaction`, which is exactly
+what flag 32 disables.
 
 ---
 

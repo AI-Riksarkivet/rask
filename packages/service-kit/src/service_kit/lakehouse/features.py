@@ -101,10 +101,25 @@ FLAG_STABLE_ROW_IDS = 2
 FLAG_USE_V2_FORMAT_DEPRECATED = 4
 FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
-#: Not in the vendored spec table (which stops at 16 and calls 32+ "unknown"), but real and measured:
-#: a committed ``LanceOperation.DataOverlay`` sets it, and an overlay writes new cell values to
-#: ``data/overlay-<uuid>.lance`` referenced from ``DataFragment.overlays`` rather than ``data_files()``.
+#: THE THREE BITS THE VENDORED TABLE DOES NOT CARRY. `lance_docs/file_format.md` stops at 16 and says
+#: "flags with bit values 32 and above are unknown", but `lance-table/src/feature_flags.rs` defines
+#: all three — the same doc-lag the vendored `spec.yaml` shows against upstream. Named here so a
+#: refusal says WHICH feature it declined instead of "32 (unknown)": an operator can act on
+#: "disable_transaction_file", not on a bare bit. **Naming is not supporting** — none of them enters
+#: :data:`SUPPORTED`, so all three still refuse; pylance 10.0.0 has no symbol for 32 or 128 at all,
+#: which makes refusal the only correct answer today.
+#:
+#: 32 is WRITER-REQUIRED ONLY, which is why it is the concrete case for the reader/writer split: a
+#: dataset that sets it writer-side is one a read-only pass may safely scan.
+FLAG_DISABLE_TRANSACTION_FILE = 32
+#: Measured, not inferred: a committed ``LanceOperation.DataOverlay`` sets it, and an overlay writes
+#: new cell values to ``data/overlay-<uuid>.lance`` referenced from ``DataFragment.overlays`` rather
+#: than ``data_files()``. Release builds of Lance reject it unless
+#: ``LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES`` is set — which rask never sets in a deployed image
+#: (verified: zero occurrences in the repo and zero in the live Deployments).
 FLAG_DATA_OVERLAYS = 64
+#: Reader- and writer-required, and STICKY once set.
+FLAG_COVERED_INDEX_METADATA = 128
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -149,7 +164,9 @@ _FLAG_NAMES = {
     FLAG_USE_V2_FORMAT_DEPRECATED: "v2 format (deprecated)",
     FLAG_TABLE_CONFIG: "table config",
     FLAG_BASE_PATHS: "base_paths (shallow clone / multi-base)",
+    FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
     FLAG_DATA_OVERLAYS: "data overlays",
+    FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
