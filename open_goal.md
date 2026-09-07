@@ -195,9 +195,22 @@ Then F2-5..12, ALL of which now have verdicts (2026-09-07):
 
     F2-12  sign and attest images — CONFIRMED (Q17-16), with a naming trap that makes the opposite
            easy to believe. `.dagger/images.go` has a helper called `provenance()`, and it emits three
-           OCI LABELS — BUILD_DATE, VCS_REF, VERSION. No SBOM, no signature, no in-toto/SLSA
-           attestation. A reader asking "do we have provenance?" finds a function by that name on the
-           publish path.
+           OCI LABELS — BUILD_DATE, VCS_REF, VERSION (13 dockerfiles declare the ARGs and turn them
+           into real `org.opencontainers.image.*` labels; re-checked 2026-09-07, so the row is right
+           as written). No SBOM, no signature, no in-toto/SLSA attestation.
+           **BUT THE FIX IS NOT "ADD COSIGN", and measuring 2026-09-07 is what says so.** The estate
+           has **ZERO** signature verifiers — no Kyverno, no sigstore policy-controller, no
+           Gatekeeper; its five validating webhooks are CNPG, external-secrets and Kueue. **A
+           signature nothing verifies is decoration**, which is the exact anti-pattern this section
+           has produced six times today, and adding one would make a seventh: a control whose NAME is
+           present and whose enforcement is not. Signing needs a key custodian AND an admission-time
+           verifier before it is a control, and both are owner decisions.
+           **THE SBOM HALF IS DIFFERENT and partly already delivered**: `make audit` runs osv-scanner
+           over six lockfiles plus `.dagger/go.mod`, `make scan-config` runs trivy over `.docker/` +
+           `chart/`, and `make scan-image` runs trivy over a DAGGER-BUILT image. So the estate already
+           answers "what vulnerable things are in this?" — what an SBOM adds is a PORTABLE manifest a
+           downstream consumer can scan without rebuilding, which is a supply-chain claim rather than
+           a scanning gap.
 
     F2-5   Dapr access control — ITS OWN PREMISE IS REFUTED (2026-09-07), and the refutation is what
            stopped it shipping as an outage. This file said "only TWO service-invocation callers
