@@ -893,12 +893,32 @@ the run either, and what is staged is drained later.
 gap in the graph that looks exactly like a healthy estate. That has already happened twice on this
 lane (the trainer in 2026-07, `service-ingest` on 2026-08-06, a day of 403s while the data landed)."*
 
-**THE FIX IS ONE CHOKEPOINT, AND ONE OBSTACLE.** Both emit sites funnel through
-`ingest/lineage.py::_emit` (lines 268 and 341 → 358), so the stage/drop wrapping has a single home.
-The obstacle is that `_emit` receives an OPAQUE zero-arg callable — the event is built inside the
-lambda — so the event JSON the outbox needs is not visible at the staging point. Closing this row
-means having the callable yield its event (or passing it alongside) before wrapping; the outbox itself
-needs nothing new, only an object-store URI and storage options, both of which ingest already holds.
+**THE FIX IS ONE CHOKEPOINT, AND THE OBSTACLE IS AN API ONE — traced 2026-09-07.** Both emit sites
+funnel through `ingest/lineage.py::_emit` (268 and 341 → 358), so the wrapping has a single home, and
+the event is NOT hidden the way it first looks: `lineage_kit.runs.RunRecorder.start()` /
+`.complete()` / `.fail()` each build the `RunEvent`, call `self.emitter.emit(event)` and **return it**
+— ingest simply discards the return.
+
+**The real obstacle is that `Emitter.emit()` cannot report what happened.** It swallows BOTH failure
+modes by design — authoring and transport, each counted into `lineage_kit.metrics` via `record_drop`
+and logged — and returns `None`. So the emitter KNOWS the event was dropped and the caller cannot ask.
+Nothing downstream can decide to stage.
+
+Two shapes close it, and they are not equivalent:
+
+* **Make `Emitter.emit()` report success** (a bool, or a raise the caller catches). Additive, and the
+  emitter already has the fact. Then ingest stages ONLY on a reported failure — which covers the two
+  recorded incidents exactly, since both were a refused door rather than a crash. Its residual is a
+  crash between the failed emit and the stage: a smaller window, not a closed one.
+* **Build the event first, stage, emit, drop** — the medallion's shape (`transform.py::_build_stage_event`),
+  which is why it is durable. Closes the crash window too, and costs a stage write on the happy path.
+
+Choosing between them is a real trade (one object-store write per event against a narrow crash window),
+which is why this is recorded rather than guessed at.
+
+**Not attempted here** because it changes a SHARED package every producer emits through, and wants the
+live verification its shape deserves: drive a real ingest run with the lineage door refusing, confirm
+the event is staged, then confirm the lineage reconciler drains it.
 
 **Not attempted here** because it wants live verification the shape deserves: drive a real ingest run
 with the lineage door refusing, confirm the event is staged, then confirm the lineage reconciler drains
