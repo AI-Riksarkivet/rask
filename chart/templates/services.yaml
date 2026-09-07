@@ -573,7 +573,12 @@ spec:
             {{- $lineageWriters := list .Values.medallion.producer.serviceIdentity }}
             {{- range .Values.medallion.movers }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
             {{- range (.Values.medallion.mediaMovers | default list) }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
-            {{- $lineagePrivileged := append (compact $lineageWriters | uniq) .Values.medallion.train.trainerIdentity }}
+            {{- /* The web BFF joins the privileged set: it is the widest holder of the shared bearer
+                   (seven zone pods) and needs no client half, since it already reads its token from
+                   env. `service-ingest` and `notifications` remain on the shared token — each needs a
+                   service change first, and naming a subject privileged before it can present its own
+                   credential 401s it outright (measured 2026-08-26). */}}
+            {{- $lineagePrivileged := concat (compact $lineageWriters | uniq) (list .Values.medallion.train.trainerIdentity .Values.frontend.serviceIdentity) }}
             - { name: LINEAGE_PRIVILEGED_SUBJECTS, value: {{ compact $lineagePrivileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
             {{- end }}

@@ -177,7 +177,12 @@ spec:
                        nothing seeded the secret it needs, so it was inert in every deployment.
                        Derived from the same medallion declarations as LANCE_FGA_CASCADE_WRITERS, so a
                        new mover cannot be added with an identity that has no credential of its own. */}}
-                {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity }}
+                {{- /* `frontend.serviceIdentity` is here for the widest holder rather than the most
+                       privileged one: SEVEN zone Deployments mount the shared bearer, and the privileged
+                       block's own note records what that buys — "Reading one web pod's environment was
+                       the whole attack." It needs no client half, because the BFF already reads
+                       `LINEAGE_SERVICE_TOKEN` from env. */}}
+                {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity .Values.frontend.serviceIdentity }}
                 {{- range .Values.medallion.movers }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (.Values.medallion.mediaMovers | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}

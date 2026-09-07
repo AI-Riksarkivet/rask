@@ -251,8 +251,18 @@ spec:
             - name: LINEAGE_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
+{{- if $root.Values.auth.dedicatedServiceCredentials }}
+                  {{- /* ITS OWN CREDENTIAL, not the estate's shared bearer. `service_principal` refuses a
+                       PRIVILEGED subject presenting the shared token, and `frontend.serviceIdentity` is on
+                       that list under this same flag — so the two move together or every BFF call 401s.
+                       No sidecar here, so it takes the Ray head's route: infra-credentials, which
+                       external-secrets already syncs from OpenBao. */}}
+                  name: {{ include "lance.fullname" $root }}-infra-credentials
+                  key: service-token-{{ $root.Values.frontend.serviceIdentity }}
+{{- else }}
                   name: {{ $root.Release.Name }}-dapr-app-token
                   key: token
+{{- end }}
             - name: LINEAGE_SERVICE_ID
               value: {{ $fe.serviceIdentity | quote }}
             {{- if $fe.oidc.enabled }}

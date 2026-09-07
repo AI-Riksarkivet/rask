@@ -66,11 +66,16 @@ is empty, and not before — its header count is re-derived from its own rows, n
 sweep scores 19 controls: HAVE 6, STRONGER 3, PARTIAL 8, MISSING 1, and §F2 states outright that
 items 1-4 "decide whether the claim is honest":
 
-    F2-1  per-workload storage identities — catalog, maintenance, the producer and EVERY mover run
-          as the RustFS ROOT user; OpenBao changes where that secret comes from, not which identity
-          it is. The single MISSING control, and the largest gap in the estate.
-    F2-2  fail closed in CODE, not only in the chart — `oidc_enabled` defaults False, so a service
-          run outside the chart is anonymous.
+    F2-1  per-workload storage identities — DONE for the medallion plane 2026-09-07 (`e4cdd7f4`),
+          verified live and by the governed-union suite on the scoped credential. `rask-catalog` is
+          the ONE identity left, and it is a design question rather than another copy of the
+          pattern: the catalog vends credentials for every runtime-minted warehouse, so "what may
+          the thing that grants access itself reach?" has no answer this policy shape supplies.
+    F2-2  fail closed in CODE — DONE 2026-09-07 (`2c69c270`). `assert_authentication_configured`
+          refuses to boot a governed service whose auth is off with nobody having acknowledged it;
+          the refusal is on the AMBIGUITY, not on being open. Landed for the three services that
+          have a human door (catalog, lineage, the medallion producer); `maintenance`,
+          `notifications` and the movers have none and were deliberately left out.
     F2-3  kill the one shared service bearer — one token across an allowlist lets any holder claim
           the most privileged name on it. The trainer 401 was this control working; the rest of the
           allowlist is where it is not.
