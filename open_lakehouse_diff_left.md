@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 222 tracked, 148 open, 74 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 221 tracked, 147 open, 74 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -260,29 +260,6 @@ deployed S3 -> the internal-error panic. Duplicating Lance's validator here is r
 it accepts `über`, `HEAD`, `-x` and `x.LOCK`, disagreeing with its own message text, so a hand-rolled
 copy would reject names Lance accepts. The fix belongs upstream (an invalid name must not panic).
 
-### A12 · The vendored lance-ns spec is a MINOR VERSION BEHIND, and one drift is a capability gap
-**NEW 2026-09-07**, found by diffing `lance_docs/ns_catalog/spec.yaml` against upstream `main` rather
-than trusting it. The error contract is intact — the 24 codes are byte-identical and all 54 operations
-are present on both sides — so nothing in A5 above rests on stale ground. But the file is 79 lines
-short of upstream (101 changed lines) and `lance-namespace` is pinned at **0.11.1** against **0.12.0**
-on PyPI. Note Q3 above already cited "lance-namespace v0.12.0 `spec.yaml`" for its 406 decision while
-the vendored copy is older, so the two have been out of step for a while without anyone measuring it.
-
-**The one with teeth:** `merge_insert`'s `on` went from a single `string` to an `array` (`minItems: 1`,
-`style: form`, `explode: true`) — a COMPOSITE match key, "a row matches only when every listed field is
-equal". The vendored client still types it `Optional[str]`, so the catalog cannot express an upsert on
-`(tenant_id, doc_id)`; it can only match one column. That is a missing capability, not a cosmetic
-difference, and it is invisible to every test because they all pass a single column.
-
-Also upstream and absent here: `num_partitions` / `num_sub_vectors` / `num_bits` / `sample_rate` on
-create_index (IVF/PQ tuning), `num_inserted_rows` + `version` on a response, and `backfill_column`
-extended from UDF-backed columns to computed columns with an expression binding.
-
-**Close it by** bumping the dependency and re-vendoring the spec, then widening `on` end to end. Heed
-A10's lesson recorded in `open_goal.md`: a dependency bump passed the catalog's own tests because they
-mock the layer that refuses — so this one is proven by driving `merge_insert` with two `on` values
-against the deployed catalog, not by a green suite.
-
 **What.** 422, generic 500, FastAPI 404/405, maintenance 503, 413, 429 and draining 503 all collapse to
 `InternalError 18` in the client; tag/branch failures are unmapped 500s (codes 8/9/11/22/23 unreachable);
 column/data ops never mint 14/20; UNSUPPORTED answers 501 where the spec and Lance's reference server
@@ -361,6 +338,16 @@ which is itself the lesson: a "revert" that leaves the range open reverts nothin
 the estate is on 10.0.0). That is a major-version bump of the core columnar format library across
 every service that reads a dataset, not a pin edit, and it deserves its own change with its own
 verification. A9 rides on it.
+
+**THE RE-VENDOR HALF, SIZED 2026-09-07** by diffing `lance_docs/ns_catalog/spec.yaml` against upstream
+`main` rather than trusting it. **The error contract is INTACT** — the 24 codes are byte-identical and
+all 54 operations are present on both sides — which is what makes §A5's coded-error work safe to have
+landed against the vendored copy. What has moved is 101 lines, ours 79 short. Besides `on` (A9),
+upstream adds `num_partitions` / `num_sub_vectors` / `num_bits` / `sample_rate` to create_index (IVF/PQ
+tuning), `num_inserted_rows` + `version` to a response, and extends `backfill_column` from UDF-backed
+columns to computed columns with an expression binding. Note Q3 above cited "lance-namespace v0.12.0
+`spec.yaml`" for its 406 decision while the vendored copy is pre-0.12.0 — the two have been out of step
+unmeasured, which is why the re-vendor is part of this row rather than a separate one.
 
 **THE RE-VENDOR HALF IS SEPARATE AND STILL OPEN, and measuring it found a second defect: `lance_docs/`
 records no source version at all.** Six files, hand-vendored, no manifest, no pinned commit, no
