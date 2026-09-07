@@ -17,9 +17,11 @@ deleted when its work lands. Pause it by creating `.claude/GOAL.paused`.
 **G1 — CLOSE C4.** Every live e2e failure classified, and the estate defects fixed. Drift is repaired
 in the SUITE; a defect is repaired in the ESTATE; neither is left as "failing". Two items remain:
 
-  * **The trainer's dedicated credential reaches the live Ray head.** Fixed in code (`96e6885f`) and
-    the key is in `rask-infra-credentials`; the head still has to mount it and restart. Verified only
-    when a governed training run's lineage lands attributed to `service-trainer`.
+  * ~~**The trainer's dedicated credential reaches the live Ray head.**~~ **DONE 2026-09-07.** Code
+    (`96e6885f`), the key in `rask-infra-credentials`, and the head repointed at it and rolled. Proven
+    live: `test_train_lineage_lands_attributed_under_governance` passes, and the newest train job's
+    log carries ZERO `lineage emit attempt … rejected: HTTP 401` lines where every previous run
+    carried four.
   * **`POST /ingest-media` stops answering 503.** The cascade HEAD must ASK the catalog where its
     bronze lives and write there, putting that location on the `medallion.media` trigger as
     `from_uri` — which is what `/bronze-arrival` already does for the tabular lane. The head cannot
