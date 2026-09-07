@@ -875,7 +875,36 @@ lane; `submit_or_reattach` exists only as library code used in-process by the me
 
 ## E. Lineage (from the lineage sweep)
 
-### E1 · Lost origination events are unrecoverable and invisible — **HIGH**
+### E1 · Lost origination events are unrecoverable and invisible — **MEASURED 2026-09-07: ingest is the ONE lossy producer**
+**The clause about producers swallowing failures is confirmed, and narrowed to one service.** Four of
+the five lakehouse producers already stage durably through the shared object-store outbox
+(`service_kit.lakehouse.outbox` — `stage_event` / `drop_event` / `resolve_event`, "stage → publish →
+drop"): **catalog, lineage, maintenance, medallion**. **`ingest` has zero outbox usage** and emits
+bare, so a refused or unreachable lineage door loses the event outright.
+
+**IT IS SWALLOWED BY DESIGN, and the design's own reasoning is right** —
+`ingest/lineage.py::_emit`: *"A run whose data landed must not be reported as failed because the graph
+was unreachable — that would turn an observability outage into a data incident."* True, and the outbox
+is precisely the mechanism that honours that constraint WITHOUT losing the event: staging cannot fail
+the run either, and what is staged is drained later.
+
+**IT HAS ALREADY HAPPENED TWICE, and the estate wrote it down** —
+`ingest/service_identity.py`: *"a 401 there does not surface as an error, it surfaces as a permanent
+gap in the graph that looks exactly like a healthy estate. That has already happened twice on this
+lane (the trainer in 2026-07, `service-ingest` on 2026-08-06, a day of 403s while the data landed)."*
+
+**THE FIX IS ONE CHOKEPOINT, AND ONE OBSTACLE.** Both emit sites funnel through
+`ingest/lineage.py::_emit` (lines 268 and 341 → 358), so the stage/drop wrapping has a single home.
+The obstacle is that `_emit` receives an OPAQUE zero-arg callable — the event is built inside the
+lambda — so the event JSON the outbox needs is not visible at the staging point. Closing this row
+means having the callable yield its event (or passing it alongside) before wrapping; the outbox itself
+needs nothing new, only an object-store URI and storage options, both of which ingest already holds.
+
+**Not attempted here** because it wants live verification the shape deserves: drive a real ingest run
+with the lineage door refusing, confirm the event is staged, then confirm the lineage reconciler drains
+it. That is a deliberate deferral, not an oversight — the measurement above is what the row was
+missing.
+
 **What.** The reconcile sweep enumerates the graph, not storage, and skips nodes without `source_uri`;
 every HTTP producer swallows failures. A lost `create/declare/register` means the table never exists in
 lineage; a lost write on a known table is back-filled version-only. **Where.** `lineage/core/reconcile.py:169-172`,
