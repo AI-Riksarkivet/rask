@@ -66,11 +66,14 @@ is empty, and not before — its header count is re-derived from its own rows, n
 sweep scores 19 controls: HAVE 6, STRONGER 3, PARTIAL 8, MISSING 1, and §F2 states outright that
 items 1-4 "decide whether the claim is honest":
 
-    F2-1  per-workload storage identities — DONE for the medallion plane 2026-09-07 (`e4cdd7f4`),
-          verified live and by the governed-union suite on the scoped credential. `rask-catalog` is
-          the ONE identity left, and it is a design question rather than another copy of the
-          pattern: the catalog vends credentials for every runtime-minted warehouse, so "what may
-          the thing that grants access itself reach?" has no answer this policy shape supplies.
+    F2-1  per-workload storage identities — DONE for the medallion plane, and as of release 102/103
+          they are RELEASE INTENT rather than drift: `helm get values` carries
+          rustfs.medallionAccessKey + maintenanceAccessKey, the post-upgrade hook rotated both RustFS
+          users onto DERIVED secrets, and the governed-union suite passed 5/5 after the roll (Q17-17
+          closed). `rask-catalog` is the ONE identity left, and it is a design question rather than
+          another copy of the pattern: the catalog vends credentials for every runtime-minted
+          warehouse, so "what may the thing that grants access itself reach?" has no answer this
+          policy shape supplies. `rask-lineage` is root too and was never counted — check it.
     F2-2  fail closed in CODE — DONE 2026-09-07 (`2c69c270`). `assert_authentication_configured`
           refuses to boot a governed service whose auth is off with nobody having acknowledged it;
           the refusal is on the AMBIGUITY, not on being open. Landed for the three services that
@@ -89,9 +92,26 @@ items 1-4 "decide whether the claim is honest":
           gated, and the two e2e suites that read AS it (which is why it survived) now read as a
           user. Live: anonymous 403 / signed-in 200.
 
-Then F2-5..12 (Dapr access control + NetworkPolicy on by default, TLS to every store, validate
-`register_table` locations, delete the dead `static` vending mode, refuse well-known defaults,
-correlate audit records, lock root create, sign and attest images).
+Then F2-5..12, of which THREE now have verdicts (2026-09-07):
+
+    F2-8   the dead `static` vending mode — DONE, DELETED (Q17-12). It could be selected and never
+           got: `main.py` passes no `static_keys`, so it built an empty vendor that answered None for
+           everything and degraded to the mode it was chosen instead of. Gated by the GENERAL form —
+           a test that parses the real call site and refuses any permitted mode needing more.
+    F2-9   refuse well-known defaults — DONE (Q17-13). Four guards already existed and all four keyed
+           on one OPT-IN flag; `prod-credentials.yaml` now answers "is this a real deployment?" once,
+           unconditionally, on a signal an operator cannot forget.
+    F2-6   TLS to every store — MEASURED live, still open: every store is plaintext (RustFS S3 from
+           five services plus STS, OpenFGA, the AGE DSN, OpenBao, NATS monitor, OTLP). Dapr mTLS is
+           the estate's only transport security and every store sits outside it.
+    F2-11  lock root create — MEASURED live, still open: the running catalog carries
+           LANCE_FGA_LOCK_ROOT_CREATE=false, so any authenticated subject may mint a top-level
+           namespace ON THIS ESTATE, not merely by chart default.
+
+Remaining with no verdict yet: F2-5 (Dapr access control + NetworkPolicy — measured tractable: only
+TWO service-invocation callers exist, so a defaultAction:deny needs 11 allow entries and has ONE home
+in the shared `lance-tracing` Configuration), F2-7 (validate register_table locations), F2-10
+(correlate audit records), F2-12 (sign and attest images).
 
 ---
 
