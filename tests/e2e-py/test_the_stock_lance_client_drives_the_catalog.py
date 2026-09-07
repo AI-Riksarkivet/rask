@@ -194,3 +194,32 @@ def test_the_stock_client_drives_a_WRITE_round_trip(stock) -> None:  # noqa: ANN
     finally:
         with contextlib.suppress(Exception):
             stock.drop_table(ln.DropTableRequest(id=table))
+
+
+def test_rasks_GOVERNANCE_refusals_are_legible_to_a_spec_client(stock) -> None:  # noqa: ANN001
+    """§A7's close condition, asserted with the only arbiter that can settle it.
+
+    rask refuses things the bare spec does not: no tables at the root, no top-level namespace except
+    through the warehouse door, no dropping a protected object. Those refusals are correct — but a
+    refusal a spec client cannot classify is indistinguishable from a broken server, so the question
+    is not whether rask refuses, it is whether the STOCK client rebuilds each refusal as a typed spec
+    error. Driven 2026-09-07: all of them do.
+
+    `NamespaceNotEmpty` (3) for a protected TABLE is deliberate and recorded, and § A7 carries the
+    measurement that its stated reason is falsified — code 19 is mapped at both ends. This pins the
+    CURRENT contract so a change to it is a decision rather than a drift.
+    """
+    ln = _requests()
+    unique = uuid.uuid4().hex[:8]
+
+    with pytest.raises(ln.InvalidInputError) as root_table:
+        stock.create_table(ln.CreateTableRequest(id=[f"roottable_{unique}"]), b"")
+    assert root_table.value.code == 13, f"a root table was refused with code {root_table.value.code}, not 13"
+
+    with pytest.raises(ln.InvalidInputError) as top_level:
+        stock.create_namespace(ln.CreateNamespaceRequest(id=[f"toplevel_{unique}"]))
+    assert top_level.value.code == 13, f"a top-level namespace was refused with code {top_level.value.code}, not 13"
+
+    with pytest.raises(ln.NamespaceNotEmptyError) as not_empty:
+        stock.drop_namespace(ln.DropNamespaceRequest(id=[NAMESPACE]))
+    assert not_empty.value.code == 3, f"dropping a populated namespace answered code {not_empty.value.code}, not 3"
