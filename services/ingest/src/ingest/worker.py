@@ -421,6 +421,18 @@ class Worker:
         # caller — and every test that builds a bare Worker — working unchanged.
         self._sizing = sizing or resolve()
 
+    async def _park(self, task: UnitTask, reason: str, outcome: ChunkOutcome) -> None:
+        """Record the refusal, park the evidence, and say so when the evidence did not land.
+
+        THE ORDER IS THE CONTRACT. The run's own record is written unconditionally, because that is
+        what the publish precondition reads and what the operator sees; the DLQ copy is evidence
+        somebody goes looking for afterwards. So a park that fails may change the TEXT of the record
+        and must never change whether there is one — and must never propagate, because every caller
+        acks immediately after and an unacked poison unit hangs the chunk it was meant to let finish.
+        """
+        parked = await self._q.park_poison(task, reason)
+        outcome.errors[task.key] = reason if parked else f"{reason} — and the DLQ park FAILED, so this unit is recorded here only"
+
     async def _refuse(self, msg: Any, task: UnitTask, exc: Exception, outcome: ChunkOutcome) -> None:  # noqa: ANN401 — a nats Msg, typed only under TYPE_CHECKING
         """A fetch failed. Redeliver it, or park it — the two are NOT the same failure.
 
@@ -435,9 +447,7 @@ class Worker:
         `errors`. Everything else is presumed transient and redelivered.
         """
         if _is_permanent(exc):
-            reason = f"permanent fetch failure: {exc}"
-            outcome.errors[task.key] = reason
-            await self._q.park_poison(task, reason)
+            await self._park(task, f"permanent fetch failure: {exc}", outcome)
             await msg.ack()
             logger.warning("unit %s parked, will not be retried: %s", task.key, exc)
             return
@@ -448,9 +458,7 @@ class Worker:
         # promises, not in `errors`, invisible to the publish precondition. `_is_redelivery`'s
         # `num_delivered` is the delivery count; at `MAX_DELIVER` this attempt is the final one.
         if _delivery_count(msg) >= MAX_DELIVER:
-            reason = f"transient fetch failure exhausted {MAX_DELIVER} deliveries: {exc}"
-            outcome.errors[task.key] = reason
-            await self._q.park_poison(task, reason)
+            await self._park(task, f"transient fetch failure exhausted {MAX_DELIVER} deliveries: {exc}", outcome)
             await msg.ack()
             logger.warning("unit %s parked after exhausting redelivery: %s", task.key, exc)
             return
@@ -600,9 +608,7 @@ class Worker:
                     return
                 if fetched[0] is None:
                     # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
-                    reason = fetched[1]
-                    batch.outcome.errors[task.key] = reason
-                    await self._q.park_poison(task, reason)
+                    await self._park(task, fetched[1], batch.outcome)
                     await msg.ack()
                     return
                 # Held, NOT acked — the ack is owed until this unit's fragment is on the store.

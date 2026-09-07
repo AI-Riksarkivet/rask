@@ -85,10 +85,10 @@ def test_reachability_and_stream_PRESENCE_are_separate_fields(client: TestClient
 def test_the_DLQ_is_reported_because_its_absence_is_SILENT(client: TestClient) -> None:
     """The quietest failure in the plane, and the reason the DLQ gets its own field.
 
-    `park_poison` publishes and moves on. With no DLQ stream that publish fails and a corrupt unit is
-    DROPPED rather than parked — while the run still reports the error, so the operator sees a normal
-    validation failure and never learns the evidence was thrown away. Nothing else in the estate
-    would ever surface it.
+    `park_poison` answers whether the park landed and never raises, so with no DLQ stream a corrupt
+    unit is DROPPED rather than parked while the run completes exactly as it would have — the
+    operator sees a normal validation failure, and never learns the evidence they would open to
+    explain it was thrown away. Nothing else in the estate would ever surface that.
     """
     res = client.get("/api/queue")
 

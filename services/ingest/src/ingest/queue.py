@@ -278,11 +278,10 @@ class WorkQueue:
         Job had run, the park worked on BORROWED state; anywhere else it raised
         `NoStreamResponseError` from the very first poison unit. Reproduced against a bare broker.
 
-        That is not merely a test problem. `park_poison` is awaited BEFORE `msg.ack()` in both of the
-        worker's parking paths, and it is not wrapped — so on a stream-less broker the raise means
-        the unit is never acked, the drain dies, and the chunk that was supposed to "complete WITH
-        ERRORS rather than hang" hangs. The one path written to stop a poison unit from stalling a
-        run was itself the stall.
+        That is not merely a test problem, and it stays worth provisioning even though `park_poison`
+        now absorbs the failure: absorbing it means the run completes and looks entirely normal while
+        the evidence copy an operator would open to explain a refusal was never written. Provisioning
+        here is what keeps the DLQ a place to look rather than a warning in a log.
 
         CONFIG IS MIRRORED FROM THE CHART, NOT CHOSEN HERE, and the match is load-bearing. This
         stream is estate-wide (Dapr's resiliency parks every app's dead letters on `dlq.>`), and
@@ -449,12 +448,38 @@ class WorkQueue:
             logger.info("released %d undrained unit(s) for run %s", released, run_id)
         return released
 
-    async def park_poison(self, task: UnitTask, reason: str) -> None:
-        """Park a unit that exhausted its deliveries, so it is visible rather than merely gone."""
-        await self._js.publish(
-            DLQ_SUBJECT,
-            json.dumps({"task": task.model_dump(), "reason": reason}).encode(),
-        )
+    async def park_poison(self, task: UnitTask, reason: str) -> bool:
+        """Park a unit that exhausted its deliveries, so it is visible rather than merely gone.
+
+        ANSWERS WHETHER THE PARK LANDED, AND NEVER RAISES — and both halves are load-bearing, because
+        of where this sits in the drain. All three of the worker's parking paths await this BEFORE
+        `msg.ack()`, so an exception here means the unit is never acked, the drain task dies, and the
+        chunk that was supposed to "complete WITH ERRORS rather than hang" hangs: ONE bad unit fails
+        the whole run. The publish can fail for reasons `ensure_dlq_stream` cannot pre-empt — it runs
+        once at drain start, while this fires later, and a `limits`-retention stream at its ceiling
+        refuses writes with the stream very much present.
+
+        Returning FALSE rather than swallowing, because the caller owes the run a different sentence:
+        `outcome.errors[task.key]` is written before the park and is what the publish precondition
+        reads, so the authoritative record survives — what is lost is the EVIDENCE copy a human goes
+        looking for, and a record that does not say the evidence is missing sends them hunting for a
+        DLQ entry that was never written.
+        """
+        try:
+            await self._js.publish(
+                DLQ_SUBJECT,
+                json.dumps({"task": task.model_dump(), "reason": reason}).encode(),
+            )
+        except Exception:
+            logger.error(
+                "could not park unit %s of run %s on %s — the unit stays recorded in the run's errors, but no DLQ copy exists to inspect",
+                task.key,
+                task.run_id,
+                DLQ_SUBJECT,
+                exc_info=True,
+            )
+            return False
+        return True
 
     # `signal_drained` was here, and it LEAKED. It published to `ingest.run.{run}.drained` to wake a
     # chunk workflow that suspended on an external event — the design `worker.py`'s module docstring
@@ -560,14 +585,14 @@ async def inspect_queue(url: str, timeout: float = 3.0) -> QueueSnapshot:
             out["dlq_present"] = True
         except Exception:
             out["dlq_present"] = False
-            # NOT "dropped". Measured against a bare broker: `park_poison` awaits `js.publish`, which
-            # raises `NoStreamResponseError` when no stream carries the subject — and the worker awaits
-            # it BEFORE `msg.ack()`, unwrapped. So the unit is not silently lost; the DRAIN DIES on it,
-            # which is the louder and more expensive failure. Saying "dropped" sent a reader looking
-            # for missing records when the symptom is a chunk that never completes.
+            # DROPPED, and only dropped — which is why this field exists and why the warning is worth
+            # a line. Measured against a bare broker: `park_poison` awaits `js.publish`, which raises
+            # `NoStreamResponseError` when no stream carries the subject; the seam answers False and
+            # the run still records the unit in `outcome.errors`. So the RUN survives and looks
+            # entirely normal, and the only thing lost is the evidence copy an operator would open to
+            # see WHY a unit was refused. Nothing else in the estate would ever surface that.
             logger.warning(
-                "the %s stream does not exist — a poison unit will RAISE in park_poison and kill the "
-                "drain before its ack, hanging the chunk it was meant to let finish",
+                "the %s stream does not exist — a poison unit will be recorded in its run and have no DLQ copy to inspect",
                 DLQ_STREAM,
             )
         return out

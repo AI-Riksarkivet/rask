@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 217 tracked, 172 open, 45 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 217 tracked, 171 open, 46 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -856,7 +856,7 @@ services", and eight services now import `GovernedAuthSettings` while none re-de
 | ~~Q3-3~~ | `VS-07` | med | Five silent swallows in the search path render real failures as empty results — **CLOSED — verified at HEAD 2026-09-06 (C3).** `1f770a5d` (2026-08-31) closed the last of the five swallows. No `except Exception: pass` and no `except Exception: return []` remains anywhere in `services/search/src/`; every cited site now logs or re-raises |
 | Q3-4 | `PS-02` | med | `storage`'s error taxonomy is half-applied — `s3_errors` wraps nothing inside the package |
 | ~~Q3-5~~ | `MAINT-08` | med | `reconcile()`'s `control_root` falls back to the POLICY root, not the control root — **CLOSED — verified at HEAD 2026-09-06 (C3).** `e4e73b68` (2026-08-16) replaced `control_root or settings.resolved_policy_root`, the exact expression audited at `reconcile.py:701`. Two doc-only residues survive and are worth a separate low row, neither of which is the defect |
-| Q3-6 | `ingest-flow-06` | med | `park_poison` publishes unguarded — one bad unit fails the whole run when the DLQ is down |
+| ~~Q3-6~~ | `ingest-flow-06` | med | `park_poison` publishes unguarded — one bad unit fails the whole run when the DLQ is down — **CLOSED 2026-09-07.** Confirmed as written and fixed RED-first. All three of the worker's parking paths awaited the DLQ publish BEFORE `msg.ack()` and it was unwrapped, so any publish failure — stream absent, broker briefly gone, a `limits` stream at its ceiling — raised out of the drain task, left the unit unacked and hung the chunk that was supposed to complete WITH ERRORS. `ensure_dlq_stream` narrowed that window and could not close it: it runs once at drain start, the publish happens later. `park_poison` now ANSWERS (`bool`) instead of raising, and the callers write the run's own record first — the DLQ copy is evidence, `outcome.errors` is what the publish precondition reads — so a failed park changes the TEXT of the record and never whether there is one. Two doc claims this falsified were rewritten rather than annotated |
 | ~~Q3-7~~ | `catalog-api-07` | low | `_collect_descendants` recurses with no depth cap and no cycle guard — **CLOSED — verified at HEAD 2026-09-06 (C3).** `3357f7dd` (2026-08-15). `_collect_descendants` now carries the depth cap its sibling enumerator always had |
 | Q3-8 | `catalog-api-06` | low | Three tuple write/revoke sites bypass the `seed_ownership` seam |
 | Q3-9 | `ING-14` | med | The A8 provenance check fetches the entire unbounded `/runs` board |

@@ -49,8 +49,9 @@ class _SpyQueue:
     def __init__(self) -> None:
         self.parked: list[tuple[str, str]] = []
 
-    async def park_poison(self, task: UnitTask, reason: str) -> None:
+    async def park_poison(self, task: UnitTask, reason: str) -> bool:
         self.parked.append((task.key, reason))
+        return True
 
 
 def _worker() -> tuple[Worker, _SpyQueue]:
