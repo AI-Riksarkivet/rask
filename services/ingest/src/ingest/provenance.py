@@ -39,6 +39,7 @@ import threading
 from collections import OrderedDict
 
 from ingest.config import settings
+from ingest.service_identity import service_headers
 
 
 logger = logging.getLogger(__name__)
@@ -66,13 +67,11 @@ def lineage_base_url() -> str:
 #: indistinguishable from an outage.
 def _service_headers() -> dict[str, str]:
     config = settings()
-    token, identity = config.lineage_app_token, config.lineage_service_identity
-    if not token or not identity:
-        # HALF-CONFIGURED is worth nothing: the lineage door needs BOTH, and sending one is a request
-        # that will be refused for a reason nobody can see from here. The emitter warns about exactly
-        # this pair; a matching silence here would repeat the defect on the read side.
-        return {}
-    return {"dapr-api-token": token, "x-lance-service-identity": identity}
+    # ONE builder for both of ingest's doors (`ingest.service_identity`), so the dedicated credential
+    # cannot reach the catalog and miss the graph. It keeps the half-configured rule this function
+    # established: the lineage door needs BOTH halves, and sending one is a request refused for a
+    # reason nobody can see from here, so it answers `{}` rather than a doomed request.
+    return service_headers(config, identity=config.lineage_service_identity, shared_token=config.lineage_app_token)
 
 
 class ProvenanceRefused(Exception):

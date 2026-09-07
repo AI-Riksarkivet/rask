@@ -156,6 +156,14 @@ class IngestSettings(BaseSettings):
     #: governed fleet reads (`lance-secrets` -> OpenBao), so there is one place a credential rotates.
     secret_store: str = Field(default="lance-secrets", validation_alias="RASK_SECRET_STORE")
     secret_key: str = Field(default="lance", validation_alias="RASK_SECRET_KEY")
+    #: Whether this deployment's DEDICATED service credential comes from the store
+    #: (`service_identity.dedicated_token_for`). Symmetric with `MAINTENANCE_SECRETS_FROM_DAPR`, and
+    #: OFF by default for a reason specific to ingest: `catalog_token` above deliberately SKIPS the
+    #: store when the identity and the shared token are both set, because a fail-closed fetch written
+    #: before the catalog had an identity door turned a missing-and-unneeded `catalog-token` into a
+    #: failed run at the first activity. Resolving the dedicated token unconditionally would put that
+    #: read back and fail closed on a dev stack that has no store and needs none.
+    secrets_from_dapr: bool = Field(default=False, validation_alias="RASK_INGEST_SECRETS_FROM_DAPR")
 
     # ── the medallion handshake (`naming.py`) ─────────────────────────────────────────
     #: The bronze TIER's namespace name, read from the same chart value the medallion reads. A tier

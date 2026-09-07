@@ -66,7 +66,7 @@ def _privileged(env_name: str) -> set[str]:
 def test_the_discovery_finds_the_services_that_have_one() -> None:
     """A grep matching nothing would make the assertions below vacuous."""
     have = _services_with_a_client_half()
-    assert {"medallion", "maintenance"} <= have, f"only {sorted(have)} define dedicated_token_for — has it been renamed?"
+    assert {"medallion", "maintenance", "ingest"} <= have, f"only {sorted(have)} define dedicated_token_for — has it been renamed?"
 
 
 def test_every_catalog_privileged_subject_belongs_to_a_service_that_can_present_one() -> None:
@@ -77,6 +77,7 @@ def test_every_catalog_privileged_subject_belongs_to_a_service_that_can_present_
 
     # The cascade writers, the trainer and maintenance are the only owners the chart puts on this list.
     unready = {s for s in subjects if s.startswith("service-maintenance") and "maintenance" not in have}
+    unready |= {s for s in subjects if s == "service-ingest" and "ingest" not in have}
     unready |= {
         s
         for s in subjects
@@ -86,8 +87,12 @@ def test_every_catalog_privileged_subject_belongs_to_a_service_that_can_present_
 
 
 def test_the_services_with_NO_client_half_are_NOT_privileged() -> None:
-    """The other direction, and the one that would actually break the estate. `service-ingest` and
-    `notifications` read no dedicated token; naming either privileged refuses it outright."""
+    """The other direction, and the one that would actually break the estate. `notifications` reads no
+    dedicated token; naming it privileged refuses it outright.
+
+    Written as a RULE over the pair rather than a list of the services that happen to lack one, so a
+    service that gains a client half is admitted by this test without editing it, and one that loses
+    it is caught."""
     have = _services_with_a_client_half()
     subjects = _privileged("LANCE_PRIVILEGED_SUBJECTS") | _privileged("LINEAGE_PRIVILEGED_SUBJECTS")
     for service, subject in (("ingest", "service-ingest"), ("notifications", "notifications")):
@@ -96,6 +101,18 @@ def test_the_services_with_NO_client_half_are_NOT_privileged() -> None:
                 f"{subject} is privileged but services/{service} defines no dedicated_token_for — "
                 "the door will demand a credential it cannot send, and every call 401s"
             )
+
+
+def test_ingest_is_privileged_at_BOTH_doors_now_that_it_can_present_one() -> None:
+    """Ingest claims ONE subject at TWO doors, and `service_principal` refuses the shared token from a
+    privileged name AND a dedicated one from an ordinary name. So a subject privileged at one door and
+    ordinary at the other cannot satisfy both: whichever token it sends, one door refuses it. The two
+    lists must therefore agree about it, which is why this asserts both rather than either."""
+    assert "ingest" in _services_with_a_client_half(), "ingest lost its client half"
+    assert "service-ingest" in _privileged("LANCE_PRIVILEGED_SUBJECTS"), "ingest is ordinary at the catalog"
+    assert "service-ingest" in _privileged("LINEAGE_PRIVILEGED_SUBJECTS"), (
+        "ingest is privileged at the catalog and ordinary at the graph — whichever token it sends, one door refuses it"
+    )
 
 
 def test_maintenance_is_privileged_now_that_it_can_present_one() -> None:

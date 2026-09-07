@@ -226,6 +226,13 @@ services:
       # admits cannot drift from the one ingest claims. Measured on the live cluster: the allowlist
       # already held `service-ingest` and nothing in the chart had put it there.
       RASK_CATALOG_SERVICE_IDENTITY: service-ingest
+      # Ingest presents its OWN `service-token-service-ingest` at both doors it calls, resolved from
+      # the store by `ingest.service_identity`. Explicitly opt-in rather than implied by the identity:
+      # `catalog_token` deliberately SKIPS the store when the identity and shared token are both set,
+      # because a fail-closed fetch written before the catalog had an identity door turned a
+      # missing-and-unneeded `catalog-token` into a failed run at the first activity. Reading the store
+      # unconditionally would put that read back on a dev stack that has no store and needs none.
+      RASK_INGEST_SECRETS_FROM_DAPR: "true"
       # Route creation and commits through the CATALOG rather than writing the object store
       # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
       # merely down must fail the run loudly, not silently downgrade to a local write that produces

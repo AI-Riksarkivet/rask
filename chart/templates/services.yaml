@@ -258,17 +258,26 @@ spec:
                    refusal rather than a silent downgrade to the shared token. */}}
             {{- $privileged := append (compact $cascadeWriters | uniq) .Values.medallion.train.trainerIdentity }}
             {{- $privileged = append $privileged .Values.maintenance.catalogServiceIdentity }}
+            {{- /* Ingest, DERIVED from its own `RASK_CATALOG_SERVICE_IDENTITY` rather than written out,
+                   for the reason the allowlist above already records: a name that must agree with a
+                   service's own declaration and is typed here instead WILL drift. */}}
+            {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}
+              {{- $privileged = append $privileged . }}
+            {{- end }}
             {{- /* EVERY NAME HERE MUST ALREADY PRESENT ITS OWN CREDENTIAL. The server-side expectation is
                    half the control: this makes the catalog demand `service-token-<identity>` from a
                    privileged subject, and a subject still sending the shared APP_API_TOKEN is refused
                    outright — measured 2026-08-26, when rendering this alone 401'd every catalog call and
                    stopped the cascade (`POST /v1/table/acme-silver$features/describe -> 401`, repeating).
                    The client half exists for each name on this list: the cascade writers and the trainer
-                   through `medallion.core.config.dedicated_token_for`, and maintenance through
-                   `maintenance.services.catalog_compaction.dedicated_token_for`. ADDING A NAME WITHOUT ITS
-                   CLIENT HALF IS AN OUTAGE, and there is no safe ordering — the two land together.
-                   `service-ingest` and `notifications` are absent for exactly that reason: neither reads a
-                   dedicated token yet. */}}
+                   through `medallion.core.config.dedicated_token_for`, maintenance through
+                   `maintenance.services.catalog_identity.dedicated_token_for`, and ingest through
+                   `ingest.service_identity.dedicated_token_for`. ADDING A NAME WITHOUT ITS CLIENT HALF IS
+                   AN OUTAGE, and there is no safe ordering — the two land together, and the token must be
+                   SEEDED in the same change or the resolver answers None and the shared bearer is refused
+                   for being privileged. `notifications` is absent for exactly that reason: it reads no
+                   dedicated token yet. Pinned by
+                   `tests/unit/test_a_privileged_subject_can_present_its_own_credential.py`. */}}
             {{- if .Values.auth.dedicatedServiceCredentials }}
             - { name: LANCE_PRIVILEGED_SUBJECTS, value: {{ compact $privileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
@@ -578,10 +587,16 @@ spec:
             {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $lineageWriters = append $lineageWriters .serviceIdentity }}{{- end }}
             {{- /* The web BFF joins the privileged set: it is the widest holder of the shared bearer
                    (seven zone pods) and needs no client half, since it already reads its token from
-                   env. `service-ingest` and `notifications` remain on the shared token — each needs a
-                   service change first, and naming a subject privileged before it can present its own
-                   credential 401s it outright (measured 2026-08-26). */}}
+                   env. Ingest joins it through `ingest.service_identity`, which is ONE builder for both
+                   of its doors — a subject privileged at one door and ordinary at the other cannot
+                   satisfy both, since `service_principal` refuses the shared token from a privileged
+                   name AND a dedicated one from an ordinary name. `notifications` remains on the shared
+                   token: it needs a service change first, and naming a subject privileged before it can
+                   present its own credential 401s it outright (measured 2026-08-26). */}}
             {{- $lineagePrivileged := concat (compact $lineageWriters | uniq) (list .Values.medallion.train.trainerIdentity .Values.frontend.serviceIdentity) }}
+            {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
+              {{- $lineagePrivileged = append $lineagePrivileged . }}
+            {{- end }}
             - { name: LINEAGE_PRIVILEGED_SUBJECTS, value: {{ compact $lineagePrivileged | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
             {{- end }}

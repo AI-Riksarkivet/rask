@@ -186,9 +186,15 @@ spec:
                        `LANCE_PRIVILEGED_SUBJECTS` names it: a privileged subject whose token is not
                        seeded resolves to nothing, falls back to the shared bearer, and is refused —
                        so the SEED is a third half of this control, not an afterthought to the pair. */}}
+                {{- /* Ingest claims ONE subject at TWO doors — the catalog's and the graph's — and both
+                       name it privileged, so one seeded token serves both. Read from the service's own
+                       declarations rather than written out, and `uniq` below collapses them when they
+                       agree (they do, and the render is what proves it). */}}
                 {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity .Values.frontend.serviceIdentity .Values.maintenance.catalogServiceIdentity }}
                 {{- range .Values.medallion.stageRunners }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
+                {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
+                {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
                 service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) }} \
                 {{- end }}

@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from ingest.config import settings
 from ingest.naming import delimiter
+from ingest.service_identity import service_headers
 
 
 if TYPE_CHECKING:
@@ -221,10 +222,9 @@ class CatalogServiceClient:
         """
         headers = dict(extra or {})
         config = settings()
-        token, identity = config.catalog_app_token, config.catalog_service_identity
-        if token and identity:
-            headers["dapr-api-token"] = token
-            headers["x-lance-service-identity"] = identity
+        service = service_headers(config, identity=config.catalog_service_identity, shared_token=config.catalog_app_token)
+        if service:
+            headers.update(service)
         elif self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
