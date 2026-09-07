@@ -1250,6 +1250,32 @@ can never drift into a profile that sets neither.
 {{- end -}}
 
 {{/*
+The secret half of a SCOPED STORAGE IDENTITY, derived rather than stored.
+
+Usage: {{ include "lance.scopedStorageSecret" (list . "rask-medallion" .Values.rustfs.medallionSecretKey) }}
+
+WHY DERIVED. A scoped identity is the control this estate most wants declared in a values file, and it
+was the one that could not be: declaring it meant committing its secret. So both live scoped users were
+minted by hand, which is drift no render can correct (Helm only patches fields that CHANGED, so a
+hand-set env survives every upgrade and reverts the moment one values edit touches it).
+
+Deriving it makes NAMING the identity sufficient. The third argument is the operator's own value and
+WINS when set — someone supplying a secret from a manager must not have it silently replaced.
+
+ONE OVERRIDE SECURES THE WHOLE SET, which is the reason to seed from `rustfs.secretKey` rather than
+from a constant: on a real deployment that value must already be overridden (`prod-credentials.yaml`
+refuses the published default), so every secret derived from it is real without a second decision.
+
+DETERMINISTIC, so a re-render is not a rotation. `sha256sum | trunc 40` matches
+`lance.dedicatedServiceToken`, deliberately — a second shape for the same job is how one of them ends
+up wrong.
+*/}}
+{{- define "lance.scopedStorageSecret" -}}
+{{- $root := index . 0 -}}{{- $identity := index . 1 -}}{{- $explicit := index . 2 -}}
+{{- if $explicit -}}{{- $explicit -}}{{- else -}}{{- printf "%s-s3-%s" $identity $root.Values.rustfs.secretKey | sha256sum | trunc 40 -}}{{- end -}}
+{{- end -}}
+
+{{/*
 A privileged service identity's DEDICATED credential — `service-token-<identity>`.
 
 `dapr_auth.service_principal` compares what a caller presents against this value with

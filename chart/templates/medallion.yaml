@@ -306,10 +306,12 @@ spec:
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
                  data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
                  write-denied on every other control prefix — see `rustfs-scoped-users.yaml`. */}}
-            {{- $medScoped := and .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey }}
+            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
+                 (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
+            {{- $medScoped := .Values.rustfs.medallionAccessKey }}
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.medallionAccessKey .Values.rustfs.accessKey (not (not $medScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary .Values.rustfs.medallionSecretKey .Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
+            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey)) .Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env
             # (Batch 7 closes the gap: the env was already omitted here but nothing told the service to
@@ -476,10 +478,12 @@ spec:
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
                  data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
                  write-denied on every other control prefix — see `rustfs-scoped-users.yaml`. */}}
-            {{- $medScoped := and $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.medallionSecretKey }}
+            {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
+                 (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
+            {{- $medScoped := $root.Values.rustfs.medallionAccessKey }}
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.accessKey (not (not $medScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" $root) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary $root.Values.rustfs.medallionSecretKey $root.Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
+            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list $root $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.medallionSecretKey)) $root.Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
             # Store-on → sole source at boot (see the producer block above). Fails closed.
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }

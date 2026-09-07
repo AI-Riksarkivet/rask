@@ -1,6 +1,6 @@
-{{- $ray := and .Values.rustfs.rayComputeAccessKey .Values.rustfs.rayComputeSecretKey }}
-{{- $maint := and .Values.rustfs.maintenanceAccessKey .Values.rustfs.maintenanceSecretKey }}
-{{- $medallion := and .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey }}
+{{- $ray := .Values.rustfs.rayComputeAccessKey }}
+{{- $maint := .Values.rustfs.maintenanceAccessKey }}
+{{- $medallion := .Values.rustfs.medallionAccessKey }}
 {{- if and .Values.rustfs.enabled (or $ray $maint $medallion) }}
 # RustFS SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
 #
@@ -30,7 +30,10 @@
 # RustFS 1.0.0-beta.8 on 2026-09-04: a second create with different content returned exit 0 and the
 # readback showed the new document. So the create carries no `|| true`; the only thing one could
 # swallow is a REAL failure (malformed JSON, admin denied), leaving the credential on its previous
-# policy while the hook reports success. `user add` and `attach` keep theirs, which do guard a re-run.
+# policy while the hook reports success. `user add` and `attach` keep theirs. Note what `user add` does
+# on a re-run, because the `|| true` hides it either way: it ROTATES the existing user's secret rather
+# than failing (probed 2026-09-07 — afterwards the old secret gives `SignatureDoesNotMatch` and the new
+# one gives `Access Denied`, i.e. valid but unpolicied). That is what makes a derived secret converge.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -66,15 +69,15 @@ spec:
                 secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
             {{- if $maint }}
             - name: MAINTENANCE_SECRET_KEY
-              value: {{ .Values.rustfs.maintenanceSecretKey | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.maintenanceAccessKey .Values.rustfs.maintenanceSecretKey) | quote }}
             {{- end }}
             {{- if $ray }}
             - name: RAY_COMPUTE_SECRET_KEY
-              value: {{ .Values.rustfs.rayComputeSecretKey | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.rayComputeAccessKey .Values.rustfs.rayComputeSecretKey) | quote }}
             {{- end }}
             {{- if $medallion }}
             - name: MEDALLION_SECRET_KEY
-              value: {{ .Values.rustfs.medallionSecretKey | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey) | quote }}
             {{- end }}
           command:
             - sh

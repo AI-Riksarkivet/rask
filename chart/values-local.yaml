@@ -63,3 +63,32 @@ medallion:
 # answers anonymously and fans out to every backend it fronts.
 docs:
   enabled: true
+
+# THE SCOPED STORAGE IDENTITIES this estate actually runs on.
+#
+# They were live long before they were written down: the Deployments held `rask-maintenance` and
+# `rask-medallion` while `helm get values` carried no `rustfs` section at all. That is drift Helm
+# cannot correct — it only patches fields that CHANGED between releases, so a hand-set env survives
+# every upgrade and reverts to the tenant ROOT the moment one values edit touches the field, with
+# nothing going red. The same class as the corpus PVC this file's header describes, and worse: the
+# symptom is a credential quietly widening rather than a 500.
+#
+# Only the NAME is needed. Each secret is derived from it plus `rustfs.secretKey`
+# (`lance.scopedStorageSecret`), so declaring the identities costs no secret in git, and the one
+# string reaches the pod env, the OpenBao seed and the `mc` user creation together — a scoped access
+# key beside any other secret is `SignatureDoesNotMatch` on every call.
+#
+# `rustfs-scoped-users` provisions each policy and user as a post-upgrade hook, and naming an
+# identity here is enough even when the user already exists: `mc admin user add` ROTATES an existing
+# user's secret. Probed 2026-09-07 against this estate's own mc image on a throwaway user — after a
+# second `add` with a different secret, the NEW secret reaches `Access Denied` (a valid credential
+# with no policy attached) while the OLD one fails `SignatureDoesNotMatch`. Read the error text, not
+# the exit code: both an unprovisioned credential and a wrong one fail an `mc ls`, and only the
+# message tells them apart.
+#
+# The hook runs POST-upgrade, so on the one upgrade that first names an identity the pods read the
+# derived secret from OpenBao before RustFS has been told about it. Expect a brief window of failed
+# S3 calls there; the movers are idempotent and retry.
+rustfs:
+  maintenanceAccessKey: rask-maintenance
+  medallionAccessKey: rask-medallion

@@ -25,8 +25,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from tests.unit.test_invariants import _helm_template
 from tests.unit.test_scoped_policies_reach_runtime_minted_warehouses import _policy, allowed
 
@@ -86,19 +84,20 @@ def test_the_policy_denies_the_records_that_govern_maintenance() -> None:
         assert guarded in policy, f"the policy never mentions {guarded}, so nothing stops the compaction credential rewriting it"
 
 
-@pytest.mark.parametrize("absent", ["rustfs.maintenanceAccessKey", "rustfs.maintenanceSecretKey"])
-def test_half_a_pair_provisions_nothing(absent: str) -> None:
-    """Both halves or neither. The Ray plane's own note records the measured cost of setting one:
-    every job got `SignatureDoesNotMatch`."""
-    sets = {
-        "rustfs.maintenanceAccessKey": "rask-maintenance",
-        "rustfs.maintenanceSecretKey": "maintenance-secret",
-    }
-    del sets[absent]
-    rendered = _helm_template("maintenance.enabled=true", *(f"{k}={v}" for k, v in sets.items()))
+def test_a_secret_without_a_name_provisions_nothing() -> None:
+    """A secret alone identifies nobody, so it cannot scope anything and must leave the plane on root.
+
+    THE OTHER DIRECTION IS NO LONGER A DEFECT: an access key alone now scopes the plane, because
+    `lance.scopedStorageSecret` derives the secret from it. That is what lets a values file DECLARE a
+    scoped identity without committing a secret — the reason both live identities were hand patches
+    that no chart rendered. The pairing this test used to guard is now guarded where it can actually
+    break, across all eight read sites, by
+    `test_a_scoped_identity_needs_only_its_name::test_one_secret_string_reaches_every_site`.
+    """
+    rendered = _helm_template("maintenance.enabled=true", "rustfs.maintenanceSecretKey=maintenance-secret")
     env = _maintenance_env(rendered)
     assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rustfsadmin", (
-        f"only {next(iter(sets))} was set and the chart repointed anyway — that is SignatureDoesNotMatch on every sweep"
+        "a secret was set with no identity to attach it to and the chart repointed anyway — there is no such user"
     )
 
 

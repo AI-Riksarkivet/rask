@@ -1874,14 +1874,17 @@ rustfs:
   # (measured 2026-08-30: `medallion*` and `*-wh` allowed; `_projects/`, `_protection/`, `_policies/`
   # and `rask-observability` all AccessDenied from the pod's own credential).
   #
-  # BOTH HALVES LIVE TOGETHER because they are used apart: `submit_stage_job` exports S3_KEY into the
-  # job's runtime_env while the POD supplies S3_SECRET (the Jobs API echoes runtime_env to any
-  # reader, so the secret is deliberately not in it). Changing one without the other gives every job
-  # `SignatureDoesNotMatch` — measured, twice.
+  # NAMING THE IDENTITY IS ENOUGH: set the access key alone and the secret is DERIVED
+  # (`lance.scopedStorageSecret` — sha256 of the identity plus `rustfs.secretKey`, the
+  # `lance.dedicatedServiceToken` shape), so declaring a scoped identity in a values file needs no
+  # secret in git. Set the secret key too and yours wins, for an operator supplying one from a manager.
+  # One value therefore reaches all of: the pod env, the OpenBao seed and the `mc` user creation —
+  # which is the property that matters, because a scoped access key beside any other secret is
+  # `SignatureDoesNotMatch` on every call (measured, twice) and looks correct in a diff.
   #
-  # EMPTY = the root credential, i.e. exactly today's behaviour, so this is inert until an operator
-  # provisions the user. `scripts/` has no provisioning step yet: create the policy and user with the
-  # `mc` image the mkbucket Job already uses, then set these.
+  # EMPTY = the root credential, i.e. today's behaviour, so this stays inert until an identity is
+  # named. `rustfs-scoped-users` then creates the policy and the user with the same `mc` image the
+  # bucket-init Job uses.
   rayComputeAccessKey: ""
   rayComputeSecretKey: ""
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
@@ -1899,19 +1902,20 @@ rustfs:
   # outside the default warehouse degrades, and what it degrades TO is this key. The fallback itself
   # has to stop being root.
   #
-  # BOTH HALVES OR NEITHER, the same rule the Ray pair carries and for the same measured reason:
-  # setting one gives `SignatureDoesNotMatch` on every operation.
+  # THE ACCESS KEY ALONE IS THE WHOLE SETTING: the secret is derived from it unless one is supplied
+  # (`lance.scopedStorageSecret`), so this identity can be declared in a values file — which is the
+  # point, since a hand-set env is drift Helm never corrects and one values edit reverts to root.
   #
-  # EMPTY = the root credential, i.e. exactly today's behaviour. A chart that silently repointed a live
-  # service at a credential nobody created would take maintenance down on upgrade. Unlike the Ray pair,
-  # these ARE provisioned by the chart: `rustfs-scoped-users` creates the policy and the user with the
-  # same `mc` image the bucket-init Job uses, so the hardening is one values edit rather than a
-  # hand-run session.
+  # EMPTY = the root credential, i.e. today's behaviour. A chart that silently repointed a live service
+  # at a credential nobody created would take maintenance down on upgrade, so naming it stays a choice;
+  # `rustfs-scoped-users` provisions the policy and the user, making the hardening one values edit
+  # rather than a hand-run session.
   maintenanceAccessKey: ""
   maintenanceSecretKey: ""
-  # THE MEDALLION PLANE'S SCOPED PAIR — the producer and all three movers share one identity,
-  # because `medallion.yaml` renders their S3 env from one pair and they do one class of work.
-  # Empty falls back to the tenant ROOT credential, which is what every install runs today
+  # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three movers share one, because
+  # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
+  # is the whole setting; the secret is derived unless supplied (`lance.scopedStorageSecret`).
+  # Empty falls back to the tenant ROOT credential, which is what an install runs until one is named
   # (Q17-5). Provisioned by `rustfs-scoped-users.yaml` as `rask-medallion`: data in any
   # warehouse, `_tasks/` writable because this plane REGISTERS them, every other control
   # prefix read-only.
