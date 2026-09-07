@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-07, from the rows below rather than asserted: 221 tracked, 147 open, 74 struck.**
+**Counted 2026-09-07, from the rows below rather than asserted: 221 tracked, 146 open, 75 struck.**
 That splits into 58 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -268,14 +268,35 @@ answer 406. **Where.** `service_kit/lakehouse/ns_errors.py:25,135-161`,
 for every status (the four hand-built ones in `body_limit.py`, `load_shed.py`, `draining.py` fold in), and
 `UNSUPPORTED → 406` (Q3, decided).
 
-### A6 · Identity: `x-api-key` never read; bearer verified only with OIDC on
-**RE-MEASURED 2026-09-07, still open on the first clause:** `x-api-key` / `x_api_key` appears in
-**zero** files under `services/catalog/src` and `packages/service-kit/src`, so the header the spec
-names is read by nothing. The second clause moved with §F2-2 — `assert_authentication_configured`
-now refuses to boot a governed service whose auth is off unacknowledged, so "anonymous by default"
-is no longer reachable silently.
-**Where.** `api/security.py:36-49,168-181`, `core/config.py:181` (`RASK_OIDC_ENABLED=False`).
-**Closes it.** See §F; anonymous-by-default ends.
+### ~~A6 · Identity: `x-api-key` never read; bearer verified only with OIDC on~~ — **BOTH CLAUSES ANSWERED 2026-09-07**
+**The second clause closed with §F2-2**: `assert_authentication_configured` refuses to boot a governed
+service whose auth is off unacknowledged, so "anonymous by default" is not silently reachable.
+
+**The first clause is REFUTED — not a conformance gap but a deliberate position, and the spec is what
+says so.** It is literally true that `x-api-key` is read by nothing (zero files under
+`services/catalog/src` or `packages/service-kit/src`, re-measured today). It is not a defect, and
+reading the spec's own `security` block rather than only its `Identity` schema is what settles it:
+
+    security:                     <- a DISJUNCTION: any ONE scheme satisfies the contract
+      - OAuth2: []
+      - BearerAuth: []
+      - ApiKeyAuth: []
+
+The `Identity` schema (`spec.yaml:2440`) defines how a CLIENT carries a credential it already has —
+`api_key` -> `x-api-key`, `auth_token` -> `Authorization: Bearer`. It does not oblige a server to
+accept all three. Measured against the deployed catalog: our scheme is
+`{"type": "http", "scheme": "bearer"}`, **structurally identical to the spec's `BearerAuth`** (the
+local name `HTTPBearer` differs, and OpenAPI scheme names are local identifiers a generated client
+never dispatches on); **155 of 160 operations declare it**, and the five that do not are `/livez`,
+`/readyz`, `/dapr/subscribe` and `/control-events` — correctly unauthenticated. The door enforces it:
+`GET /v1/table` with no credential answers **401**, and with `x-api-key` alone also **401**.
+
+**Implementing the third scheme would work AGAINST §F2-3.** An API key is a long-lived shared static
+credential needing its own issuance, storage, rotation and revocation — a second credential plane
+beside the OIDC one, against the standing rule that secrets come from the Dapr secret store only, and
+the precise shape §F2-3 spent 2026-09-07 removing (one shared service bearer -> a credential per
+subject). Adding it to satisfy a header name would trade a real control for a spelling.
+**Struck: conformant as built, and the alternative is a regression.**
 
 ### A7 · Governance inside spec handlers
 **Status 2026-09-02.** The *"update/delete ignoring `branch`"* clause is closed and wider than
