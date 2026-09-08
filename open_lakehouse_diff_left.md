@@ -546,11 +546,35 @@ backed by rask's own staged-manifest KV (the dir backend will not provide it).
 params, headers (`X-Lance-Run-Facets`, `x-lance-originator`) and dialects. Full list:
 `lance-conformance-and-build-rules.md` §4.
 
-### B3 · Conflict classification on every mutating door
-**What.** `_classify_commit_error` (400 incompatible / 409 retryable / 503) wraps only
+### B3 · Conflict classification on every mutating door — **COLUMN HALF DONE; UPDATE/DELETE REFUTED 2026-09-08**
+**What it said.** `_classify_commit_error` (400 incompatible / 409 retryable / 503) wraps only
 `commit_appended_fragments`; update/delete/column ops let a Lance conflict escape as 5xx.
-**Where.** `dataplane.py:578-596, 945-972, 992-1029`. **Closes it.** One classifier exported from
-`service_kit.lancekit.writer` (the catalog keeps a duplicate today) applied on every door.
+
+**The COLUMN half was real and is closed** — six concurrent `add_columns` against one table, five
+losers, every one answering Internal 18 until `_column_op` learned the markers it already had
+(`test_a_lost_commit_race_is_retryable_not_a_server_fault.py`).
+
+**The UPDATE/DELETE half is REFUTED, and the distinction is the format's own.** Column ops are Merge
+transactions and genuinely conflict; `update` and `delete` are Rewrite transactions Lance retries
+internally against the newer version. Probed directly with two handles opened at one version:
+
+    both at version 1 · A committed -> 2
+    stale update  -> no conflict, version 3
+    stale delete  -> no conflict, version 4
+
+So conflict translation on those two doors would be a branch no input can reach — a control that looks
+like one and is decoration, the shape this estate keeps paying for. Pinned by
+`test_a_lost_update_race_is_retryable_not_a_server_fault.py`, which FAILS if Lance ever stops
+rebasing; that failure is the signal to add what this row asked for.
+
+**What is left is the DEDUPLICATION, and it is smaller than "one classifier".** The catalog's taxonomy
+(no-base / client-error / non-retryable incompatible / retryable conflict / outage) and
+`service_kit.lancekit.writer`'s (`commit conflict`, `concurrent` -> `ConflictError`) are two
+vocabularies for one condition, and the service-kit copy cannot see the NON-RETRYABLE case at all — an
+`incompatible transaction` matches none of its markers and escapes as a raw `OSError` -> 500. They
+cannot literally share a classifier, because each raises its own plane's error type (`lance_namespace`
+errors in the catalog, `DomainError` in service-kit); what they can share is the TAXONOMY, with each
+plane mapping the verdict. **Where.** `dataplane.py:535-579`, `lancekit/writer.py:57-83`.
 
 ---
 
