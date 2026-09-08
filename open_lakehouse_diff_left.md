@@ -1616,7 +1616,7 @@ refusal is doing real work, not sitting idle.
 never by widening the orphan scan's mask — which the estate already measured as the wrong fix (an
 `add_bases` prefix through which no `DataFile` resolves let the scan pass a dataset as `checked=True`
 with live files named as orphans).
-### H3 · Clone protection bounded to maintained buckets — **THIS IS NOW THE LIVE HALF OF C3**
+### H3 · Clone protection bounded to maintained buckets — **MEASURED 2026-09-08: the cross-BUCKET half is refuted, the cross-ROOT half is real**
 C3's headline clause (the on-demand doors destroying a live clone) is REFUTED — both `run_maintenance`
 and `compact_maintenance` compute `_base_refs` and pass it, and the guard records 220 live refusals.
 **What survives is exactly this row**, and the code states the bound in its own docstring:
@@ -1628,10 +1628,44 @@ nothing about the dataset in front of you reveals the danger.
 **Branches now ride this protection** (C8): they set flag 16 and their parent is a sibling, so the
 pre-pass sees the reference. That is the same-bucket case working; it does not extend the reach.
 
+**MEASURED ESTATE-WIDE 2026-09-08, 93 buckets, every flag-16 dataset opened — and the row's premise
+splits in two, one half confirmed and one half refuted:**
+
+    419 flag-16 datasets, 539 base references
+    all refs            same-root  11   cross-root 125   CROSS-BUCKET 403
+    declared ROOTS      same-root   5   cross-root 115   CROSS-BUCKET   0
+
+**REFUTED: the cross-BUCKET clone.** Zero base references that declare a dataset root cross a bucket,
+so the shape this row worried about — "a clone whose referrer lives in another bucket" — does not exist
+on this estate. `sibling_base_refs`'s docstring defends its bound with exactly that claim ("a shape
+nothing in this estate creates") and the measurement supports it FOR CLONES.
+
+**But the docstring's claim is stated too widely and the estate does create cross-warehouse references:**
+403 of the 539 cross a bucket, 409 of them pointing at `s3://lance-catalog/models/` with
+`is_dataset_root=FALSE` — the EXTERNAL BLOB BASE shape (`initial_bases`), not a clone. Those are
+harmless to this guard: nothing under `models/` is a Lance dataset (measured: a depth-8 walk finds
+zero), so the sweep never maintains it and there is nothing there to rewrite. The prose should say "no
+cross-warehouse CLONE", not "a shape nothing in this estate creates".
+
+**CONFIRMED, and it is the half worth acting on: 115 declared dataset roots cross a ROOT boundary
+inside one bucket.** `sibling_base_refs` computes `root = location.rsplit("/", 1)[0]` and lists that
+directory, so its reach is the dataset's own PARENT — a referrer under a different parent in the same
+bucket is invisible to it by construction. Branches are the obvious population: a branch lives at
+`<dataset>/tree/<name>`, whose parent is `<dataset>/tree`, while the dataset it protects sits at
+`<dataset>` whose siblings are the bucket's top level. Neither is in the other's listing.
+
+**THE EXPOSURE IS SCOPED TO THE ON-DEMAND LANE, and that is why nothing has broken.** The SWEEP does
+not use `sibling_base_refs` — `sweep.py::_protected_roots` opens every discovered dataset in every
+bucket, and `discover_datasets` descends into `tree/`, so the whole-estate pre-pass sees these
+referrers and refuses (220 live refusals a tick). What cannot see them is the catalog's on-demand
+maintenance doors (`maintenance.py:46`) and the event lane, both of which take the cheap sibling
+listing precisely because they cannot afford the estate-wide pass.
+
 **Closes it** with C3's second half — record the clone/branch -> (source, version) edge AT CREATION and
-consult that registry from every GC door, instead of rediscovering referrers by listing. That also
-removes the reliance on a listing being complete, which `protected_roots` already has to report as
-`unreadable`.
+consult that registry from every GC door, instead of rediscovering referrers by listing. That is now
+measured rather than argued: a registry is the only thing that makes the on-demand doors as safe as the
+sweep without paying the sweep's cost, and it removes the reliance on a listing being complete, which
+`protected_roots` already has to report as `unreadable`.
 
 ### H4 · No lease, no deployment strategy, unpersisted retry state — **THE STRATEGY CLAUSE IS DONE 2026-09-07**
 **`strategy: Recreate` — DONE, and measuring it is what showed the pin was never enough.** The steady
