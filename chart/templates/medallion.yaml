@@ -514,6 +514,13 @@ spec:
             # cluster (deploy/ray-lance-demo.yaml). Default off — fake-Ray in-process stays the default path.
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
             - { name: MEDALLION_RAY_ADDRESS, value: {{ $root.Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" $root)) | quote }} }
+            {{- /* WHERE THE STAGE JOB POSTS ITS OWN PROVENANCE. Ray pods carry no daprd, so a job
+                 emits over HTTP — the same reason the train lane has `MEDALLION_TRAIN_LINEAGE_URL`,
+                 and derived the same way. The CODE default is empty on purpose (an unwired estate
+                 must post to no guessed address); the chart is not guessing, it knows its own lineage
+                 Service. Without it `emit()` returns early and the entire stage lane is unlineaged
+                 while every job reports success. */}}
+            - { name: MEDALLION_STAGE_LINEAGE_URL, value: {{ $root.Values.medallion.stageLineageUrl | default (printf "http://%s-lineage:%v" (include "lance.fullname" $root) $root.Values.services.lineage.port) | quote }} }
             {{- if .stageJob }}
             # P7b seam: this stage runner's stage-job entrypoint (stage runners[].stageJob) — how the HTR lanes select
             # the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
@@ -577,9 +584,16 @@ spec:
             {{- with $root.Values.auth.fgaModelId }}
             - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
             {{- end }}
-            - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_FGA_REQUIRED_ACTION, value: {{ .requiredAction | quote }} }
             {{- end }}
+            {{- /* THE IDENTITY IS WHO THIS RUNNER IS, so it renders whether or not FGA is on — the
+                 lesson `catalog_service_identity` already records in its own docstring, repeated here
+                 because `ray_submit` fills the stage job's `LINEAGE_SERVICE_ID` from this value.
+                 Gated on `fgaEnabled` it was ABSENT from all three running stage runners (measured
+                 2026-09-08), so a stage job claimed a code default at lineage's door and the emit was
+                 refused while the job exited SUCCEEDED. Authentication and authorization are
+                 different questions; only the ACTION below belongs to the authorization toggle. */}}
+            - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
           {{- include "lance.appProbes" $root | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" $root "comp" .name) | nindent 12 }}
           volumeMounts:

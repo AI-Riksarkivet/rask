@@ -255,7 +255,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # BARE subject (no ``user:`` prefix) — ``service_kit.governed.fga.check`` adds ``user:`` itself, so ``user:service-*``
     # here would double-prefix (``user:user:service-*``) and the gate would always deny. Matches the
     # catalog's convention (it passes the bare OIDC sub to fga.check).
-    fga_service_identity: str = Field(default="service-stage runner", alias="MEDALLION_FGA_SERVICE_IDENTITY")
+    fga_service_identity: str = Field(default="service-stage-runner", alias="MEDALLION_FGA_SERVICE_IDENTITY")
     fga_required_action: str = Field(default="can_create_table", alias="MEDALLION_FGA_REQUIRED_ACTION")
 
     # --- Produce-trigger admin auth (#64): ``/produce`` accepts EITHER the Dapr app-api-token (service-to-

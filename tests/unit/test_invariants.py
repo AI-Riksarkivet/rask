@@ -716,14 +716,10 @@ _UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
 #: values key, so it is not a change to make blind — but the cost of leaving it is stated here rather
 #: than nowhere, which is the whole difference between debt and a defect.
 _UNWIRED_DEBT: Final[dict[str, str]] = {
-    # Every STAGE job's own OpenLineage emission, off in every shipped release. `ray_submit` puts
-    # `LINEAGE_URL` into the job's `runtime_env.env_vars` only when this is set, and a runner's
-    # `emit()` returns False on an unset one — so a lane whose runner emits (the dummy runner does,
-    # and any workload runner may) records nothing, while the run itself succeeds and every pod is
-    # green. The sibling `MEDALLION_TRAIN_LINEAGE_URL` IS rendered (medallion.yaml), so the train lane
-    # emits and the stage lane does not: one asymmetry between two adjacent settings, invisible to
-    # every test that exercises either half on its own.
-    "MEDALLION_STAGE_LINEAGE_URL": "stage-lane Ray jobs emit no OpenLineage at all; the train lane's twin IS rendered",
+    # EMPTY IS THE GOAL STATE, not a missing registry. An entry here declares a setting the chart
+    # deliberately does not render, so the pin below can tell chosen silence from an oversight; the
+    # test above expires an entry the moment the chart starts setting it, which is how the last one
+    # left (MEDALLION_STAGE_LINEAGE_URL, wired 2026-09-08 — the stage lanes now emit).
 }
 
 

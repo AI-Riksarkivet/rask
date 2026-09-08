@@ -1329,6 +1329,11 @@ medallion:
     trainerIdentity: service-trainer
     modelsNamespace: models
     lineageUrl: ""
+  # Where a STAGE lane's Ray job posts its own OpenLineage events — same shape and same reason as
+  # `train.lineageUrl` above: Ray pods carry no daprd, so the job emits over HTTP. Empty =
+  # release-derived (http://<release>-lineage:<port>). The CODE default is "" and disables emission
+  # entirely, which is how the whole stage lane ran unlineaged while every job reported success.
+  stageLineageUrl: ""
   producer:
     daprAppId: medallion-producer
     # The subject the producer claims at the catalog's service door — the same one
