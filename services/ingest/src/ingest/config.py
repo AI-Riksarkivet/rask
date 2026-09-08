@@ -210,6 +210,19 @@ class IngestSettings(BaseSettings):
     #: have to look the flag up to know what it costs.
     insecure_allow_ambient_storage: bool = Field(default=False, validation_alias="RASK_INGEST_INSECURE_ALLOW_AMBIENT_STORAGE")
 
+    #: Where an UNDELIVERED lineage event is staged so it is not lost — the SAME object-store prefix
+    #: every other producer stages to (`LINEAGE_OUTBOX_URI` and its per-service twins), because the
+    #: thing that drains it is lineage's reconcile cron and it reads one prefix.
+    #:
+    #: § E1: four of the five lakehouse producers already stage durably and `ingest` emitted bare, so a
+    #: refused door lost the event outright — recorded twice on this lane, most recently a day of 403s
+    #: while the data landed. A 401 there "surfaces as a permanent gap in the graph that looks exactly
+    #: like a healthy estate".
+    #:
+    #: EMPTY DISABLES STAGING, deliberately: a deployment that has not wired an outbox must not have
+    #: events written to a guessed prefix nothing drains, which is a leak wearing recovery's name.
+    lineage_outbox_uri: str = Field(default="", validation_alias="RASK_INGEST_LINEAGE_OUTBOX_URI")
+
     @property
     def lineage_app_token(self) -> str | None:
         """The token presented to the lineage door. Same fallback, same reason, as the catalog's."""

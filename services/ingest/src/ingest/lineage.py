@@ -26,11 +26,16 @@ medallion's `/bronze-arrival` did.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+
+if TYPE_CHECKING:
+    from lineage_kit.schemas import RunEvent
 
 
 logger = logging.getLogger(__name__)
@@ -187,7 +192,45 @@ def _run(
         run_id=lineage_run_id(run_id),
         emitter=_emitter(),
         run_facets=_tenant_facet(project, run_id, originator, published, publish_reason, publish_error),
+        on_undelivered=_stage_undelivered,
     )
+
+
+def _stage_undelivered(event: RunEvent) -> None:
+    """Persist an event the lineage door refused, so the reconcile cron can re-ingest it.
+
+    § E1. This lane emitted BARE — four of the five lakehouse producers stage through the shared
+    object-store outbox and this one did not — so a refused door lost the event outright. That is not
+    hypothetical: `service_identity.py` records it happening twice, most recently a day of 403s while
+    the data landed, and a 401 here "surfaces as a permanent gap in the graph that looks exactly like a
+    healthy estate".
+
+    The SAME prefix every other producer stages to, because lineage's reconcile cron drains exactly one.
+    Unwired (`lineage_outbox_uri` empty) writes nothing: staging to a guessed prefix nothing drains is a
+    leak wearing recovery's name.
+
+    Never raises — `LineageRun` contains it too, and both are deliberate: this is still observability,
+    and a stager that cannot reach the object store must not end a run whose data already landed (I8).
+    """
+    from ingest.config import settings
+
+    outbox = settings().lineage_outbox_uri
+    if not outbox:
+        return
+    from service_kit.lakehouse.outbox import stage_event
+
+    # `to_wire` and not `model_dump_json`: the outbox holds what the DOOR would have received, so the
+    # relay re-ingests the identical bytes rather than a second serialization of the same object.
+    stage_event(outbox, _outbox_storage_options(), event.run.run_id, json.dumps(event.to_wire()))
+
+
+def _outbox_storage_options() -> dict[str, str]:
+    """The object-store options the outbox write uses — the deployment's own store, resolved the way
+    every other S3 caller in this service resolves it."""
+    from ingest.config import settings
+
+    endpoint = settings().s3_endpoint_url
+    return {"endpoint": endpoint} if endpoint else {}
 
 
 def _tenant_facet(

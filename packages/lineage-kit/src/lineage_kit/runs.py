@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import traceback
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -84,6 +85,7 @@ class LineageRun:
         parent: LineageContext | None = None,
         emitter: Emitter | None = None,
         run_facets: dict[str, Any] | None = None,
+        on_undelivered: Callable[[RunEvent], None] | None = None,
     ) -> None:
         self.job_name = job_name
         self.namespace = namespace
@@ -99,7 +101,36 @@ class LineageRun:
         #: pair has to special-case which one to trust. Authored with `custom_facet()` so the payload
         #: stays spec-legal; `RunFacets` allows extras, so it reaches the wire verbatim.
         self._run_facets = dict(run_facets or {})
+        #: Called with any event the emitter reports UNDELIVERED, so a producer can stage it durably.
+        #:
+        #: INJECTED rather than built in, because only the producer knows whether it already has
+        #: durability: four of the five lakehouse producers stage through the shared object-store
+        #: outbox themselves, and a recorder that staged on their behalf would double-stage and grow an
+        #: outbox no relay can tell from real backlog (§ E1). `ingest` is the one that emits bare, and
+        #: the gap it leaves is the one recorded twice on that lane — a 401 that "surfaces as a
+        #: permanent gap in the graph that looks exactly like a healthy estate".
+        self._on_undelivered = on_undelivered
         self._terminal: RunState | None = None
+
+    def _emit_or_recover(self, event: RunEvent) -> None:
+        """Emit, and hand the event to the recovery hook when the emitter reports it undelivered.
+
+        The bool means "this event needs no recovery", not "it reached the graph" — which is why a
+        no-op emitter answers True: a deployment with lineage switched off has lost nothing, and
+        staging its events would turn an opt-out into a leak.
+
+        THE HOOK CANNOT FAIL THE RUN. I8, and it bites hardest exactly here: a run whose data landed
+        must not be reported as failed because the graph was unreachable, and a stager that cannot
+        reach the object store is that same outage one layer down. Broad by intent — anything the hook
+        raises is contained and logged, because the alternative is an observability path that can end
+        a run that already succeeded.
+        """
+        if self.emitter.emit(event) or self._on_undelivered is None:
+            return
+        try:
+            self._on_undelivered(event)
+        except Exception:
+            log.warning("lineage_recovery_hook_failed", extra={"run_id": self.run_id}, exc_info=True)
 
     @property
     def emitter(self) -> Emitter:
@@ -163,19 +194,19 @@ class LineageRun:
             return None
         self._terminal = state
         event = self._event(state, inputs=inputs, outputs=outputs, error=error)
-        self.emitter.emit(event)
+        self._emit_or_recover(event)
         return event
 
     def start(self, *, inputs: Iterable[DatasetLike] = (), outputs: Iterable[OutputDatasetLike] = ()) -> RunEvent:
         """Emit START (call once, when the unit of work begins)."""
         event = self._event(RunState.START, inputs=inputs, outputs=outputs)
-        self.emitter.emit(event)
+        self._emit_or_recover(event)
         return event
 
     def running(self, *, inputs: Iterable[DatasetLike] = (), outputs: Iterable[OutputDatasetLike] = ()) -> RunEvent:
         """Emit a RUNNING heartbeat (non-terminal, repeatable)."""
         event = self._event(RunState.RUNNING, inputs=inputs, outputs=outputs)
-        self.emitter.emit(event)
+        self._emit_or_recover(event)
         return event
 
     def complete(self, *, inputs: Iterable[DatasetLike] = (), outputs: Iterable[OutputDatasetLike] = ()) -> RunEvent | None:
