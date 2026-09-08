@@ -2111,7 +2111,7 @@ anything is hiding.
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
 
-### H12 · The scoped credential turns a base-ref "no" into an "unknown", falsely refusing 69 compactions a tick — **HIGH**
+### H12 · The scoped credential turns a base-ref "no" into an "unknown", falsely refusing 69 compactions a tick — **NAMED 2026-09-08 (`bddc415b`); THE REMEDY IS AN OWNER CALL**
 **MEASURED LIVE 2026-09-08** on `h11-24483c84`, from one sweep tick driven through `POST
 /maintenance-cron` (`planned 440, published 440`):
 
@@ -2174,6 +2174,28 @@ is not available — a real base would then be rewritten, which is the data-loss
 to prevent. So the scope must cover the question: `vending.build_session_policy(bucket, prefix, tier)`
 grants by bucket + prefix, and a table's DECLARED base paths belong in that grant, because reading them
 is part of maintaining that table. The catalog knows them at vend time — it holds the manifest.
+
+**THE HALF THAT WAS MINE TO FIX LANDED AND IS OBSERVED.** A denial and an outage refused alike AND
+read alike — both rendered "could not be read in object storage", sending an operator to inspect a
+store that is working. `BaseEvidence.probe_denied` now separates them, the warning carries the flag so
+the population is countable rather than inferred from a message, and the refusal says where the fix is.
+Verified on the deployed `lance-rest-catalog:h12-bddc415b` against the estate's OWN error string:
+
+    recognised as a denial: True        (the live "AWS Error ACCESS_DENIED during HeadObject" text)
+    an ordinary failure:    False
+
+    DENIED -> ... this maintainer is not permitted to read the base at s3://lance-catalog/models ...
+              The credential's scope excludes the base, so this refuses on every tick until the scope covers it
+    BROKEN -> ... the base at s3://lance-catalog/models could not be read in object storage ...
+
+**THE VERDICT IS DELIBERATELY UNCHANGED.** `_base_paths_compaction_refusal` fails closed with its
+asymmetry measured — a wrong permit destroys the reason a clone exists — and a denial is no more
+evidence about the base than an outage is. Only the instruction changed.
+
+**THE REMEDY IS NOT TAKEN HERE, AND THAT IS DELIBERATE.** Making the 69 compactable means
+`vending.build_session_policy(bucket, prefix, tier)` covering the base paths a table declares, which
+WIDENS a credential scope — an owner decision under the zero-trust ruling, not a judgement call for
+this pass. The other direction, treating denied as "not protected", is not available at any price.
 
 **Still open, and smaller than it looked:** whether the 184 `403 Forbidden` credential vends are this
 population or a separate refusal. One names `trackansdba60663$read_ghost`, which reads like a table
