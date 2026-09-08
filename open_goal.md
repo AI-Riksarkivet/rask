@@ -60,8 +60,8 @@ source. Comments carry rationale and provenance, never history.**
 
 **Per commit: `uvx ty check`, `uv run ruff check`, the TESTPATHS the change touches. The FULL suite is
 ~16 min — owner ruling 2026-09-08: NOT per commit; once per batch, backgrounded, never blocking (two
-runs were killed by teardown and bought nothing). Anything deployable BUILT with Dagger, DEPLOYED to
-k3s, and OBSERVED working. Never claim a thing works before showing it. PUSH every commit.**
+runs were killed by teardown, buying nothing). Anything deployable is BUILT with Dagger, DEPLOYED to
+k3s and OBSERVED working; never claim it works before showing it. PUSH every commit.**
 
 ## STOPPING
 

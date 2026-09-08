@@ -266,6 +266,19 @@ class Settings(GovernedAuthSettings, BaseSettings):
     vending_mode: Literal["mode_b", "sts", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
     vending_ttl_seconds: int = Field(default=900, ge=60, alias="LANCE_VENDING_TTL_SECONDS")
     s3_assume_role_arn: str | None = Field(default=None, alias="LANCE_S3_ASSUME_ROLE_ARN")
+    #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
+    #: straight to object storage with the catalog out of the path, so whatever the estate intends must
+    #: travel in the storage options or it does not happen.
+    #:
+    #: Key names and their contract are verified against `lance_docs/guide.md:2417-2419`, and
+    #: `lance_storage_options` REFUSES an invalid pairing rather than passing it on: object_store drops
+    #: an option it does not recognise, so a wrong value here would land plaintext under a config that
+    #: claims encryption — the one failure with no later signal.
+    #:
+    #: Unset is every deployment's behaviour today: whatever the bucket does.
+    s3_server_side_encryption: str | None = Field(default=None, alias="LANCE_S3_SERVER_SIDE_ENCRYPTION")
+    s3_sse_kms_key_id: str | None = Field(default=None, alias="LANCE_S3_SSE_KMS_KEY_ID")
+    s3_sse_bucket_key_enabled: bool | None = Field(default=None, alias="LANCE_S3_SSE_BUCKET_KEY_ENABLED")
     s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
 
     # Maintenance: when true, reject mutating /v1 requests with 503 + Retry-After — for

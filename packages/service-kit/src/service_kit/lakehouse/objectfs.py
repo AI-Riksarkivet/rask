@@ -12,7 +12,7 @@ object storage in unit tests.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pyarrow.fs as pafs
 
@@ -33,6 +33,9 @@ def lance_storage_options(
     allow_http: bool = True,
     virtual_hosted: bool = False,
     session_token: str | None = None,
+    server_side_encryption: str | None = None,
+    sse_kms_key_id: str | None = None,
+    sse_bucket_key_enabled: bool | None = None,
 ) -> StorageOptions:
     """The lance-style ``storage_options`` dict every service opens datasets with.
 
@@ -75,6 +78,43 @@ def lance_storage_options(
     }
     if session_token:
         options["aws_session_token"] = session_token
+    options.update(_encryption_options(server_side_encryption, sse_kms_key_id, sse_bucket_key_enabled))
+    return options
+
+
+#: The three algorithms object_store accepts, verbatim from `lance_docs/guide.md:2417`. A fourth value
+#: is not an error at the store — it is an ignored option, and the bytes land in plaintext.
+_SSE_ALGORITHMS: Final = ("AES256", "aws:kms", "aws:kms:dsse")
+#: The two that carry a customer key. `guide.md:2418`: "If set, `aws_sse_kms_key_id` … requires
+#: `aws_server_side_encryption` to be `aws:kms` or `aws:kms:dsse`."
+_SSE_KMS_ALGORITHMS: Final = ("aws:kms", "aws:kms:dsse")
+
+
+def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_key_enabled: bool | None) -> StorageOptions:
+    """Encryption-at-rest options, REFUSING the combinations the store would silently ignore (§ J5).
+
+    Validated here rather than trusted, because this module's whole reason for existing is that
+    object_store DROPS an option it does not recognise without erroring (probed 2026-09-03). For
+    credentials that surfaces later as a permission failure; for encryption it surfaces as nothing at
+    all — the write succeeds, unencrypted, under a configuration that claims otherwise. There is no
+    later signal to catch it, which is why the check belongs at the only point that sees both fields.
+    """
+    if kms_key_id and algorithm not in _SSE_KMS_ALGORITHMS:
+        raise ValueError(
+            f"aws_sse_kms_key_id requires aws_server_side_encryption to be one of {_SSE_KMS_ALGORITHMS} (got {algorithm!r}) — "
+            "the store would ignore the key id and encrypt with its default, so the key would appear configured and never be used"
+        )
+    if algorithm is not None and algorithm not in _SSE_ALGORITHMS:
+        raise ValueError(
+            f"aws_server_side_encryption must be one of {_SSE_ALGORITHMS} (got {algorithm!r}) — any other value is dropped and the data lands unencrypted"
+        )
+    options: StorageOptions = {}
+    if algorithm:
+        options["aws_server_side_encryption"] = algorithm
+    if kms_key_id:
+        options["aws_sse_kms_key_id"] = kms_key_id
+    if bucket_key_enabled is not None:
+        options["aws_sse_bucket_key_enabled"] = str(bucket_key_enabled).lower()
     return options
 
 

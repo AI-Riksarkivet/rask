@@ -27,7 +27,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
-from catalog.core.vending import make_vendor
+from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import warehouses
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
@@ -146,6 +146,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # puts the S3 secret there.
         access_key=settings.s3_access_key_id,
         secret_key=settings.s3_secret_access_key.get_secret_value(),
+        encryption=EncryptionAtRest(
+            algorithm=settings.s3_server_side_encryption,
+            kms_key_id=settings.s3_sse_kms_key_id,
+            bucket_key_enabled=settings.s3_sse_bucket_key_enabled,
+        ),
     )
     # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
     # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so

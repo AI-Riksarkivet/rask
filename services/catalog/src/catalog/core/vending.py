@@ -50,6 +50,31 @@ class VendedCredentials(BaseModel):
     expires_at_millis: int | None = None
 
 
+class EncryptionAtRest(BaseModel):
+    """What a vended credential must tell the writer about encrypting the bytes it lands (§ J5).
+
+    THE POINT IS THE DIRECT WRITE. A client vended credentials writes to object storage without the
+    catalog in the path, so any encryption the warehouse intends has to travel IN the storage options
+    or it does not happen. Key names and their contract are verified against `lance_docs/guide.md`
+    (2417-2419), not guessed — `lance_storage_options` refuses a combination the store would ignore.
+
+    Empty is the default and means "whatever the bucket does", which is what every deployment had
+    before this existed: unset here changes nothing.
+    """
+
+    algorithm: str | None = None
+    kms_key_id: str | None = None
+    bucket_key_enabled: bool | None = None
+
+    def as_options(self) -> dict[str, object]:
+        """The keyword arguments `lance_storage_options` takes — one place, so a rename cannot half-land."""
+        return {
+            "server_side_encryption": self.algorithm,
+            "sse_kms_key_id": self.kms_key_id,
+            "sse_bucket_key_enabled": self.bucket_key_enabled,
+        }
+
+
 @runtime_checkable
 class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
@@ -225,7 +250,10 @@ class StsVendor:
         assume_role: Callable[..., dict[str, object]] | None = None,
         access_key: str | None = None,
         secret_key: str | None = None,
+        encryption: EncryptionAtRest | None = None,
     ) -> None:
+        #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
+        self._encryption = encryption or EncryptionAtRest()
         self._role_arn = role_arn
         self._region = region
         self._endpoint = endpoint
@@ -272,6 +300,7 @@ class StsVendor:
             str(creds["SecretAccessKey"]),
             self._region,
             session_token=str(creds["SessionToken"]),
+            **self._encryption.as_options(),  # ty: ignore[invalid-argument-type]
         )
         if not self._endpoint:
             # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the
@@ -300,7 +329,10 @@ class WebIdentityVendor:
         role_arn: str = _DEFAULT_VEND_ROLE_ARN,
         ttl_seconds: int = 900,
         assume: Callable[..., dict[str, object]] | None = None,
+        encryption: EncryptionAtRest | None = None,
     ) -> None:
+        #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
+        self._encryption = encryption or EncryptionAtRest()
         self._region = region
         self._endpoint = endpoint
         self._role_arn = role_arn  # RustFS ignores it; boto3 requires the param
@@ -341,6 +373,7 @@ class WebIdentityVendor:
             str(creds["SecretAccessKey"]),
             self._region,
             session_token=str(creds["SessionToken"]),
+            **self._encryption.as_options(),  # ty: ignore[invalid-argument-type]
         )
         if not self._endpoint:
             opts.pop("endpoint", None)
@@ -356,6 +389,7 @@ def make_vendor(
     ttl_seconds: int = 900,
     access_key: str | None = None,
     secret_key: str | None = None,
+    encryption: EncryptionAtRest | None = None,
 ) -> CredentialVendor:
     """Build the configured :class:`CredentialVendor`.
 
@@ -374,6 +408,7 @@ def make_vendor(
             ttl_seconds=ttl_seconds,
             access_key=access_key,
             secret_key=secret_key,
+            encryption=encryption,
         )
     if mode == "web_identity":
         return WebIdentityVendor(
@@ -381,6 +416,7 @@ def make_vendor(
             endpoint=sts_endpoint,
             role_arn=assume_role_arn or _DEFAULT_VEND_ROLE_ARN,
             ttl_seconds=ttl_seconds,
+            encryption=encryption,
         )
     assert_never(mode)
 

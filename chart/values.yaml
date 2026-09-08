@@ -926,6 +926,18 @@ vending:
   mode: sts # mode_b | web_identity | sts | static
   ttlSeconds: 900
   assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # RustFS ignores it; boto3 requires the param
+  # ENCRYPTION AT REST for every DIRECT write, carried in the vended storage options (§ J5). A vended
+  # client writes to object storage with the catalog out of the path, so this is the only channel that
+  # reaches it.
+  #
+  # EMPTY BY DEFAULT = whatever the bucket does, which is every deployment's behaviour today. The names
+  # and their contract come from `lance_docs/guide.md:2417-2419`: algorithm must be AES256, aws:kms or
+  # aws:kms:dsse, and a kmsKeyId REQUIRES one of the two kms values. The catalog refuses an invalid
+  # pairing at boot rather than passing it on — object_store ignores an option it does not recognise,
+  # so a wrong value would write plaintext while the config claimed encryption.
+  #
+  # RustFS ignores SSE headers; this is for an AWS/S3 deployment.
+  encryption: {}
   # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
   # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source
   # delete dangles the pointer); (2) SSRF — a client-controlled pointer URI is fetched server-side by the

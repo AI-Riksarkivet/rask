@@ -118,6 +118,21 @@ spec:
             - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
             - { name: LANCE_VENDING_TTL_SECONDS, value: {{ .Values.vending.ttlSeconds | quote }} }
             {{- end }}
+            {{- /* ENCRYPTION AT REST, carried INTO the vended credential (§ J5). Rendered only when
+                 asked for: an empty value would reach the writer as an option object_store does not
+                 recognise, and it drops those silently — plaintext under a config claiming otherwise.
+                 The catalog REFUSES an invalid pairing at boot rather than passing it on. */}}
+            {{- with .Values.vending.encryption }}
+            {{- with .algorithm }}
+            - { name: LANCE_S3_SERVER_SIDE_ENCRYPTION, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .kmsKeyId }}
+            - { name: LANCE_S3_SSE_KMS_KEY_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- if hasKey . "bucketKeyEnabled" }}
+            - { name: LANCE_S3_SSE_BUCKET_KEY_ENABLED, value: {{ .bucketKeyEnabled | quote }} }
+            {{- end }}
+            {{- end }}
             - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }
             - { name: LANCE_DAPR_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
