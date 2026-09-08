@@ -1915,7 +1915,37 @@ ingestion. Measure which paths use ambient credentials, then scope to those plus
 **NOT a reason to delay the outbox identity**: an additional narrow credential used only for staging is
 safe now and independent of the data-path question.
 
-### H9 · 43 secrets reach workloads through env — the estate-wide size of the zero-trust goal — **HIGH**
+### H9 · Secrets reaching workloads through env — **RE-MEASURED 2026-09-08: the lakehouse plane holds TWO classes, not 43**
+
+**THE 43 IS INFLATED, AND THE INFLATION IS THE INTERESTING PART.** Re-measured inside the RUNNING pods
+2026-09-08 — printing each variable's LENGTH rather than its name — the lakehouse plane sorts into
+three kinds, and only one is a violation:
+
+    rask-catalog       LANCE_S3_ACCESS_KEY_ID <11>   APP_API_TOKEN <36>   LANCE_SECRETS_FROM_DAPR <4>
+    rask-lineage       LINEAGE_S3_ACCESS_KEY_ID <11> APP_API_TOKEN <36>   LINEAGE_SECRETS_FROM_DAPR <4>
+    rask-maintenance   MAINTENANCE_S3_ACCESS_KEY_ID <16>  MAINTENANCE_DAPR_SECRET_S3_FIELD <25>  APP_API_TOKEN <36>
+    rask-medallion-*   MEDALLION_S3_ACCESS_KEY_ID <14>    MEDALLION_DAPR_SECRET_S3_FIELD <23>    APP_API_TOKEN <36>
+    rask-ingest        AWS_ACCESS_KEY_ID <11>  AWS_SECRET_ACCESS_KEY <11>  HF_TOKEN <EMPTY>  APP_API_TOKEN <36>
+
+  * **CONFIGURATION that merely matches a keyword scan.** `*_SECRETS_FROM_DAPR` is the four-character
+    string `true`; `*_DAPR_SECRET_S3_FIELD` names a FIELD. Neither is secret material, and both were
+    counted. A scan for `SECRET|TOKEN|PASSWORD` in a variable NAME is exactly the "a keyword match is
+    not a classification" error the goal warns about, committed by this row.
+  * **IDENTIFIERS, not secrets.** `*_S3_ACCESS_KEY_ID` is the public half of a key pair. The half that
+    matters — `*_S3_SECRET_ACCESS_KEY` — is ABSENT from catalog, lineage, maintenance and medallion,
+    because `apply_dapr_secrets` fills it from the store at startup. The sanctioned path is already
+    working on four services, and this row was counting the evidence of it as the violation.
+  * **THE ACTUAL VIOLATIONS ARE TWO.** `APP_API_TOKEN` (36 chars, on every service) and ingest's
+    `AWS_SECRET_ACCESS_KEY`. `HF_TOKEN` is EMPTY, so it is a name in an environment and nothing else.
+
+**So what remains of the estate-wide goal is not 43 migrations.** It is (1) ingest's root key — § H8's
+remaining half, and the last long-lived storage credential in the plane — and (2) `APP_API_TOKEN`,
+which is one secret delivered the same way to every service and therefore ONE change, not eight. The
+bootstrap ordering rules out the Dapr store for it (the token is what authenticates the sidecar call),
+which leaves ESO — needing `externalSecrets.enabled=true` and a release.
+
+**This does not shrink the goal, it locates it.** The count was the reason this row read as an
+estate-wide slog; the measurement says the lakehouse plane is two changes from clean.
 **MEASURED ON THE LIVE CLUSTER 2026-09-08**, against the running Deployments and StatefulSets rather
 than the chart, because `envFrom` is invisible to a survey of `env:` and that error was made twice this
 day. Owner ruling: *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
