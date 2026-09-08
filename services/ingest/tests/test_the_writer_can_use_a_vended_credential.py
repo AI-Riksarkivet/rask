@@ -115,16 +115,24 @@ def test_server_mediated_vends_nothing_and_that_is_not_an_error() -> None:
         assert client.vend_storage_options("ns", "ds", tier="write") is None
 
 
-def test_a_vending_failure_degrades_rather_than_failing_the_run() -> None:
-    """A vend that errors must not lose the ingest run. The ambient credential is what the writer used
-    before this existed, so falling back to it is a strictly-no-worse outcome — whereas raising would
-    turn an optional hardening into a new single point of failure."""
+def test_a_vending_failure_REFUSES_rather_than_signing_with_the_storage_root() -> None:
+    """A vend that ERRORS is not the same as one that offers nothing, and this asserted that it was.
+
+    "Falling back is strictly no worse" held only while the ambient credential was an unremarkable
+    key. It is the RustFS ROOT pair — measured inside the running pod 2026-09-08,
+    `AWS_ACCESS_KEY_ID=rustfsadmin` — so the degrade signed the run's bytes with the widest credential
+    in the estate, at INFO, counted by nothing. The owner's standing rule is "never a fallback"; the
+    escape stays reachable for an operator who names it (`allow_ambient_fallback`), so the refusal is
+    about the AMBIGUITY, not about being open.
+    """
     import httpx
+    import pytest
     import respx
 
-    from ingest.catalog_service import CatalogServiceClient
+    from ingest.catalog_service import CatalogServiceClient, VendingUnavailableError
 
     client = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog:2333", token="t")
     with respx.mock:
         respx.post("http://catalog:2333/v1/table/ns$ds/credentials").mock(return_value=httpx.Response(503, json={"detail": "vendor down"}))
-        assert client.vend_storage_options("ns", "ds", tier="write") is None
+        with pytest.raises(VendingUnavailableError):
+            client.vend_storage_options("ns", "ds", tier="write")

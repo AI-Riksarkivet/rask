@@ -197,6 +197,19 @@ class IngestSettings(BaseSettings):
         """
         return self.catalog_app_token_override or self.app_api_token
 
+    #: Whether a vending FAILURE may sign the run's bytes with the pod's ambient credential.
+    #:
+    #: OFF, because on this estate that credential is the RustFS ROOT pair (measured inside the running
+    #: pod 2026-09-08: `AWS_ACCESS_KEY_ID=rustfsadmin`) and the degrade was reported at INFO with
+    #: nothing counting it. The owner's standing rule is "never a fallback".
+    #:
+    #: NOT the same as a deployment that OFFERS no credential — `mode_b` answers 200 with no
+    #: `storage_options` and is untouched by this, because the ambient credential is that posture's
+    #: design rather than its failure. The name carries `INSECURE` for the reason
+    #: `LANCE_INSECURE_ALLOW_UNAUTHENTICATED` does: an operator reading the values file should not
+    #: have to look the flag up to know what it costs.
+    insecure_allow_ambient_storage: bool = Field(default=False, validation_alias="RASK_INGEST_INSECURE_ALLOW_AMBIENT_STORAGE")
+
     @property
     def lineage_app_token(self) -> str | None:
         """The token presented to the lineage door. Same fallback, same reason, as the catalog's."""

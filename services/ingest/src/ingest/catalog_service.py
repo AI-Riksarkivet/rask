@@ -114,6 +114,22 @@ class CatalogError(RuntimeError):
     """The catalog refused, or could not be reached."""
 
 
+class VendingUnavailableError(RuntimeError):
+    """Vending was configured and could not answer — so the write must not proceed on the ambient key.
+
+    NOT the same as "no credential offered". A deployment on `mode_b` answers 200 with no
+    `storage_options`, and the ambient credential IS its design; this is the other case — the vendor
+    unreachable, misconfigured or refusing — where degrading means signing the run's bytes with
+    whatever the pod happens to hold. On this estate that is the RustFS ROOT pair (measured inside the
+    running pod 2026-09-08: `AWS_ACCESS_KEY_ID=rustfsadmin`), and the degrade was logged at INFO and
+    counted by nothing.
+
+    The owner's standing rule is "never a fallback". `allow_ambient_fallback` keeps the old behaviour
+    reachable for an operator who names it, so the refusal is about the AMBIGUITY rather than about
+    being open — the argument `assert_authentication_configured` already makes for the human doors.
+    """
+
+
 class CatalogServiceClient:
     """Talks to the catalog service — the `ServiceCatalogSeam` half of the seam (`ingest.catalog`).
 
@@ -122,10 +138,20 @@ class CatalogServiceClient:
     run id rides the commit itself.
     """
 
-    def __init__(self, schema: pa.Schema, base_url: str | None = None, token: str | None = None) -> None:
+    def __init__(
+        self,
+        schema: pa.Schema,
+        base_url: str | None = None,
+        token: str | None = None,
+        *,
+        allow_ambient_fallback: bool = False,
+    ) -> None:
         self._schema = schema
         self._base = (base_url or catalog_base_url()).rstrip("/")
         self._token = token if token is not None else catalog_token()
+        #: Whether a vending FAILURE may degrade to the pod's ambient credential. Off, because that
+        #: credential is the storage root and the degrade was invisible; see `VendingUnavailableError`.
+        self._allow_ambient_fallback = allow_ambient_fallback
         self.registered: list[tuple[str, int, str]] = []
 
     # ── identity ──────────────────────────────────────────────────────────────────────
@@ -139,18 +165,18 @@ class CatalogServiceClient:
         RustFS 2026-09-03 — a credential vended for one table read it and was refused on another with
         403 AccessDenied.
 
-        ``None`` on ANY non-answer, and that is deliberate in three cases rather than one:
+        TWO OUTCOMES, NOT ONE, and collapsing them is what put the storage ROOT key on the write path.
 
-        * ``mode_b`` answers ``server_mediated`` with no credential. It is a supported posture, not a
-          failure.
-        * a vending error (the vendor down, misconfigured, unreachable) must not lose an ingest run.
-          The ambient credential is what this writer used before vending existed, so falling back is
-          strictly no worse — whereas raising would turn an optional hardening into a new single point
-          of failure.
-        * an unparseable body, for the same reason.
+        * ``None`` — NOT OFFERED. ``mode_b`` answers ``server_mediated`` with no credential; the
+          ambient credential IS that deployment's design and refusing would break it.
+        * :class:`VendingUnavailableError` — NOT AVAILABLE. The vendor is unreachable, refuses, or
+          answers something unparseable. Degrading here signs the run's bytes with whatever the pod
+          holds, which on this estate is the RustFS root pair, and the old behaviour reported that at
+          INFO with nothing counting it. The owner's rule is "never a fallback"; an operator who wants
+          the old posture names it with ``allow_ambient_fallback``.
 
-        The caller therefore never has to distinguish "not offered" from "not available": both mean
-        write the way we always did.
+        The distinction is decidable from the answer itself — an offer-less deployment returns 200 with
+        no ``storage_options``, a broken one returns an error — so the caller never has to guess.
         """
         import httpx
 
@@ -174,15 +200,23 @@ class CatalogServiceClient:
             # this very method and reported it as "vending unavailable" — the degradation path hid a
             # programming error as a configuration one, which is what a bare catch actually costs.
             # Transport failures degrade; anything else is a defect and must surface.
-            logger.info("credential vending unreachable (%s) — writing with the ambient credential", exc)
+            if not self._allow_ambient_fallback:
+                raise VendingUnavailableError(f"credential vending unreachable ({exc}) and the ambient credential is the storage root") from exc
+            logger.warning("credential vending unreachable (%s) — falling back to the ambient credential by explicit configuration", exc)
             return None
         if response.status_code >= 400:
-            logger.info("credential vending unavailable (%s) — writing with the ambient credential", response.status_code)
+            if not self._allow_ambient_fallback:
+                raise VendingUnavailableError(f"credential vending refused ({response.status_code}) and the ambient credential is the storage root")
+            logger.warning("credential vending refused (%s) — falling back to the ambient credential by explicit configuration", response.status_code)
             return None
         try:
             options = (response.json().get("credentials") or {}).get("storage_options")
         except ValueError as exc:  # a non-JSON body from something in front of the catalog
-            logger.info("credential vending answered unparseable content (%s) — writing with the ambient credential", exc)
+            if not self._allow_ambient_fallback:
+                raise VendingUnavailableError(
+                    f"credential vending answered unparseable content ({exc}) and the ambient credential is the storage root"
+                ) from exc
+            logger.warning("credential vending answered unparseable content (%s) — falling back to the ambient credential by explicit configuration", exc)
             return None
         if not isinstance(options, dict) or not options:
             return None
@@ -531,7 +565,9 @@ class CatalogServiceClient:
 def build_catalog(schema: pa.Schema) -> CatalogSeam:
     """The one place that decides which catalog the plane is talking to."""
     if catalog_enabled():
-        return CatalogServiceClient(schema)
+        from ingest.config import settings as ingest_settings
+
+        return CatalogServiceClient(schema, allow_ambient_fallback=ingest_settings().insecure_allow_ambient_storage)
     from ingest.catalog import LocalCatalog
 
     return LocalCatalog(schema)

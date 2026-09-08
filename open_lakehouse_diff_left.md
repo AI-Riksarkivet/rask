@@ -1816,9 +1816,14 @@ conclusion first. **A vend for a table that does not exist answers 403, not 404*
 this was "the vending door grants nothing to any service". **And `mode` in the response is the
 DATA-PLANE axis (direct vs proxied), not the credential mode**: it says `direct` on an estate whose
 `LANCE_VENDING_MODE` is `sts`, and the credential is nonetheless a real short-lived STS triple.
-`service-ingest` holds ZERO tuples of its own and is still allowed, because `table.writer` resolves
-`writer from parent` up the namespace → warehouse chain; checked without mutating the store, using
-OpenFGA contextual tuples.
+A THIRD TRAP, and it produced a wrong sentence in this very row before it was caught. "`service-ingest`
+holds ZERO tuples of its own" was a QUERY ARTIFACT: OpenFGA's Read with only a `user` filter and no
+object type returns nothing, so the subject looked ungranted. It is not — it holds `owner` and `writer`
+on the namespaces and tables it CREATED, which is the estate's shipped posture (`lockRootCreate` false:
+an authenticated caller owns what it creates). The control that caught it was checking a subject that
+certainly has nothing (`user:nobody-at-all-9f3` → allowed False) beside the real one; without that
+control, an empty result reads as an empty grant. Contextual tuples remain the right instrument for
+"would this grant help?" — they were simply answering a question whose premise was already false.
 
 **WHAT IS ACTUALLY LEFT** is therefore not "make vending work" but "stop holding the root key beside
 it":
