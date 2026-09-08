@@ -1778,12 +1778,27 @@ convenience.**
     `RASK_INGEST_USE_CATALOG=true`, and `runtime.write_options_for(...)` hands the worker a
     `VendedCredentialCache` callable, so every governed table write signs with a short-lived
     catalog-vended credential. The ambient root pair is NOT what writes bronze.
-    **So what still needs the root credential is the SOURCE-READ path and dev mode**, not the governed
-    write: `objectstore.py` states it — *"a registered store that declares no secret shares the
-    deployment's credentials"* — i.e. reading an EXTERNAL bucket a run declares without its own secret,
-    plus the non-catalog path where `write_options_for` returns `None` and the write falls back to
-    ambient. Those are the two things to replace or refuse, and they are much smaller than "ingest needs
-    a storage identity".
+    **So what still needs the root credential is the SOURCE-READ path** — and measured 2026-09-08 that
+    is narrower again, and is the EASY case for STS rather than the hard one:
+
+        RASK_STORES registered on the deployed pod   NONE (empty)
+        ingest READ targets, from the graph          s3://lance-catalog/media-src/batch  126
+                                                     source                               24
+                                                     s3://images-batch                    15
+                                                     s3://acme-bucket                     14
+                                                     s3://lance-catalog                    9
+
+    With no store registered, `resolve_source_connection`'s case 2 (a registered external store) is
+    DEAD in this deployment and case 3 refuses, so every real read takes case 1 — *"no endpoint
+    declared, or one that IS the deployment's own"* — which uses the ambient env chain. The targets
+    agree: every one is an ESTATE bucket.
+
+    **So ingest's root credential exists to read estate buckets it was never scoped to**, not to reach
+    the outside world. That is the tractable shape: the catalog can vend a READ credential per source
+    location exactly as it already vends the write one, and `build_session_policy` already scopes by
+    bucket + prefix. The dev/non-catalog path (`write_options_for` returning `None`) is the other
+    consumer and should REFUSE rather than fall back, on the same rule as every other credential in
+    this estate.
   * **ingest's outbox — STS too, and the machinery already exists.** `catalog.core.vending.build_session_policy`
     scopes an inline session policy by BUCKET + PREFIX (`s3:ListBucket` gated on an `s3:prefix`
     condition, object actions on `bucket/<prefix>/*`) with a 900 s TTL, and ingest already consumes
