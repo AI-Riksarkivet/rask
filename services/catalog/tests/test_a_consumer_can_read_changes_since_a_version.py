@@ -23,6 +23,9 @@ disclosing read available, not a metadata lookup.
 
 from __future__ import annotations
 
+import pytest
+from lance_namespace import InvalidInputError
+
 from catalog.services import changes
 
 
@@ -49,18 +52,53 @@ def test_an_OPEN_end_means_everything_since() -> None:
     assert got == "_row_created_at_version > 7", f"an open-ended feed was bounded: {got!r}"
 
 
-def test_a_BEGIN_AFTER_END_is_refused() -> None:
+def test_a_BEGIN_AFTER_END_is_refused_AS_A_CLIENT_ERROR() -> None:
     """An inverted window answers empty, which reads as "nothing changed" — the one answer a consumer
-    must never receive when its request was malformed."""
-    import pytest
+    must never receive when its request was malformed.
 
-    with pytest.raises(ValueError, match="begin_version"):
+    `InvalidInputError`, not `ValueError`, and the difference is what the caller sees. Driven against
+    the deployed door 2026-09-08, a bare `ValueError` reached the client as `InternalError 18` — a 500,
+    which tells a consumer the CATALOG is broken and to retry, when the truth is that its own request
+    was malformed and retrying it will fail identically forever.
+    """
+    with pytest.raises(InvalidInputError, match="begin_version"):
         changes.change_filter(begin_version=9, end_version=7, kind="inserted")
 
 
-def test_a_NEGATIVE_begin_is_refused() -> None:
+def test_a_NEGATIVE_begin_is_refused_AS_A_CLIENT_ERROR() -> None:
     """Version 0 is the empty dataset, so "since -1" is not a wider window, it is a malformed one."""
-    import pytest
-
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidInputError):
         changes.change_filter(begin_version=-1, end_version=None, kind="inserted")
+
+
+def test_the_feed_PROJECTS_the_version_columns_so_a_consumer_can_CHECKPOINT() -> None:
+    """`file_format.md:4283`: the query returns the changed rows "including the version metadata columns
+    `_row_created_at_version`, `_row_last_updated_at_version`, and `_rowid`".
+
+    THIS IS THE WHOLE FEED, not a nicety. A consumer polls "what changed since N" and must learn the N
+    to send next; without a version on the rows it has no way to advance, and re-sending its old N
+    replays the same rows forever. Measured on the live door 2026-09-08 before this existed: a feed over
+    `bronze$pages` answered `['id', 'payload', 'source_uri', 'stage']` — three real rows and nothing to
+    checkpoint from. Lance does not project the pseudo-columns unless they are asked for, so the door
+    asks.
+    """
+    got = changes.feed_projection(None, data_columns=["id", "payload"])
+    assert got[:2] == ["id", "payload"]
+    for column in ("_row_created_at_version", "_row_last_updated_at_version", "_rowid"):
+        assert column in got, f"a consumer cannot checkpoint without {column}"
+
+
+def test_a_CALLERS_column_list_still_gets_the_version_columns() -> None:
+    """Narrowing the payload is the ordinary case for a wide table, and it must not cost the ability to
+    advance — the version columns ride along with whatever was asked for."""
+    got = changes.feed_projection(["id"], data_columns=["id", "payload"])
+    assert got[0] == "id"
+    assert "payload" not in got, "a caller's projection was widened"
+    assert "_row_created_at_version" in got
+
+
+def test_a_CALLER_who_names_a_version_column_gets_it_ONCE() -> None:
+    """Lance rejects a duplicated name in a projection, so a consumer that asks for the column the door
+    adds anyway would have its request refused for asking correctly."""
+    got = changes.feed_projection(["_rowid", "id"], data_columns=["id"])
+    assert got.count("_rowid") == 1, f"duplicated projection: {got}"

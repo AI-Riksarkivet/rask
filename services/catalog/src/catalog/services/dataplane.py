@@ -89,7 +89,7 @@ from pydantic import BaseModel
 
 from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
-from catalog.services import native
+from catalog.services import changes, native
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
@@ -1371,13 +1371,18 @@ def read_changes(
     door, and a consumer reading one framing as the other fails at the first batch rather than
     degrading. `encode_arrow_stream` is the sibling for the stream doors and is deliberately not reused.
 
-    The predicate comes from `services/changes.py`, which owns the two documented windows; this
-    function does not know what a change is and must not learn — a second place that composes the
-    filter is a second place it can drift from `file_format.md`.
+    The predicate AND the projection come from `services/changes.py`, which owns the two documented
+    windows; this function does not know what a change is and must not learn — a second place that
+    composes either is a second place it can drift from `file_format.md`.
+
+    THE PROJECTION IS PART OF THE ANSWER, not a default: Lance returns only data columns unless the
+    version pseudo-columns are named, so a feed that passed the caller's `columns` through verbatim
+    handed back changed rows with no version on them and no way to ask for the next window.
     """
     dataset = open_dataset(ns, so, table_id, branch=branch)
+    projection = changes.feed_projection(columns, data_columns=dataset.schema.names)
     with _user_sql("invalid change-feed predicate"):
-        table = dataset.scanner(filter=predicate, columns=columns).to_table()
+        table = dataset.scanner(filter=predicate, columns=projection).to_table()
     sink = pa.BufferOutputStream()
     with pa.ipc.new_file(sink, table.schema) as writer:
         writer.write_table(table)

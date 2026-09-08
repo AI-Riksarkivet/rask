@@ -26,7 +26,10 @@ predicate to drive the cascade. What was missing is a door and the UPDATED half.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Sequence
+from typing import Final, Literal
+
+from lance_namespace import InvalidInputError
 
 
 ChangeKind = Literal["inserted", "updated"]
@@ -35,6 +38,12 @@ ChangeKind = Literal["inserted", "updated"]
 #: an unresolved column at scan time, and the message names the column rather than the feature.
 _CREATED = "_row_created_at_version"
 _UPDATED = "_row_last_updated_at_version"
+
+#: What the feed adds to every projection. `file_format.md:4283` states the documented result "includes
+#: the version metadata columns" — Lance does NOT project pseudo-columns unless they are named, so the
+#: door names them. `_rowid` rides along because it is what identifies the row an update applies TO: the
+#: primary key is the transform's business, and the cascade's tiers do not all carry one.
+FEED_COLUMNS: Final = (_CREATED, _UPDATED, "_rowid")
 
 
 def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKind) -> str:
@@ -46,14 +55,16 @@ def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKi
     window that silently drops whatever landed in between.
 
     Raises:
-        ValueError: for a negative begin, or a window that ends before it starts. Both would answer an
-            EMPTY feed, which a consumer reads as "nothing changed" — the one answer a malformed
-            request must never produce.
+        InvalidInputError: for a negative begin, or a window that ends before it starts. Both would
+            answer an EMPTY feed, which a consumer reads as "nothing changed" — the one answer a
+            malformed request must never produce. The estate's 400: a bare `ValueError` here reached
+            the live door's caller as `InternalError 18` (measured 2026-09-08), which says "the catalog
+            is broken, retry" about a request that will fail identically forever.
     """
     if begin_version < 0:
-        raise ValueError(f"begin_version must be >= 0 (got {begin_version}) — version 0 is the empty dataset, so there is no wider window")
+        raise InvalidInputError(f"begin_version must be >= 0 (got {begin_version}) — version 0 is the empty dataset, so there is no wider window")
     if end_version is not None and end_version < begin_version:
-        raise ValueError(
+        raise InvalidInputError(
             f"begin_version {begin_version} is after end_version {end_version} — an inverted window answers no rows, "
             "which is indistinguishable from 'nothing changed'"
         )
@@ -66,3 +77,22 @@ def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKi
     if end_version is not None:
         clauses.append(f"{_UPDATED} <= {end_version}")
     return " AND ".join(clauses)
+
+
+def feed_projection(columns: Sequence[str] | None, *, data_columns: Sequence[str]) -> list[str]:
+    """The caller's projection plus the version columns it needs to CHECKPOINT.
+
+    A change feed whose rows carry no version is a feed that can be read once: the consumer polls
+    "what changed since N", receives rows, and has no N to send next — so it re-sends the old one and
+    replays the same rows forever. Measured on the live door before this existed (2026-09-08,
+    `bronze$pages`): three real changed rows, projected as `['id', 'payload', 'source_uri', 'stage']`,
+    with nothing to advance on.
+
+    `data_columns` is the dataset's own schema, passed in rather than read here, because this module
+    owns the feed's vocabulary and deliberately not a dataset handle.
+
+    A name the caller already asked for is not added twice — Lance refuses a duplicated projection, so
+    a consumer that asks for `_rowid` correctly would otherwise have its request rejected for it.
+    """
+    chosen = list(columns) if columns is not None else list(data_columns)
+    return chosen + [column for column in FEED_COLUMNS if column not in chosen]

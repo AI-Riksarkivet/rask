@@ -603,9 +603,10 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
-    Composes the predicate `lance_docs/file_format.md:4270-4300` documents and delegates to the SAME
-    scan the query door uses, rather than opening a second read path: a feed that answered from
-    different machinery than `query` would drift from it exactly where a consumer could not see.
+    Composes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is
+    `dataplane.read_changes`, which is its OWN scan and not the query door's — `QueryTableRequest`
+    requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
+    with nothing to do with similarity. What the two doors DO share is the framing they answer in.
 
     A CHANGE FEED IS A READ, which settles both policy questions. It is gated like one — the router
     guard that admits `query` admits this — and audited like one (§ J1), because following every row a
