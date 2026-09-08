@@ -2358,6 +2358,31 @@ reports `known=False`, which publishes nothing and looks exactly like a healthy 
 zone's `/events` poll (§ E7), 34 x 401 on Ray-lane emits (Defect 1), and 44 x 403 on the lag detector's
 reads. Each renders as absence rather than error, and absence is what a healthy estate looks like.
 
+**THE CREDENTIAL NOW EXISTS WHERE A SIDECAR-LESS POD CAN READ IT.** Verified from the producer pod
+2026-09-08 that the Dapr store already holds a dedicated token for `service-medallion-producer`,
+`service-trainer` AND the stage identities — all three answer `present`. What was missing was a copy on
+`rask-infra-credentials`, the one object the Ray head can reach; `infra-credentials.yaml` now renders it
+through the SAME `lance.dedicatedServiceToken` helper OpenBao is seeded with, so the two cannot drift
+(the door compares them with `secrets.compare_digest`).
+
+**AND THE REMAINING PROBLEM IS STRUCTURAL, NOT A MISSING SECRET.** The Ray head carries ONE
+`LINEAGE_SERVICE_TOKEN` while running jobs of TWO identities — `ray_stage_job.py` claims
+`service-medallion-producer`, the train lane claims `service-trainer` — and a single env var cannot be
+both. That is why this row is not closed by the render above. Three shapes, none obviously right:
+
+  * **the pod carries a token per identity** (`LINEAGE_SERVICE_TOKEN_<identity>`) and the emitter picks
+    by its own `LINEAGE_SERVICE_ID`. Explicit, ugly, and grows an env var per privileged subject;
+  * **ESO mounts the whole bundle** and the emitter looks up `service-token-<its identity>` — which is
+    exactly what `dedicated_token_from_store` does for pods that HAVE a sidecar, so the Ray lane would
+    resolve its credential the same way the rest of the estate does. The goal names ESO as the path for
+    sidecar-less pods, which argues for this one;
+  * **the submitter injects the token** — RULED OUT: `ray_submit.py` records that a secret in
+    `runtime_env` is a P0 leak, because Ray echoes it back on the job.
+
+**Whichever lands, the identity must stay the job's own.** Making stage jobs claim `service-trainer`
+would authenticate immediately and put a lie in the authoritative graph — the goal's own words are that
+provenance must SURVIVE a write, and provenance attributed to the wrong subject has not survived.
+
 **Closes it.** Provision a dedicated credential for every subject in `LINEAGE_PRIVILEGED_SUBJECTS`, and
 make the two lists agree — a privileged subject that is not an allowed one is a configuration error
 that should fail the render rather than 403 at runtime. For the Ray lane specifically the pair must be
