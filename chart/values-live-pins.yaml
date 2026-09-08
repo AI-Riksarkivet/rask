@@ -9,7 +9,7 @@ image:
     dashboard: "0.15.0"
     flows: "fix-71d7b04f"
     gateway: "stagerunner-04d6fcda"
-    ingest: "h8-45449555"
+    ingest: "e1-44c2bb14"
     lance-rest-catalog: "h15-e7aa8aff"
     nats: "2.14.2-alpine"
     nats-box: "0.19.7"
