@@ -30,6 +30,9 @@ tuples:
   - { user: warehouse:acme_bucket, relation: parent, object: namespace:acme_gold }
   - { user: namespace:acme_silver, relation: parent, object: table:acme_silver_features }
   - { user: namespace:acme_gold, relation: parent, object: table:acme_gold_catalog }
+  # service-maintenance: MAINTAINER on one warehouse. One tuple per warehouse is the grant shape —
+  # enumerable, revocable per tenant, and nothing like a `writer` on every table.
+  - { user: user:service-maintenance, relation: maintainer, object: warehouse:acme_bucket }
   # dave: a plain WRITER on the warehouse (writes any stage, but is NOT a validator)
   - { user: user:dave, relation: writer, object: warehouse:acme_bucket }
   # carol: a VALIDATOR on the gold stage via role:validators, + reader on the warehouse (to read silver)
@@ -1141,3 +1144,54 @@ tests:
       # quilla under beta_bucket, so it is not repeated here. This fixture exists for the direction
       # alone, and stays a single namespace with no table: adding one puts a table into the demo estate
       # that nine seed-sequence assertions count.
+
+  - name: the sweep may MAINTAIN what it may not WRITE, and that separation runs both ways
+    # Owner ruling 2026-09-08 (zero trust). Gating the lineage bus door on the stamped subject needs the
+    # sweep to be authorized for what it does; the cheap way was `writer` on every governed table, which
+    # is the widest write grant in the estate and would make one compromised maintenance pod equivalent
+    # to compromising every table. `can_maintain` is the narrow rung instead: compaction, index
+    # optimisation and version reclamation rewrite HOW a dataset is stored, never WHAT it says.
+    check:
+      # The grant is at the WAREHOUSE and cascades to every stage and table beneath it — one tuple per
+      # tenant rather than one per table, so the sweep's reach is enumerable.
+      #
+      # THE ACTION EXISTS ONLY ON `table`, deliberately: maintenance compacts DATASETS, and there is no
+      # such thing as compacting a namespace. The containers carry the ROLE so the cascade works, and
+      # asserting the role there rather than an action is what keeps the model from advertising an
+      # operation nothing can perform.
+      - user: user:service-maintenance
+        object: warehouse:acme_bucket
+        assertions: { maintainer: true }
+      - user: user:service-maintenance
+        object: namespace:acme_silver
+        assertions: { maintainer: true }
+      - user: user:service-maintenance
+        object: table:acme_silver_features
+        assertions:
+          can_maintain: true
+          # THE HALF THAT MATTERS. A maintainer may not change what the data says, may not read it, and
+          # may not destroy it — so a compromised sweep cannot rewrite, exfiltrate or drop a table.
+          can_write_data: false
+          can_read_data: false
+          can_get_metadata: false
+          can_drop: false
+          can_promote: false
+      # …and it does not leak to another tenant's warehouse, which is what "one tuple per warehouse"
+      # buys over an estate-wide grant.
+      - user: user:service-maintenance
+        object: table:acme_gold_catalog
+        assertions: { can_maintain: true }
+      - user: user:service-maintenance
+        object: warehouse:beta_bucket
+        assertions: { maintainer: false }
+      # The other direction: a plain data WRITER is not a maintainer. dave writes any stage in acme and
+      # still may not compact one — maintenance is an operational authority, not a side-effect of write.
+      - user: user:dave
+        object: table:acme_silver_features
+        assertions:
+          can_write_data: true
+          can_maintain: false
+      # An OWNER keeps it, concentrically, exactly as `validator` behaves: alice administers the project.
+      - user: user:alice
+        object: table:acme_silver_features
+        assertions: { can_maintain: true }

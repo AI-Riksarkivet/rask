@@ -117,8 +117,31 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "rask.fullname" $root }}-config
+            {{- /* THE FLEET SECRET GOES ONLY TO SERVICES THAT USE IT, and until 2026-09-08 it went to
+                 every one of them. It carries four keys — AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+                 HCP_ENDPOINT, HF_TOKEN — and the AWS pair is the RustFS ROOT credential.
+
+                 MEASURED INSIDE THE RUNNING PODS: `rask-ingest` listed 106 buckets with it (the whole
+                 estate) while `rask-maintenance`, on its scoped identity, was denied the same call. So
+                 the widest storage credential in the estate was mounted into the gateway, the
+                 notifications inbox, the compute shell and the flows backend — none of which
+                 constructs an S3 client at all: zero imports of lance, pyarrow, boto3, storage or any
+                 service_kit.lakehouse storage module, no HF code, and no HF/boto dependency. Nothing
+                 in them can make the call the credential authorises.
+
+                 IT IS ALSO THE FORBIDDEN MECHANISM. Owner ruling 2026-09-08: "Never secret through
+                 envs. Either from ESO, secret store dapr and STS for zero trust" — the rule CLAUDE.md
+                 already states. Withholding it here does not FIX that for the services that do need a
+                 credential (ingest is § H8's remaining half, and its answer is STS, which
+                 `vending.build_session_policy` already implements by bucket + prefix); it removes the
+                 blast radius that no code was using.
+
+                 `lanceWriter` is the flag those services already carry for "this one writes Lance", so
+                 the secret follows the same declaration rather than a second list that can disagree. */}}
+            {{- if $svc.lanceWriter }}
             - secretRef:
                 name: {{ $secretName }}
+            {{- end }}
           env:
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
             {{- /* The storage registry, when a deployment declares one — the same rows explorer.yaml

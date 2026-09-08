@@ -1,37 +1,46 @@
 # open_goal — the standing goal, armed as a Stop hook
 
-**Set 2026-09-07, trimmed 2026-09-08 to fit a 4 000-character budget.** It had grown to 23 362 — six
-times over — by accumulating the record of work it had already caused. A goal that is too long to read
-stops being an instruction, so the finished parts moved to where evidence belongs: G1/G1b and the twelve
-§F2 verdicts are now in `open_lakehouse_diff_left.md` § F2, and "a control's NAME is not evidence that
-it exists" is in `docs/DECISIONS.md`. Nothing was deleted. Keep this file under 4 000 characters: when
-something here is DONE, move it out rather than striking it in place.
+**KEEP UNDER 4 000 CHARACTERS** — injected verbatim on every Stop; it reached 23 362 once by hoarding
+the record of work it caused. When something here is DONE, MOVE IT OUT rather than striking it in
+place. Evidence lives in `open_lakehouse_diff_left.md` and `docs/DECISIONS.md`.
 
-`.claude/settings.local.json` reads this file on every Stop. The hook stops firing when
-`open_lakehouse_diff_left.md` no longer exists, because that is what finishing means: an open spec is
-deleted when its work lands. Pause it by creating `.claude/GOAL.paused`.
+`.claude/settings.local.json` reads this on every Stop; the hook stops when
+`open_lakehouse_diff_left.md` is gone. Pause with `.claude/GOAL.paused`.
 
 ---
 
 ## GOAL
 
-**The lakehouse is IDIOMATIC LANCE and its provenance survives a write.**
+**ZERO TRUST (owner, 2026-09-08 — "Zero trust is the goal"), on a lakehouse that is IDIOMATIC LANCE
+and whose provenance survives a write.**
 
-**G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md`. Re-read that file's own
-header, which re-derives its counts from its own rows; any number written here goes stale by design.
+**SECRETS REACH A WORKLOAD BY EXACTLY THREE PATHS AND NO OTHERS** — owner, verbatim: *"Never secret
+through envs. Either from ESO, secret store dapr and STS for zero trust."*
 
-**SCOPE — OWNER RULING 2026-09-07, THE LAKEHOUSE FIRST, THEN COMPUTE, AND NOTHING ELSE.** Verbatim:
-*"prio lakehouse and ignore other zones that are not the lakehouse or compute. I.e search, flows and
-model training and annotator should be ignored and focus only on lakehouse compute services, but
-priotize lakehouse."* IN: catalog, lineage, medallion's cascade, maintenance, ingest, the lakehouse
-halves of service-kit and storage, the `lakehouse` zone — then `services/compute`, ray-kit and the
-`compute` zone. OUT: `services/search`, `services/flows`, `services/annotator`, the TRAIN lane and the
-`models` zone; a row about them is STRUCK with this ruling as its reason rather than worked.
+  1. **Dapr secret store (OpenBao)** — any pod with a sidecar.
+  2. **ESO** — a pod with NO sidecar (Ray lane, web zones, runners) that cannot call `/v1.0/secrets/*`.
+  3. **STS short-lived credentials** — the answer for STORAGE. `vending.build_session_policy` already
+     scopes by BUCKET + PREFIX with a 900 s TTL; prefer it over any long-lived key.
 
-**A row being PRESENT is not evidence it is in scope** — this register absorbed two drained ledgers that
-swept the whole estate, so its contents describe what was once audited rather than what is wanted now.
-**And a keyword match is not a classification**: a scan flagged nine, and READING them saved three live
-lakehouse rows that matched on Prometheus rule *annotations* and on "catalog" sitting beside "flows".
+**NEVER through env** — not process env, not a k8s Secret via `envFrom`, not a chart value, and never a
+fallback chain between them. **A SCOPED STATIC KEY IS NOT A FIX**: it shrinks the blast radius of the
+wrong mechanism instead of replacing it. **AND `envFrom` IS INVISIBLE TO A SURVEY OF `env:`** — read
+the RUNNING POD, never the manifest (measured 2026-09-08: five services held the RustFS ROOT credential
+that way, four of them with no S3 client at all).
+
+**G2 — DRAIN THE BACKLOG, BY BLAST RADIUS.** `open_lakehouse_diff_left.md`; re-read its own header,
+which re-derives its counts from its rows. Any number written here goes stale by design.
+
+**SCOPE — OWNER 2026-09-07, LAKEHOUSE FIRST, THEN COMPUTE, NOTHING ELSE.** Verbatim: *"prio lakehouse
+and ignore other zones that are not the lakehouse or compute. I.e search, flows and model training and
+annotator should be ignored and focus only on lakehouse compute services, but priotize lakehouse."*
+IN: catalog, lineage, medallion, maintenance, ingest, the lakehouse halves of service-kit/storage, the
+`lakehouse` zone — then `services/compute`, ray-kit, the `compute` zone. OUT: search, flows, annotator,
+the TRAIN lane, the `models` zone; such a row is STRUCK with this ruling rather than worked.
+
+**A row being PRESENT is not evidence it is in scope** — the register absorbed two drained ledgers that
+swept the whole estate. **And a keyword match is not a classification**: a scan flagged nine, and
+READING them saved three live lakehouse rows.
 
 **ORDER:** anything provably wrong on the LIVE ESTATE first — silent, data-losing, nothing red — then
 correctness, then tidiness. Every row reaches a verdict: fixed, or struck with the measurement that
@@ -49,9 +58,9 @@ source. Comments carry rationale and provenance, never history.**
 
 ## VERIFICATION
 
-**Every change verified the estate's way: per commit `uv run pytest` count, `uvx ty check` count,
-`uv run ruff check`; anything deployable BUILT with Dagger, DEPLOYED to k3s, and observed working.
-Never claim a thing works before showing it working. PUSH every commit — 28 sat unpushed once already.**
+**Per commit: `uv run pytest` count, `uvx ty check`, `uv run ruff check`; anything deployable BUILT with
+Dagger, DEPLOYED to k3s, and OBSERVED working. Never claim a thing works before showing it working.
+PUSH every commit — 28 sat unpushed once already.**
 
 ## STOPPING
 

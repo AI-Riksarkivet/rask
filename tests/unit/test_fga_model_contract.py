@@ -444,8 +444,16 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
 #: restriction carrying the `non_expired_grant` condition.
 #:
 #: The set is exactly the three data rungs (`reader`, `writer`, `validator`) plus the materialized
-#: view's `refresher`, and its shape is the invariant: **ownership and grant AUTHORITY are never
-#: time-boxable.** An expiring `owner` leaves the object with no owner at all — invisible to every
+#: view's `refresher`, plus `maintainer`, and its shape is the invariant: **ownership and grant
+#: AUTHORITY are never time-boxable.**
+#:
+#: `maintainer` qualifies on the rule this list encodes rather than by resemblance to its neighbours,
+#: and the rule is "what does the expiry LEAVE BEHIND". An expired maintainer leaves a dataset
+#: unmaintained — it stops being compacted, its versions stop being reclaimed — which is the fail-safe
+#: direction and reversible by re-granting. Nothing is stranded, nothing becomes unrevocable, and no
+#: caller loses an ability it needs to clean up. It is also the rung that most WANTS an expiry: a
+#: one-off compaction campaign should lapse on its own rather than depend on someone remembering to
+#: revoke it (owner ruling 2026-09-08: zero trust). An expiring `owner` leaves the object with no owner at all — invisible to every
 #: list (per-item filtering) and undroppable by every caller including an estate admin, which is the
 #: stranded-object class the estate has spent real effort closing. An expiring `manage_grants` or
 #: `pass_grants` is the same failure one axis over: the delegation lapses while the grants it issued
@@ -463,6 +471,9 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
         ("table", "validator"),
         ("materialized_view", "reader"),
         ("materialized_view", "refresher"),
+        ("warehouse", "maintainer"),
+        ("namespace", "maintainer"),
+        ("table", "maintainer"),
     }
 )
 

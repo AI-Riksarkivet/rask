@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 224 tracked, 143 open, 81 struck.**
-That splits into 61 lettered rows (48 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 225 tracked, 144 open, 81 struck.**
+That splits into 62 lettered rows (49 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -930,31 +930,21 @@ events would grow an outbox nothing drains — turning an opt-out into a leak. G
 failure modes through a `cast` structural client double and pins that a refused door STILL does not
 raise.
 
-**SECOND HALF IS BLOCKED ON AN OWNER DECISION, and the blocker is not code — measured 2026-09-08.**
-The framing "make the fifth producer do what the other four do" is wrong, and finding out why explains
-why `ingest` is the one producer without an outbox in the first place. It is not an oversight.
+**SECOND HALF IS NOT BLOCKED — my own "blocker" was a mis-measurement, corrected 2026-09-08.**
+I read the ingest Deployment's `env` list, saw an S3 endpoint and no key, and concluded ingest held no
+credential and therefore could not write a shared outbox prefix. The `env` list was the wrong surface:
+the credential arrives through **`envFrom: rask-app`**, which that filter cannot see. Verified inside
+the running pod, which is the only authority:
 
-**INGEST HOLDS NO S3 CREDENTIAL OF ITS OWN.** The deployed pod's entire S3 environment is:
+    AWS_ACCESS_KEY_ID     = rustfsadmin      <- the RustFS ROOT credential
+    AWS_SECRET_ACCESS_KEY = <set>
+    AWS_ENDPOINT_URL      = http://rask-rustfs-io:9000
 
-    RASK_S3_ENDPOINT_URL = http://rask-rustfs-io:9000
-    AWS_ENDPOINT_URL     = http://rask-rustfs-io:9000
-    AWS_ALLOW_HTTP       = true
+So ingest can write the outbox today and the second half is ordinary work, not a decision.
 
-No access key, no secret, no `secretRef`. Its write authority is **VENDED per dataset** —
-`runtime.py:851`, `VendedCredentialCache(catalog.vend_storage_options)` scoped to
-`(namespace, dataset)`. The outbox is a SHARED prefix (`<rustfs.bucket>/_lineage_outbox`), so a
-credential scoped to `bronze$pages` cannot write to it. The other four producers stage there because
-each holds a service-owned credential; ingest is the estate's least-privileged service and holds none.
-
-So closing E1's second half means one of:
-
-  * **give `ingest` a service-owned S3 identity** scoped to the outbox prefix — which is F2-1's shape
-    (`rask-catalog` is named there as "the ONE identity left"; ingest is a second, and its policy is
-    the narrowest possible: write + delete under one prefix, nothing else);
-  * **stage through a service that already has one** — the catalog, which ingest already calls, at the
-    cost of a new dependency on the exact path that exists for when a service is unreachable;
-  * **accept the residual** and ship the reporting half alone, which covers both recorded incidents
-    (each was a refused door, not a crash) and leaves the crash window open.
+**AND THE TRUE MEASUREMENT IS A WORSE FINDING THAN THE ONE I INVENTED — see § H8.** The service that
+takes EXTERNAL, UNTRUSTED bytes runs as storage ROOT, while `rask-maintenance` beside it runs on a
+scoped identity. My note that ingest was "the estate's least-privileged service" was exactly backwards.
 
 **OWNER RULING 2026-09-08: ZERO TRUST — the first option.** `ingest` gets its OWN service identity,
 scoped to the outbox prefix and nothing else. That rules out staging through the catalog (which would
@@ -1708,6 +1698,88 @@ describe this mistake exactly: *"a control's NAME is not evidence that it exists
 CONFIGURATION"*, and *"when a measurement is a COUNT, ask what surface the count could see."* I read two
 settings and never asked what the sweep computed from them. Logged here rather than quietly deleted
 because a register that shows only its correct findings teaches nothing about how the wrong ones happen.
+
+### H8 · The ingest plane runs as storage ROOT, and four other services with it — **HIGH**
+**MEASURED INSIDE THE RUNNING PODS 2026-09-08**, which is the only surface that answers this:
+
+    rask-ingest        AWS_ACCESS_KEY_ID = rustfsadmin     (RustFS ROOT, via envFrom: rask-app)
+    rask-maintenance   MAINTENANCE_S3_ACCESS_KEY_ID = rask-maintenance   (scoped, F2-1)
+
+**AND IT IS UNRESTRICTED, PROVEN BY THE CALL THE SCOPED IDENTITY IS DENIED.** Driven from inside each
+pod, same endpoint, same operation:
+
+    ingest credential       ListBuckets -> 106 buckets (the whole estate)
+    maintenance credential  ListBuckets -> AWS Error ACCESS_DENIED
+
+That is the difference between a scoped identity and the root one, measured rather than inferred from
+the key's name.
+
+`rask-ingest`, `rask-compute`, `rask-flows`, `rask-gateway` and `rask-notifications` all take
+`envFrom: rask-app`, and that Secret carries the tenant ROOT `AWS_*` pair. **The service that accepts
+EXTERNAL, UNTRUSTED BYTES holds the widest storage credential in the estate**, while the maintenance
+sweep beside it — which touches only data the estate already owns — runs scoped.
+
+**THIS IS F2-1'S REMAINING SURFACE, AND IT IS BIGGER THAN THAT ROW SAYS.** F2-1 names `rask-catalog` as
+"the ONE identity left" after medallion, maintenance and lineage were scoped. That count was taken over
+services with a NAMED `*AccessKey` value; these five never had one to be empty, so they were never
+counted. A credential inherited through `envFrom` is invisible to a survey of `env:`.
+
+**WHY IT WAS MISSED TWICE, including by me today.** Reading the Deployment's `env` list shows an S3
+endpoint and no key, which reads as "this service holds no credential" — the opposite of the truth. The
+estate's own rule applies exactly: verify where the value LANDS. `kubectl exec … printenv` answers in
+one command what the manifest cannot.
+
+**FOUR OF THE FIVE HOLD IT FOR NOTHING, and that half is safe to fix now.** The shared `rask-app`
+Secret carries exactly four keys — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `HCP_ENDPOINT`,
+`HF_TOKEN` — and `gateway`, `notifications`, `compute` and `flows` construct **no S3 client at all**:
+zero imports of `lance`, `pyarrow`, `boto3`, `storage` or any `service_kit.lakehouse` storage module
+across their sources. The import check is the load-bearing one, not a grep for the variable name:
+`object_store` and pyarrow read `AWS_*` AMBIENTLY, so a service that never names the variable can still
+sign with it — but a service that never constructs a client cannot. So those four carry an estate-wide
+storage credential and an HF token with no code able to use either.
+
+**INGEST IS THE ONE THAT ACTUALLY USES IT**, proven rather than assumed: a pyarrow `S3FileSystem` built
+from the pod's own ambient environment listed 106 buckets, and `objectstore.py` states the dependency —
+*"a registered store that declares no secret shares the deployment's credentials"*.
+
+**IT IS A DOUBLE VIOLATION, not one.** The credential is both the WIDEST possible and delivered by the
+FORBIDDEN mechanism. Owner ruling 2026-09-08, verbatim: *"Never secret through envs. Either from ESO,
+secret store dapr and STS for zero trust"* — and `CLAUDE.md` already carries the same rule (*"Secrets
+from the Dapr secret store only — never env, never a fallback"*), which `rask-app`'s `AWS_*` pair has
+been contradicting for five services.
+
+**Closes it — three sanctioned sources, and which one applies is decided by the consumer, not by
+convenience.**
+
+  * **gateway, notifications, compute, flows — NEITHER, they need no storage credential.** They
+    construct no S3 client (zero imports of `lance`, `pyarrow`, `boto3`, `storage`, or any
+    `service_kit.lakehouse` storage module), so the fix is to stop delivering the storage half of
+    `rask-app` to them. Nothing can break, because nothing in them can make the call. This is the
+    cheapest real reduction in blast radius available in the estate.
+  * **ingest — STS, and the machinery already exists.** `catalog.core.vending.build_session_policy`
+    scopes an inline session policy by BUCKET + PREFIX (`s3:ListBucket` gated on an `s3:prefix`
+    condition, object actions on `bucket/<prefix>/*`) with a 900 s TTL, and ingest already consumes
+    vended credentials per dataset (`VendedCredentialCache`). A lineage-outbox credential is the same
+    call with the outbox prefix, so § E1's second half needs no new secret at all — which is why the
+    static RustFS user first drafted for it was withdrawn: a long-lived key in a chart value is the
+    mechanism this row exists to remove.
+  * **A pod with no Dapr sidecar — ESO.** The sanctioned k8s-native path, already used by
+    `externalSecrets`; the Ray lane and the web zones have no sidecar and cannot call
+    `/v1.0/secrets/*`.
+
+**WITHDRAWN, and recorded so it is not re-proposed:** a `rustfs.ingestAccessKey` static user provisioned
+by `rustfs-scoped-users.yaml`, mirroring the medallion/maintenance/lineage identities. It is narrower
+than root and still a long-lived secret rendered into a chart value, so it trades one violation of the
+rule for a smaller one. The three identities that already ship this way are the same debt and are not a
+precedent to extend. `rask-ingest` is now declared there (`rustfs.ingestAccessKey`) — but its policy as
+written covers only the lineage outbox, which is the § E1 half. **The data half needs measuring first**:
+ingest writes table bytes through a credential the catalog VENDS per dataset AND through the ambient
+`AWS_*` chain (`objectstore.py` — "a registered store that declares no secret shares the deployment's
+credentials"), so narrowing the ambient pair without knowing which writes depend on it would break
+ingestion. Measure which paths use ambient credentials, then scope to those plus the outbox.
+
+**NOT a reason to delay the outbox identity**: an additional narrow credential used only for staging is
+safe now and independent of the data-path question.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`

@@ -98,6 +98,9 @@ type warehouse
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or member from project
     # A warehouse-level validator validates EVERY stage below it.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # A warehouse-level maintainer maintains EVERY stage below it — one tuple per warehouse is how the
+    # sweep is granted, which keeps the grant enumerable rather than estate-wide.
+    define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
     # ---- the GRANT axis (separate from the USE rungs above) ----
     # Who may hand out access here, as its own privilege rather than a side-effect of `owner`. Until
     # this existed the two were welded together — the grant routes gate on the owner bar — so
@@ -260,6 +263,12 @@ type namespace
     # The validator rung is SEPARATE from writer — a writer is NOT a validator. Inherits from the parent
     # so a warehouse/parent validator validates this stage. This is what gates promotion INTO the stage.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
+    # The maintainer rung is SEPARATE from writer IN BOTH DIRECTIONS, which is the whole point of it.
+    # A writer is not a maintainer, and — the half that matters — a MAINTAINER IS NOT A WRITER: the
+    # sweep may rewrite a dataset's files and reclaim its versions, and may not change what the data
+    # says. Granting the sweep `writer` estate-wide would have made one compromised maintenance pod
+    # equivalent to compromising every table (owner ruling 2026-09-08: zero trust).
+    define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
     # ---- the GRANT axis ---- (see `warehouse` for why it is separate from the rungs above)
     # Managed access, inherited: setting the flag on the warehouse governs every stage beneath it, and
     # a stage may also set it for itself. The recursion is what makes "manage this collection centrally"
@@ -330,6 +339,8 @@ type table
     define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or reader from parent
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
+    # See the namespace rung for why this is separate from `writer` in both directions.
+    define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
     # ---- the GRANT axis ---- (see `warehouse`)
     # A table takes no `managed_access` of its own — the flag is a CONTAINER policy, and a per-table
     # switch would let an owner exempt their own table from the collection's rule, which is the rule's
@@ -347,6 +358,10 @@ type table
     define can_be_notified: reader
     define can_read_data: reader
     define can_write_data: writer
+    # MAINTENANCE is not a write, and the model has to say so or the sweep needs `writer` on everything.
+    # Compaction, index optimisation and version reclamation rewrite HOW a dataset is stored; they never
+    # change WHAT it says. `can_maintain` therefore neither implies nor is implied by `can_write_data`.
+    define can_maintain: maintainer
     define can_promote: validator
     define can_drop: owner
     define can_deregister: owner
