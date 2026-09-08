@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 140 open, 92 struck.**
+**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 139 open, 93 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -2847,7 +2847,21 @@ everywhere (C4 / §F2-1). **Where.** `maintenance.yaml:123`, `values.yaml:1517`.
 
 ### I1 · ~~`ratch` ungoverned write path~~ — withdrawn
 **What.** `packages/ratch` was dissolved 2026-08-28 (`open_ray-kernel.md`) and is absent from `main`; `.docker/ray-cluster.dockerfile` builds from the root lock. The packages sweep audited untracked residue. The one transferable point survives as I5/L: no service may open a governed table with bare pylance outside the catalog's doors.
-### I2 · Vended credentials cannot pass through any seam — **HIGH** (see C1)
+### ~~I2 · Vended credentials cannot pass through any seam~~ — **STRUCK 2026-09-08: A POINTER ROW, AND ITS CLAIM IS FALSIFIED**
+Like § I3, this carried no body of its own — a title and "(see C1)" — so it counted as open while the
+row it points at owns the work. C1 closed 2026-09-07 (the falsy-zero guard bug), and the claim in this
+title is refuted by three independent measurements rather than by that closure alone:
+
+    ingest        11 seams take `storage_options`; the lander AND the staging ledger both sign with the
+                  vended credential (§ H8, 2026-09-08)
+    maintenance   a dedicated `services/credentials.py` for per-table WRITE vends — and the effect was
+                  measured live: root-signed rewrites 207 -> 8, scoped 78 -> 277 (§ H13)
+    catalog       the vendor itself; driven in-pod 2026-09-08, a real STS triple with a session token,
+                  900 s TTL, scoped to one table's prefix
+
+**THE MEDALLION IS THE ONE PLANE WITH NONE, and that is a different row.** Its writes go through the Ray
+lane, which takes `S3_KEY`/`S3_SECRET` off the pod because Ray pods carry no daprd — a credential-DELIVERY
+question (§ H9/F2-1), not "no seam can carry a vended credential".
 
 ### ~~I3 · Both emit kernels swallow; only the medallion has an outbox~~ — **STRUCK 2026-09-08: A DUPLICATE, AND ITS OTHER HALF IS FIXED**
 This row was never independent — its own body says "MERGED into **Q3-13**", so it counted as open while
