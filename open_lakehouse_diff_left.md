@@ -1111,6 +1111,20 @@ maintainer set covers the writer set, then revoke: the same "no safe gap in eith
 `test_the_sweep_is_bootstrapped_as_a_MAINTAINER_never_a_WRITER`, asserted on the RENDERED hook because
 the relation is chosen inside a Helm loop that a values-level assertion cannot see.
 
+**THE PRECONDITION THIS ROW SET IS NOW MET, AND MEASURED (2026-09-09).** The rule above — *"a
+consumer-side gate is only safe once the producers sign"* — was written when 664 of 5 644 runs carried
+no author. Re-measured after the producer half deployed: of the 69 runs in the last thirty hours, **8
+are anonymous and NONE of them is live traffic** — 6 are `e2e/atomicity` fixture rows stamped with a
+hardcoded `2026-09-08T10:00:00`, and 2 are maintenance compactions from 05:21–05:22, before the fix
+rolled. Every maintenance run after the roll carries `service-maintenance` (23 of them). The historical
+597 remain and are historical: they age out under the 30-day retention now armed. **So the blocker is
+gone and what is left is the consumer-side gate itself** — `on_lineage_event` applying the authz its
+HTTP twin applies, keyed on the OPERATION (`can_maintain` for a maintenance-authored run,
+`can_write_data` for a data-authored one). Two things to carry into it: the e2e fixture emits
+unauthored runs and would be refused, so the gate needs the fixture fixed or exempted first; and a
+refusal at a bus door must be a TERMINAL ack rather than an error, or a denied event exhausts the
+sidecar's retry schedule and storms the dead-letter route.
+
 **THE REMAINING 146 WERE TRACED, and they are not a second producer gap.** The 79 carrying no producer
 either break down as: 66 `lance-catalog/create_table|drop_table` runs stamped
 `2026-07-11T09:00:00Z`–`09:10:00Z`, which is the fixture window of
