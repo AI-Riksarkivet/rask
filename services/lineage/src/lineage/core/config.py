@@ -176,6 +176,15 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # sweep (under its cluster-wide lock). 0 = off (the dev/demo default: keep full provenance). Pruning a
     # run deletes its WROTE edges — per-version schema/stats history goes with it, which is what retention
     # means; the next sweep back-fills a fresh reconcile run for any dataset left without a versioned edge.
+    #: Days of :Run history to keep; 0 keeps everything. The CHART sets 30 (owner ruling 2026-09-08);
+    #: this CODE default stays 0 on purpose, and the asymmetry is deliberate rather than an oversight.
+    #:
+    #: Today's other defaults moved the other way — `lineageAccessKey`, `lockRootCreate` — under the rule
+    #: that "a guard reachable only by remembering an opt-in protects the installs that did not need
+    #: protecting". That rule is about PROTECTIVE controls, where the failure of a missing default is an
+    #: estate left open. Retention is DESTRUCTIVE: its failure is deleted history. So the safe direction
+    #: inverts — a deployment nobody configured must not start erasing provenance because it inherited a
+    #: number, and the chart is where an operator says how long to keep it.
     run_retention_days: int = Field(default=0, ge=0, alias="LINEAGE_RUN_RETENTION_DAYS")
 
     # --- Read/access audit (#6) — record WHO READ which dataset on the gated read endpoints (an access

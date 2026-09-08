@@ -467,9 +467,18 @@ services:
     outbox:
       enabled: true
     # Run-node retention (§4): the reconcile cron prunes graph :Run nodes older than this many days
-    # (batched DETACH DELETE under the sweep's single-flight lock). 0 = off — keep full provenance
-    # (the dev/demo default). Only meaningful with reconcile.enabled (the cron is the pruner).
-    runRetentionDays: 0
+    # (batched DETACH DELETE under the sweep's single-flight lock), and then the Dataset nodes that
+    # prune ORPHANS. Only meaningful with reconcile.enabled (the cron is the pruner).
+    #
+    # 30 BY OWNER RULING 2026-09-08, and 0 (keep everything) is what it replaced. Keeping everything
+    # was not free: it is a RETENTION knob whose real cost is a CONTROL. The reconcile probes every
+    # dataset node the graph holds, so residue makes `storage_loss` and `unreadable` fire on every tick
+    # carrying dead rows, and a REAL bucket deletion arrives invisible among them — measured on this
+    # estate at 1,271 Dataset nodes against 5,692 runs, the datasets every one still edge-reachable.
+    #
+    # Thirty days is long enough to investigate an incident that surfaced late and short enough that
+    # the graph actually converges; a quarter would have left the current residue in place for months.
+    runRetentionDays: 30
     # Durable /events feed retention, in DAYS of ARRIVAL time (`received_at`, stamped by the database —
     # never the producer-supplied eventTime, which lineage stores as an unparsed string). Pruned batched
     # on the same reconcile tick, under the same single-flight lock. 0 = unbounded.
