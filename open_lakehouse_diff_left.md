@@ -1801,6 +1801,38 @@ settings and never asked what the sweep computed from them. Logged here rather t
 because a register that shows only its correct findings teaches nothing about how the wrong ones happen.
 
 ### H8 · The ingest plane runs as storage ROOT, and four other services with it — **HIGH**
+
+**THE STS HALF IS PROVEN WORKING LIVE (2026-09-08), so what is left is narrower than this row reads.**
+Driven from inside `rask-ingest` through the service's OWN client, presenting its OWN dedicated token:
+
+    POST /v1/table/bronze$pages/credentials?tier=read   -> 200
+    POST /v1/table/bronze$pages/credentials?tier=write  -> 200
+    access key   EAM88YED5PBVM8PLIVEJ   != the pod's ambient AWS_ACCESS_KEY_ID
+    session token present · ttl 900 s · scope s3://lance-catalog/bronze/pages
+
+TWO TRAPS PAID FOR IN GETTING THAT NUMBER, both recorded because each produced a confident wrong
+conclusion first. **A vend for a table that does not exist answers 403, not 404**, naming the read rung
+— so probing with an invented table id reads exactly like a missing grant, and the first reading of
+this was "the vending door grants nothing to any service". **And `mode` in the response is the
+DATA-PLANE axis (direct vs proxied), not the credential mode**: it says `direct` on an estate whose
+`LANCE_VENDING_MODE` is `sts`, and the credential is nonetheless a real short-lived STS triple.
+`service-ingest` holds ZERO tuples of its own and is still allowed, because `table.writer` resolves
+`writer from parent` up the namespace → warehouse chain; checked without mutating the store, using
+OpenFGA contextual tuples.
+
+**WHAT IS ACTUALLY LEFT** is therefore not "make vending work" but "stop holding the root key beside
+it":
+
+  1. the pod still MOUNTS the RustFS root pair (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, from the
+     fleet Secret via `lanceWriter`), so the widest credential in the estate is present whether or not
+     anything reaches for it;
+  2. `staging.py` writes and deletes the `_ingest_staging` ledger through the AMBIENT client
+     (`_client()`), never a vended one — the only remaining ambient WRITE;
+  3. the source read for ESTATE buckets is ambient, and `catalog_service.vend_storage_options` falls
+     back to ambient on any vending failure, logged at INFO as "vending unavailable" — a fallback that
+     is correct (a vending outage must not lose a run) and invisible (nothing counts how often it
+     fires).
+
 **MEASURED INSIDE THE RUNNING PODS 2026-09-08**, which is the only surface that answers this:
 
     rask-ingest        AWS_ACCESS_KEY_ID = rustfsadmin     (RustFS ROOT, via envFrom: rask-app)
