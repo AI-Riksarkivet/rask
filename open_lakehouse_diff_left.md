@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 147 open, 85 struck.**
+**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 146 open, 86 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -2405,7 +2405,32 @@ table that does not exist answers 403). Each was caught by running a control —
 certainly has nothing, a table that certainly exists — and none would have been caught by reading
 more code.
 
-### H14 · The cascade's Ray-lane lineage emits are refused, and the job reports SUCCEEDED — **HIGH**
+### ~~H14 · The cascade's Ray-lane lineage emits are refused, and the job reports SUCCEEDED~~ — **FIXED AND OBSERVED 2026-09-08** (release 110)
+
+**FOUR LINKS HAD TO BE TRUE AND NONE WAS.** Verified on the running estate after the roll, each read
+from the pod rather than the template:
+
+    1 admitted    LINEAGE_SERVICE_SUBJECTS now carries all three stage identities, and every
+                  PRIVILEGED subject is one the door admits (they were privileged and not allowed)
+    2 credential  service-token-{bronze-to-silver,silver-to-gold,media-to-silver} on the Secret
+    3 the wire    the Ray head holds RASK_LINEAGE_TOKEN_<IDENTITY> for all four identities, and the
+                  shipped emitter was observed in-pod sending the identity's OWN key
+    4 address     MEDALLION_STAGE_LINEAGE_URL renders on all three runners, and
+                  MEDALLION_FGA_SERVICE_IDENTITY no longer hides behind the FGA toggle
+
+**THE DOOR, DRIVEN:** each stage identity with its own token answers 422 — the credential is ACCEPTED
+and only the deliberately-invalid body is refused — while the same subject presenting the TRAINER's
+token answers `401 the presented credential may not claim 'service-bronze-to-silver'`. This morning
+all four answered `403 service identity not allowed`.
+
+**THE ROLL ITSELF COST A REGRESSION AND IS RECORDED BECAUSE OF IT.** Release 109 was upgraded without
+`auth.dedicatedServiceCredentials`, which defaults FALSE, so it silently dropped the flag release 108
+carried: `LINEAGE_PRIVILEGED_SUBJECTS` came back EMPTY and no subject was required to present its own
+credential any more. Caught by reading the running pod immediately after, and repaired in 110. A
+values file is not a diff — an `--set` omitted is a control removed, and the chart's guard cannot see
+the difference between "not set" and "deliberately off".
+
+
 **MEASURED LIVE 2026-09-08.** `rask-lineage`'s access log over its last 3,000 lines: **1,331 x 401
 against 1,558 x 200** — 46% of everything reaching the service is refused. Two callers own all of it:
 
