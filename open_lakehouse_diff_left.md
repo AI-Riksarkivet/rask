@@ -2111,12 +2111,12 @@ anything is hiding.
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
 
-### H12 · The scoped write credential cannot answer the base-ref probe, so compaction refuses forever — **HIGH**
+### H12 · The scoped credential turns a base-ref "no" into an "unknown", falsely refusing 69 compactions a tick — **HIGH**
 **MEASURED LIVE 2026-09-08** on `h11-24483c84`, from one sweep tick driven through `POST
 /maintenance-cron` (`planned 440, published 440`):
 
-    compaction_base_probe_failed         39   every one on key `models/_versions`
-    maintenance_refused_protected_base  127
+    compaction_base_probe_failed         69   every one on key `models/_versions`
+    maintenance_refused_protected_base  220   of 440 dataset outcomes
     403 Forbidden on /credentials?tier=write  184
 
 The chain is visible in three consecutive log lines:
@@ -2134,7 +2134,7 @@ lies OUTSIDE that table's prefix. The scoped credential cannot HeadObject it, ev
 ladder treats unknown as refuse — correctly, since rewriting a base a live clone resolves through is
 the data-loss shape the whole ladder exists to prevent.
 
-**So the safe answer and the scoped answer compose into a permanent stall.** 39 of the tick's 127
+**So the safe answer and the scoped answer compose into a permanent stall.** 69 of the tick's 220
 refusals are not "a clone protects this dataset" but "we were not allowed to ask", and no retry, policy
 or grace window changes that: the credential is scoped by construction and the base path is outside it.
 Silent — one WARNING per dataset per tick, nothing red, no report field, and `maintenance_dataset_outcome`
@@ -2147,19 +2147,37 @@ gate that assumes the condition is transient.
 vending are untouched by `ad111621` / `24483c84`; the sweep tick that surfaced it was driven to verify
 the changed `_discover_all` signature, which reported `compaction_bucket_skipped: 0`.
 
-**NOT YET DETERMINED, and the row must not pretend otherwise:**
-  * whether the 39 are 39 distinct datasets or one retried — every failure names the same key;
-  * WHY `models` is a declared base path at all (`same_store_uri(dataset_uri, "models")`), which
-    decides whether the right fix is at the probe, the vending scope, or the manifest that names it;
-  * whether the 184 `403 Forbidden` credential vends are the same population or a separate refusal —
-    one names `trackansdba60663$read_ghost`, which reads like a table that SHOULD be refused.
+**MEASURED AGAIN ON THE COMPLETED TICK — 440 of 440 outcomes in, and the refusals are FALSE:**
 
-**Closes it.** Decide what a probe that was DENIED means, distinctly from a probe that answered "no".
-Denied is not evidence about the base; it is evidence the maintainer is under-scoped for the question
-it must ask. Either the vending scope must cover the bases a dataset declares (the probe is part of
-maintaining that table), or the probe must run under an identity that may read them — `can_maintain`
-(§ landed 2026-09-08) exists for exactly this kind of question. What it must NOT do is stay a
-permanently unanswerable question that silently costs those datasets their compaction.
+    compaction_base_probe_failed         69   across 69 DISTINCT correlation ids
+    maintenance_refused_protected_base  220   of 440 datasets
+
+Under the MAINTENANCE ROOT credential, the very path the scoped probe was denied is not a dataset root
+at all:
+
+    models/_versions                                   NotFound
+    is_lance_dataset_root('s3://lance-catalog/models')  False
+
+So the honest answer to the question is **"no, that base is not a dataset root"** — the ladder would
+not refuse — and the scoped credential turns that "no" into an "unknown" that refuses. **All 69 are
+false refusals, one per distinct dataset per tick, protecting a base that does not exist.** Traced end
+to end on `acme-bronze$agnostic` by correlation id; every one of the 69 names the same key.
+
+**The zero-trust scoping is therefore COSTING the estate compaction it should be doing.** That is not
+an argument against scoping — the scoped credential is the right mechanism and the goal's own third
+path — it is an argument that the scope is drawn without reference to the questions maintenance must
+ask about the table it was issued for.
+
+**Closes it.** A probe that was DENIED is not evidence about the base; it is evidence the maintainer is
+under-scoped for a question it is REQUIRED to ask before rewriting. Treating denied as "not protected"
+is not available — a real base would then be rewritten, which is the data-loss shape the ladder exists
+to prevent. So the scope must cover the question: `vending.build_session_policy(bucket, prefix, tier)`
+grants by bucket + prefix, and a table's DECLARED base paths belong in that grant, because reading them
+is part of maintaining that table. The catalog knows them at vend time — it holds the manifest.
+
+**Still open, and smaller than it looked:** whether the 184 `403 Forbidden` credential vends are this
+population or a separate refusal. One names `trackansdba60663$read_ghost`, which reads like a table
+that SHOULD be refused, so this may be correct behaviour rather than a second defect.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
