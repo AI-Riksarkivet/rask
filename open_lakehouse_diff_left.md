@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 228 tracked, 146 open, 82 struck.**
-That splits into 65 lettered rows (51 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 229 tracked, 147 open, 82 struck.**
+That splits into 66 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -2041,7 +2041,7 @@ kept the gate frozen just as effectively: the manifest-flag refusal pylance rais
 pylance), and `_OverlaysPresent`, raised from inside the fragment walk and previously sorted with the
 opens that merely failed. Both are permanent; neither went through the gate the first fix guarded.
 
-### H11 · The bucket walk MANUFACTURES coverage gaps in subtrees that hold no datasets — **HIGH**
+### H11 · The bucket walk MANUFACTURES coverage gaps in subtrees that hold no datasets — **TWO OF THREE LANDED AND OBSERVED 2026-09-08** (`24483c84`)
 **THIS ROW FIRST CLAIMED THE OPPOSITE AND THE ESTATE REFUTED IT.** It read *"70 prefixes of the live
 estate are below the discovery depth bound"*, taking the 70 `depth limit reached` notes in § H10's
 classification to mean hidden, unmaintained data. Measuring instead of inferring:
@@ -2081,6 +2081,28 @@ that are known not to hold data.
     dataset in every bucket before one is compacted). Moving it is an owner call with a cost profile,
     not a fix to slip into this row.
 
+**OBSERVED ON THE LIVE ESTATE**, deployed as `lance-rest-catalog:h11-24483c84`:
+
+    before (h10-ad111621)   incomplete 71   excluded 419   total 615
+    after  (h11-24483c84)   incomplete 61   excluded 419   total 615
+
+Exactly the 10 `_lineage_outbox` dead ends, gone. The depth-limit notes fell 70 -> 60 and the other
+counts did not move, which is the shape a skip-list fix should have.
+
+**The sweep was driven through its own door on the new signature** — `planned 440, published 440,
+not_queued 0` — with `compaction_bucket_skipped: 0`, so no bucket was lost to the changed walk. That
+check was not optional: `_discover_all` gained a keyword-only argument, and four stubs across the suite
+still named the old positional shape, where the per-bucket `except Exception` had swallowed the
+`TypeError` into an empty result.
+
+**NOT DEPLOYED: the chart half.** `MAINTENANCE_DISCOVERY_MAX_DEPTH` is absent from the running pod —
+the image was rolled with `kubectl set image`, not a release, so the lever exists in the chart and the
+code default (3) is what runs. It reaches the estate on the next `make k3s-up`.
+
+**STILL OPEN:** the 49 `models/` prefixes. Clearing them means exhausting the tree, which the lever now
+permits and the default does not do. Left as an owner decision with its numbers rather than slipped in:
+the measurement covers ONE of 93 buckets.
+
 **AND THE LEVER'S JUSTIFICATION CHANGED WITH THE MEASUREMENT.** It was added believing it would reveal
 hidden datasets. It does not. It stays because the bound is policy that nothing could set, and because
 exhausting the tree is the only way an operator can clear the remaining false gaps — not because
@@ -2088,6 +2110,56 @@ anything is hiding.
 
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
+
+### H12 · The scoped write credential cannot answer the base-ref probe, so compaction refuses forever — **HIGH**
+**MEASURED LIVE 2026-09-08** on `h11-24483c84`, from one sweep tick driven through `POST
+/maintenance-cron` (`planned 440, published 440`):
+
+    compaction_base_probe_failed         39   every one on key `models/_versions`
+    maintenance_refused_protected_base  127
+    403 Forbidden on /credentials?tier=write  184
+
+The chain is visible in three consecutive log lines:
+
+    credentials — write credential SCOPED for acme-bronze$agnostic
+    features    — compaction_base_probe_failed
+    OSError: key 'models/_versions' in bucket 'lance-catalog': AWS Error ACCESS_DENIED (HeadObject)
+    optimize    — maintenance_refused_protected_base
+
+**BOTH HALVES ARE BEHAVING AS DESIGNED, AND THAT IS THE PROBLEM.** `credentials.py` vends a
+TABLE-SCOPED write credential — the STS path the zero-trust goal asks for, working. `dataset_root_probe`
+then binds `is_lance_dataset_root` to **the dataset's** storage options and asks about a base path that
+lies OUTSIDE that table's prefix. The scoped credential cannot HeadObject it, ever.
+`gather_compaction_bases` records the failure as the unknown it is (`probed = None`), and the refusal
+ladder treats unknown as refuse — correctly, since rewriting a base a live clone resolves through is
+the data-loss shape the whole ladder exists to prevent.
+
+**So the safe answer and the scoped answer compose into a permanent stall.** 39 of the tick's 127
+refusals are not "a clone protects this dataset" but "we were not allowed to ask", and no retry, policy
+or grace window changes that: the credential is scoped by construction and the base path is outside it.
+Silent — one WARNING per dataset per tick, nothing red, no report field, and `maintenance_dataset_outcome`
+records the refusal as an ordinary outcome.
+
+**THIS IS THE § H10 SHAPE ON THE SWEEP SIDE.** A permanent condition, correctly refused, consumed by a
+gate that assumes the condition is transient.
+
+**NOT CAUSED BY THIS SESSION.** `gather_compaction_bases`, `dataset_root_probe` and the credential
+vending are untouched by `ad111621` / `24483c84`; the sweep tick that surfaced it was driven to verify
+the changed `_discover_all` signature, which reported `compaction_bucket_skipped: 0`.
+
+**NOT YET DETERMINED, and the row must not pretend otherwise:**
+  * whether the 39 are 39 distinct datasets or one retried — every failure names the same key;
+  * WHY `models` is a declared base path at all (`same_store_uri(dataset_uri, "models")`), which
+    decides whether the right fix is at the probe, the vending scope, or the manifest that names it;
+  * whether the 184 `403 Forbidden` credential vends are the same population or a separate refusal —
+    one names `trackansdba60663$read_ghost`, which reads like a table that SHOULD be refused.
+
+**Closes it.** Decide what a probe that was DENIED means, distinctly from a probe that answered "no".
+Denied is not evidence about the base; it is evidence the maintainer is under-scoped for the question
+it must ask. Either the vending scope must cover the bases a dataset declares (the probe is part of
+maintaining that table), or the probe must run under an identity that may read them — `can_maintain`
+(§ landed 2026-09-08) exists for exactly this kind of question. What it must NOT do is stay a
+permanently unanswerable question that silently costs those datasets their compaction.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
