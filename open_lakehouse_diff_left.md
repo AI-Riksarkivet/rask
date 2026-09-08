@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 230 tracked, 148 open, 82 struck.**
-That splits into 67 lettered rows (53 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 230 tracked, 147 open, 83 struck.**
+That splits into 67 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -2171,7 +2171,7 @@ anything is hiding.
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
 
-### H13 · 207 of 285 rewrites a tick fall back to the RustFS ROOT key — **THE DOOR IS FIXED AND UNREACHABLE; A ROUTER RUNG DENIES FIRST**
+### ~~H13 · 207 of 285 rewrites a tick fall back to the RustFS ROOT key — **FIXED AND OBSERVED 2026-09-08** (`cd4697ab` + `8c92fa95`)~~
 **MEASURED LIVE 2026-09-08** on `c1-ec10c48f`, one sweep tick through `POST /maintenance-cron`:
 
     credential vend 200 -> SCOPED    78
@@ -2254,13 +2254,26 @@ request implies a data read. The two rules are individually right and jointly de
 **The tuples stay.** They confer `maintainer` and nothing else, `can_maintain` is consulted only by the
 door, and the door is currently unreachable — so they are inert today and correct for the end state.
 
-**What is left is ONE more decision of the same kind as the last:** `credentials` must stop being a
-pure `can_read_data` action. Either the router admits `can_maintain` as an alternative for that action,
-or the route's required rung becomes tier-aware. Both widen a central authz seam, which is the same
-class of change the owner ruled on for the door — so it is asked, not assumed. The three obvious
-non-answers: granting the maintenance identity a reader rung (defeats the separation the model exists
-to state), moving `credentials` out of the gated set (ungates the READ-tier vend), and leaving it
-(207 root-signed rewrites a tick).
+**CLOSED BY THE SECOND DOOR** (`8c92fa95`, deployed as `h13b-8c92fa95` to BOTH `rask-catalog` and
+`rask-maintenance`). `_ALTERNATIVE_RUNGS` gives the `credentials` action alone a second rung through
+the existing `_require_any`, so the audit trail names the door that decided:
+
+    before   outcomes 440   AMBIENT 207   SCOPED  78   vend 403 x207
+    after    outcomes 440   AMBIENT   8   SCOPED 277   vend 403 x8
+
+**96% of the estate's root-signed rewrites are gone**, replaced by table-scoped STS credentials with a
+900 s TTL — the goal's third path, doing the job it exists for.
+
+**PER ACTION, NEVER A READER RUNG AT LARGE.** `query` and `blobs` still require `can_read_data`, pinned
+by a test that fails the moment the alternative leaks. And per action rather than per TIER on purpose:
+a write-tier session policy grants `s3:GetObject` beside `PutObject`, so a maintainer that may rewrite
+can already read those bytes — gating the second door on the tier would add a moving part and no
+privilege boundary.
+
+**THE REMAINING 8 ARE NOT THIS DEFECT** and are left measured rather than rounded away: 8 vends still
+answer 403, so 8 rewrites a tick still sign with the ambient key. They are a different population from
+the 207 — the maintainer rung now covers every warehouse in the registry, so these are tables the
+registry does not account for. Worth its own row when someone reads them.
 
 **Until all three, the honest posture is that the fallback is LOUD rather than silent.** It already
 names itself in the log; what it does not do is reach any report, counter or alert, so an operator sees
