@@ -49,6 +49,23 @@ groups:
             A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal).
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
+      - alert: LineageIngestRefusingProvenance
+        expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="refused"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "Lineage ingest is REFUSING events — a producer's provenance is being dropped"
+          description: >-
+            A bus-delivered run was refused because its stamped author does not hold the rung its operation
+            demands on the datasets it claims to have written, and a refusal is ACKED — so the loss is
+            silent and permanent without this alert. Either a producer is claiming an identity it has no
+            grant for (the case the gate exists to catch) or a legitimate producer lost a grant it needs
+            (a broken cascade wearing an authorization costume). Distinct from `dropped`, which is a
+            malformed payload and a question about the producer's schema rather than its permissions.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+
   - name: lance-catalog
     rules:
       - alert: CatalogWritesShedSustained

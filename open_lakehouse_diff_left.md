@@ -1125,6 +1125,35 @@ unauthored runs and would be refused, so the gate needs the fixture fixed or exe
 refusal at a bus door must be a TERMINAL ack rather than an error, or a denied event exhausts the
 sidecar's retry schedule and storms the dead-letter route.
 
+**THE GATE IS BUILT AND ITS BLAST RADIUS WAS MEASURED BEFORE ARMING (2026-09-09).**
+`enforce_bus_authz` authorizes a bus-delivered event as the STAMPED subject, delegating to the same
+`enforce_output_authz` the HTTP door uses — one implementation, so the run-mutation check and the output
+check cannot drift between the two doors. The rung follows the OPERATION, not the caller
+(`relations_for_operation`): a maintenance operation (`compaction`, `create_index`) accepts
+`can_write_data` OR `can_maintain`, everything else demands `can_write_data`. EITHER, never
+`can_maintain` alone, because `create_index` is emitted by the catalog's own writer-tier door as well as
+by the sweep — accepting only the maintainer rung would refuse the human who built the index. **The
+stamp is not verified and the gate does not pretend it is**; what changes is that a forged subject must
+still hold the rung on every output, so a forger can only claim an identity already authorized to write
+those datasets. **ACK CONTRACT:** denied → `DROP` (redelivery cannot grant a permission, and retrying
+parks a permanent refusal on the dead-letter topic dressed as an outage); anything else → `RETRY` (an
+unreachable authorizer is an outage, and dropping on one deletes provenance silently, since a dropped
+event is acked).
+
+**THE ARMING MEASUREMENT, which is the whole reason this row waited.** `RASK_FGA_ENABLED=true` on the
+live lineage pod, so the gate is ACTIVE the moment it deploys. Every distinct (author, operation,
+output) triple written since 2026-09-06 — 1 075 of them — was replayed through the rung the gate would
+demand: **891 authorized, 184 refused**, and NONE of the 184 is live bus traffic. 75 unauthored
+(historical, pre-producer-fix); 68 the estate's own user on `e2e-ns$*` tables that were CREATED AND
+DROPPED by the suite (22 of each), so the drop revoked the tuples a historical run still names; 30
+`reconcile`, which lineage's own reconciler writes straight to the repository and never sends through
+this door; 6 `analyst`/`data_eng`, seed rows whose producer URI is the retired `lance-ns` repo; 3
+`ray`, which has no Dapr sidecar and therefore cannot publish to this topic at all; 2 `e2e`.
+**`service-maintenance` passes 2 of 2** — the grant swap above is what makes that true, and running the
+two in the other order would have refused every compaction. **NO CREATE-TIME RACE:** `table_create`
+seeds ownership at step 7 and emits lineage at step 8, so the tuple exists before the event it
+authorizes — the order is stated in that module as the contract.
+
 **THE REMAINING 146 WERE TRACED, and they are not a second producer gap.** The 79 carrying no producer
 either break down as: 66 `lance-catalog/create_table|drop_table` runs stamped
 `2026-07-11T09:00:00Z`–`09:10:00Z`, which is the fixture window of

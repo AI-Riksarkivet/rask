@@ -18,9 +18,10 @@ from typing import Annotated, Any
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 
+from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
 from lineage.core.metrics import Outcome, record_outcome
-from lineage.models import author_sub_from_payload
+from lineage.models import RunEvent, author_sub_from_payload
 from lineage.services.consumer import handle_cloud_event
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -31,12 +32,27 @@ log = logging.getLogger(__name__)
 async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
     """Ingest one Dapr-delivered OpenLineage CloudEvent into the graph; returns the Dapr ack status.
 
-    Authenticated by the Dapr **app-api-token** (``require_dapr_token``): without this the route was an
-    unauthenticated, publicly-reachable ingest path co-mounted on the query app — a forged POST could
-    self-assert any ``author`` and inject fabricated nodes/edges into the authoritative AGE graph,
-    *even with OIDC/FGA on* (the security-audit prod-blocker). The catalog stamps the verified author;
-    the token guard ensures only the sidecar (carrying the secret) can deliver."""
-    return await handle_cloud_event(request.app.state.repository, event)
+    TWO GUARDS, ANSWERING TWO DIFFERENT QUESTIONS (§ E2).
+
+    ``require_dapr_token`` answers *may this TRANSPORT deliver* — without it the route was an
+    unauthenticated, publicly-reachable ingest path co-mounted on the query app, and a forged POST could
+    self-assert any ``author`` and inject fabricated nodes/edges into the authoritative AGE graph even
+    with OIDC/FGA on (the security-audit prod-blocker).
+
+    ``enforce_bus_authz`` answers *may the stamped subject record THIS* — which the token cannot,
+    because it is shared by every producer that holds it. Its absence was the asymmetry E2 names: the
+    HTTP twin applies ``enforce_author`` and ``enforce_output_authz`` and this door applied neither, so
+    one shared credential authorized any provenance about any dataset — including a ``drop_table``
+    operation on a table the producer had never seen, which the reconcile sweep then honours.
+
+    Passed as a callback rather than a dependency because the subject is INSIDE the payload: there is no
+    principal to resolve before the body is parsed, and the parse is the consumer's (it owns the
+    malformed-payload ack contract)."""
+
+    async def authorize(parsed: RunEvent) -> None:
+        await enforce_bus_authz(parsed, request, get_settings())
+
+    return await handle_cloud_event(request.app.state.repository, event, authorize)
 
 
 async def on_dead_letter(event: dict[str, Any], _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:

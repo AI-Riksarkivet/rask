@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends, Request
 from lance_namespace import (
@@ -36,15 +36,61 @@ from lance_namespace import (
     ServiceUnavailableError,
     UnauthenticatedError,
 )
+from openfga_sdk import OpenFgaClient
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
-from lineage.models import RunEvent
+from lineage.models import RunEvent, author_sub_from_payload
 from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)
+
+
+#: Operations that are MAINTENANCE rather than data writes. `model.fga` separates the two rungs in
+#: both directions on purpose — a maintainer rewrites HOW a dataset is stored, a writer changes WHAT it
+#: says — and the owner ruling (2026-09-08, zero trust) is that the sweep gets the former and never the
+#: latter, so authorizing its provenance on `can_write_data` would demand a grant the estate refuses to
+#: issue. `create_index` is here because building an index changes no row either; it is emitted by BOTH
+#: the sweep and the catalog's own door, which is exactly why the rule below accepts EITHER rung rather
+#: than swapping one for the other.
+_MAINTENANCE_OPERATIONS: Final = frozenset({"compaction", "create_index"})
+
+#: The relation a data write demands. Named once so the two doors cannot drift on it.
+_WRITE_RELATIONS: Final = ("can_write_data",)
+_MAINTENANCE_RELATIONS: Final = ("can_write_data", "can_maintain")
+
+
+def relations_for_operation(operation: str | None) -> tuple[str, ...]:
+    """Which rungs may record this operation — ANY of them suffices.
+
+    THE RELATION FOLLOWS THE OPERATION, NOT THE CALLER (owner ruling 2026-09-08). A compaction is a
+    maintenance act whoever emits it, and an insert is a write whoever emits it, so keying on the
+    subject would make the same act authorizable for one producer and not another.
+
+    A maintenance operation accepts EITHER rung, never `can_maintain` alone: `create_index` is emitted
+    by the catalog's own door as well as by the sweep, and that door gates it at the writer tier — so
+    accepting only the maintainer rung would refuse the human who actually built the index. Adding the
+    maintainer path is strictly additive; it takes nothing away from a writer. Same shape as the
+    catalog's `_ALTERNATIVE_RUNGS`, and for the same reason.
+    """
+    return _MAINTENANCE_RELATIONS if operation in _MAINTENANCE_OPERATIONS else _WRITE_RELATIONS
+
+
+async def _denied_objects(client: OpenFgaClient, *, user: str, relations: tuple[str, ...], names: list[str], object_type: str) -> list[str]:
+    """The names the subject may NOT record against — denied under EVERY acceptable relation.
+
+    Batched per relation rather than per object, and short-circuited: the common case is one relation
+    and one round trip. A name still denied after the last relation is genuinely refused.
+    """
+    remaining = list(names)
+    for relation in relations:
+        if not remaining:
+            break
+        allowed = await fga.batch_check(client, user=user, relation=relation, objects=[f"{object_type}:{n}" for n in remaining])
+        remaining = [n for n in remaining if not allowed.get(f"{object_type}:{n}")]
+    return sorted(remaining)
 
 
 async def _require_relation(relation: str, name: str, request: Request, settings: LineageSettings, token: Principal | None) -> None:
@@ -141,7 +187,57 @@ def is_external_source(namespace: str) -> bool:
     return "://" in namespace
 
 
-async def enforce_output_authz(event: RunEvent, request: Request, settings: LineageSettings, token: Principal | None) -> None:
+class _StampedAuthor:
+    """The subject a BUS producer stamped on its own event, as a :class:`Principal`.
+
+    NOT a verified identity, and the gate does not pretend otherwise — the bus door authenticates the
+    SIDECAR (a shared app token), so nothing proves the stamp. What the gate changes is that the stamp
+    becomes CONSEQUENTIAL: a forged subject must still hold the rung on every output, so a forger can
+    only claim an identity that was already authorized to write those datasets — which bounds the
+    forgery to producers that could have recorded it honestly. That is strictly stronger than the door
+    it replaces, which accepted any stamp at all.
+    """
+
+    __slots__ = ("sub",)
+
+    def __init__(self, sub: str) -> None:
+        self.sub = sub
+
+
+async def enforce_bus_authz(event: RunEvent, request: Request, settings: LineageSettings) -> None:
+    """Output-scoped authz for a DAPR-DELIVERED event, as the subject the producer stamped (§ E2).
+
+    The HTTP door proves WHO is ingesting (`enforce_author`) and then what they may write
+    (`enforce_output_authz`); the bus door could do neither, because it has no principal — it is
+    authenticated by the sidecar's shared credential and reads the author off the payload. So a
+    producer holding that one token could record any provenance it liked about any dataset, including
+    a `drop_table` operation on a table it has never seen, which the reconcile sweep then honours.
+
+    THE SAME FUNCTION, not a second copy: this delegates to `enforce_output_authz` with a synthetic
+    principal, so the run-mutation check and the output check apply identically at both doors. Two
+    implementations of "may you record this" would drift, and the asymmetry between the doors is the
+    defect this closes.
+
+    AN UNAUTHORED EVENT IS REFUSED. That was not safe until the producers signed: measured 2026-09-08,
+    664 of 5 644 runs carried no author and 518 of those were the sweep's, so this gate would have
+    silently deleted the maintenance plane's entire provenance. Re-measured 2026-09-09 after the
+    producer half landed: of the 69 runs in thirty hours, the only unauthored ones are e2e fixture rows
+    written straight to the repository (which never reach this door) and two compactions from before
+    that roll. `author_sub_from_payload` is the reader — `sub` only, never the `name` or `ownership`
+    facets, because those are for attribution on a board and would let a producer authorize itself
+    under someone else's display name.
+    """
+    if not settings.fga_enabled:
+        return
+    subject = author_sub_from_payload(event.model_dump(by_alias=True))
+    if not subject:
+        raise PermissionDeniedError("a bus-delivered run must carry a verified author sub to be authorized")
+    await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
+
+
+async def enforce_output_authz(
+    event: RunEvent, request: Request, settings: LineageSettings, token: Principal | None, *, relations: tuple[str, ...] = _WRITE_RELATIONS
+) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
     :func:`enforce_author` proves WHO is ingesting; this proves they were AUTHORIZED to write those outputs —
@@ -185,19 +281,16 @@ async def enforce_output_authz(event: RunEvent, request: Request, settings: Line
     if repository is not None and event.run.run_id:
         prior = await repository.run_output_names(event.run.run_id)
         if prior:
-            objs = [f"{object_type}:{n}" for n in prior]
-            may = await fga.batch_check(client, user=token.sub, relation="can_write_data", objects=objs)
-            refused = sorted(n for n in prior if not may.get(f"{object_type}:{n}"))
+            refused = await _denied_objects(client, user=token.sub, relations=relations, names=prior, object_type=object_type)
             if refused:
                 log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run.run_id, "outputs": refused})
-                raise PermissionDeniedError(f"can_write_data required to amend run {event.run.run_id}: {', '.join(refused)}")
+                raise PermissionDeniedError(f"{' or '.join(relations)} required to amend run {event.run.run_id}: {', '.join(refused)}")
     outputs = [d.name for d in event.outputs if d.name]
     if outputs:
-        allowed = await fga.batch_check(client, user=token.sub, relation="can_write_data", objects=[f"{object_type}:{n}" for n in outputs])
-        denied = sorted(n for n in outputs if not allowed.get(f"{object_type}:{n}"))
+        denied = await _denied_objects(client, user=token.sub, relations=relations, names=outputs, object_type=object_type)
         if denied:
-            log.info("ingest_denied", extra={"sub": token.sub, "relation": "can_write_data", "outputs": denied})
-            raise PermissionDeniedError(f"can_write_data required on outputs: {', '.join(denied)}")
+            log.info("ingest_denied", extra={"sub": token.sub, "relation": "|".join(relations), "outputs": denied})
+            raise PermissionDeniedError(f"{' or '.join(relations)} required on outputs: {', '.join(denied)}")
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
     # service-web read identity) could forge READ-edge provenance like "service-web read gold$catalog" into
     # the governed audit graph. `writer ⊇ reader` in model.fga, so stage runners (writers) and the trainer (reader)
