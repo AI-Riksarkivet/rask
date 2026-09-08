@@ -72,7 +72,7 @@ def _run(
         return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
-    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=list(uris)))
+    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
     lance.dataset(uris[0]).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
     try:
         results = sweep_mod.run_sweep(settings)

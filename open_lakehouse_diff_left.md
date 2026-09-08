@@ -2041,40 +2041,53 @@ kept the gate frozen just as effectively: the manifest-flag refusal pylance rais
 pylance), and `_OverlaysPresent`, raised from inside the fragment walk and previously sorted with the
 opens that merely failed. Both are permanent; neither went through the gate the first fix guarded.
 
-### H11 · 70 prefixes of the live estate are below the discovery depth bound, which has no lever — **HIGH**
-**MEASURED LIVE 2026-09-08**, in the same classification that corrected § H10. Of the 490 incomplete
-notes, **70 are `depth limit reached at <prefix> — datasets under it were not scanned`.**
+### H11 · The bucket walk MANUFACTURES coverage gaps in subtrees that hold no datasets — **HIGH**
+**THIS ROW FIRST CLAIMED THE OPPOSITE AND THE ESTATE REFUTED IT.** It read *"70 prefixes of the live
+estate are below the discovery depth bound"*, taking the 70 `depth limit reached` notes in § H10's
+classification to mean hidden, unmaintained data. Measuring instead of inferring:
 
-Unlike H10's 419, these are NOT structural exclusions and H10's fix deliberately leaves them blocking:
-a dataset nested below the walk's bound was never opened, so the report genuinely cannot certify that
-part of the file layer. `Discovery.truncated` exists precisely to stop that being silent, and it works.
+    max_depth=3   datasets 30   stopped 49
+    max_depth=6   datasets 30   stopped  0
+    under models/, walked to depth 8: 0 datasets
 
-**THE DEFECT IS THAT NOBODY CAN ACT ON IT.** `discover_datasets(fs, bucket, *, max_depth: int = 3)`
-and BOTH callers take the default — `reconcile.py:839` passes nothing, `sweep.py` passes nothing and
-then logs `"max_depth": 3` as a LITERAL beside the call, so the log would lie the moment the default
-moved. There is no setting, no chart value, nothing in `MaintenanceSettings`. An operator reading
-"depth limit reached" has no next move.
+**Not one dataset hides below the bound.** Nothing is unmaintained because of depth, and the "raise
+the default" instinct the first version of this row carried would have bought nothing. What the 59
+stopped prefixes of the primary bucket actually are:
 
-**AND IT IS THE SHAPE `report_is_clean` ALREADY RULED ON.** Its docstring records the fix for the
-blanket skip-pass: the split between the two kinds of skip was only defensible once a LEVER
-(`maintenance.orphanScan`) made blocking reachable rather than fatal. The depth bound is the same
-argument one arm over — it blocks the purge, it is a real gap so it SHOULD block, and there is no
-lever to clear it. So after H10, reclamation is still unreachable on this estate, now for a reason
-nobody can fix without a code change.
+    49   models/<run>/<id>/          model-training artefacts, no `_versions/` anywhere beneath
+    10   _lineage_outbox/<ev>/<id>/  control-plane bookkeeping
 
-**Consequences beyond the gate:** the sweep does not maintain those datasets either (same walk, same
-bound) — so a prefix below depth 3 is uncompacted, unversioned-cleaned AND unscanned, and the only
-trace is one WARNING line per tick.
+**THE REAL DEFECT IS THE § H10 SHAPE ONE LAYER UP.** A subtree the walk stops inside becomes an
+`IncompleteScan`, and `report_is_clean` blocks on it — so a prefix that will never hold a dataset
+blocks reclamation exactly as hard as a manifest we failed to read, and blocks it forever. The walk
+cannot tell "no dataset here" from "did not look deep enough", which is why it must not enter subtrees
+that are known not to hold data.
 
-**Closes it.** A `MaintenanceSettings` bound threaded to both callers and surfaced as a chart value,
-and the sweep's log line reading that value rather than restating a literal. The prefixes themselves
-are ALREADY named — the note is `depth limit reached at <prefix>`, and the classification above only
-looked anonymous because the query that produced it folded the URIs away. So the operator is told
-exactly where the walk stopped and has no way to act on it, which is the narrow thing to fix.
+**Two of the three are fixed; the third is a decision, not a defect.**
 
-Whether the right default is deeper is a separate question those prefixes answer, and it must be
-MEASURED before it is moved: the walk is the sweep's dominant cost, and `_protected_roots` opens every
-discovered dataset in every bucket before one is compacted.
+  * **`_lineage_outbox` was the only one of five control prefixes not skipped.** `_warehouses`,
+    `_policies`, `_protection` and `_trash` were; the outbox was not, so the walk descended into
+    lineage bookkeeping and filed its dead ends as gaps. Now named in `_CONTROL_PREFIXES` with the
+    other four. **DONE.**
+  * **The walk died on a concurrent delete.** The outbox is drained continuously, so a directory named
+    by one listing was gone before the descent — a depth-4 walk died `FileNotFoundError` on one. Both
+    callers catch per BUCKET, so one vanished sub-prefix cost a whole bucket its maintenance for that
+    tick, reported only as `compaction_bucket_skipped`. Now tolerated BELOW the root and still raised
+    AT it, because a missing bucket must stay distinguishable from an empty one. **DONE.**
+  * **The 49 `models/` prefixes still block**, and clearing them means exhausting the tree (depth 6
+    stops nothing on this bucket). That is now possible — `maintenance.discoveryMaxDepth` exists,
+    bounded 1..16 — but the DEFAULT is unchanged at 3 deliberately: the measurement covers ONE of 93
+    buckets, and the walk is the sweep's dominant cost (`_protected_roots` opens every discovered
+    dataset in every bucket before one is compacted). Moving it is an owner call with a cost profile,
+    not a fix to slip into this row.
+
+**AND THE LEVER'S JUSTIFICATION CHANGED WITH THE MEASUREMENT.** It was added believing it would reveal
+hidden datasets. It does not. It stays because the bound is policy that nothing could set, and because
+exhausting the tree is the only way an operator can clear the remaining false gaps — not because
+anything is hiding.
+
+**Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
+so the depth gaps are not the binding constraint on the purge.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`

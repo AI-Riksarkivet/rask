@@ -166,7 +166,7 @@ def _buckets_to_sweep(settings: MaintenanceSettings, options: dict[str, str]) ->
     return buckets
 
 
-def _discover_all(fs: pafs.FileSystem, buckets: list[str]) -> list[str]:
+def _discover_all(fs: pafs.FileSystem, buckets: list[str], *, max_depth: int) -> list[str]:
     """Every dataset URI across every swept bucket, reporting the prefixes the walk could not reach.
 
     A bucket that does not exist (or is unreadable) is skipped, not fatal: one missing tenant bucket
@@ -182,7 +182,7 @@ def _discover_all(fs: pafs.FileSystem, buckets: list[str]) -> list[str]:
     truncated: list[str] = []
     for bucket in buckets:
         try:
-            found = discover_datasets(fs, bucket)
+            found = discover_datasets(fs, bucket, max_depth=max_depth)
         except Exception as exc:  # noqa: BLE001 — one unreadable bucket must not stop the whole sweep
             log.warning("compaction_bucket_skipped", extra={"bucket": bucket, "error": str(exc)})
             continue
@@ -195,7 +195,9 @@ def _discover_all(fs: pafs.FileSystem, buckets: list[str]) -> list[str]:
     if truncated:
         log.warning(
             "maintenance_discovery_truncated",
-            extra={"prefixes": len(truncated), "examples": sorted(truncated)[:5], "max_depth": 3},
+            # The bound is READ, never restated: it was a literal beside a call that passed nothing, so
+            # the line would have kept reporting 3 while the walk used something else.
+            extra={"prefixes": len(truncated), "examples": sorted(truncated)[:5], "max_depth": max_depth},
         )
     return uris
 
@@ -659,7 +661,7 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     older_than = timedelta(days=settings.older_than_days)
     policy_records = _load_policies(settings, options)
     trashed_by_path = _trash_exclusions(settings, options)
-    uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options))
+    uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options), max_depth=settings.discovery_max_depth)
     protected = _protected_roots(uris, options)
     uris, decided = _exclude_trashed(uris, trashed_by_path)
     now = datetime.now(UTC)

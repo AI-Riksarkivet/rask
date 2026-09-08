@@ -1611,12 +1611,23 @@ maintenance:
   # (they were 16 per-pid prefixes accumulated by a suite that called them "throwaway" and never threw
   # them away). Opening every dataset across 13 is a different proposition from opening 45.
   #
-  # It is also the last of the three blockers under `report_is_clean` that could be cleared by
-  # configuration rather than by work: `orphan_files` was the SKIPPED coverage gap, and the other two —
-  # real findings, and categories reporting UNAVAILABLE — are estate state, not switches. (The
-  # unavailable four cleared the same day for a different reason: the reconciler was refusing to LOOK UP
-  # its OpenFGA store when the ids were unpinned, which is the chart's default posture.)
+  # It is ONE of the two blockers under `report_is_clean` that configuration can clear rather than work:
+  # `orphan_files` was the SKIPPED coverage gap, and `discoveryMaxDepth` below is the other. Real
+  # findings and categories reporting UNAVAILABLE are estate state, not switches. (The unavailable four
+  # cleared the same day for a different reason: the reconciler was refusing to LOOK UP its OpenFGA
+  # store when the ids were unpinned, which is the chart's default posture.)
   orphanScan: true
+  # How deep the bucket walk descends looking for a dataset's `_versions/` marker. A subtree the walk
+  # stops inside is filed as an `IncompleteScan` and blocks the purge — and the walk cannot tell "no
+  # dataset here" from "did not look deep enough", so a prefix that will never hold one blocks
+  # reclamation as hard as a manifest nobody could read. Exhausting the tree is how you clear those.
+  #
+  # It reveals no hidden data: measured 2026-09-08 on the primary bucket, depth 6 finds the same 30
+  # datasets as depth 3 and stops nothing. The default stays 3 because that covers one of 93 buckets,
+  # and raising it costs a walk that is already the sweep's dominant cost (`_protected_roots` opens
+  # every discovered dataset in every bucket before one is compacted). MEASURE before moving it — the
+  # report names the prefixes it stopped at, which is where that measurement starts.
+  discoveryMaxDepth: 3
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
   # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).

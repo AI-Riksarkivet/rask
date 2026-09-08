@@ -262,6 +262,22 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # cadence of its own.
     orphan_scan_enabled: bool = Field(default=False, alias="MAINTENANCE_ORPHAN_SCAN_ENABLED")
 
+    # How deep `discover_datasets` walks a bucket looking for the `_versions/` marker. A subtree the
+    # walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` — and the
+    # walk cannot tell "no dataset here" from "did not look deep enough", so a prefix that will never
+    # hold a dataset blocks reclamation exactly as hard as a manifest we failed to read.
+    #
+    # Exhausting the tree is the only way to clear those, and until this field existed nothing could:
+    # both call sites took the function default. It is a POLICY LEVER, not a rescue — measured
+    # 2026-09-08 on the primary bucket, depth 6 finds the same 30 datasets as depth 3 and stops
+    # nothing, so raising it reveals no hidden data. The default stays 3 because that measurement
+    # covers one of 93 buckets.
+    #
+    # BOUNDED at both ends deliberately. 0 maintains nothing; an unbounded walk is not a freedom but a
+    # foot-gun, because `sweep.py::_protected_roots` opens every discovered dataset in every bucket
+    # before one is compacted, so the walk is the sweep's dominant cost.
+    discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
+
     # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
     # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override
     # only when the catalog's control root has been moved.

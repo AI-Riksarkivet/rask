@@ -836,7 +836,7 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     datasets: list[tuple[str, str]] = []
     for bucket in _scannable_buckets(report, settings, sources):
         try:
-            found = discover_datasets(fs, bucket)
+            found = discover_datasets(fs, bucket, max_depth=settings.discovery_max_depth)
         except Exception as exc:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"dataset discovery failed: {exc}"))
             continue

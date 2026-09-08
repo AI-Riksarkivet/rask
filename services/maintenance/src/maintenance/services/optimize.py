@@ -129,6 +129,16 @@ class Discovery(BaseModel):
 #: any future branch-aware pass cannot disagree about the spelling.
 _BRANCH_CONTAINER = "tree"
 
+#: Control-plane bookkeeping the walk never enters. No dataset is ever written under one, so descending
+#: costs S3 round-trips on the hot discovery path and, worse, MANUFACTURES coverage gaps: a subtree the
+#: walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` for a gap that
+#: cannot be filled. Measured 2026-09-08: 10 of the primary bucket's 59 truncated prefixes were
+#: `_lineage_outbox/<event>.json/<id>/`, the only one of the five not listed here.
+#:
+#: The outbox is also the one that is DRAINED continuously, so walking it races the drain — a depth-4
+#: walk died `FileNotFoundError` on an entry that was gone by the time it was opened.
+_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox")
+
 
 def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> Discovery:
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
@@ -151,11 +161,25 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
     found = Discovery()
 
     def _walk(prefix: str, depth: int) -> None:
-        for info in fs.get_file_info(pafs.FileSelector(prefix, recursive=False)):
+        try:
+            entries = fs.get_file_info(pafs.FileSelector(prefix, recursive=False))
+        except FileNotFoundError:
+            # A prefix named by one listing can be gone before the walk descends into it — the estate
+            # rewrites and reclaims continuously. This used to raise out of `discover_datasets`, and
+            # BOTH callers catch per BUCKET, so one vanished sub-prefix cost a whole bucket its
+            # maintenance for the tick.
+            #
+            # ONLY below the root. A bucket that does not exist must stay distinguishable from an empty
+            # one: both callers rely on that raise to report the bucket rather than certify it as clean,
+            # and swallowing it here would be the "0 that means we did not look" this module forbids.
+            if depth == 1:
+                raise
+            return
+        for info in entries:
             if info.type != pafs.FileType.Directory:
                 continue
             name = info.path.rstrip("/").split("/")[-1]
-            if name.startswith("__") or name in ("_warehouses", "_policies", "_protection", "_trash"):
+            if name.startswith("__") or name in _CONTROL_PREFIXES:
                 continue
             marker = fs.get_file_info(f"{info.path}/_versions")
             if marker.type == pafs.FileType.Directory:

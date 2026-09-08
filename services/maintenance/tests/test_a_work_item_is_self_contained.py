@@ -148,7 +148,7 @@ def test_the_planner_CARRIES_the_pre_passs_verdict_into_the_item(monkeypatch: ob
 
     patch.setattr(sweep_mod, "_s3fs", lambda settings: None)
     patch.setattr(sweep_mod, "_buckets_to_sweep", lambda settings, options: ["bucket"])
-    patch.setattr(sweep_mod, "_discover_all", lambda fs, buckets: [protected_uri, plain_uri])
+    patch.setattr(sweep_mod, "_discover_all", lambda fs, buckets, *, max_depth: [protected_uri, plain_uri])
     patch.setattr(sweep_mod, "_load_policies", lambda settings, options: [])
     patch.setattr(sweep_mod, "_trash_exclusions", lambda settings, options: {})
     patch.setattr(sweep_mod, "_protected_roots", fake_protected_roots)

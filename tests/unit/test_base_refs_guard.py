@@ -198,7 +198,7 @@ def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[s
         }
     )
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
-    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=list(uris)))
+    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
     return sweep_mod.run_sweep(settings)
 
 
