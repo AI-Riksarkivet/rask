@@ -94,12 +94,18 @@ def test_the_gate_can_see_both_halves() -> None:
     assert _policy(SCOPED) is not None, "the rask-lineage policy did not render"
 
 
-def test_UNNAMED_falls_back_to_the_tenant_root() -> None:
-    """The render this must never break. A chart that silently repointed a live service at a
-    credential nobody created would take it down on upgrade, so naming the identity stays a choice."""
-    env = _lineage_env()
-    assert env.get("LINEAGE_S3_ACCESS_KEY_ID") not in ("", "rask-lineage"), "an unnamed identity did not fall back"
-    assert "LINEAGE_DAPR_SECRET_S3_FIELD" not in env, "the scoped secret field is set with no scoped key"
+def test_the_DEFAULT_is_the_scoped_identity_and_EMPTY_is_the_way_back() -> None:
+    """Measured 2026-09-08: lineage was the one plane of three whose identity was built, provisioned
+    and never selected — `helm get values` named maintenance and medallion and not lineage — so the
+    running pod presented `rustfsadmin` while holding the tightest policy in the estate. The default
+    now names it; explicitly emptying the key is the deliberate way back."""
+    default = _lineage_env()
+    assert default.get("LINEAGE_S3_ACCESS_KEY_ID") == "rask-lineage", "lineage presents the tenant root on a default install"
+    assert default.get("LINEAGE_DAPR_SECRET_S3_FIELD") == "lineage-s3-secret-key", "the scoped key is paired with the tenant root's secret field"
+
+    unnamed = _lineage_env("rustfs.lineageAccessKey=")
+    assert unnamed.get("LINEAGE_S3_ACCESS_KEY_ID") == "rustfsadmin", "an explicitly emptied identity did not fall back"
+    assert "LINEAGE_DAPR_SECRET_S3_FIELD" not in unnamed, "the scoped secret field is set with no scoped key"
 
 
 def test_the_KEY_and_its_SECRET_FIELD_move_together() -> None:

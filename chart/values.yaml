@@ -1957,20 +1957,22 @@ rustfs:
   # (`lance.scopedStorageSecret`), so this identity can be declared in a values file — which is the
   # point, since a hand-set env is drift Helm never corrects and one values edit reverts to root.
   #
-  # EMPTY = the root credential, i.e. today's behaviour. A chart that silently repointed a live service
-  # at a credential nobody created would take maintenance down on upgrade, so naming it stays a choice;
-  # `rustfs-scoped-users` provisions the policy and the user, making the hardening one values edit
-  # rather than a hand-run session.
-  maintenanceAccessKey: ""
+  # DERIVED, NOT EMPTY. This shipped as `""` — the tenant ROOT credential — with the reasoning that a
+  # chart repointing a live service at a credential nobody created would take maintenance down on
+  # upgrade. That was true while the provisioning hook ran only `post-upgrade`; it now runs
+  # `pre-upgrade` too, so the user exists before the pods that present it roll, and root-by-default has
+  # nothing left defending it. `rask.isRealDeployment`'s own rule applies: a guard reachable only by
+  # remembering an opt-in protects the installs that did not need protecting. Set a value here to name
+  # a different user; the secret is still derived unless supplied (`lance.scopedStorageSecret`).
+  maintenanceAccessKey: rask-maintenance
   maintenanceSecretKey: ""
   # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three stage runners share one, because
   # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
   # is the whole setting; the secret is derived unless supplied (`lance.scopedStorageSecret`).
-  # Empty falls back to the tenant ROOT credential, which is what an install runs until one is named
-  # (Q17-5). Provisioned by `rustfs-scoped-users.yaml` as `rask-medallion`: data in any
-  # warehouse, `_tasks/` writable because this plane REGISTERS them, every other control
-  # prefix read-only.
-  medallionAccessKey: ""
+  # Provisioned by `rustfs-scoped-users.yaml` as `rask-medallion`: data in any warehouse, `_tasks/`
+  # writable because this plane REGISTERS them, every other control prefix read-only. Named here rather
+  # than left empty for the reason above — an install must not come up on the tenant root.
+  medallionAccessKey: rask-medallion
   medallionSecretKey: ""
   # THE LINEAGE SERVICE'S SCOPED IDENTITY, and its policy is the TIGHTEST of the three because its S3
   # surface is the smallest — measured 2026-09-07 rather than assumed. Lineage opens datasets READ-ONLY
@@ -1978,9 +1980,11 @@ rustfs:
   # changes anywhere are DELETES of its own outbox objects once the relay has re-ingested them
   # (`outbox.drop_event`). It calls `stage_event` nowhere — staging is the producers' half — so this
   # identity needs NO PutObject at all, which no other plane can say.
-  # Empty falls back to the tenant ROOT credential, which is what an install runs until one is named.
-  # Provisioned by `rustfs-scoped-users.yaml` as `rask-lineage`.
-  lineageAccessKey: ""
+  # Provisioned by `rustfs-scoped-users.yaml` as `rask-lineage`. Named here rather than left empty:
+  # measured on the running estate 2026-09-08, lineage was the one plane of the three whose identity
+  # was built, provisioned and never selected, so it presented `rustfsadmin` while holding the tightest
+  # policy in the estate.
+  lineageAccessKey: rask-lineage
   lineageSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.

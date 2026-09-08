@@ -114,10 +114,11 @@ def test_an_explicit_secret_still_wins(plane: str) -> None:
         assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] == "an-explicit-operator-supplied-secret", f"{name} overrode the operator"
 
 
-def test_the_default_is_still_the_root_credential() -> None:
-    """Opt-in is preserved: an estate that has not named an identity is not changed by this landing,
-    and a derived secret for a user nobody provisioned would be worse than the root credential."""
-    envs = _env_of("MEDALLION", "openbao.enabled=false")
+def test_naming_the_identity_EMPTY_is_the_escape_hatch_back_to_root() -> None:
+    """The default is now the provisioned identity; returning to the tenant root stays possible and
+    has to be DELIBERATE. What is gone is reaching root by never learning the key existed — which is
+    how lineage sat on `rustfsadmin` while holding the tightest policy in the estate."""
+    envs = _env_of("MEDALLION", "openbao.enabled=false", "rustfs.medallionAccessKey=")
     assert envs, "no medallion Deployment rendered"
     for name, env in envs.items():
-        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "rustfsadmin", f"{name} changed with no identity named"
+        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "rustfsadmin", f"{name} ignored an explicitly emptied identity"

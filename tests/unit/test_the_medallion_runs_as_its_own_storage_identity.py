@@ -20,9 +20,11 @@ and every S3 call fails `SignatureDoesNotMatch`. Both the Ray and the maintenanc
 once. A render that moves one half and not the other looks correct in a diff and takes the cascade
 down on contact, which is exactly the class of failure a grep-shaped test cannot see.
 
-OPT-IN, and the default is asserted too: empty values keep the root credential, so this change cannot
-break an estate that has not provisioned the user. That the DEFAULT is still root is Q17-13's half of
-the problem, not this one's.
+THE DEFAULT IS THE SCOPED IDENTITY (2026-09-08). It was empty — the tenant root — and the reason was
+ordering, not preference: `rustfs-scoped-users` ran `post-upgrade`, so a chart that named the key
+rolled pods onto a credential the object store had not been told about yet. The hook now runs
+`pre-upgrade`, so the user exists before the roll, and explicitly emptying the key is the deliberate
+way back to root.
 """
 
 from __future__ import annotations
@@ -57,14 +59,22 @@ def _medallion_envs(*set_values: str) -> dict[str, dict[str, str]]:
     return found
 
 
-def test_the_default_is_unchanged_and_still_the_root_credential() -> None:
-    """Opt-in: an estate that has not provisioned the user is not broken by this landing. It is also
-    the honest statement of where the estate stands — Q17-13 is the row for fixing the default."""
+def test_the_default_IS_the_provisioned_identity() -> None:
+    """A default install must not present the tenant root for a user the same release provisions.
+
+    This pinned the opposite until 2026-09-08, and said so honestly: "It is also the honest statement
+    of where the estate stands — Q17-13 is the row for fixing the default." That row is done. The
+    empty default's real defence was ordering — `rustfs-scoped-users` ran `post-upgrade`, so naming a
+    key rolled pods onto a credential that did not exist yet — and the HOOK is what was wrong: it now
+    runs `pre-upgrade` too.
+    """
     envs = _medallion_envs()
     assert envs, "no medallion Deployment rendered"
     for name, env in envs.items():
-        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "rustfsadmin", f"{name} changed without the values being set"
-        assert "MEDALLION_DAPR_SECRET_S3_FIELD" not in env, f"{name} points at a scoped secret field it has no access key for"
+        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "rask-medallion", f"{name} presents the tenant root on a default install"
+        assert env.get("MEDALLION_DAPR_SECRET_S3_FIELD") == "medallion-s3-secret-key", (
+            f"{name} carries the scoped key with the tenant root's secret field — every S3 operation signs wrong and fails SignatureDoesNotMatch"
+        )
 
 
 def test_every_medallion_deployment_takes_the_scoped_identity() -> None:

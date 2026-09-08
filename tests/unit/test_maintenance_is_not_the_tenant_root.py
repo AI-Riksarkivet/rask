@@ -16,9 +16,12 @@ root key. The fallback itself has to stop being root.
 The shape is the one the Ray plane already uses and that was measured-enforced on RustFS 2026-08-30:
 a prefix-conditioned user, list/get/put/delete on the data prefixes, nothing on the control plane.
 
-EMPTY MEANS TODAY'S BEHAVIOUR. An estate that has not provisioned the user keeps the root credential
-and changes in no way, because a chart that silently repointed a live service at a credential nobody
-created would take maintenance down on upgrade.
+THE DEFAULT IS THE PROVISIONED IDENTITY (2026-09-08). It was empty — the tenant root — because a
+chart repointing a live service at a credential nobody created would take maintenance down on
+upgrade. That hazard was ordering, not preference: `rustfs-scoped-users` ran `post-upgrade`, so the
+user was created AFTER the pods had already rolled onto it. The hook now runs `pre-upgrade` as well,
+so the credential exists before anything presents it, and explicitly emptying the key is the
+deliberate way back to root.
 """
 
 from __future__ import annotations
@@ -39,11 +42,15 @@ def _maintenance_env(rendered: str) -> dict[str, str]:
     return found
 
 
-def test_unset_keeps_the_credential_it_has_today() -> None:
+def test_the_default_IS_the_provisioned_identity() -> None:
+    """A default install must not present the tenant root for a user the same release provisions.
+
+    This asserted the opposite, guarding an ordering hazard that was real: `rustfs-scoped-users` ran
+    `post-upgrade`, so naming the key rolled pods onto a credential the object store had not heard of.
+    The hook now runs `pre-upgrade`, so the user exists before the roll.
+    """
     env = _maintenance_env(_helm_template("maintenance.enabled=true"))
-    assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rustfsadmin", (
-        "the default changed — an estate that provisioned no scoped user would lose maintenance on upgrade"
-    )
+    assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rask-maintenance", "maintenance presents the tenant root on a default install"
 
 
 def test_a_provisioned_key_replaces_the_tenant_root() -> None:
@@ -84,21 +91,14 @@ def test_the_policy_denies_the_records_that_govern_maintenance() -> None:
         assert guarded in policy, f"the policy never mentions {guarded}, so nothing stops the compaction credential rewriting it"
 
 
-def test_a_secret_without_a_name_provisions_nothing() -> None:
-    """A secret alone identifies nobody, so it cannot scope anything and must leave the plane on root.
-
-    THE OTHER DIRECTION IS NO LONGER A DEFECT: an access key alone now scopes the plane, because
-    `lance.scopedStorageSecret` derives the secret from it. That is what lets a values file DECLARE a
-    scoped identity without committing a secret — the reason both live identities were hand patches
-    that no chart rendered. The pairing this test used to guard is now guarded where it can actually
-    break, across all eight read sites, by
-    `test_a_scoped_identity_needs_only_its_name::test_one_secret_string_reaches_every_site`.
-    """
-    rendered = _helm_template("maintenance.enabled=true", "rustfs.maintenanceSecretKey=maintenance-secret")
-    env = _maintenance_env(rendered)
-    assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rustfsadmin", (
-        "a secret was set with no identity to attach it to and the chart repointed anyway — there is no such user"
-    )
+def test_a_secret_alone_attaches_to_the_identity_the_chart_already_names() -> None:
+    """A secret with no access key used to identify nobody, so it had to leave the plane on root. Now
+    the chart always names one, so an operator supplying only a secret is supplying the secret FOR
+    that identity — which is the whole point of `lance.scopedStorageSecret` being derivable: a values
+    file can declare an identity, or a secret, or both, and never a mismatched pair."""
+    env = _maintenance_env(_helm_template("maintenance.enabled=true", "rustfs.maintenanceSecretKey=maintenance-secret"))
+    assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rask-maintenance", "a supplied secret detached the plane from its provisioned identity"
+    assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD") == "maintenance-s3-secret-key", "the identity and its secret field came apart"
 
 
 def test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep() -> None:
@@ -160,7 +160,8 @@ def test_the_scoped_secret_is_actually_seeded() -> None:
     assert "maintenance-s3-secret-key=" in rendered, "nothing seeds the field the Deployment now reads"
 
 
-def test_unscoped_still_reads_the_field_it_always_did() -> None:
-    rendered = _helm_template("maintenance.enabled=true")
-    env = _maintenance_env(rendered)
-    assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD", "rustfs-secret-key") == "rustfs-secret-key"
+def test_the_secret_field_follows_the_identity_by_default() -> None:
+    """THE PAIR, on a default install. A scoped access key left on the tenant root's secret field is
+    signed against the wrong secret and fails every S3 call with SignatureDoesNotMatch."""
+    env = _maintenance_env(_helm_template("maintenance.enabled=true"))
+    assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD") == "maintenance-s3-secret-key", "the scoped key is paired with the tenant root's secret field"

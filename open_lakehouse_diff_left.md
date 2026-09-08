@@ -1338,9 +1338,22 @@ PARTIAL 8, MISSING 1) and said items 1-4 "decide whether the claim is honest":
           deliberately WIDE, which is the interesting half: it reconciles datasets this chart cannot
           enumerate, so a narrowed read is a reconciler that silently stops seeing part of the estate —
           and one that cannot read reports `known=False`, publishing nothing and looking exactly like a
-          healthy cascade. DECLARED BUT NOT ARMED (`lineageAccessKey` defaults empty, so an install
-          keeps the root credential), the way medallion and maintenance shipped before they were named.
-          **`rask-catalog` is the ONE identity left**, and it stays a design question rather than
+          healthy cascade. ARMED 2026-09-08: it was DECLARED BUT NOT ARMED, and reading
+          the RUNNING pods is what showed the arming never happened — `helm get values` names
+          maintenance and medallion and not lineage, so this pod presented `rustfsadmin` while
+          holding the tightest policy in the estate. All THREE now default to their provisioned
+          user instead of to `""`. The empty default had a real defence — the provisioning hook
+          ran `post-upgrade`, so naming a key would roll pods onto a credential that did not exist
+          yet — and the HOOK was the thing that was wrong, not the default: it now runs
+          `pre-upgrade` too, and the post pass is retained because `rustfs-mkbucket` is not a hook
+          and lands after it.
+          **THREE identities are left, not one** — this said `rask-catalog` was the only one, and
+          reading every running pod's environment on 2026-09-08 showed `ingest` (`AWS_ACCESS_KEY_ID`,
+          the bare AWS spelling) and `viewer` (`MEDIA_S3_ACCESS_KEY_ID` + `AWS_ACCESS_KEY_ID`) on
+          `rustfsadmin` as well. Each carries a DIFFERENT env spelling, which is why a survey that
+          greps one name finds one service. `ingest` is § H8's named HIGH row and reads SOURCE buckets
+          this chart never declares, so its policy is not the medallion's shape either.
+          `rask-catalog` stays a design question rather than
           another copy of the pattern: the catalog vends credentials for every runtime-minted
           warehouse, so "what may the thing that grants access itself reach?" has no answer this
           policy shape supplies.

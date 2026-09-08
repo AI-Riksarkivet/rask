@@ -41,9 +41,24 @@ metadata:
   name: {{ include "rask.fullname" . }}-rustfs-scoped-users-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    # AFTER bucket-init: a policy naming a bucket that does not exist yet is accepted by RustFS and
-    # then silently governs nothing, so the buckets must be provisioned first.
+    {{- /* THREE PHASES, AND EACH ANSWERS A DIFFERENT FAILURE.
+
+         `pre-upgrade` is what lets the identities be NAMED by default. With only `post-upgrade` the
+         RustFS user is created after the Deployments have been updated, so pods restart holding a
+         credential the object store has never heard of and 403 until the hook catches up — and that
+         window is the entire reason every scoped identity shipped defaulted to the tenant ROOT key.
+
+         `post-upgrade` STAYS, and is not a leftover: `rustfs-mkbucket` is deliberately not a hook
+         (see rustfs.yaml), so it lands with the release manifest and therefore runs AFTER this
+         pre-upgrade pass. An upgrade that adds a bucket would have a policy written before it exists,
+         which RustFS accepts and then silently governs nothing. The post pass rewrites the same
+         policies once the bucket is there — sound only because `mc admin policy create` overwrites,
+         which is probed and recorded above.
+
+         `post-install` covers the fresh install, where there is no upgrade phase to run in and no
+         running pod to strand. */}}
+    "helm.sh/hook": post-install,pre-upgrade,post-upgrade
+    # Ordering WITHIN a phase: after any hook that provisions buckets.
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
