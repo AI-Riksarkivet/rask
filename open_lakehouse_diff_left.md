@@ -2306,13 +2306,25 @@ every surface reports success.
 
 **A THIRD LIVE REFUSAL, found by the same pass and NOT the service door at all: 44 x 403 on
 `GET /datasets/advref31-gold$catalog/producers` from `rask-medallion-producer` — the CASCADE-LAG
-DETECTOR.** That route is gated on `can_get_metadata`, so this is an FGA denial: the producer holds the
-service-door rung (it is in `LINEAGE_SERVICE_SUBJECTS`) and lacks the AUTHORIZATION rung on the dataset
-it must read. `services.yaml` already records what that costs, for the neighbouring case: *"the
-detector then publishes NO POINT for any edge. That failure is silent by construction — a reader that
-cannot read reports `known=False`, which publishes nothing and looks exactly like a healthy cascade."*
-The allowlist entry was added so it could fail loudly; the FGA rung was not, so it fails silently one
-layer further in.
+DETECTOR.** That route is gated on `can_get_metadata`, so it is an FGA denial rather than a door one.
+
+**AND THE CAUSE IS NOT A MISSING RUNG — this row said it was, and the estate says otherwise.** Measured
+rather than inferred: the object carries **ZERO tuples of any kind** (no owner, no reader, nothing),
+and the catalog answers **404** for both `/v1/table/advref31-gold$catalog` and its namespace. **The
+table does not exist.** So the detector is looping on a cascade edge that names a DELETED dataset, FGA
+correctly denies a subject on an object nobody holds anything on, and the refusal is reported as an
+authorization problem — which sends a reader to check grants for a table that is simply gone.
+
+Two things follow, and neither is "grant the producer a rung":
+  * **the edge is stale and nothing prunes it** — 44 refusals a tick, forever, for a table that was
+    dropped;
+  * **403 is the wrong shape for "gone"**. `can_get_metadata` on a nonexistent object is
+    indistinguishable from the same rung on a table the caller may not see, which is defensible as
+    non-enumeration — but it means an operator reading this log goes looking for a grant.
+
+`services.yaml` records the cost of the neighbouring case and it applies here too: *"the detector then
+publishes NO POINT for any edge. That failure is silent by construction — a reader that cannot read
+reports `known=False`, which publishes nothing and looks exactly like a healthy cascade."*
 
 **So the live tally on this one service is three independent silent refusals:** 2,627 x 401 on the
 zone's `/events` poll (§ E7), 34 x 401 on Ray-lane emits (Defect 1), and 44 x 403 on the lag detector's
