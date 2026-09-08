@@ -13,10 +13,11 @@ pipeline runs unlineaged rather than crashing.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +59,40 @@ class LineageSettings(BaseSettings):
     #: ``auto`` = http when an endpoint is configured, else no-op. ``console`` logs events
     #: through the official ConsoleTransport (debugging); ``noop`` forces lineage off.
     transport: Literal["auto", "http", "console", "noop"] = Field(default="auto", validation_alias=AliasChoices("RASK_LINEAGE_TRANSPORT"))
+
+    @model_validator(mode="after")
+    def _prefer_the_token_for_the_identity_claimed(self) -> LineageSettings:
+        """Use the credential belonging to ``service_identity`` when the environment carries one.
+
+        A PRIVILEGED subject must present its OWN credential — `dapr_auth.service_principal` refuses
+        the shared token from a privileged name and will not fall back — so a producer that claims one
+        subject while holding another's key is refused, every time, silently.
+
+        THAT IS NOT HYPOTHETICAL AND IT HAPPENED TWICE. The 2026-07-13 incident in
+        `ServicePrincipal`'s docstring lost all training provenance this way; measured again
+        2026-09-08, the cascade's Ray stage jobs claimed `service-medallion-producer` while the Ray
+        head held `service-token-service-trainer`, so `POST /api/v1/lineage` answered `401 the
+        presented credential may not claim 'service-medallion-producer'` while the job wrote its data
+        and exited SUCCEEDED.
+
+        ONE POD, SEVERAL IDENTITIES is why a single env var cannot answer it: the Ray head runs stage
+        jobs and train jobs, and each claims its own subject. So the identity selects the credential —
+        `RASK_LINEAGE_TOKEN_<IDENTITY>`, upper-cased with `-` as `_`. The estate's own prefix, NOT a
+        variant of the legacy `LINEAGE_SERVICE_TOKEN` spelling: this selector is a new rule, and naming
+        it after the thing it replaces would read as a compatibility shim for something that never
+        existed. The token never travels in the job's `runtime_env`; `ray_submit` records that as a P0
+        leak because Ray echoes it back on the job. Only the IDENTITY rides there, and it is not a
+        secret.
+
+        Falls through silently when no such variable exists, so every producer that already works —
+        one identity, one token, the auth-off path — is unchanged.
+        """
+        if not self.service_identity:
+            return self
+        scoped = os.environ.get(f"RASK_LINEAGE_TOKEN_{self.service_identity.upper().replace('-', '_')}")
+        if scoped:
+            self.app_token = scoped
+        return self
 
 
 @lru_cache(maxsize=1)

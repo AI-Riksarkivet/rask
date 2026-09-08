@@ -93,6 +93,22 @@ spec:
             - name: LINEAGE_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef: { name: rask-infra-credentials, key: service-token-service-trainer, optional: true }
+            # ONE POD, TWO IDENTITIES — this head runs `ray_train_job.py` (claiming service-trainer) AND
+            # `ray_stage_job.py` (claiming service-medallion-producer), and the single variable above
+            # can only be one of them. Measured 2026-09-08: the cascade's stage jobs presented the
+            # trainer's key and the door answered `401 the presented credential may not claim
+            # 'service-medallion-producer'` on every emit, while the job wrote its data and exited
+            # SUCCEEDED — the SAME failure the comment above records for the trainer, one lane over.
+            #
+            # `LineageSettings` selects by the identity the job claims, so each job reaches its own
+            # credential and neither travels in the job's runtime_env (`ray_submit` records a secret
+            # there as a P0 leak, because Ray echoes it back on the job).
+            - name: RASK_LINEAGE_TOKEN_SERVICE_TRAINER
+              valueFrom:
+                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-trainer, optional: true }
+            - name: RASK_LINEAGE_TOKEN_SERVICE_MEDALLION_PRODUCER
+              valueFrom:
+                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-medallion-producer, optional: true }
           ports:
             - { name: gcs, containerPort: 6379 }
             - { name: dashboard, containerPort: 8265 }

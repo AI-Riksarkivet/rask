@@ -236,6 +236,31 @@ spec:
                            fail at schedule time, not at job time. */}}
                       optional: true
 {{- end }}
+{{- if .Values.auth.dedicatedServiceCredentials }}
+                {{- /* ONE POD, TWO IDENTITIES. This head runs `ray_train_job.py` (claiming
+                     `trainerIdentity`) AND `ray_stage_job.py` (claiming the medallion producer), and
+                     the single variable above can only hold one of their credentials. Measured
+                     2026-09-08: the cascade's stage jobs presented the trainer's key and the door
+                     answered `401 the presented credential may not claim
+                     'service-medallion-producer'` on every emit — while the job wrote its data and
+                     exited SUCCEEDED, which is the SAME failure the block above records for the
+                     trainer, one lane over and unnoticed for the same reason.
+
+                     `LineageSettings` picks by the identity the job CLAIMS, so each job reaches its
+                     own credential. Only the identity rides the job's `runtime_env`; a token there is
+                     the P0 leak `ray_submit.py` records, because Ray echoes runtime_env back on the
+                     job. */}}
+                - name: RASK_LINEAGE_TOKEN_{{ .Values.medallion.train.trainerIdentity | upper | replace "-" "_" }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "lance.fullname" . }}-infra-credentials
+                      key: service-token-{{ .Values.medallion.train.trainerIdentity }}
+                - name: RASK_LINEAGE_TOKEN_{{ .Values.medallion.producer.serviceIdentity | upper | replace "-" "_" }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "lance.fullname" . }}-infra-credentials
+                      key: service-token-{{ .Values.medallion.producer.serviceIdentity }}
+{{- end }}
                 {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
                      that already works. This image is built solely from runners/htr's own lock
                      (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency
