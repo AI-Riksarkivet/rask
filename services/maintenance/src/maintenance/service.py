@@ -144,6 +144,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout_seconds=settings.publish_timeout_seconds,
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options(),
+        # The SAME identity this service presents at the catalog's service door, so the graph and the
+        # catalog cannot disagree about who compacted a dataset.
+        author=settings.catalog_service_identity,
     )
     # #79: the expired-trash purge announces each reclamation on the catalog's control topic. A no-op
     # when off — never a half-configured transport that looks like it publishes.

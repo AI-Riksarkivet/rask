@@ -90,7 +90,9 @@ def classify_retryable(error: str) -> bool | None:
     return None
 
 
-def build_maintenance_fail_event(*, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, error: str) -> dict[str, Any]:
+def build_maintenance_fail_event(
+    *, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, error: str, author: str = ""
+) -> dict[str, Any]:
     """The FAIL twin of :func:`build_maintenance_event` — a per-dataset maintenance FAILURE (§4).
 
     Same job identity and the same BARE output (name only — the lineage repo then makes the ``WROTE``
@@ -118,6 +120,10 @@ def build_maintenance_fail_event(*, table_id: str, namespace: str, job_namespace
         job_namespace=job_namespace,
         run_id=run_id,
         event_time=event_time,
+        # A FAILURE especially must be attributable: an unattributed failure is the one a person is
+        # most likely to have to chase, and the COMPLETE twin carrying a signature while the FAIL did
+        # not would be the more misleading of the two states.
+        author=author,
     )
     event["eventType"] = "FAIL"
     event["run"]["facets"]["errorMessage"] = error_facet
@@ -173,20 +179,36 @@ def table_id_from_uri(uri: str) -> str | None:
     return table_id_from_location(uri)
 
 
-def build_maintenance_event(*, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, operation: str = COMPACTION) -> dict[str, Any]:
+def build_maintenance_event(
+    *, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, operation: str = COMPACTION, author: str = ""
+) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's compaction/GC pass.
 
     Versionless and input-less: a maintenance pass produces no new logical data and derives from nothing,
     so the lineage repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no version and no
     ``DERIVED_FROM`` — ``producers()`` then surfaces the compaction run next to the data writes. ``run_id`` /
     ``event_time`` are injected so the builder is pure and deterministically testable.
+
+    ``author`` IS THE SERVICE'S OWN IDENTITY, NEVER A PERSON'S. A maintenance pass is nobody's request;
+    signing it as the service is the only claim this emitter is entitled to make, and it is the claim
+    the lineage bus door can later authorize against. Measured on the deployed graph 2026-09-08: 664 of
+    5 644 runs carried no author, 518 of them from here — so the graph could not say who compacted a
+    dataset while the CATALOG, which this same service calls through its own service door, could.
+
+    EMPTY MEANS ABSENT, and that asymmetry is deliberate. An unconfigured identity emits NO author facet
+    rather than a placeholder: `author_sub_from_payload` exists because a producer-supplied author is
+    unverified, and its rule is that anonymous beats misattributed. A fabricated subject would be worse
+    than none — a later bus gate would authorize it.
     """
+    facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, operation=operation)}
+    if author:
+        facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
     return {
         "eventType": "COMPLETE",
         "eventTime": event_time,
         "producer": _PRODUCER,
         "schemaURL": RUN_EVENT_SCHEMA_URL,
-        "run": {"runId": run_id, "facets": {"lance": custom_facet(_PRODUCER, operation=operation)}},
+        "run": {"runId": run_id, "facets": facets},
         # Per-table job identity (like the catalog write emitter) — else every dataset's compaction lumps
         # into one ``compaction`` Job node whose output set spans the whole lakehouse.
         "job": {"namespace": job_namespace, "name": f"{COMPACTION}.{table_id}"},
@@ -233,8 +255,12 @@ class DaprMaintenanceEmitter:
         timeout_seconds: float,
         outbox_uri: str = "",
         storage_options: dict[str, str] | None = None,
+        author: str = "",
     ) -> None:
         self._client = client
+        #: The service's OWN identity, stamped on every event it emits — the same string it presents at
+        #: the catalog's service door, so the two stores agree about who did the work.
+        self._author = author
         self._pubsub = pubsub
         self._topic = topic
         self._job_namespace = job_namespace
@@ -252,6 +278,7 @@ class DaprMaintenanceEmitter:
             operation=operation,
             run_id=str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
+            author=self._author,
         )
         await self._publish(event, table_id)
 
@@ -306,6 +333,7 @@ def make_emitter(
     topic: str,
     job_namespace: str,
     timeout_seconds: float = 5.0,
+    author: str = "",
 ) -> MaintenanceEmitter:
     """Select the emitter: a Dapr pub/sub publisher when enabled + wired, else a no-op (never silently
     publish nowhere — a half-configured transport stays a no-op rather than pretending to emit)."""
@@ -318,5 +346,6 @@ def make_emitter(
             timeout_seconds=timeout_seconds,
             outbox_uri=outbox_uri,
             storage_options=storage_options,
+            author=author,
         )
     return NoopEmitter()
