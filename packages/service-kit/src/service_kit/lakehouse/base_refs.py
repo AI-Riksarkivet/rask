@@ -208,12 +208,27 @@ def sibling_base_refs(location: str, storage_options: StorageOptions) -> BaseRef
     whole-estate pre-pass. A per-service copy of this would drift, which is the same reasoning that
     put `protected_roots` and the policy registry in service-kit.
 
-    THE BOUND IS THE WAREHOUSE ROOT, and it is stated rather than implied. A referrer in some other
-    warehouse is invisible here, exactly as a referrer outside its configured buckets is invisible to
-    the sweep; what this rules out is the case that can actually happen, since ``shallow_clone``
-    resolves through a path and the catalog's own tables share one root. The alternative — walking
-    every warehouse on every event — buys coverage of a shape nothing in this estate creates at a cost
-    paid on every write.
+    THE BOUND IS ONE DIRECTORY LISTING, and it is stated rather than implied: ``root`` is the dataset's
+    own PARENT, so a referrer under any other parent is invisible here — in another warehouse, or
+    simply at another depth in the same bucket.
+
+    MEASURED ESTATE-WIDE 2026-09-08, 419 flag-16 datasets over 93 buckets, 539 base references:
+
+        all refs           same-root  11   cross-root 125   CROSS-BUCKET 403
+        declared ROOTS      same-root   5   cross-root 115   CROSS-BUCKET   0
+
+    **No declared dataset root crosses a bucket**, which is what makes this bound defensible: the
+    hazardous shape is the CLONE, and a clone's source shares its warehouse. The 403 that do cross are
+    ``is_dataset_root=False`` external blob bases (409 of them naming one model-artefact prefix that
+    holds no Lance dataset at all), which this guard is not protecting and could not damage.
+
+    **The 115 cross-ROOT declared roots are real and this listing cannot see them** — a branch lives at
+    ``<dataset>/tree/<name>`` while the dataset it protects sits at the bucket's top level, so neither
+    appears in the other's parent listing. That gap is bounded to the callers here: the SWEEP does not
+    use this function, `sweep.py::_protected_roots` opens every discovered dataset in every bucket and
+    `discover_datasets` descends into ``tree/``. Closing it for the on-demand lane needs the referrer
+    edge recorded AT CREATION (§ C3), not a wider listing — walking every warehouse on every event pays
+    the sweep's cost on every write.
 
     Computed PER CALL, never cached: a clone created a minute ago must protect its source on the next
     event, which is also why an hourly backstop cannot stand in for this check.
