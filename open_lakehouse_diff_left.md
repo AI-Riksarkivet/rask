@@ -583,7 +583,33 @@ ordinary table as multi-base would be worse than the bug.
 `LANCE_MULTIBASE_DATA_BASES=""` — so the guard is not reached today. It would have failed on the first
 estate that enabled the feature, which is precisely when it was needed.
 
-**The rest of the row stands**: vending per base rather than refusing, and the `session_token` seam.
+**RE-VERIFIED 2026-09-08, and TWO OF THE THREE CLAUSES ARE ALREADY DONE** — the row was written
+against `feec956` and the estate moved under it:
+
+  * **the `session_token` seam: DONE.** All four sites it named now carry the token —
+    `objectfs.lance_storage_options` (`aws_session_token`), `objectfs.s3_filesystem`,
+    `records._s3_client`, and `storage.client` (which additionally REFUSES a lone token, because
+    botocore drops it and silently signs with the env chain instead). "No package seam can carry a
+    `session_token`" is no longer true and must not be read as current.
+  * **expiry in the vended options: DONE.** `VendedCredentials.expires_at_millis`, populated from the
+    STS `Expiration` by `_expiry_millis` on both vend paths.
+  * **per-base vending: STILL OPEN**, and § H12 is the measured reason it matters — 69 datasets a tick
+    refused compaction because the vended policy cannot reach a base the manifest declares.
+
+**The spec settles what a per-base grant must look like** (`lance_docs/file_format.md` § Base Path
+System): a base is `{id, name?, is_dataset_root, path}`, and resolution differs by that flag — for
+`is_dataset_root=true` the files sit under the base's `data/`, `_deletions/` and `_indices/`; for false
+"the base path points directly to the file directory, and the file path is appended directly without
+subdirectory prefixes". A grant that ignores the flag would be wrong in one direction or the other.
+
+**And the data is already in hand at vend time:** `credentials.py` already performs a root-cred manifest
+read (`_current_version`) on the very manifest that carries `base_paths`, so reading them there costs
+nothing new.
+
+**One hazard to carry into the implementation:** `build_session_policy` refuses `*`/`?` in the prefix
+because they are IAM metacharacters with no escape. A base path comes off a MANIFEST rather than the
+create doors' validated identifier, so it must get the same guard or it is a wider hole than the one
+that guard closes.
 
 **What.** The vendor refuses any table whose fragments carry a `base_id` (feature-flagged) instead of
 vending per base; no package seam can carry a `session_token`, so vended STS creds cannot even travel
