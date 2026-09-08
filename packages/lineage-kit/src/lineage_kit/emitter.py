@@ -29,16 +29,33 @@ log = logging.getLogger(__name__)
 
 
 class Emitter(Protocol):
-    """Anything that can take an authored RunEvent. Implementations must never raise."""
+    """Anything that can take an authored RunEvent. Implementations must never raise.
 
-    def emit(self, event: RunEvent) -> None: ...
+    ``emit`` ANSWERS WHETHER THE EVENT NEEDS RECOVERY, and the distinction from "did it reach the
+    graph" is the whole contract. False means this event is lost unless someone stages it; True means
+    nothing is owed. Those differ for :class:`NoopEmitter`, which delivers nowhere and loses nothing.
+
+    IT DOES NOT MAKE EMISSION FAIL THE RUN. Implementations still never raise — a run whose data landed
+    must not be reported as failed because the graph was unreachable, which would turn an observability
+    outage into a data incident. What the bool adds is that the caller can now ASK: the emitter already
+    computes this fact to log and count it, and returning it is what lets a producer stage a refused
+    event instead of discovering the gap months later in the graph.
+    """
+
+    def emit(self, event: RunEvent) -> bool: ...
 
 
 class NoopEmitter:
-    """No endpoint configured (or lineage forced off): log at debug, drop the event."""
+    """No endpoint configured (or lineage forced off): log at debug, drop the event.
 
-    def emit(self, event: RunEvent) -> None:
+    ANSWERS TRUE, because the bool means "needs no recovery". A deployment that switched lineage off
+    has lost nothing, and staging its events would grow an outbox that nothing drains — turning an
+    opt-out into a leak.
+    """
+
+    def emit(self, event: RunEvent) -> bool:
         log.debug("lineage_noop_drop", extra={"job": event.job.name, "state": event.event_type.value})
+        return True
 
 
 class RecordingEmitter:
@@ -47,8 +64,9 @@ class RecordingEmitter:
     def __init__(self) -> None:
         self.events: list[RunEvent] = []
 
-    def emit(self, event: RunEvent) -> None:
+    def emit(self, event: RunEvent) -> bool:
         self.events.append(event)
+        return True
 
 
 class ClientEmitter:
@@ -64,19 +82,21 @@ class ClientEmitter:
     def __init__(self, client: OpenLineageClient) -> None:
         self._client = client
 
-    def emit(self, event: RunEvent) -> None:
+    def emit(self, event: RunEvent) -> bool:
         state = event.event_type.value
         try:
             payload = event.to_openlineage()
         except Exception:
             log.warning("lineage_author_failed", exc_info=True, extra={"job": event.job.name, "state": state})
             record_drop(DropReason.AUTHOR, state)
-            return
+            return False
         try:
             self._client.emit(payload)
         except Exception:
             log.warning("lineage_emit_failed", exc_info=True, extra={"job": event.job.name, "state": state})
             record_drop(DropReason.TRANSPORT, state)
+            return False
+        return True
 
 
 def build_emitter(settings: LineageSettings | None = None) -> Emitter:

@@ -913,8 +913,51 @@ Two shapes close it, and they are not equivalent:
 * **Build the event first, stage, emit, drop** — the medallion's shape (`transform.py::_build_stage_event`),
   which is why it is durable. Closes the crash window too, and costs a stage write on the happy path.
 
-Choosing between them is a real trade (one object-store write per event against a narrow crash window),
-which is why this is recorded rather than guessed at.
+**THEY ARE NOT ALTERNATIVES — measured 2026-09-08, and the framing above was the thing blocking the
+row.** Staging cannot know when to DROP unless the emit reports: a wrapper that stages, emits, and then
+drops unconditionally has staged nothing useful, and one that never drops grows an outbox no relay can
+distinguish from real backlog. **Reporting is the ENABLER for staging, not a lesser substitute for it.**
+So the sequence is forced rather than chosen, and the trade the row recorded (one object-store write per
+event against a narrow crash window) is a decision about the SECOND half only.
+
+**FIRST HALF DONE.** `Emitter.emit()` now answers `bool`. Additive — it never raises, so the I8
+constraint that emission must not turn an observability outage into a data incident is untouched — and
+the emitter already computed the fact in order to log and count it (`record_drop(AUTHOR|TRANSPORT)`).
+**The bool means "this event needs no recovery", not "it reached the graph"**, which is why
+`NoopEmitter` answers True: a deployment with lineage switched off has lost nothing, and staging its
+events would grow an outbox nothing drains — turning an opt-out into a leak. Gated by
+`packages/lineage-kit/tests/test_the_emitter_reports_what_it_already_knows.py`, which drives both
+failure modes through a `cast` structural client double and pins that a refused door STILL does not
+raise.
+
+**SECOND HALF IS BLOCKED ON AN OWNER DECISION, and the blocker is not code — measured 2026-09-08.**
+The framing "make the fifth producer do what the other four do" is wrong, and finding out why explains
+why `ingest` is the one producer without an outbox in the first place. It is not an oversight.
+
+**INGEST HOLDS NO S3 CREDENTIAL OF ITS OWN.** The deployed pod's entire S3 environment is:
+
+    RASK_S3_ENDPOINT_URL = http://rask-rustfs-io:9000
+    AWS_ENDPOINT_URL     = http://rask-rustfs-io:9000
+    AWS_ALLOW_HTTP       = true
+
+No access key, no secret, no `secretRef`. Its write authority is **VENDED per dataset** —
+`runtime.py:851`, `VendedCredentialCache(catalog.vend_storage_options)` scoped to
+`(namespace, dataset)`. The outbox is a SHARED prefix (`<rustfs.bucket>/_lineage_outbox`), so a
+credential scoped to `bronze$pages` cannot write to it. The other four producers stage there because
+each holds a service-owned credential; ingest is the estate's least-privileged service and holds none.
+
+So closing E1's second half means one of:
+
+  * **give `ingest` a service-owned S3 identity** scoped to the outbox prefix — which is F2-1's shape
+    (`rask-catalog` is named there as "the ONE identity left"; ingest is a second, and its policy is
+    the narrowest possible: write + delete under one prefix, nothing else);
+  * **stage through a service that already has one** — the catalog, which ingest already calls, at the
+    cost of a new dependency on the exact path that exists for when a service is unreachable;
+  * **accept the residual** and ship the reporting half alone, which covers both recorded incidents
+    (each was a refused door, not a crash) and leaves the crash window open.
+
+That is a credential decision with a security dimension, not a refactor, so it is recorded rather than
+guessed at. The first option is the one that fits the estate's direction.
 
 **Not attempted here** because it changes a SHARED package every producer emits through, and wants the
 live verification its shape deserves: drive a real ingest run with the lineage door refusing, confirm
@@ -931,9 +974,60 @@ lineage; a lost write on a known table is back-filled version-only. **Where.** `
 `catalog/core/lineage_emit.py:598-604`, `lineage_kit/emitter.py:193-197`. **Closes it.** Enumerate the
 catalog registry / warehouse roots; create the Dataset vertex from on-disk `lineage.dataset_id`; R10.
 
-### E2 · Bus door trusts a producer-stamped author behind one shared token — **HIGH**
-**Where.** `lineage/api/dapr.py:302-310`, `services/consumer.py:33-35`, `core/config.py:70-79`.
-**Closes it.** Q6; `enforce_output_authz` as the stamped subject on the bus door too.
+### E2 · Bus door trusts a producer-stamped author behind one shared token — **HIGH** — PRODUCER HALF DONE 2026-09-08
+**Where.** `lineage/api/dapr.py::on_lineage_event` — authenticated by `require_dapr_token` (the
+SIDECAR's shared credential) and then straight into `handle_cloud_event`, applying neither
+`enforce_author` nor `enforce_output_authz`, both of which the HTTP door at `endpoints/ingest.py`
+applies. `enforce_output_authz`'s own source already names the asymmetry.
+**Closes it.** Q6 (owner-delegated 2026-09-02): *"The bus door applies `enforce_output_authz` as the
+stamped subject either way."*
+
+**Q6 CANNOT BE APPLIED AS WRITTEN, and the measurement is the reason.** `enforce_output_authz`
+authorizes as `token.sub` and raises `UnauthenticatedError` when the token is `None`; the bus door has
+no principal at all. Measured on the deployed graph 2026-09-08:
+
+    664 of 5 644 (:Run) nodes carry NO author
+    518   producer …/services/maintenance/src/maintenance/core/lineage_emit.py
+     79   no producer either
+     34   …/services/compaction/core/lineage_emit.py
+
+So gating the bus on the stamped subject would refuse 11.8% of live traffic — the maintenance sweep's
+entire lineage — which is silent provenance loss, the shape this file's own ORDER ranks first. **A
+consumer-side gate is only safe once the producers sign.** That is the same ordering § E6's `parent`
+facet needs, and both rows read as consumer-side work, which is exactly why it is worth stating twice.
+
+**THE PRODUCER HALF IS DONE** (`791a5f5b`). `services/maintenance` already knew its own name —
+`MAINTENANCE_CATALOG_SERVICE_IDENTITY`, default `service-maintenance`, which it presents at the
+catalog's service door — so the graph and the catalog disagreed about who compacted a dataset, one
+recording the service and the other recording nobody. Both builders now stamp it, COMPLETE and FAIL
+(an unattributed failure is the one a person has to chase). Empty means ABSENT, never a placeholder:
+`author_sub_from_payload`'s rule is that anonymous beats misattributed, and a fabricated subject would
+be worse than none because the bus gate this unblocks would authorize it. Built with Dagger
+(`e2-791a5f5b`), deployed to `rask-maintenance`.
+
+**WHAT IS LEFT IS AN OWNER DECISION, not a refactor.** `can_write_data` resolves to `writer` on
+`table:` (`model.fga:349`), so gating the bus means `service-maintenance` needs `writer` on **every
+table it maintains** — which is every governed table in the estate. That is a real grant with real
+blast radius, and the alternatives are not equivalent:
+
+  * grant the sweep `writer` estate-wide — simple, and hands one service the widest write grant there is;
+  * add a narrower relation (`can_maintain`) that `can_write_data` does not imply — more model, but the
+    sweep's authority then matches what the sweep actually does;
+  * authorize on `dapr-caller-app-id` instead of the stamped author — which § F2-5 measured as not
+    armable yet: the estate invokes over THREE planes and the actor plane is uncharacterised.
+
+**THE REMAINING 146 WERE TRACED, and they are not a second producer gap.** The 79 carrying no producer
+either break down as: 66 `lance-catalog/create_table|drop_table` runs stamped
+`2026-07-11T09:00:00Z`–`09:10:00Z`, which is the fixture window of
+`test_terminal_lifecycle_and_column_gc_against_age` — e2e residue in a suite that points at whatever
+AGE its DSN names; 12 from this session's own §E4 probes; 5 `medallion/derive_media` ABORTs. **The
+catalog itself is not emitting anonymously**: 3 064 of its 3 130 runs carry an author (97.9%), and the
+66 that do not are all inside that one test window. The other 34 are the retired
+`services/compaction` emitter and are historical.
+
+So the live author-less population is essentially the sweep alone, and the producer half above closes
+it. That also sharpens what the owner decision is FOR: the bus gate would be authorizing one service
+principal, not a long tail of unsigned producers.
 
 ### ~~E3 · Run state regresses on out-of-order ingest~~ — FIXED 2026-09-08 (`cypher.py`)
 **Where.** `cypher.py::MERGE_RUN` — `r.event_type=$et, r.event_time=$tm, r.author=$au, r.producer=$pr,
