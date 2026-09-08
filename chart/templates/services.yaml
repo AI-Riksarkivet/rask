@@ -598,6 +598,20 @@ spec:
             {{- if and .Values.medallion.enabled .Values.medallion.cascadeLag.bindingName }}
               {{- $subjects = append $subjects .Values.medallion.producer.serviceIdentity }}
             {{- end }}
+            {{- /* EVERY STAGE RUNNER'S IDENTITY, because the PRIVILEGED list below already carries them
+                   and the allowlist is checked FIRST. Measured live 2026-09-08: asking the door as
+                   `service-bronze-to-silver` answered `403 service identity not allowed` while the same
+                   name sat in `LINEAGE_PRIVILEGED_SUBJECTS` — a subject named privileged and never
+                   admitted, which is a grant that cannot be exercised.
+
+                   ADMITTING THEM GRANTS NOTHING. `service_principal` asks two questions in order, and
+                   this only answers the first: a privileged subject must still present its OWN
+                   dedicated credential, and these have none provisioned, so the refusal moves from 403
+                   to `401 the presented credential may not claim ...`. Neither answer lets them in —
+                   what changes is that the two lists stop contradicting each other, which is what the
+                   render gate below can then hold. */}}
+            {{- range .Values.medallion.stageRunners }}{{- $subjects = append $subjects .serviceIdentity }}{{- end }}
+            {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $subjects = append $subjects .serviceIdentity }}{{- end }}
             - { name: LINEAGE_SERVICE_SUBJECTS, value: {{ compact $subjects | uniq | sortAlpha | join "," | quote }} }
             {{- /* THE SAME PRIVILEGED SET THE CATALOG USES, and it has to be the same set rather than a
                    list of its own. `dapr_auth.service_principal` refuses a privileged subject that
