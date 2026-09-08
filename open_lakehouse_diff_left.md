@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 229 tracked, 147 open, 82 struck.**
-That splits into 66 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 230 tracked, 148 open, 82 struck.**
+That splits into 67 lettered rows (53 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -2136,6 +2136,49 @@ anything is hiding.
 
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
+
+### H13 · 207 of 285 rewrites a tick fall back to the RustFS ROOT key, and the estate says so out loud — **HIGH**
+**MEASURED LIVE 2026-09-08** on `c1-ec10c48f`, one sweep tick through `POST /maintenance-cron`:
+
+    credential vend 200 -> SCOPED    78
+    credential vend 403 -> AMBIENT  207     "this rewrite is signed by the root key"
+    compaction_plan 403             104     "compaction_plane_unavailable_falling_back"
+
+**73% of the estate's rewrites are signed by the storage ROOT credential**, one tick after the other.
+The chain is four log lines the pod prints itself:
+
+    POST /v1/table/audx7ns$t1/credentials?tier=write   403 Forbidden
+    credential vending unavailable for audx7ns$t1 (403)
+    write credential AMBIENT for audx7ns$t1 — nothing vended; this rewrite is signed by the root key
+    POST /v1/table/audx7ns$t1/compaction_plan          403 Forbidden
+
+and the catalog names the cause on its own side: `catalog.api.fga_deps — access_denied`. The vend door
+checks `can_write_data` for the caller (`credentials.py:64`), and the MAINTENANCE identity does not
+hold it on those tables — correctly, because a maintainer is not a writer of the data.
+
+**THIS IS THE ZERO-TRUST GOAL'S OWN THIRD PATH FAILING OPEN.** STS vending is the sanctioned mechanism
+for storage, and `credentials.write_options_for` treats a refused vend as a reason to reach for the
+deployment's ambient key — "which is what this always used". Under *"never a fallback chain between
+them"* that fallback IS the defect: the mechanism is right, the failure mode hands back exactly what
+the mechanism exists to replace, and nothing goes red. § H8 is the same root credential seen from the
+ingest side; this is its measured cost on the maintenance side.
+
+**AND THE RELATION THAT FIXES IT ALREADY EXISTS, UNDEPLOYED.** `can_maintain` landed in
+`packages/service-kit/src/service_kit/governed/auth/model.fga` on 2026-09-08 (46/46 model tests,
+309/309 checks) precisely so a maintainer can compact a table it may not read, write, drop or promote —
+the test block asserts all four denials. It is not live: the model has not been pushed to OpenFGA, and
+the vend door does not consult it.
+
+**Closes it, in three parts, and only the first is mine:**
+  1. the write-tier vend accepts `can_maintain` as well as `can_write_data`, so a maintainer can obtain
+     the narrow credential its own rewrite needs;
+  2. the FGA model is pushed to the store — **owner action**, and without it part 1 cannot be OBSERVED,
+     only asserted, which the verification rule forbids;
+  3. the `maintainer` tuple exists for the maintenance service identity in the live store.
+
+**Until all three, the honest posture is that the fallback is LOUD rather than silent.** It already
+names itself in the log; what it does not do is reach any report, counter or alert, so an operator sees
+73% root-signed rewrites only by reading the pod.
 
 ### H12 · The scoped credential turns a base-ref "no" into an "unknown", falsely refusing 69 compactions a tick — **NAMED 2026-09-08 (`bddc415b`); THE REMEDY IS AN OWNER CALL**
 **MEASURED LIVE 2026-09-08** on `h11-24483c84`, from one sweep tick driven through `POST
