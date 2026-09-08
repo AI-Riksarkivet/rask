@@ -85,12 +85,24 @@ class _Token:
 _ROUTER_RUNG = "can_read_data"
 
 
-def _grant(monkeypatch: pytest.MonkeyPatch, checked: list[str], *, allow: set[str]) -> None:
-    """Stub the model, not the door: record the write-tier rungs asked about, allow only `allow`."""
+def _grant(
+    monkeypatch: pytest.MonkeyPatch,
+    checked: list[str],
+    *,
+    allow: set[str],
+    router_grants: set[str] | None = None,
+) -> None:
+    """Stub the model, not the door: record the write-tier rungs asked about, allow only `allow`.
+
+    ``router_grants`` defaults to granting the router's own rung, so the tests about the DOOR are not
+    answered by the gate in front of it. Pass an explicit set to exercise the router itself.
+    """
     from catalog.api.v1.endpoints import credentials as door
 
+    granted_at_router = {_ROUTER_RUNG} if router_grants is None else router_grants
+
     async def _check(_client: object, *, user: str, relation: str, obj: str, **_: object) -> bool:
-        if relation == _ROUTER_RUNG:
+        if relation in granted_at_router:
             return True
         checked.append(relation)
         return relation in allow
@@ -140,3 +152,55 @@ def test_the_READ_tier_never_consults_either_rung(governed: tuple[TestClient, li
 
     assert resp.status_code == 200, resp.text
     assert checked == []
+
+
+# --------------------------------------------------------------------------- #
+# the ROUTER rung — the gate in front of the door above
+# --------------------------------------------------------------------------- #
+
+
+def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The door above is unreachable without this, which is how it landed and changed nothing.
+
+    MEASURED 2026-09-08: `cd4697ab` deployed, 92 `maintainer` tuples written, `can_maintain` verified
+    TRUE on the live store — and the sweep tick was byte-identical (AMBIENT 207, SCOPED 78, 207 x 403).
+    `fga_deps` lists `credentials` in `_DATA_READ_ACTIONS`, so the ROUTER required `can_read_data` and
+    refused before the endpoint ran. Measured on a table that was falling back:
+
+        can_read_data=False  can_get_metadata=False  can_write_data=False  can_maintain=True
+
+    The model's own separation is what collided: a maintainer is deliberately not a reader, and this
+    route assumed every credential request implies a data read.
+    """
+    client, checked = governed
+    _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
+
+    resp = client.post("/v1/table/db$t/credentials?tier=write")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["mode"] == "direct"
+
+
+def test_holding_NEITHER_router_rung_is_still_refused_at_the_route(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The half that makes the above mean something: the route still refuses a caller with no rung."""
+    client, checked = governed
+    _grant(monkeypatch, checked, allow=set(), router_grants=set())
+
+    resp = client.post("/v1/table/db$t/credentials?tier=write")
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_can_maintain_opens_NOTHING_ELSE_on_the_table(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The blast radius, and the reason this is a per-action second door rather than a wider rung.
+
+    `query` is a DATA READ like `credentials` is, and a maintainer must NOT gain it — that is the whole
+    content of "a maintainer is not a reader". If this ever passes, the alternative has leaked from one
+    action to the reader tier at large.
+    """
+    client, checked = governed
+    _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
+
+    resp = client.post("/v1/table/db$t/query", json={})
+
+    assert resp.status_code == 403, f"can_maintain must not open a data read: {resp.status_code} {resp.text[:200]}"

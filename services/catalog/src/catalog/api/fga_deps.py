@@ -83,6 +83,22 @@ _DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs"})
 # deadline they are racing. Unmapped it would fall to WRITER, which is how the live audit found it.
 _META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version", "tasks"})
 
+#: A SECOND door for one action, checked through :func:`_require_any` only when the primary denies.
+#:
+#: `credentials` is a data read for everyone else, so `can_read_data` stays the primary rung. But a
+#: MAINTAINER is deliberately not a reader — `model.fga` states that and its test block asserts it —
+#: while it must still obtain the credential its own rewrite needs. The two rules are individually
+#: right and jointly denied: MEASURED 2026-09-08, 207 of 285 rewrites a tick fell back to the
+#: deployment's ROOT key because this router refused before the endpoint's tier check ever ran.
+#:
+#: PER ACTION, never per tier. The router could read `?tier=`, and it would buy nothing: a write-tier
+#: session policy grants `s3:GetObject` alongside `PutObject`, so a maintainer that can rewrite can
+#: already read those bytes. Gating the second door on the tier would add a moving part and no
+#: privilege boundary. What it must NOT become is a rung on the reader tier at large — `query` and
+#: `blobs` stay `can_read_data`, pinned by
+#: `tests/integration/test_the_maintainer_rung_opens_the_write_tier_vend.py`.
+_ALTERNATIVE_RUNGS: dict[tuple[str, str], str] = {("table", "credentials"): "can_maintain"}
+
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
 _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
     "table": frozenset({"create", "declare", "register"}),
@@ -657,6 +673,9 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         return
     relation = _action_relation(fga_type, suffix)
     obj = _object(fga_type, segments, settings.delimiter)
+    if (alternative := _ALTERNATIVE_RUNGS.get((fga_type, suffix))) is not None:
+        await _require_any(client, user=token.sub, doors=[(relation, obj), (alternative, obj)])
+        return
     await _require(client, user=token.sub, relation=relation, obj=obj)
 
 
