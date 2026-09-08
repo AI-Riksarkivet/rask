@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 223 tracked, 143 open, 80 struck.**
-That splits into 59 lettered rows (51 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 224 tracked, 144 open, 80 struck.**
+That splits into 61 lettered rows (49 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1670,6 +1670,43 @@ exactly why the two halves of this row want different mechanisms: a log/audit li
 control event only if a person should hear it.
 
 **Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`.
+
+### H7 · Every per-warehouse bucket is outside the sweep, and the control that would include them is empty — **HIGH**
+**MEASURED 2026-09-08 on the deployed estate.** The maintenance sweep's bucket list and the estate's
+actual buckets have nothing in common:
+
+    catalog /v1/warehouses          92 active warehouses, 92 DISTINCT buckets
+    `lance-catalog` among them?     NO
+    deployed sweep_buckets          ['lance-catalog']
+    MAINTENANCE_S3_EXTRA_BUCKETS    rendered with NO value
+
+So **no governed warehouse bucket is compacted, index-optimised or version-reclaimed at all** — the
+sweep maintains one bucket that is not any registered warehouse.
+
+**THE ESTATE ALREADY DIAGNOSED THIS EXACT LEAK AND THE FIX DID NOT HOLD.** `config.py`'s own comment
+records the 2026-07-14 audit: *"The sweep discovered exactly ONE bucket, so every #3-A per-warehouse
+bucket and #3-B multi-base data bucket was INVISIBLE to GC: their tables accumulated superseded
+manifest versions and small fragments FOREVER. A storage leak introduced by the very features that
+create new buckets."* `s3_extra_buckets` was the fix, and `chart/templates/maintenance.yaml:243` states
+the part that cannot hold: *"Per-warehouse (#3-A) buckets are provisioned at RUNTIME, so they are
+appended by the operator as tenants are onboarded."*
+
+**A MANUAL STEP PER TENANT, IN A PLANE THAT MINTS TENANTS THROUGH AN API.** The chart derives `$extra`
+from `medallion.buckets` and `catalog.multibase.dataBases` — both static values — and leaves the runtime
+set to a human. 92 onboarded, 0 appended. This is the estate's own recurring pattern with a third
+variant: the control's NAME exists, its CONFIGURATION exists, and the value never lands because nothing
+puts it there.
+
+**AND NOTHING REPORTS IT.** `orphan_buckets` flags buckets no warehouse record claims; these are claimed
+by warehouses, so they are not orphans. The sweep reports `checked: N` for the one bucket it walks and a
+clean run "certifies the estate" — over 1/93 of it.
+
+**Closes it.** Derive the sweep's bucket set from the WAREHOUSE REGISTRY at run time instead of from a
+static env var, the way the policy registry is already read from the control root — a set that grows
+when a tenant is onboarded and needs nobody to remember. `s3_extra_buckets` then keeps only what the
+registry cannot know (multi-base data buckets). The second half is the CREDENTIAL: maintenance holds a
+scoped identity (F2-1), so reaching 92 new buckets is a policy change, not only a list change — and
+that half is an owner decision of the same shape as E1's.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
