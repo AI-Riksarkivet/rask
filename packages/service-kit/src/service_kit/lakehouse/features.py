@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -426,6 +426,12 @@ class BaseEvidence(BaseModel):
     #: The listing's answer: ``<path>/_versions/`` is a directory. ``None`` = the store could not be
     #: asked (permission, endpoint, a path shape the filesystem cannot resolve) — treated as a refusal.
     probed_dataset_root: bool | None = None
+    #: The probe was REFUSED rather than failed: the credential this maintainer holds does not cover
+    #: the base. Same verdict as any other unknown — a denial is no more evidence about the base than
+    #: an outage — but a different INSTRUCTION, because the fix is the scope and not the store.
+    #: Measured 2026-09-08: 69 datasets a tick refused this way against a base that the root credential
+    #: shows is not a dataset root at all, so every one of those refusals was false.
+    probe_denied: bool = False
 
 
 class CompactionBases(BaseModel):
@@ -487,18 +493,34 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
         log.warning("compaction_base_paths_unreadable", exc_info=True)
         refs = []
     for ref in refs:
+        denied = False
         try:
             probed: bool | None = probe(ref.path)
-        except Exception:
-            log.warning("compaction_base_probe_failed", extra={"base": ref.path}, exc_info=True)
+        except Exception as exc:
+            denied = _is_permission_denial(exc)
+            log.warning("compaction_base_probe_failed", extra={"base": ref.path, "denied": denied}, exc_info=True)
             probed = None
-        bases.append(BaseEvidence(path=ref.path, declares_dataset_root=ref.is_dataset_root, probed_dataset_root=probed))
+        bases.append(BaseEvidence(path=ref.path, declares_dataset_root=ref.is_dataset_root, probed_dataset_root=probed, probe_denied=denied))
     try:
         resolves: bool | None = any(file.base_id is not None for fragment in ds.get_fragments() for file in fragment.data_files())
     except Exception:
         log.warning("compaction_fragment_read_failed", exc_info=True)
         resolves = None
     return CompactionBases(bases=bases, data_resolves_through_a_base=resolves)
+
+
+#: What an object store says when the credential is the problem rather than the path. Matched on the
+#: MESSAGE because that is all `pyarrow.fs` surfaces — the same constraint, and the same approach, as
+#: `_OPEN_REFUSAL_MARKERS` for pylance's own refusals.
+_DENIAL_MARKERS: Final = ("ACCESS_DENIED", "AccessDenied", "403 Forbidden", "InvalidAccessKeyId", "SignatureDoesNotMatch")
+
+
+def _is_permission_denial(exc: BaseException) -> bool:
+    """Whether a failed base probe was REFUSED rather than broken.
+
+    Both refuse, so a wrong answer here costs an operator the right instruction and never the guard.
+    """
+    return any(marker in str(exc) for marker in _DENIAL_MARKERS)
 
 
 def describe_compaction_unsupported_flags(reader: int, writer: int, bases: CompactionBases | None) -> str | None:
@@ -569,6 +591,11 @@ def _base_paths_compaction_refusal(bases: CompactionBases | None) -> str | None:
         if base.declares_dataset_root:
             return f"the base at {base.path} is declared a dataset root (a shallow clone) — compacting would materialise the shared data into this root"
         if base.probed_dataset_root is None:
+            if base.probe_denied:
+                return (
+                    f"this maintainer is not permitted to read the base at {base.path}, so whether it is a dataset root is unknown — "
+                    "refusing rather than guessing. The credential's scope excludes the base, so this refuses on every tick until the scope covers it"
+                )
             return f"the base at {base.path} could not be read in object storage, so whether it is a dataset root is unknown — refusing rather than guessing"
         if base.probed_dataset_root:
             return f"a Lance dataset is rooted at the base {base.path} — compacting would materialise its data into this root"

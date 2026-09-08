@@ -407,3 +407,41 @@ def test_a_base_in_another_store_is_UNKNOWN_and_therefore_refused(tmp_path: path
     lance.write_dataset(_table(), source)
     assert dataset_root_probe(str(tmp_path / "clone.lance"), {})(source) is True
     assert dataset_root_probe(str(tmp_path / "clone.lance"), {})(str(tmp_path)) is False
+
+
+def test_a_base_the_CREDENTIAL_may_not_read_says_so_rather_than_blaming_the_store() -> None:
+    """A denied probe and an unreadable one refuse alike, and must not READ alike.
+
+    MEASURED LIVE 2026-09-08 (§ H12): a sweep tick vended a table-scoped STS write credential — the
+    right mechanism — then probed a base outside that table's prefix. ACCESS_DENIED, `probed=None`,
+    refuse. 69 of the tick's 220 protected-base refusals were that, one per distinct dataset, and the
+    refusal an operator read said the base "could not be read in object storage", which sends them to
+    look at a store that is working. Under the ROOT credential that same path answers plainly: not a
+    dataset root.
+
+    The refusal itself is UNCHANGED and deliberately so — `_base_paths_compaction_refusal` fails closed,
+    and a denied probe is no more evidence about the base than an unreadable one. What changes is that
+    the reason names the scope, because that is where the operator's fix is.
+    """
+    denied = features.CompactionBases(
+        bases=[features.BaseEvidence(path="s3://lance-catalog/models", probed_dataset_root=None, probe_denied=True)],
+        data_resolves_through_a_base=False,
+    )
+    refusal = features.describe_compaction_unsupported_flags(16, 16, denied)
+
+    assert refusal is not None, "a denied probe must still refuse — this changes the reason, never the verdict"
+    assert "s3://lance-catalog/models" in refusal
+    assert "permitted" in refusal, f"the refusal must name the SCOPE, not the store: {refusal}"
+
+
+def test_an_ordinary_unreadable_base_still_blames_the_store() -> None:
+    """The other side, and what keeps the test above from being a rename: a probe that failed for any
+    reason OTHER than permission must keep saying so, or the distinction buys nothing."""
+    unreadable = features.CompactionBases(
+        bases=[features.BaseEvidence(path="gs://elsewhere/blobs", probed_dataset_root=None)],
+        data_resolves_through_a_base=False,
+    )
+    refusal = features.describe_compaction_unsupported_flags(16, 16, unreadable)
+
+    assert refusal is not None and "could not be read" in refusal
+    assert "permitted" not in refusal, f"an ordinary read failure must not be reported as a permission problem: {refusal}"
