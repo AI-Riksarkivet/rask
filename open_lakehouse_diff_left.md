@@ -1089,6 +1089,28 @@ one compromised sweep equivalent to compromising every table. The bus gate then 
 `can_maintain` for a maintenance-authored run and `can_write_data` for a data-authored one — the
 relation follows the operation, not the caller.
 
+**THE GRANT THE RULING REJECTED WAS ALREADY LIVE, and measuring for the gate is what found it
+(2026-09-09).** The ruling above chose `can_maintain` over granting the sweep `writer` estate-wide —
+and `chart/templates/bootstrap-admin.yaml` had been granting exactly `writer` since vending shipped.
+Measured against the store: `service-maintenance` held **`can_write_data` on 106 tables** and
+`can_maintain` on 323, through `writer` tuples on **two warehouses** (`lance_catalog`, `acme-bucket`)
+cascading to 52 namespaces. The old grant's own comment defended the wrong axis — *"`writer`, never
+`owner`: maintenance rewrites and reclaims, it must not drop"* — which is true and answers a different
+question: the rung below `owner` is not `writer`, it is `maintainer`, and the model had said so since
+the maintainer rung landed. **It costs the sweep nothing:** `credentials.py` has opened the write-tier
+vend on `can_write_data` OR `can_maintain` since that rung existed (*"EITHER RUNG OPENS THIS DOOR, and
+they mean different things"*), and the vend is the only door the grant was for.
+
+**IT IS A SWAP, NOT A REVOKE, and the measurement is the reason.** `warehouse:lance_catalog` — which
+parents bronze/silver/gold — carried **no maintainer tuple at all**, so the estate's core tiers were
+being maintained THROUGH the write grant. Revoking first would strip every rung from 15 tables
+(`bronze$pages`, `bronze$events`, the `models$*` set) and drop the sweep back to the deployment ROOT
+KEY on exactly the tables that matter most — the degradation §Q17-5 closed. Grant, verify the
+maintainer set covers the writer set, then revoke: the same "no safe gap in either direction" rule
+§Q17-7 paid for. Gated by
+`test_the_sweep_is_bootstrapped_as_a_MAINTAINER_never_a_WRITER`, asserted on the RENDERED hook because
+the relation is chosen inside a Helm loop that a values-level assertion cannot see.
+
 **THE REMAINING 146 WERE TRACED, and they are not a second producer gap.** The 79 carrying no producer
 either break down as: 66 `lance-catalog/create_table|drop_table` runs stamped
 `2026-07-11T09:00:00Z`–`09:10:00Z`, which is the fixture window of

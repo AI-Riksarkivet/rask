@@ -135,13 +135,28 @@ spec:
               {{- $readers = append $readers .Values.medallion.producer.serviceIdentity }}
               {{- end }}
               readers = {{ $readers | toJson }}
-              # WRITERS are a separate list because the rung is different and the reason is different.
-              # A reader observes; the maintenance plane REWRITES bytes. It holds the root object-store
-              # key today and compacts every bucket with it, and the vending door replaces that with a
-              # credential scoped to one table and expiring in 900s — but the door authorizes on
-              # `can_write_data`, which resolves through `table#writer` <- `namespace#writer` <-
-              # `warehouse#writer`. Without a grant the vend is refused and the service degrades
-              # silently back to the root key, i.e. the hardening looks configured and is not.
+              # MAINTAINERS are a separate list because the rung is different and the reason is
+              # different. A reader observes; the maintenance plane REWRITES bytes. It holds the root
+              # object-store key today and compacts every bucket with it, and the vending door replaces
+              # that with a credential scoped to one table and expiring in 900s. Without a grant the vend
+              # is refused and the service degrades silently back to the root key, i.e. the hardening
+              # looks configured and is not.
+              #
+              # `maintainer`, NOT `writer` — owner ruling 2026-09-08, zero trust. The two are separate
+              # rungs in both directions (`model.fga`): a maintainer may rewrite HOW a dataset is stored
+              # and may not change WHAT it says. Granting the sweep `writer` is the widest write grant in
+              # the estate and would make one compromised maintenance pod equivalent to compromising
+              # every table it can reach. The vend door has accepted either rung since the maintainer
+              # rung landed (`credentials.py`: "EITHER RUNG OPENS THIS DOOR, and they mean different
+              # things"), so this costs the sweep nothing it uses.
+              #
+              # MEASURED on the live store 2026-09-09, before this line changed: `service-maintenance`
+              # held `can_write_data` on 106 tables and `can_maintain` on 323. The writer grant existed
+              # on exactly two warehouses and `warehouse:lance_catalog` — which parents bronze/silver/
+              # gold — carried NO maintainer tuple at all, so the estate's core tiers were being
+              # maintained THROUGH the write grant. Swapping the rung is therefore a grant-then-revoke,
+              # never a revoke: 15 tables (`bronze$pages`, `bronze$events`, the `models$*` set) would
+              # otherwise lose every rung between the two writes.
               #
               # THIS GRANT COVERS THIS WAREHOUSE ONLY, and the file header's "cascades estate-wide" is
               # true of the DEFAULT warehouse rather than of the estate. Measured against the live
@@ -155,21 +170,21 @@ spec:
               # authorization-model decision — see `docs/DECISIONS.md`, "The lakehouse cloud-native
               # cutover" — not a bigger tuple list.
               #
-              # `writer`, never `owner`: maintenance rewrites and reclaims, it must not drop. The
-              # destructive rung stays with people.
+              # Never `owner`: maintenance rewrites and reclaims, it must not drop. The destructive
+              # rung stays with people.
               #
               # Gated on the flag that turns the feature on, so an estate not vending grants nothing —
-              # a standing estate-wide write grant to a service that is not using it is exactly the
-              # kind of tuple nobody remembers to revoke.
-              {{- $writers := list }}
+              # a standing grant to a service that is not using it is exactly the kind of tuple nobody
+              # remembers to revoke.
+              {{- $maintainers := list }}
               {{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials }}
-              {{- $writers = append $writers .Values.maintenance.catalogServiceIdentity }}
+              {{- $maintainers = append $maintainers .Values.maintenance.catalogServiceIdentity }}
               {{- end }}
-              writers = {{ $writers | toJson }}
+              maintainers = {{ $maintainers | toJson }}
               grants = (
                   [(user, "owner")]
                   + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
-                  + [(w if ":" in w else f"user:{w}", "writer") for w in writers]
+                  + [(m if ":" in m else f"user:{m}", "maintainer") for m in maintainers]
               )
 
               for subject_id, relation in grants:

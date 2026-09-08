@@ -1038,6 +1038,31 @@ def _helm_template(*set_values: str) -> str:
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
 
 
+def test_the_sweep_is_bootstrapped_as_a_MAINTAINER_never_a_WRITER() -> None:
+    """CONTRACT (security, owner ruling 2026-09-08 — zero trust): the maintenance plane's standing
+    warehouse grant is `maintainer`, and `writer` is refused.
+
+    The two rungs are separate IN BOTH DIRECTIONS in `model.fga`, and the asymmetry is the whole point:
+    a maintainer rewrites HOW a dataset is stored, a writer changes WHAT it says. `writer` on a
+    warehouse cascades to every namespace and every table beneath it, so granting it to the sweep makes
+    one compromised maintenance pod equivalent to compromising every table it can reach — the widest
+    write grant in the estate, handed to the busiest unattended service.
+
+    MEASURED on the live store 2026-09-09, which is why this gate exists rather than a comment: the
+    bootstrap hook had been granting `writer`, and `service-maintenance` held `can_write_data` on 106
+    tables. It costs the sweep nothing to drop: `credentials.py` opens the write-tier vend on
+    `can_write_data` OR `can_maintain` ("EITHER RUNG OPENS THIS DOOR, and they mean different things"),
+    and that is the only door the sweep needs the grant for.
+
+    Asserted on the RENDERED hook, not on the values file: the grant is built by a Helm loop, and a
+    values-level assertion cannot see which relation the loop writes.
+    """
+    rendered = _helm_template("auth.bootstrapAdmin=user:gate-probe", "maintenance.vendWriteCredentials=true")
+    assert "maintainers = [" in rendered, "the bootstrap hook no longer builds a maintainer list"
+    assert '"maintainer") for m in maintainers' in rendered, "the maintainer list is not granted the maintainer rung"
+    assert '"writer") for w in writers' not in rendered, "the sweep is being bootstrapped as a WRITER — the rung the owner ruling refused"
+
+
 def test_every_first_party_deployment_is_hardened() -> None:
     """The docs claim "every Deployment has probes + preStop". The gateway had NEITHER (audit 2026-07-14).
 
