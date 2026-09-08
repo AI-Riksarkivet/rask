@@ -96,6 +96,19 @@ spec:
       app.kubernetes.io/component: {{ $comp }}
   template:
     metadata:
+      annotations:
+        {{- /* A ROTATED SECRET DOES NOT REACH A POD THAT CONSUMED IT THROUGH `secretKeyRef`: the value
+               is injected at pod CREATION and never refreshed, so the render stays correct, the
+               reference stays correct, and the running pod holds a dead credential with no signal
+               anywhere. Measured 2026-09-08: six of the seven zones carried a stale
+               `service-token-service-web`, every lineage read answered `the presented credential may
+               not claim 'service-web'`, and that was 2,627 x 401 — 46% of ALL traffic to the service —
+               rendering as an empty panel, which is what an idle estate looks like too.
+
+               Hashing the Secret into the pod template is what closes it: a rotation changes the
+               annotation, which changes the template, which rolls the consumers. Nothing else in this
+               chart makes a credential change reach the pods holding it. */}}
+        checksum/infra-credentials: {{ include (print $root.Template.BasePath "/infra-credentials.yaml") $root | sha256sum }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $comp }}
