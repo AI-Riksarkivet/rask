@@ -2353,6 +2353,46 @@ anything is hiding.
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
 
+### H15 · The lag detector probes a CARTESIAN PRODUCT, and 94% of the compliance trail is now false denials — **MEASURED 2026-09-08**
+
+**Found by sweeping the live estate for active failures rather than from a row.** `rask-catalog` was
+logging ~900 error-ish lines every two hours; every one is `catalog.api.fga_deps — access_denied`
+paired with a `lance.audit` record. Read over 30 minutes:
+
+    GET /v1/table/<ns>$features/tags/list     1464 x 403     96 x 200     6 x 404
+    caller                                    rask-medallion-producer (10.42.0.232)
+    distinct tables refused                   244
+    rate                                      ~488 per 10 min  ->  ~2,900/hour
+
+**NOTHING IS BROKEN, AND THAT IS THE POINT.** `cascade_lag_readers` treats 403 and 404 as one answer
+(`EdgeNotMeasurable`) and excludes the edge rather than fabricating a level — correct, and its comment
+explains why. The catalog is also correct: an object with NO tuples answers 403, not 404, because
+existence is not an oracle. Both halves are right and the product of them is 2,900 refusals an hour.
+
+**THE SOURCE IS THE PRODUCT, NOT THE PROBE.** `declared_edges` returns every declared lane x every
+project in the warehouse registry — 3 x 93 = 279 cells a tick — and most tenants do not run most
+lanes, so roughly two thirds name a table nobody created. Verified on one: `warehouse:vaud1-wh` exists
+in the FGA store while `namespace:vaud1-silver` and `table:vaud1-silver$features` do not exist at all.
+
+**WHAT IT COSTS is the audit trail, which is the part that matters.** `lance.audit` exists for the #41
+compliance record; at 94% false denials it cannot serve that purpose — a real refusal is now a needle
+in 2,900 hourly haystacks, and F2-10's whole argument is that this stream is the evidence. The wasted
+FGA checks are the cheaper half.
+
+**Closes it.** The detector must stop asking about cells it can know are absent — enumerate a project's
+real tables once per tick instead of probing the product. NOT by making the catalog distinguish absent
+from forbidden in its RESPONSE (that is the no-existence-oracle rule and it is right), and not by
+granting the producer anything: it already owns 92 of the 93 warehouses that exist, so this is not a
+missing grant. **Where.** `cascade_lag_readers.py:44-60,134-149`.
+
+**THREE WRONG CONCLUSIONS WERE REACHED BEFORE THIS ONE**, all from the same habit of reading a query
+result as a fact: that the cascade grants were never written (they are — 101 owner tuples), that no
+service subject holds a tuple (OpenFGA `Read` needs an object filter; the store has 4,042 tuples, not
+the 50 a first page showed), and that the vending door grants nothing to any service (a vend for a
+table that does not exist answers 403). Each was caught by running a control — a subject that
+certainly has nothing, a table that certainly exists — and none would have been caught by reading
+more code.
+
 ### H14 · The cascade's Ray-lane lineage emits are refused, and the job reports SUCCEEDED — **HIGH**
 **MEASURED LIVE 2026-09-08.** `rask-lineage`'s access log over its last 3,000 lines: **1,331 x 401
 against 1,558 x 200** — 46% of everything reaching the service is refused. Two callers own all of it:
