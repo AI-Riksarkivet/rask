@@ -608,9 +608,15 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
     with nothing to do with similarity. What the two doors DO share is the framing they answer in.
 
-    A CHANGE FEED IS A READ, which settles both policy questions. It is gated like one — the router
-    guard that admits `query` admits this — and audited like one (§ J1), because following every row a
-    table ever received is the most disclosing read available, not a metadata lookup.
+    A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
+    one (§ J1), because following every row a table ever received is the most disclosing read
+    available, not a metadata lookup.
+
+    THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
+    shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
+    `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
+    reader who was not also a writer — the feed's whole audience — was refused. Pinned by
+    `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
     """
     segments = parse_identifier(id, settings.delimiter)
     predicate = changes.change_filter(begin_version=body.begin_version, end_version=body.end_version, kind=body.kind)

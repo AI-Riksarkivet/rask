@@ -10577,6 +10577,65 @@
         "title": "TableBasicStats",
         "type": "object"
       },
+      "TableChangesRequest": {
+        "description": "What a consumer asks for when following a table (\u00a7 J4).\n\nNOT a spec model \u2014 the Lance Namespace spec has no change-feed op \u2014 so it is declared here rather\nthan imported. That makes this a NON-SPEC route on a spec-conformant surface, which \u00a7 B2 is already\ncarving out (25 route groups); this is a deliberate 26th, placed with `query`/`count_rows`/`blobs`\nbecause a change feed is a DATA-PLANE read, not a management operation. When B2 carves, it moves\nwith the data doors, not with the admin ones.",
+        "properties": {
+          "begin_version": {
+            "title": "Begin Version",
+            "type": "integer"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Columns"
+          },
+          "end_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Version"
+          },
+          "kind": {
+            "default": "inserted",
+            "enum": [
+              "inserted",
+              "updated"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "begin_version"
+        ],
+        "title": "TableChangesRequest",
+        "type": "object"
+      },
       "TableExistsRequest": {
         "description": "TableExistsRequest",
         "properties": {
@@ -21633,6 +21692,128 @@
         "summary": "List Table Branches",
         "tags": [
           "branch"
+        ]
+      }
+    },
+    "/v1/table/{id}/changes": {
+      "post": {
+        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route\nshipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded\n`can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every\nreader who was not also a writer \u2014 the feed's whole audience \u2014 was refused. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.",
+        "operationId": "table_changes_v1_table__id__changes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TableChangesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Changes",
+        "tags": [
+          "data"
         ]
       }
     },

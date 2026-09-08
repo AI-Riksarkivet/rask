@@ -341,6 +341,37 @@ def test_access_disclosure_routes_are_owner_tier() -> None:
         assert _action_relation("namespace", suffix) == "can_delete", suffix
 
 
+def test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough() -> None:
+    """CONTRACT (security): a door that returns table DATA is authorized with ``can_read_data``.
+
+    THE FALL-THROUGH IS THE DEFECT SURFACE, and it has now caught two doors the same way. `tasks` was
+    unmapped and fell to WRITER — "which is how the live audit found it", says the comment beside it —
+    and on 2026-09-08 the change feed did exactly the same: `POST /{id}/changes` shipped without a
+    mapping, and the live audit trail recorded `can_write_data ALLOW` on `table:bronze$pages` for what
+    the record beside it called a `read_data`. A new read door is refused for every reader who is not
+    also a writer, which for a change feed is its whole audience, and the audit trail describes a write
+    that never happened.
+
+    Asserting the SET is not enough — membership can be true while `_action_relation` routes elsewhere —
+    so this resolves each one through the real classifier.
+    """
+    from catalog.api.fga_deps import _DATA_READ_ACTIONS, _META_READ_ACTIONS, _action_relation
+
+    assert "changes" in _DATA_READ_ACTIONS, "the change feed is the most disclosing read a table has"
+    for action in _DATA_READ_ACTIONS:
+        assert _action_relation("table", action) == "can_read_data", action
+
+    # `history` is the THIRD door the same fall-through caught, and the only one whose own docstring
+    # already named the right rung: "Reader-tier: `can_get_metadata` on the table, the same rung as
+    # describe/list-versions". It was unmapped, so the ROUTER guard demanded `can_write_data` first and
+    # the endpoint's own `require_can_get_metadata` — a weaker check, running second — could only ever
+    # be reached by callers who had already cleared the higher bar. Measured on the estate 2026-09-09:
+    # one `GET /history` logged `can_write_data ALLOW` and then `can_get_metadata ALLOW`, in that order.
+    assert "history" in _META_READ_ACTIONS, "a commit log is metadata about the data, not a write"
+    for action in _META_READ_ACTIONS:
+        assert _action_relation("table", action) == "can_get_metadata", action
+
+
 def test_grant_routes_are_intercepted_before_the_suffix_fallthrough() -> None:
     """CONTRACT (security, #72 + the grant axis): ``access/grant`` / ``access/revoke`` are authorized
     PER RUNG from the request body by ``_authorize_grant``, not by the suffix map.

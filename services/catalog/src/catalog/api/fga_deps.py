@@ -77,11 +77,22 @@ _FGA_TYPE: dict[str, str] = {
 # endpoint additionally requires can_write_data for a write-tier vend.
 # ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
-_DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs"})
+# ``changes`` (§ J4) is the MOST disclosing read a table has — every row it ever received, in order —
+# so it is a data read and nothing weaker. Unmapped it fell to WRITER, and the live audit trail is what
+# said so (2026-09-08: `can_write_data ALLOW` on `table:bronze$pages`, logged one line above the
+# `read_data` record for the same call). That refuses every reader who is not also a writer, which for a
+# change feed is its entire audience, and it writes a fiction into the compliance trail.
+_DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "changes"})
 # `tasks` (#75) reports what is SCHEDULED against this object — a pending undrop deadline today.
 # Reader tier: it discloses no data and no principals, and an owner must be able to see the
 # deadline they are racing. Unmapped it would fall to WRITER, which is how the live audit found it.
-_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version", "tasks"})
+# `history` (GET /v1/table/{id}/history) is the commit log — WHAT changed and WHEN, never who. Its own
+# docstring already argued the rung ("the same rung as describe/list-versions") and the endpoint checks
+# `can_get_metadata` itself; what was missing is this line, so the ROUTER demanded `can_write_data`
+# first and that weaker second check was unreachable for anyone who had not already cleared the higher
+# bar. Measured on the estate 2026-09-09: one GET logged `can_write_data ALLOW` then
+# `can_get_metadata ALLOW`, in that order.
+_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version", "tasks", "history"})
 
 #: A SECOND door for one action, checked through :func:`_require_any` only when the primary denies.
 #:
