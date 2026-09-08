@@ -1858,8 +1858,24 @@ trust"*, and *"Zero trust is the goal"*.
     the injector wiring changes. Calling this an "accepted exception" (as this row first did) would
     have written off the largest single class in the survey on a premise that only rules out ONE of
     the three sanctioned paths.
-  * **The rest sit on pods that DO have a sidecar** (`LINEAGE_SERVICE_TOKEN` x8, the database
-    passwords) and are the straightforward **Dapr secret store** migrations.
+  * **`LINEAGE_SERVICE_TOKEN` x8 IS ESO TOO, not a Dapr-store migration** — corrected 2026-09-08 by
+    following the `secretKeyRef` instead of the variable name, the same discipline that caught
+    `MEDIA_S3_ACCESS_KEY_ID` being root:
+
+        rask-web-{annotator,compute,explorer,home,lakehouse,models,studio}  <- service-token-service-web
+        ray-lance-head                                                     <- service-token-service-trainer
+
+    All eight are the seven web zones plus the Ray head — every one a pod with NO Dapr sidecar. The
+    variable name reads like a service credential and the holders are all zones. An earlier sort of
+    this row put them in the Dapr-store class on exactly that assumption.
+  * **The genuine Dapr-store class is what is LEFT after that: about four** — the database passwords,
+    `DAPRSTATE_PASSWORD` and `OPENFGA_DATASTORE_URI`. The sidecar-bearing lakehouse services already
+    resolve their own secrets through `apply_dapr_secrets` and fail closed, so this class is nearly
+    empty rather than the dozen it first looked like.
+
+**SO THE SORT COLLAPSES TO: ~34 ESO, ~5 STS, ~4 Dapr store.** The largest class by far is the one whose
+blocker was removed the same day (the auth half above), and the only class with real code work left is
+STS — which § H8 measured as smaller still, since ingest's governed writes are already vended.
 
 **AND A REF IS NOT ALWAYS A SOURCE.** Several lakehouse services call `apply_dapr_secrets(settings)` at
 boot and fail closed, so their rendered env value is a placeholder the store overwrites — measured
