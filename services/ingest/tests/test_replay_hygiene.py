@@ -359,7 +359,7 @@ def test_a_RETRIED_finalize_presents_the_SAME_read_version_and_never_re_reads_it
 
     catalog = _Catalog()
     monkeypatch.setattr(runtime, "_catalog", lambda: catalog)
-    monkeypatch.setattr(staging, "discover_staged", lambda uri, run_id: ["{}"])
+    monkeypatch.setattr(staging, "discover_staged", lambda uri, run_id, storage_options=None: ["{}"])
 
     spec = RunSpec.model_validate(SPEC)
     runtime.finalize_run(spec, ["{}"], {}, read_version=5)

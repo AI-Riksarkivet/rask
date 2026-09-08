@@ -1202,9 +1202,10 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: EnumerateChunksInput
     # keys made this activity's result O(units) and each child's input O(units) again; the manifest
     # makes both O(chunks). Written BEFORE the descriptors exist so a descriptor can never name a
     # window that was not persisted.
+    from ingest.runtime import ledger_options
     from ingest.staging import write_unit_manifest
 
-    write_unit_manifest(uri, spec.run_id, pairs)
+    write_unit_manifest(uri, spec.run_id, pairs, ledger_options(spec.namespace, spec.dataset))
 
     chunks: list[dict[str, Any]] = []
     for index in range(0, len(pairs), CHUNK_SIZE):

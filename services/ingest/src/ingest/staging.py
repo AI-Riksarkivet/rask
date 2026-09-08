@@ -91,7 +91,9 @@ def manifest_name(unit_keys: Sequence[str] | str) -> str:
     return f"{hashlib.sha256('\x00'.join(keys).encode()).hexdigest()[:32]}.json"
 
 
-def stage_fragments(dataset_uri: str, run_id: str, unit_keys: Sequence[str] | str, fragments_json: Sequence[str]) -> str:
+def stage_fragments(
+    dataset_uri: str, run_id: str, unit_keys: Sequence[str] | str, fragments_json: Sequence[str], storage_options: dict[str, str] | None = None
+) -> str:
     """Record a batch's fragments durably. MUST be called before ANY of its units is acked.
 
     `unit_keys` is every unit whose rows are inside these fragments — not a label for the batch. The
@@ -109,7 +111,7 @@ def stage_fragments(dataset_uri: str, run_id: str, unit_keys: Sequence[str] | st
 
     if _is_object_store(root):
         bucket, prefix = _split(root)
-        _client().put_object(Bucket=bucket, Key=f"{prefix}/{name}", Body=payload, ContentType="application/json")
+        _client_for_options(storage_options).put_object(Bucket=bucket, Key=f"{prefix}/{name}", Body=payload, ContentType="application/json")
     else:
         target = Path(root) / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +136,7 @@ def unit_manifest_uri(dataset_uri: str, run_id: str) -> str:
     return f"{dataset_uri.rstrip('/')}/{STAGING_DIR}/_units/{run_id}.json"
 
 
-def write_unit_manifest(dataset_uri: str, run_id: str, pairs: Sequence[tuple[str, str | None]]) -> str:
+def write_unit_manifest(dataset_uri: str, run_id: str, pairs: Sequence[tuple[str, str | None]], storage_options: dict[str, str] | None = None) -> str:
     """Persist the run's enumerated `(key, token)` list once, so chunk descriptors can be POINTERS.
 
     §2.13: `enumerate_chunks` used to return every key and token inline, which put the whole set into
@@ -149,7 +151,7 @@ def write_unit_manifest(dataset_uri: str, run_id: str, pairs: Sequence[tuple[str
     uri = unit_manifest_uri(dataset_uri, run_id)
     if _is_object_store(uri):
         bucket, key = _split(uri)
-        _client().put_object(Bucket=bucket, Key=key, Body=payload, ContentType="application/json")
+        _client_for_options(storage_options).put_object(Bucket=bucket, Key=key, Body=payload, ContentType="application/json")
     else:
         target = Path(uri)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -157,7 +159,7 @@ def write_unit_manifest(dataset_uri: str, run_id: str, pairs: Sequence[tuple[str
     return uri
 
 
-def read_unit_slice(dataset_uri: str, run_id: str, offset: int, count: int) -> list[tuple[str, str | None]]:
+def read_unit_slice(dataset_uri: str, run_id: str, offset: int, count: int, storage_options: dict[str, str] | None = None) -> list[tuple[str, str | None]]:
     """One chunk's `(key, token)` window, read back from the manifest.
 
     Raises rather than returning a short slice when the manifest is missing: an absent manifest means
@@ -169,7 +171,7 @@ def read_unit_slice(dataset_uri: str, run_id: str, offset: int, count: int) -> l
     if _is_object_store(uri):
         bucket, key = _split(uri)
         try:
-            with contextlib.closing(_client().get_object(Bucket=bucket, Key=key)["Body"]) as body:
+            with contextlib.closing(_client_for_options(storage_options).get_object(Bucket=bucket, Key=key)["Body"]) as body:
                 raw = body.read().decode()
         except Exception as exc:
             raise UnitManifestMissing(run_id, uri) from exc
@@ -231,7 +233,7 @@ class StagingCoverAbandoned(RuntimeError):
     """
 
 
-def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
+def discover_staged(dataset_uri: str, run_id: str, storage_options: dict[str, str] | None = None) -> list[str]:
     """The fragments this run should commit — each of its units covered exactly ONCE.
 
     Not simply "everything staged". A fragment is committed whole (`LanceOperation.Append` takes
@@ -274,7 +276,7 @@ def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
     # Sorting the raw manifest BODIES first bought nothing and held every manifest's JSON in memory
     # at once — hundreds of MB on a run this module's docstrings advertise, for an ordering thrown
     # away three lines later.
-    for raw in _read_all(staging_root(dataset_uri, run_id)):
+    for raw in _read_all(staging_root(dataset_uri, run_id), storage_options):
         try:
             record = json.loads(raw)
         except json.JSONDecodeError:
@@ -690,7 +692,7 @@ def _search_core(sets: Sequence[frozenset[str]], core: Sequence[int], remaining:
             frames.append(iter(state.candidates()))
 
 
-def purge_staged(dataset_uri: str, run_id: str) -> int:
+def purge_staged(dataset_uri: str, run_id: str, storage_options: dict[str, str] | None = None) -> int:
     """Drop the run's staging after its commit lands. Returns how many manifests were removed.
 
     Called only AFTER the commit succeeds. Purging earlier would delete the very record a retried
@@ -698,11 +700,11 @@ def purge_staged(dataset_uri: str, run_id: str) -> int:
     prevent.
     """
     root = staging_root(dataset_uri, run_id)
-    removed = _purge_unit_manifest(dataset_uri, run_id)
+    removed = _purge_unit_manifest(dataset_uri, run_id, storage_options)
     if _is_object_store(root):
         bucket, prefix = _split(root)
-        client = _client()
-        for key in _list_object_keys(bucket, prefix):
+        client = _client_for_options(storage_options)
+        for key in _list_object_keys(bucket, prefix, storage_options):
             client.delete_object(Bucket=bucket, Key=key)
             removed += 1
         return removed
@@ -716,7 +718,7 @@ def purge_staged(dataset_uri: str, run_id: str) -> int:
     return removed
 
 
-def _purge_unit_manifest(dataset_uri: str, run_id: str) -> int:
+def _purge_unit_manifest(dataset_uri: str, run_id: str, storage_options: dict[str, str] | None = None) -> int:
     """Remove the run's unit manifest. Counted with the fragment manifests — it is run staging too.
 
     It needs its own removal precisely BECAUSE it lives outside the run's staging prefix (see
@@ -727,7 +729,7 @@ def _purge_unit_manifest(dataset_uri: str, run_id: str) -> int:
     if _is_object_store(uri):
         bucket, key = _split(uri)
         with contextlib.suppress(Exception):
-            _client().delete_object(Bucket=bucket, Key=key)
+            _client_for_options(storage_options).delete_object(Bucket=bucket, Key=key)
             return 1
         return 0
     path = Path(uri)
@@ -762,6 +764,42 @@ def _client_for(endpoint: str | None) -> Any:  # noqa: ANN401 — boto3 client h
     return s3_client(endpoint)
 
 
+def _client_for_options(storage_options: dict[str, str] | None) -> Any:  # noqa: ANN401 — matches `storage.s3_client`
+    """The client the staging LEDGER signs with: the vended credential when one was supplied, else the
+    ambient chain.
+
+    WHY THE LEDGER NEEDS ITS OWN SEAM AT ALL. The DATA writes already take a scoped credential
+    (`write_unit_fragments(..., storage_options=...)`, supplied by `runtime.write_options_for` and
+    proven enforced on RustFS), but every manifest write, read, list and delete went through the
+    ambient chain — so the RustFS ROOT pair had to stay mounted on `rask-ingest` for the ledger alone.
+    Measured 2026-09-08: it was the last pod in the estate still holding it.
+
+    The ledger lives UNDER the dataset (`<dataset>.lance/_ingest_staging/...`, beside Lance's own
+    `_versions`), so the table-scoped vend already covers it — no second credential and no wider scope.
+
+    NOT MEMOIZED, unlike `_client_for`. That cache is keyed on an endpoint because an endpoint is
+    process-stable; a vended credential expires in 900 s and is re-vended per table, so caching by it
+    would hold a dead client exactly as long as it is wrong.
+
+    ``None`` is the ambient chain unchanged — `mode_b` and the auth-off profile, where no credential is
+    on offer and the ambient one is the deployment's design rather than its failure.
+    """
+    if not storage_options:
+        return _client()
+    from storage import s3_client
+
+    return s3_client(
+        storage_options.get("endpoint") or settings().s3_endpoint_url,
+        access_key=storage_options.get("aws_access_key_id"),
+        secret_key=storage_options.get("aws_secret_access_key"),
+        # WITHOUT THIS AN STS TRIPLE IS NOT A CREDENTIAL. A vended key/secret presented with no session
+        # token is refused by the store on every call, and the failure reads as a bad key rather than a
+        # missing header.
+        session_token=storage_options.get("aws_session_token"),
+        region=storage_options.get("region"),
+    )
+
+
 def _client() -> Any:  # noqa: ANN401 — boto3 client has no public stub; matches `storage.s3_client`
     """The estate's sanctioned S3 wrapper. Never boto3 directly — `packages/storage` owns the
     endpoint/credential resolution that keeps this MinIO/RustFS/AWS-agnostic.
@@ -774,19 +812,19 @@ def _client() -> Any:  # noqa: ANN401 — boto3 client has no public stub; match
     return _client_for(settings().s3_endpoint_url)
 
 
-def _list_object_keys(bucket: str, prefix: str) -> list[str]:
-    paginator = _client().get_paginator("list_objects_v2")
+def _list_object_keys(bucket: str, prefix: str, storage_options: dict[str, str] | None = None) -> list[str]:
+    paginator = _client_for_options(storage_options).get_paginator("list_objects_v2")
     keys: list[str] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix}/"):
         keys.extend(obj["Key"] for obj in page.get("Contents", []) if obj["Key"].endswith(".json"))
     return keys
 
 
-def _read_all(root: str) -> Iterator[str]:
+def _read_all(root: str, storage_options: dict[str, str] | None = None) -> Iterator[str]:
     if _is_object_store(root):
         bucket, prefix = _split(root)
-        client = _client()
-        for key in _list_object_keys(bucket, prefix):
+        client = _client_for_options(storage_options)
+        for key in _list_object_keys(bucket, prefix, storage_options):
             with contextlib.closing(client.get_object(Bucket=bucket, Key=key)["Body"]) as body:
                 yield body.read().decode()
         return

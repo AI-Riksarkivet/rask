@@ -387,7 +387,10 @@ class _OpenBatch:
         # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
         # partially-acked batch committed its units TWICE
         # (`tests/test_partial_ack_duplication.py`). Still one manifest — it is keyed on the set.
-        stage_fragments(self._dataset_uri, self._run_id, [key for key, _ in units], written)
+        # THE SAME CREDENTIAL THE FRAGMENTS WERE WRITTEN WITH, one line above. The ledger lives under
+        # the dataset, so the table-scoped vend already covers it; signing the data scoped and its
+        # manifest with the ambient root key would keep the root credential mounted for the ledger alone.
+        stage_fragments(self._dataset_uri, self._run_id, [key for key, _ in units], written, self._write_options())
         self.outcome.fragments.extend(written)
         self.outcome.units_done += len(units)
         for msg in msgs_to_ack:

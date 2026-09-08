@@ -361,7 +361,7 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
         else:
             from ingest.staging import read_unit_slice
 
-            pairs = read_unit_slice(chunk.dataset_uri, chunk.run_id, chunk.offset, chunk.count)
+            pairs = read_unit_slice(chunk.dataset_uri, chunk.run_id, chunk.offset, chunk.count, ledger_options(chunk.namespace, chunk.dataset))
         # The active span's W3C context, captured ONCE here and carried on every unit, so a run's
         # trace spans api -> workers -> lander. Injected via the propagator rather than reading the
         # span id by hand — that is what keeps the format the W3C `traceparent` the worker's `extract`
@@ -583,7 +583,7 @@ def _fragments_to_commit(uri: str, spec: RunSpec, carried: list[str], *, fallbac
     """
     from ingest.staging import discover_staged
 
-    staged = discover_staged(uri, spec.run_id)
+    staged = discover_staged(uri, spec.run_id, ledger_options(spec.namespace, spec.dataset))
     if not staged and carried:
         # Staging returned nothing while the workflow is holding fragments. That is not the ordinary
         # empty case (no work), it means the staging prefix was unreadable or its manifests were all
@@ -669,7 +669,7 @@ def _finalize_without_fragments(catalog: CatalogSeam, uri: str, spec: RunSpec, e
     # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
     # arrives here with an empty list and would strand its staged bytes with nothing left to
     # collect them.
-    purge_staged(uri, spec.run_id)
+    purge_staged(uri, spec.run_id, ledger_options(spec.namespace, spec.dataset))
     return {
         # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
         # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
@@ -753,7 +753,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
         result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id, read_version=read_version)
     # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
     # turning a recoverable failure into exactly the data loss staging exists to prevent.
-    purge_staged(uri, spec.run_id)
+    purge_staged(uri, spec.run_id, ledger_options(spec.namespace, spec.dataset))
 
     # A COMMIT IS NOT A PUBLICATION (§ D2 D-R1). The rows are now readable, and until the catalog
     # gates this version and advances `published` they are not READY — nothing downstream should act
@@ -850,6 +850,21 @@ def write_options_for(catalog: CatalogSeam, *, namespace: str, dataset: str) -> 
 
     cache = VendedCredentialCache(catalog.vend_storage_options)
     return lambda: cache.storage_options(namespace, dataset)
+
+
+def ledger_options(namespace: str, dataset: str) -> dict[str, str] | None:
+    """The credential the staging LEDGER is signed with — the same table-scoped vend the fragments use.
+
+    The ledger lives under the dataset (`<dataset>.lance/_ingest_staging/...`), so one vend covers both
+    and no second credential or wider scope is needed. Resolved per call rather than held: a vended
+    credential expires in 900 s and a run can outlive it.
+
+    ``None`` — the ambient chain — where no credential is on offer: `LocalCatalog` has no vending door,
+    and a chunk replayed from before this build carries no namespace. Neither is a failure; both are
+    the shapes `write_options_for` already documents.
+    """
+    provider = write_options_for(_catalog(), namespace=namespace, dataset=dataset)
+    return provider() if provider is not None else None
 
 
 def _catalog() -> CatalogSeam:
