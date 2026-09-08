@@ -137,7 +137,11 @@ class TestTheHeadRegistersWhatItSeeds:
         _register_route(409)
         respx.post(f"{CATALOG}/v1/table/bronze$events/describe").mock(return_value=Response(200, json={"location": "s3://somewhere-else/bronze"}))
 
-        assert (await _produce())["status"] == "register_failed"
+        # `location_conflict`, not `register_failed`: both refuse and write nothing, but the ROUTE
+        # answers them differently. A disagreement is PERMANENT — no retry re-points a registration —
+        # so it is 409 with the operator action, where an unreachable catalog stays 503 + Retry-After
+        # (§ Q9-4: the old shared status promised "a convergence no retry can produce").
+        assert (await _produce())["status"] == "location_conflict"
         assert steps == [], "nothing may be written into a tier the catalog governs elsewhere"
 
 

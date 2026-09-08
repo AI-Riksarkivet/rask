@@ -76,6 +76,22 @@ class RegisterError(RuntimeError):
     """
 
 
+class LocationConflictError(RegisterError):
+    """The catalog governs this table at a DIFFERENT location than this writer writes — permanent.
+
+    A SUBCLASS BECAUSE THE DIFFERENCE IS THE STATUS CODE, not the severity. Every caller that catches
+    `RegisterError` keeps catching this; the produce route is the one place that has to tell them apart,
+    because it answers a transient failure `503` + `Retry-After: 5` on the reasoning that "nothing
+    happened and the caller's retry converges". That reasoning is true of an unreachable catalog and
+    FALSE here: no retry re-points a registration, and the remedy this error already names — deregister,
+    then register at the written location — is an operator action, not a wait.
+
+    § Q9-4's words for the old behaviour are exact: "promising a convergence no retry can produce. The
+    next tenant whose catalog and head disagree is 503 again." It is the shape § H10 already cost the
+    estate once — a refusal answered with advice the caller cannot act on.
+    """
+
+
 def credential(
     *,
     token: str | None,
@@ -479,7 +495,7 @@ def _require_same_location(client: httpx.Client, table_id: str, location: str, c
     registered = str((described.json() or {}).get("location") or "")
     expected = f"{catalog_root.rstrip('/')}/{location.lstrip('/')}"
     if registered.rstrip("/") != expected.rstrip("/"):
-        raise RegisterError(
+        raise LocationConflictError(
             f"{table_id!r} is registered at {registered!r} but this writer writes {expected!r} — the catalog governs a different copy of this table. "
             "Re-point the registration (deregister, then register at the written location) rather than letting the two drift."
         )

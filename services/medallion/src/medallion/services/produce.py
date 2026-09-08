@@ -165,6 +165,15 @@ async def produce(
                         dedicated_token=dedicated_token_for(settings),
                     )
                 )
+            except catalog_register.LocationConflictError as exc:
+                # PERMANENT, and told apart from the outage below because the ROUTE answers them
+                # differently. The catalog governs this table somewhere else; no retry re-points a
+                # registration, so answering `503 Retry-After` would promise a convergence that cannot
+                # happen and the same tenant is 503 again forever (§ Q9-4). The detail carries the
+                # operator action the error already names.
+                span.set_status(Status(StatusCode.ERROR, "location_conflict"))
+                log.warning("medallion_produce_location_conflict", extra={"token": token, "dataset": bronze_dataset_id, "error": str(exc)})
+                return {"status": "location_conflict", "token": token, "detail": str(exc)}
             except catalog_register.RegisterError as exc:
                 span.set_status(Status(StatusCode.ERROR, "register_failed"))
                 log.warning("medallion_produce_register_failed", extra={"token": token, "dataset": bronze_dataset_id, "error": str(exc)})

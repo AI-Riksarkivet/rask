@@ -97,6 +97,16 @@ async def produce(
             media_type="application/problem+json",
             content=problem_body(ErrorCode.INVALID_TABLE_STATE, status=409, title="Conflict", detail=str(exc)),
         )
+    if result.get("status") == "location_conflict":
+        # 409, NOT 503 — the same code this route already gives its other permanent conflict
+        # (`UnresolvableProjectError` above), so this is parity with its own contract rather than a new
+        # code. The catalog governs this table at a different location; retrying re-points nothing, and
+        # the detail carries the operator action instead of a Retry-After that cannot help (§ Q9-4).
+        return JSONResponse(
+            status_code=409,
+            media_type="application/problem+json",
+            content=problem_body(ErrorCode.INVALID_TABLE_STATE, status=409, title="Conflict", detail=str(result.get("detail") or "")),
+        )
     if result.get("status") in ("publish_failed", "register_failed"):
         # RFC 9457 problem+json + Retry-After (parity with catalog/lineage errors), not a bare FastAPI 503.
         return JSONResponse(
