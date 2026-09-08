@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 143 open, 89 struck.**
+**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 140 open, 92 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1649,11 +1649,18 @@ turned out to be are § Q16.
 service-only ungoverned projection of the feed gated by `can_observe_events`; `can_be_notified` stays the
 sole disclosure gate.
 
-### G2 · Unbounded producer strings become permanent retry loops — **HIGH**
+### ~~G2 · Unbounded producer strings become permanent retry loops~~ — **STRUCK 2026-09-08: OUT OF SCOPE**
+Owner ruling 2026-09-07 puts notifications outside this drain (lakehouse first, then compute). VERIFIED
+BY LOCATION rather than by the section's title, because § G is where in-scope rows hide: both files it
+names — `notifications/models.py` and `notifications/api/fanout.py` — exist only under
+`services/notifications`. Nothing in it touches catalog, lineage, medallion, maintenance or ingest.
 **Where.** `models.py:122-135`, `fanout.py:164-176`. **Closes it.** `max_length` on delivery fields; a
 permanent outcome for validation faults.
 
-### G3 · Producer `eventTime` is the sort and retention key — **HIGH**
+### ~~G3 · Producer `eventTime` is the sort and retention key~~ — **STRUCK 2026-09-08: OUT OF SCOPE**
+Same ruling and the same check: `notifications/feed.py` and `notifications/inbox_actor.py` exist nowhere
+else. The title says "producer", which is what made this worth READING rather than classifying on the
+word — the producer here is the notifications feed's own writer, not a lakehouse plane.
 **Where.** `feed.py:61-80`, `inbox_actor.py:299-343`. **Closes it.** Service-side `received_at`; cap
 inside `deliver`.
 
@@ -2842,7 +2849,11 @@ everywhere (C4 / §F2-1). **Where.** `maintenance.yaml:123`, `values.yaml:1517`.
 **What.** `packages/ratch` was dissolved 2026-08-28 (`open_ray-kernel.md`) and is absent from `main`; `.docker/ray-cluster.dockerfile` builds from the root lock. The packages sweep audited untracked residue. The one transferable point survives as I5/L: no service may open a governed table with bare pylance outside the catalog's doors.
 ### I2 · Vended credentials cannot pass through any seam — **HIGH** (see C1)
 
-### I3 · Both emit kernels swallow; only the medallion has an outbox — **HIGH** (R10)
+### ~~I3 · Both emit kernels swallow; only the medallion has an outbox~~ — **STRUCK 2026-09-08: A DUPLICATE, AND ITS OTHER HALF IS FIXED**
+This row was never independent — its own body says "MERGED into **Q3-13**", so it counted as open while
+tracking a defect another row owns. Q3-13 stays canonical. The half this title names is also no longer
+true: `ingest` gained the outbox on 2026-09-08 (§ E1, observed live), so the medallion is not the only
+producer that stages.
 
 > MERGED into **Q3-13** — the same defect (two OpenLineage kernels and four RunEvent builders) was tracked here and in the Python-audit ledger under two ids. Q3-13 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.
 
