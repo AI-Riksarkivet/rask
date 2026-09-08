@@ -19,7 +19,7 @@ image:
     openfga: "v1.18.3"
     opentelemetry-collector-contrib: "0.157.0"
     operator: "latest"
-    ray-lance: "wire-32ff50cb"
+    ray-lance: "h14-ce91f68b"
     rustfs: "1.0.0-beta.8"
     web-annotator: "main-90b8d0ed"
     web-compute: "main-90b8d0ed"
