@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 148 open, 84 struck.**
+**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 147 open, 85 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -2353,7 +2353,7 @@ anything is hiding.
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
 
-### H15 · The lag detector probes a CARTESIAN PRODUCT, and 94% of the compliance trail is now false denials — **MEASURED 2026-09-08**
+### ~~H15 · The lag detector probes a CARTESIAN PRODUCT, and 94% of the compliance trail is now false denials~~ — **FIXED AND OBSERVED 2026-09-08** (`e7aa8aff`)
 
 **Found by sweeping the live estate for active failures rather than from a row.** `rask-catalog` was
 logging ~900 error-ish lines every two hours; every one is `catalog.api.fga_deps — access_denied`
@@ -2378,6 +2378,18 @@ in the FGA store while `namespace:vaud1-silver` and `table:vaud1-silver$features
 compliance record; at 94% false denials it cannot serve that purpose — a real refusal is now a needle
 in 2,900 hourly haystacks, and F2-10's whole argument is that this stream is the evidence. The wasted
 FGA checks are the cheaper half.
+
+**OBSERVED ON THE LIVE ESTATE**, built with Dagger (`lance-rest-catalog:h15-e7aa8aff`) and rolled onto
+`rask-medallion-producer`. The report carries the effect, and the catalog's own log is the independent
+witness:
+
+    tick report      edges 261   published 13   unknown 2   failed 1   unmeasurable 0   skipped 245
+    catalog, before  976 x 403 + 64 x 200 in 20 min   (48.8 refusals/min)   1,088 audit records
+    catalog, after   80 x 200, ZERO 403, ZERO access_denied   in 3 min across 5 ticks
+
+The first observation window read UNCHANGED and that was the pin working, not the fix failing: the
+memo needs three consecutive refusals before it skips, the pod had rolled three ticks earlier, and the
+window covered exactly the three LEARNING ticks. Measuring again after them showed the drop.
 
 **Closes it.** The detector must stop asking about cells it can know are absent — enumerate a project's
 real tables once per tick instead of probing the product. NOT by making the catalog distinguish absent
