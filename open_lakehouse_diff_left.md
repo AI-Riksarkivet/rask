@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 146 open, 86 struck.**
+**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 145 open, 87 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -925,7 +925,28 @@ lane; `submit_or_reattach` exists only as library code used in-process by the me
 
 ## E. Lineage (from the lineage sweep)
 
-### E1 · Lost origination events are unrecoverable and invisible — **MEASURED 2026-09-07: ingest is the ONE lossy producer**
+### ~~E1 · Lost origination events are unrecoverable and invisible~~ — **FIXED AND OBSERVED 2026-09-08** (`44c2bb14`, release 111)
+
+**SECOND HALF LANDED AND DRIVEN ON THE LIVE ESTATE.** `LineageRun` routes its three emit sites through
+one place and offers any event the emitter reports UNDELIVERED to an injected hook; ingest stages it to
+the shared outbox. Driven inside the running pod with an emitter that refuses every event, diffing the
+prefix around the call:
+
+    outbox objects  3 -> 4
+    NEW             _lineage_outbox/19073745-…-5997cf790360@START.json
+    content         eventType START · job ingest.run
+
+Keyed by run id AND event type, so a run's COMPLETE cannot truncate its own FAIL. The probe events were
+deleted afterwards — the reconcile cron drains this prefix, and a fake run would have been ingested into
+the authoritative graph. Deleting them also OBSERVED the drain: an object vanished mid-listing, which is
+the relay doing its job and is why the cleanup had to be vanish-tolerant.
+
+**THE HOOK IS INJECTED, NOT BUILT IN.** The other four producers already stage, so a recorder staging on
+their behalf would double-stage and grow an outbox no relay can tell from real backlog. And it cannot
+fail a run at either layer: `LineageRun` contains what the hook raises, and ingest writes nothing when no
+outbox is configured — staging to a guessed prefix nothing drains is a leak wearing recovery's name.
+
+
 **The clause about producers swallowing failures is confirmed, and narrowed to one service.** Four of
 the five lakehouse producers already stage durably through the shared object-store outbox
 (`service_kit.lakehouse.outbox` — `stage_event` / `drop_event` / `resolve_event`, "stage → publish →
