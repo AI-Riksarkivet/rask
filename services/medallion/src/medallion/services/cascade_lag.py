@@ -208,6 +208,65 @@ class LagTickReport(BaseModel):
     unknown: int
     failed: int
     unmeasurable: int = 0
+    #: Cells NOT asked about this tick because :class:`AbsentEdgeMemo` has seen them refuse
+    #: repeatedly. Counted rather than silent for the same reason `unmeasurable` is separate from
+    #: `failed`: a detector that quietly stops asking looks exactly like one with nothing to report.
+    skipped: int = 0
+
+
+class AbsentEdgeMemo:
+    """Remembers which (edge, project) cells keep answering "not visible", so they stop being ASKED.
+
+    WHY ASKING COSTS ANYTHING. `declared_edges` is a cartesian product — every declared lane x every
+    project in the warehouse registry — and most tenants do not run most lanes, so a large fraction of
+    the cells name a table nobody created. Measured on the live estate 2026-09-08: 1,464 refusals to
+    96 answers over thirty minutes, ~2,900 an hour. Each refusal is correct on both sides and each
+    writes a `lance.audit` `access_denied` record, so the #41 compliance trail became mostly false
+    denials and a real refusal is a needle in them.
+
+    THE FAILURE THIS MUST NOT BECOME. This module's doctrine is that a cascade nobody measures is
+    indistinguishable from a cascade with no lag. A memo that learns "absent" once and never looks
+    again trades audit noise for silent blindness, which is strictly worse — so it is deliberately
+    forgetful in two directions:
+
+      * it takes ``MISSES_BEFORE_SKIP`` CONSECUTIVE refusals before skipping, so a tenant mid-
+        onboarding or a catalog blip cannot cost a lane its series; and
+      * it re-probes EVERYTHING every ``TICKS_BEFORE_REPROBE`` ticks, so a lane created after the memo
+        learned about it is picked up rather than lost forever.
+
+    Injected, never global: a detector's memory is state, and state a caller cannot see or reset is
+    what makes a wrong one impossible to diagnose. `LagTickReport.skipped` reports its effect.
+    """
+
+    #: Consecutive refusals before a cell is skipped. One is not evidence; three across three ticks is.
+    MISSES_BEFORE_SKIP = 3
+    #: Ticks between full re-probes. Bounds how long a newly-created lane can go unmeasured.
+    TICKS_BEFORE_REPROBE = 20
+
+    def __init__(self) -> None:
+        self._misses: dict[tuple[str, str], int] = {}
+        self._ticks = 0
+
+    def begin_tick(self) -> None:
+        """Advance the tick counter, clearing the memo when a full re-probe is due."""
+        self._ticks += 1
+        if self._ticks >= self.TICKS_BEFORE_REPROBE:
+            self.reset()
+
+    def reset(self) -> None:
+        """Forget everything — the next tick asks about every cell again."""
+        self._misses.clear()
+        self._ticks = 0
+
+    def should_skip(self, cell: tuple[str, str]) -> bool:
+        return self._misses.get(cell, 0) >= self.MISSES_BEFORE_SKIP
+
+    def record_absent(self, cell: tuple[str, str]) -> None:
+        self._misses[cell] = self._misses.get(cell, 0) + 1
+
+    def record_present(self, cell: tuple[str, str]) -> None:
+        """A cell that answered is back in the normal population immediately."""
+        self._misses.pop(cell, None)
 
 
 #: Reads the source's published version for one edge. Raising is expected and contained per edge.
@@ -225,6 +284,7 @@ def run_lag_tick(
     published: PublishedReader,
     consumed: ConsumedReader,
     gauge: LagGauge,
+    memo: AbsentEdgeMemo | None = None,
 ) -> LagTickReport:
     """Measure every declared edge, publish what is known, and report what was not.
 
@@ -241,13 +301,24 @@ def run_lag_tick(
     which takes an advisory lock because it WRITES.
     """
     report = LagTickReport(edges=len(edges), published_points=0, unknown=0, failed=0)
+    if memo is not None:
+        memo.begin_tick()
     for edge, project in edges:
+        cell = (edge, project)
+        if memo is not None and memo.should_skip(cell):
+            # NOT ASKED, and that is the whole change: the probe itself is what writes a false
+            # `access_denied` into the compliance trail, so declining to issue it is the only thing
+            # that removes the record. Counted, never silent — the memo re-probes on its own schedule.
+            report.skipped += 1
+            continue
         try:
             lag = lag_for_edge(edge=edge, project=project, published=published(edge, project), consumed=consumed(edge, project))
         except EdgeNotMeasurable:
             # No log line: this is a steady state, not an event, and one line per invisible edge per
             # tick is the shape that buried every other service's errors once already.
             report.unmeasurable += 1
+            if memo is not None:
+                memo.record_absent(cell)
             continue
         except Exception as exc:  # noqa: BLE001 — one edge's read must never end the tick
             log.warning("cascade_lag_edge_unreadable", extra={"edge": edge, "project": project, "error": str(exc)})
@@ -256,10 +327,19 @@ def run_lag_tick(
         if not lag.known:
             report.unknown += 1
             continue
+        if memo is not None:
+            memo.record_present(cell)
         record_edge_lag(lag, gauge=gauge)
         report.published_points += 1
     log.info(
         "cascade_lag_tick",
-        extra={"edges": report.edges, "published": report.published_points, "unknown": report.unknown, "failed": report.failed},
+        extra={
+            "edges": report.edges,
+            "published": report.published_points,
+            "unknown": report.unknown,
+            "failed": report.failed,
+            "unmeasurable": report.unmeasurable,
+            "skipped": report.skipped,
+        },
     )
     return report

@@ -32,11 +32,11 @@ from starlette.concurrency import run_in_threadpool
 
 from medallion.api.dependencies import SettingsDep
 from medallion.core.metrics import cascade_lag_gauge
-from medallion.services.cascade_lag import LagTickReport, run_lag_tick
+from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, run_lag_tick
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
-async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dapr_token)]) -> LagTickReport:
+async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dapr_token)], memo: AbsentEdgeMemo | None = None) -> LagTickReport:
     """One lag tick.
 
     Guarded by the Dapr app token so only the sidecar's cron may drive it: unauthenticated, anything
@@ -63,6 +63,7 @@ async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dap
             published=published_reader(settings),
             consumed=consumed_reader(settings),
             gauge=cascade_lag_gauge(),
+            memo=memo,
         )
     )
 
@@ -73,9 +74,20 @@ async def _ack_binding() -> dict[str, str]:
 
 
 def build_lag_cron_router(binding_name: str) -> APIRouter:
-    """A FACTORY, not a module-level router: the path is the binding NAME, known only at wiring time."""
+    """A FACTORY, not a module-level router: the path is the binding NAME, known only at wiring time.
+
+    THE MEMO LIVES IN THIS CLOSURE, which is the narrowest scope that outlives one tick. A detector's
+    memory is state, and the alternatives are worse in both directions: a module global is shared by
+    every app a test builds (so one test's ticks teach another's memo), and rebuilding it per request
+    would mean it never remembers anything and the probe storm it exists to stop never stops.
+    """
     router = APIRouter()
-    router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["cascade-lag"])
+    memo = AbsentEdgeMemo()
+
+    async def _tick(settings: SettingsDep, guard: Annotated[None, Depends(require_dapr_token)]) -> LagTickReport:
+        return await _on_cron(settings, guard, memo=memo)
+
+    router.add_api_route(f"/{binding_name}", _tick, methods=["POST"], tags=["cascade-lag"])
     router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
     return router
 
