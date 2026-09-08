@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 225 tracked, 144 open, 81 struck.**
-That splits into 62 lettered rows (49 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 226 tracked, 145 open, 81 struck.**
+That splits into 63 lettered rows (50 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1780,6 +1780,49 @@ ingestion. Measure which paths use ambient credentials, then scope to those plus
 
 **NOT a reason to delay the outbox identity**: an additional narrow credential used only for staging is
 safe now and independent of the data-path question.
+
+### H9 · 43 secrets reach workloads through env — the estate-wide size of the zero-trust goal — **HIGH**
+**MEASURED ON THE LIVE CLUSTER 2026-09-08**, against the running Deployments and StatefulSets rather
+than the chart, because `envFrom` is invisible to a survey of `env:` and that error was made twice this
+day. Owner ruling: *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
+trust"*, and *"Zero trust is the goal"*.
+
+    A) whole Secret via envFrom        6 workloads
+       rask-{compute,flows,gateway,ingest,notifications} <- rask-app (RustFS ROOT AWS_* pair)
+       rask-greptimedb-standalone      <- rask-observability-s3
+    B) secret KEYS via env valueFrom  26 workloads, 43 key references
+
+    APP_API_TOKEN          x10     LINEAGE_SERVICE_TOKEN   x8
+    OIDC_CLIENT_SECRET      x7     SESSION_SECRET          x7
+    MEDIA_S3_ACCESS_KEY_ID  x3     AWS_ACCESS_KEY_ID/SECRET, S3_SECRET, JWT_SECRET,
+                                   POSTGRES_PASSWORD, DAPRSTATE_PASSWORD, OPENFGA_DATASTORE_URI x1 each
+
+**THE COUNT IS NOT THE FINDING — the SORT is**, and each class has a different sanctioned answer, so
+"43 violations" would be the wrong summary:
+
+  * **14 belong to the seven web zones** (`OIDC_CLIENT_SECRET` + `SESSION_SECRET`, and a third each).
+    Those pods have NO Dapr sidecar and cannot call `/v1.0/secrets/*`, so **ESO** is their path — not a
+    violation to be argued away, a migration with a named destination. `ray-lance-head` (2) is the same
+    case.
+  * **~5 are STORAGE credentials** — `MEDIA_S3_ACCESS_KEY_ID` x3, the `AWS_*` pair, `S3_SECRET`. These
+    are the **STS** cases: `vending.build_session_policy` already scopes by bucket + prefix at a 900 s
+    TTL, so a long-lived key here is the shape § H8 exists to remove.
+  * **`APP_API_TOKEN` x10 is a BOOTSTRAP credential and needs its own answer.** daprd itself reads it
+    via `dapr.io/app-token-secret` before the app runs, so it cannot come from the store the sidecar
+    has not started yet. That is a chicken-and-egg case, not laziness — but it must be RECORDED as an
+    accepted exception rather than counted as compliance.
+  * **The rest sit on pods that DO have a sidecar** (`LINEAGE_SERVICE_TOKEN` x8, the database
+    passwords) and are the straightforward **Dapr secret store** migrations.
+
+**AND A REF IS NOT ALWAYS A SOURCE.** Several lakehouse services call `apply_dapr_secrets(settings)` at
+boot and fail closed, so their rendered env value is a placeholder the store overwrites — measured
+indirectly: a fresh `python -c` inside `rask-maintenance` read an EMPTY `s3_secret_access_key` while the
+running app held a working one. **Before migrating any single row here, check whether the store already
+wins**; counting refs would otherwise report a service as non-compliant that is already correct.
+
+**Closes it.** A per-class migration, in blast-radius order: the storage credentials to STS first (they
+are the widest authority), then the sidecar-bearing service tokens to the Dapr store, then the zones to
+ESO. The `APP_API_TOKEN` exception written down where the render can point at it.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
