@@ -1821,7 +1821,38 @@ exists to insist on. All four report READY 1/1 afterwards, the gateway answers `
 ROOT `AWS_*` pair and the `HF_TOKEN` are gone from four of the five services that held them**, and
 nothing needed them: the import check is why that was safe to assert in advance.
 
-**INGEST REMAINS, and it is the half with real work left.** The shared `rask-app`
+**INGEST REMAINS, and its BLOCKER was removed 2026-09-08 (`06f0ab21`) — the machinery existed and
+could not be aimed.** `resolve_source_connection` short-circuited before consulting the registry:
+
+    if not declared or declared == normalise_endpoint(configured_endpoint()):
+        return SourceConnection()      # ambient env; `store_for_endpoint` never called
+
+Every measured read target is an ESTATE bucket on the deployment's OWN endpoint, so case 1 took every
+read and case 2's Dapr-secret-store path was unreachable for all of them. **No operator action could
+narrow ingest's reads** — registering a store did nothing, because the lookup never happened. A second
+spelling problem sat behind it: a store on the default endpoint is written `endpoint: None`, so an
+endpoint-equality lookup for the default could not have matched it even if reached.
+
+Both are fixed. `_own_store_for` accepts either spelling, still requires an exact bucket match, and
+**counts only a store that declares a `secret`** — a store without one means "shares the deployment's
+credentials", which is the ambient answer already. That last clause is what keeps the change INERT
+until an operator aims it, and it is not hypothetical: `DEFAULT_STORES` ships exactly such an entry for
+`lance-catalog`, so without it the estate's own warehouse took the new path immediately (caught by
+`test_no_declared_endpoint_still_uses_the_estate_default`).
+
+The seam had NO tests before this. Three now, in
+`services/ingest/tests/test_the_source_read_can_use_a_registered_identity.py`.
+
+**SO WHAT IS LEFT IS CONFIGURATION, NOT MACHINERY:** register the source buckets as stores with a
+`secret` naming a scoped identity in the Dapr store, and ingest's reads stop using the ambient root
+pair — at which point `rask-app` can be withheld from `rask-ingest` too, the way it already is from the
+other four. Which buckets and which identity is the operator's decision, and the credential is then
+delivered by a sanctioned path (Dapr secret store) rather than env.
+
+**NOT YET OBSERVED END TO END, and the reason is stated rather than glossed:** `rask-ingest` is idle on
+this estate (9,307 log lines in 24 h, essentially all health checks, no unit or source-read activity),
+so there is no live read to watch take the new path. The change is proven by test and by the code it
+removes; the live proof arrives with the first run after a store is registered. The shared `rask-app`
 Secret carries exactly four keys — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `HCP_ENDPOINT`,
 `HF_TOKEN` — and `gateway`, `notifications`, `compute` and `flows` construct **no S3 client at all**:
 zero imports of `lance`, `pyarrow`, `boto3`, `storage` or any `service_kit.lakehouse` storage module
