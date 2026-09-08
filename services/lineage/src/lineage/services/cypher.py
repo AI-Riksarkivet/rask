@@ -259,11 +259,23 @@ PRUNE_BATCH_SIZE: Final = 500
 # READ/WROTE ONLY, and the omission is the safety. A dataset that a User CREATED but no run has touched
 # is a declared table, not residue: dropping it would erase the record that someone made it. `MATCH`ing
 # the two run edges asks "has anything ever happened here", which is the question a lineage graph is for.
-COUNT_ORPHAN_DATASETS: Final = "MATCH (d:Dataset) WHERE NOT (d)<-[:READ]-(:Run) AND NOT (d)<-[:WROTE]-(:Run) AND NOT (d)<-[:CREATED]-(:User) RETURN count(d)"
-# Batched for the reason `PRUNE_OLD_RUNS_TEMPLATE` is, and with the same literal-LIMIT constraint.
-PRUNE_ORPHAN_DATASETS_TEMPLATE: Final = (
-    "MATCH (d:Dataset) WHERE NOT (d)<-[:READ]-(:Run) AND NOT (d)<-[:WROTE]-(:Run) AND NOT (d)<-[:CREATED]-(:User) WITH d LIMIT {limit} DETACH DELETE d"
+# AGE 1.5.0 REJECTS A NEGATED PATTERN PREDICATE, and this was written with one first. `WHERE NOT
+# (d)<-[:WROTE]-(:Run)` is a syntax error at the `:` — reported by the server, by no test: the pins
+# assert on the query STRING and never execute it, so the suite stayed green and the deployed prune
+# failed on its first live tick (`lineage_dataset_prune_failed`, 2026-09-08). The OPTIONAL MATCH +
+# count form below was PROVED against the running database before it was written here, and found 117
+# orphans on the estate that the negated form could not even parse.
+_ORPHAN_DATASETS: Final = (
+    "MATCH (d:Dataset) "
+    "OPTIONAL MATCH (d)<-[w:WROTE]-() "
+    "OPTIONAL MATCH (d)<-[r:READ]-() "
+    "OPTIONAL MATCH (d)<-[c:CREATED]-() "
+    "WITH d, count(w) AS nw, count(r) AS nr, count(c) AS nc "
+    "WHERE nw = 0 AND nr = 0 AND nc = 0 "
 )
+COUNT_ORPHAN_DATASETS: Final = _ORPHAN_DATASETS + "RETURN count(d)"
+# Batched for the reason `PRUNE_OLD_RUNS_TEMPLATE` is, and with the same literal-LIMIT constraint.
+PRUNE_ORPHAN_DATASETS_TEMPLATE: Final = _ORPHAN_DATASETS + "WITH d LIMIT {limit} DETACH DELETE d"
 # The per-version column schema rides the same WROTE edge as the version (#24 prerequisite). Stored as
 # a JSON **string** scalar — params are JSON-encoded and ``_parse`` json.loads each cell, so a scalar
 # round-trips cleanly; an array-in-SET is the risky path AGE 1.5.0 mishandles (same reason tags are a
