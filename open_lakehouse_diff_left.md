@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 224 tracked, 144 open, 80 struck.**
-That splits into 61 lettered rows (49 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 224 tracked, 143 open, 81 struck.**
+That splits into 61 lettered rows (48 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -956,8 +956,12 @@ So closing E1's second half means one of:
   * **accept the residual** and ship the reporting half alone, which covers both recorded incidents
     (each was a refused door, not a crash) and leaves the crash window open.
 
-That is a credential decision with a security dimension, not a refactor, so it is recorded rather than
-guessed at. The first option is the one that fits the estate's direction.
+**OWNER RULING 2026-09-08: ZERO TRUST — the first option.** `ingest` gets its OWN service identity,
+scoped to the outbox prefix and nothing else. That rules out staging through the catalog (which would
+borrow another service's authority for a path that exists precisely for when a service is unreachable)
+and rules out accepting the residual. The policy is the narrowest in the estate: `PutObject` +
+`DeleteObject` under `<root>/_lineage_outbox/`, no read of governed data, no other prefix. It is F2-1's
+shape and makes `ingest` the second named identity after the medallion plane.
 
 **Not attempted here** because it changes a SHARED package every producer emits through, and wants the
 live verification its shape deserves: drive a real ingest run with the lineage door refusing, confirm
@@ -1015,6 +1019,14 @@ blast radius, and the alternatives are not equivalent:
     sweep's authority then matches what the sweep actually does;
   * authorize on `dapr-caller-app-id` instead of the stamped author — which § F2-5 measured as not
     armable yet: the estate invokes over THREE planes and the actor plane is uncharacterised.
+
+**OWNER RULING 2026-09-08: ZERO TRUST — the second option.** A `can_maintain` relation that
+`can_write_data` does not imply, so the sweep's authority matches what a sweep actually does (rewrite
+files in place, reclaim versions) and stops short of what a writer may do (change what the data SAYS).
+Granting `writer` estate-wide was rejected: it is the widest write grant in the estate and would make
+one compromised sweep equivalent to compromising every table. The bus gate then authorizes
+`can_maintain` for a maintenance-authored run and `can_write_data` for a data-authored one — the
+relation follows the operation, not the caller.
 
 **THE REMAINING 146 WERE TRACED, and they are not a second producer gap.** The 79 carrying no producer
 either break down as: 66 `lance-catalog/create_table|drop_table` runs stamped
@@ -1671,42 +1683,31 @@ control event only if a person should hear it.
 
 **Where.** `routes.py:80`, `sweep.py:486-524`, `endpoints/maintenance.py:39-56`.
 
-### H7 · Every per-warehouse bucket is outside the sweep, and the control that would include them is empty — **HIGH**
-**MEASURED 2026-09-08 on the deployed estate.** The maintenance sweep's bucket list and the estate's
-actual buckets have nothing in common:
+### ~~H7 · Every per-warehouse bucket is outside the sweep~~ — **REFUTED 2026-09-08, BY THE TRAP IT WAS ABOUT**
+**The claim was wrong and the way it was wrong is the point.** I measured `settings.sweep_buckets`
+(`['lance-catalog']`) and `MAINTENANCE_S3_EXTRA_BUCKETS` (empty) against the catalog's 92 registered
+warehouse buckets and concluded no governed bucket was maintained. Both readings are accurate. The
+conclusion is false.
 
-    catalog /v1/warehouses          92 active warehouses, 92 DISTINCT buckets
-    `lance-catalog` among them?     NO
-    deployed sweep_buckets          ['lance-catalog']
-    MAINTENANCE_S3_EXTRA_BUCKETS    rendered with NO value
+**`sweep.py::_buckets_to_sweep` ALREADY derives the set from the registry at run time** — item #81, whose
+docstring describes this exact leak and closes it: *"``sweep_buckets`` is the primary bucket plus a
+static env var — but a per-warehouse bucket is created by an API CALL at runtime, so every tenant
+provisioned since the last config edit was invisible."* It reads
+`warehouse_records.list_warehouse_records(...)`, takes `maintainable_buckets(...)`, and extends. An
+unreadable registry degrades to the configured list and says so.
 
-So **no governed warehouse bucket is compacted, index-optimised or version-reclaimed at all** — the
-sweep maintains one bucket that is not any registered warehouse.
+**Measured where the value LANDS, which is what I failed to do first time.** One sweep tick's own log:
 
-**THE ESTATE ALREADY DIAGNOSED THIS EXACT LEAK AND THE FIX DID NOT HOLD.** `config.py`'s own comment
-records the 2026-07-14 audit: *"The sweep discovered exactly ONE bucket, so every #3-A per-warehouse
-bucket and #3-B multi-base data bucket was INVISIBLE to GC: their tables accumulated superseded
-manifest versions and small fragments FOREVER. A storage leak introduced by the very features that
-create new buckets."* `s3_extra_buckets` was the fix, and `chart/templates/maintenance.yaml:243` states
-the part that cannot hold: *"Per-warehouse (#3-A) buckets are provisioned at RUNTIME, so they are
-appended by the operator as tenants are onboarded."*
+    compaction_bucket_discovered × 93        = 92 warehouses + lance-catalog
 
-**A MANUAL STEP PER TENANT, IN A PLANE THAT MINTS TENANTS THROUGH AN API.** The chart derives `$extra`
-from `medallion.buckets` and `catalog.multibase.dataBases` — both static values — and leaves the runtime
-set to a human. 92 onboarded, 0 appended. This is the estate's own recurring pattern with a third
-variant: the control's NAME exists, its CONFIGURATION exists, and the value never lands because nothing
-puts it there.
+The static config is the FLOOR, not the list. `MAINTENANCE_S3_EXTRA_BUCKETS` being empty is correct by
+design: the registry supplies the rest, and the env var carries only what the registry cannot know.
 
-**AND NOTHING REPORTS IT.** `orphan_buckets` flags buckets no warehouse record claims; these are claimed
-by warehouses, so they are not orphans. The sweep reports `checked: N` for the one bucket it walks and a
-clean run "certifies the estate" — over 1/93 of it.
-
-**Closes it.** Derive the sweep's bucket set from the WAREHOUSE REGISTRY at run time instead of from a
-static env var, the way the policy registry is already read from the control root — a set that grows
-when a tenant is onboarded and needs nobody to remember. `s3_extra_buckets` then keeps only what the
-registry cannot know (multi-base data buckets). The second half is the CREDENTIAL: maintenance holds a
-scoped identity (F2-1), so reaching 92 new buckets is a policy change, not only a list change — and
-that half is an owner decision of the same shape as E1's.
+**THIS IS THE ESTATE'S OWN PATTERN, AND IT CAUGHT ME.** `open_goal.md` states it in the words that
+describe this mistake exactly: *"a control's NAME is not evidence that it exists — and neither is its
+CONFIGURATION"*, and *"when a measurement is a COUNT, ask what surface the count could see."* I read two
+settings and never asked what the sweep computed from them. Logged here rather than quietly deleted
+because a register that shows only its correct findings teaches nothing about how the wrong ones happen.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
