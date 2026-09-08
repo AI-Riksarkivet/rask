@@ -2141,8 +2141,8 @@ so the depth gaps are not the binding constraint on the purge.
 **MEASURED LIVE 2026-09-08** on `h11-24483c84`, from one sweep tick driven through `POST
 /maintenance-cron` (`planned 440, published 440`):
 
-    compaction_base_probe_failed         69   every one on key `models/_versions`
-    maintenance_refused_protected_base  220   of 440 dataset outcomes
+    compaction_base_probe_failed         69   every one on key `models/_versions`, 69 DISTINCT datasets
+    maintenance_refused_protected_base  220   of 440 — a DIFFERENT guard, see the conflation note below
     403 Forbidden on /credentials?tier=write  184
 
 The chain is visible in three consecutive log lines:
@@ -2160,11 +2160,18 @@ lies OUTSIDE that table's prefix. The scoped credential cannot HeadObject it, ev
 ladder treats unknown as refuse — correctly, since rewriting a base a live clone resolves through is
 the data-loss shape the whole ladder exists to prevent.
 
-**So the safe answer and the scoped answer compose into a permanent stall.** 69 of the tick's 220
-refusals are not "a clone protects this dataset" but "we were not allowed to ask", and no retry, policy
-or grace window changes that: the credential is scoped by construction and the base path is outside it.
-Silent — one WARNING per dataset per tick, nothing red, no report field, and `maintenance_dataset_outcome`
+**So the safe answer and the scoped answer compose into a permanent stall.** No retry, policy or grace
+window changes it: the credential is scoped by construction and the base path is outside it. Silent —
+one WARNING per dataset per tick, nothing red, no report field, and `maintenance_dataset_outcome`
 records the refusal as an ordinary outcome.
+
+**A CONFLATION THIS ROW MADE AND THE ESTATE CORRECTED.** It first said "69 of the tick's 220 refusals"
+are the denied probes. They are not the same population and not even the same guard:
+`maintenance_refused_protected_base` (220) is `base_refs.protected_roots` — the estate-wide pre-pass
+that refuses a dataset because ANOTHER dataset resolves its files through it, the clone-SOURCE hazard —
+while the denied probes feed the flag-16 ladder in `describe_compaction_unsupported_flags`, which
+carries its refusal in the result rather than in a log line of its own. The 220 were never affected by
+the credential's scope, and they did not move when it changed.
 
 **THIS IS THE § H10 SHAPE ON THE SWEEP SIDE.** A permanent condition, correctly refused, consumed by a
 gate that assumes the condition is transient.
@@ -2217,6 +2224,20 @@ Verified on the deployed `lance-rest-catalog:h12-bddc415b` against the estate's 
 **THE VERDICT IS DELIBERATELY UNCHANGED.** `_base_paths_compaction_refusal` fails closed with its
 asymmetry measured — a wrong permit destroys the reason a clone exists — and a denial is no more
 evidence about the base than an outage is. Only the instruction changed.
+
+**THE REMEDY LANDED VIA § C1 AND THE PROBE NOW ANSWERS.** `lance-rest-catalog:c1-ec10c48f` deployed to
+BOTH `rask-catalog` (which vends) and `rask-maintenance` (which asks), then a sweep driven through its
+own door:
+
+    before (h12-bddc415b)   probe_failed 69   outcomes 440
+    after  (c1-ec10c48f)    probe_failed  0   outcomes 440
+
+**WHAT THAT PROVES, AND WHAT IT DOES NOT.** It proves the vended credential can now read the bases its
+table declares — the question the maintainer is required to ask before rewriting is answerable again.
+It does NOT prove 69 compactions now proceed: the flag-16 ladder weighs three readings and the probe is
+one, `compact_refusal` is carried in the result rather than logged, and the 220 protected-root refusals
+are a separate guard that did not move. Proving the compactions would mean reading the per-dataset
+results, and it is not claimed here on the strength of a probe count.
 
 **THE REMEDY IS § C1's REMAINING CLAUSE, and it is narrower than "widen the scope".** C1 already
 records the direction for exactly this collision — its own docstring states the stake, *"the STS session
