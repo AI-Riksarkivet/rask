@@ -1796,9 +1796,21 @@ convenience.**
     **So ingest's root credential exists to read estate buckets it was never scoped to**, not to reach
     the outside world. That is the tractable shape: the catalog can vend a READ credential per source
     location exactly as it already vends the write one, and `build_session_policy` already scopes by
-    bucket + prefix. The dev/non-catalog path (`write_options_for` returning `None`) is the other
-    consumer and should REFUSE rather than fall back, on the same rule as every other credential in
-    this estate.
+    bucket + prefix.
+
+    **AND THE WRITE PATH'S TWO FALLBACKS ARE BOTH REASONED, so this row does not touch them** — read
+    2026-09-08 rather than assumed from the `None` return. `write_options_for` degrades to the ambient
+    credential in exactly two cases, each documented at the site: the seam **cannot vend**
+    (`LocalCatalog`, the no-catalog dev shape, which has no vending door and would RAISE if asked), and
+    the chunk **names no namespace** (`workflow.py:327` defaults it empty on purpose — Dapr replays a
+    chunk enqueued by the PREVIOUS build verbatim, so a required field would fail every in-flight run
+    at the moment of deploy). Neither is a standing production path: the deployed seam is
+    `CatalogServiceClient`, and the second is a transient window across one deploy boundary.
+
+    **So ingest's PRODUCTION writes never sign with the root credential, and its only standing use is
+    the source read.** Removing the credential therefore needs the read path moved to a vended
+    credential and dev mode allowed to refuse — not a rewrite of the write path, which was the shape
+    this row implied three measurements ago.
   * **ingest's outbox — STS too, and the machinery already exists.** `catalog.core.vending.build_session_policy`
     scopes an inline session policy by BUCKET + PREFIX (`s3:ListBucket` gated on an `s3:prefix`
     condition, object actions on `bucket/<prefix>/*`) with a 900 s TTL, and ingest already consumes
