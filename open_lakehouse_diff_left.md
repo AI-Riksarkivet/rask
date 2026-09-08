@@ -2280,7 +2280,13 @@ dedicated credential. So the job claims one subject and presents another's key, 
 credential and the door will not fall back. **The two halves of the pair are provisioned by different
 mechanisms that nothing reconciles.**
 
-**DEFECT 2 — three subjects are PRIVILEGED but not ALLOWED, which is unusable by construction.**
+**DEFECT 2 — three subjects are PRIVILEGED but not ALLOWED. LATENT, NOT LIVE, and this row first
+implied otherwise.** The 403 quoted above for `service-bronze-to-silver` was MY OWN PROBE, not estate
+traffic — checked afterwards: the stage-runner pods carry NO lineage variables at all (0 of
+`LINEAGE_SERVICE_ID`/`LINEAGE_URL` on all three), so nothing in the estate presents a stage identity
+today. The inconsistency is real and would bite the moment one did; it is not breaking anything now,
+and citing a self-inflicted 403 as evidence of live breakage is the error this register exists to
+avoid.
 
     LINEAGE_SERVICE_SUBJECTS     notifications, service-ingest, service-medallion-producer, service-trainer, service-web
     LINEAGE_PRIVILEGED_SUBJECTS  service-bronze-to-silver, service-ingest, service-medallion-producer,
@@ -2297,6 +2303,20 @@ while the job went on publishing its model and exiting SUCCEEDED"*. The trainer'
 provisioning its dedicated token; the cascade's was not, and the estate has been serving the identical
 401 for the cascade ever since. Ray-lane stage runs write their data and lose their provenance, and
 every surface reports success.
+
+**A THIRD LIVE REFUSAL, found by the same pass and NOT the service door at all: 44 x 403 on
+`GET /datasets/advref31-gold$catalog/producers` from `rask-medallion-producer` — the CASCADE-LAG
+DETECTOR.** That route is gated on `can_get_metadata`, so this is an FGA denial: the producer holds the
+service-door rung (it is in `LINEAGE_SERVICE_SUBJECTS`) and lacks the AUTHORIZATION rung on the dataset
+it must read. `services.yaml` already records what that costs, for the neighbouring case: *"the
+detector then publishes NO POINT for any edge. That failure is silent by construction — a reader that
+cannot read reports `known=False`, which publishes nothing and looks exactly like a healthy cascade."*
+The allowlist entry was added so it could fail loudly; the FGA rung was not, so it fails silently one
+layer further in.
+
+**So the live tally on this one service is three independent silent refusals:** 2,627 x 401 on the
+zone's `/events` poll (§ E7), 34 x 401 on Ray-lane emits (Defect 1), and 44 x 403 on the lag detector's
+reads. Each renders as absence rather than error, and absence is what a healthy estate looks like.
 
 **Closes it.** Provision a dedicated credential for every subject in `LINEAGE_PRIVILEGED_SUBJECTS`, and
 make the two lists agree — a privileged subject that is not an allowed one is a configuration error
