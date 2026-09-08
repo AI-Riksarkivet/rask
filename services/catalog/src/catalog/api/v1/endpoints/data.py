@@ -50,8 +50,9 @@ from catalog.schemas import (
     CompactionCommitResponse,
     CompactionPlanRequest,
     CompactionPlanResponse,
+    TableChangesRequest,
 )
-from catalog.services import blob_serving, dataplane, native, table_create
+from catalog.services import blob_serving, changes, dataplane, native, table_create
 from service_kit.governed.audit import audit_read
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
@@ -598,6 +599,25 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 # method it happened to register last — so the generated OpenAPI flipped between `_get` and
 # `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
+@router.post("/{id}/changes")
+def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+    """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
+
+    Composes the predicate `lance_docs/file_format.md:4270-4300` documents and delegates to the SAME
+    scan the query door uses, rather than opening a second read path: a feed that answered from
+    different machinery than `query` would drift from it exactly where a consumer could not see.
+
+    A CHANGE FEED IS A READ, which settles both policy questions. It is gated like one — the router
+    guard that admits `query` admits this — and audited like one (§ J1), because following every row a
+    table ever received is the most disclosing read available, not a metadata lookup.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    predicate = changes.change_filter(begin_version=body.begin_version, end_version=body.end_version, kind=body.kind)
+    data = dataplane.read_changes(ns, so, segments, predicate=predicate, columns=body.columns, branch=body.branch)
+    audit_read(subject=_reader(token), resource=id, version=body.end_version, columns=body.columns, change_kind=body.kind)
+    return Response(content=data, media_type=ARROW_FILE)
+
+
 @router.post("/{id}/count_rows", operation_id="count_table_rows")
 @router.get("/{id}/count_rows", operation_id="count_table_rows_compat_get")
 def count_table_rows(

@@ -18,6 +18,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
+from catalog.services.changes import ChangeKind
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.user_state import UserStateDocument
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
@@ -1233,3 +1234,22 @@ class DeleteProjectResponse(BaseModel):
 
     project: str
     tuples_revoked: int
+
+
+class TableChangesRequest(BaseModel):
+    """What a consumer asks for when following a table (§ J4).
+
+    NOT a spec model — the Lance Namespace spec has no change-feed op — so it is declared here rather
+    than imported. That makes this a NON-SPEC route on a spec-conformant surface, which § B2 is already
+    carving out (25 route groups); this is a deliberate 26th, placed with `query`/`count_rows`/`blobs`
+    because a change feed is a DATA-PLANE read, not a management operation. When B2 carves, it moves
+    with the data doors, not with the admin ones.
+    """
+
+    begin_version: int
+    end_version: int | None = None
+    kind: ChangeKind = "inserted"
+    columns: list[str] | None = None
+    #: Honoured like every other read door's: a branch-scoped feed that answered from main would report
+    #: changes for a dataset the caller did not ask about — the defect `count_rows` already paid for.
+    branch: str | None = None

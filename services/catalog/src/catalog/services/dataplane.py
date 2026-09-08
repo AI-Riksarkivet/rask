@@ -1352,6 +1352,38 @@ def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColu
     return AlterTableDropColumnsResponse(version=dataset.version)
 
 
+def read_changes(
+    ns: LanceNamespace,
+    so: StorageOptions,
+    table_id: list[str],
+    *,
+    predicate: str,
+    columns: list[str] | None = None,
+    branch: str | None = None,
+) -> bytes:
+    """Rows matching a change-feed predicate, Arrow FILE-framed (§ J4).
+
+    Its own scan rather than the query door's, because `QueryTableRequest` is a VECTOR model — `k` and
+    `vector` are required — so reusing it would mean inventing a vector to ask a question that has
+    nothing to do with similarity.
+
+    FILE FRAMING, not stream: this answers `application/vnd.apache.arrow.file`, matching the query
+    door, and a consumer reading one framing as the other fails at the first batch rather than
+    degrading. `encode_arrow_stream` is the sibling for the stream doors and is deliberately not reused.
+
+    The predicate comes from `services/changes.py`, which owns the two documented windows; this
+    function does not know what a change is and must not learn — a second place that composes the
+    filter is a second place it can drift from `file_format.md`.
+    """
+    dataset = open_dataset(ns, so, table_id, branch=branch)
+    with _user_sql("invalid change-feed predicate"):
+        table = dataset.scanner(filter=predicate, columns=columns).to_table()
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    return cast("bytes", sink.getvalue().to_pybytes())
+
+
 def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
     """The table's schema-level metadata as ``{str: str}`` — the read twin of ``schema_metadata/update``.
 
