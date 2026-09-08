@@ -2192,10 +2192,18 @@ Verified on the deployed `lance-rest-catalog:h12-bddc415b` against the estate's 
 asymmetry measured — a wrong permit destroys the reason a clone exists — and a denial is no more
 evidence about the base than an outage is. Only the instruction changed.
 
-**THE REMEDY IS NOT TAKEN HERE, AND THAT IS DELIBERATE.** Making the 69 compactable means
-`vending.build_session_policy(bucket, prefix, tier)` covering the base paths a table declares, which
-WIDENS a credential scope — an owner decision under the zero-trust ruling, not a judgement call for
-this pass. The other direction, treating denied as "not protected", is not available at any price.
+**THE REMEDY IS § C1's REMAINING CLAUSE, and it is narrower than "widen the scope".** C1 already
+records the direction for exactly this collision — its own docstring states the stake, *"the STS session
+policy is scoped to the primary root bucket only, so a data-base fragment would be denied at the object
+store"* — and closes with: *vend the union of `base_paths` with per-base rights (read on inherited
+bases, write on `target_bases`, never on reference-only bases)*. READ on an inherited base is precisely
+what this probe needs, and per-base rights are stricter than the blanket widening this row first
+imagined: the credential comes to match the table's actual extent, least privilege per base, rather
+than growing a prefix.
+
+So H12 does not need a scope decision of its own — it needs C1 finished, and it is the sharpest
+measured reason to finish it. The other direction, treating denied as "not protected", is not
+available at any price.
 
 **Still open, and smaller than it looked:** whether the 184 `403 Forbidden` credential vends are this
 population or a separate refusal. One names `trackansdba60663$read_ghost`, which reads like a table
