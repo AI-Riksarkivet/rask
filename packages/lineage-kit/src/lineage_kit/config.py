@@ -68,21 +68,30 @@ class LineageSettings(BaseSettings):
         the shared token from a privileged name and will not fall back — so a producer that claims one
         subject while holding another's key is refused, every time, silently.
 
-        THAT IS NOT HYPOTHETICAL AND IT HAPPENED TWICE. The 2026-07-13 incident in
-        `ServicePrincipal`'s docstring lost all training provenance this way; measured again
-        2026-09-08, the cascade's Ray stage jobs claimed `service-medallion-producer` while the Ray
-        head held `service-token-service-trainer`, so `POST /api/v1/lineage` answered `401 the
-        presented credential may not claim 'service-medallion-producer'` while the job wrote its data
-        and exited SUCCEEDED.
+        ONE POD, SEVERAL IDENTITIES is why a single env var cannot answer it. The standing example is
+        the Ray head, which runs the train lane (claiming `service-trainer`) and every stage lane
+        (each claiming its submitting stage runner's own subject) from one pod carrying one token.
+        Measured against the live door 2026-09-08, replaying one POST twice from inside that pod:
+        `service-trainer` answered 201 and a second subject answered `401 the presented credential may
+        not claim '<subject>'` — while the job writes its data and exits SUCCEEDED, which is how the
+        2026-07-13 incident in `ServicePrincipal`'s docstring lost all training provenance without
+        anything reporting it.
 
-        ONE POD, SEVERAL IDENTITIES is why a single env var cannot answer it: the Ray head runs stage
-        jobs and train jobs, and each claims its own subject. So the identity selects the credential —
-        `RASK_LINEAGE_TOKEN_<IDENTITY>`, upper-cased with `-` as `_`. The estate's own prefix, NOT a
-        variant of the legacy `LINEAGE_SERVICE_TOKEN` spelling: this selector is a new rule, and naming
-        it after the thing it replaces would read as a compatibility shim for something that never
-        existed. The token never travels in the job's `runtime_env`; `ray_submit` records that as a P0
-        leak because Ray echoes it back on the job. Only the IDENTITY rides there, and it is not a
-        secret.
+        LATENT ON THIS ESTATE RATHER THAN FIRING, and worth stating so the pin is not read as a
+        post-mortem: `stage_lineage_url` is empty by default and unwired here, so the stage lanes emit
+        nothing and the only identity emitting is the one whose token is mounted. The credential
+        arrives before the lane is wired, not after it silently loses its provenance.
+
+        So the identity selects the credential — `RASK_LINEAGE_TOKEN_<IDENTITY>`, upper-cased with `-`
+        as `_`. The estate's own prefix, NOT a variant of the legacy `LINEAGE_SERVICE_TOKEN` spelling:
+        this selector is a new rule, and naming it after the thing it replaces would read as a
+        compatibility shim for something that never existed. The token never travels in a job's
+        `runtime_env`; `ray_submit` records that as a P0 leak because Ray echoes it back on the job.
+        Only the IDENTITY rides there, and it is not a secret.
+
+        The same two lines live in the two stdlib-only job emitters, which cannot import this package
+        (`scripts/ray_train_job.py`, `runners/dummy/.../lineage.py`); the three copies are pinned
+        together by `tests/unit/test_lineage_emitters_share_one_wire_contract.py`.
 
         Falls through silently when no such variable exists, so every producer that already works —
         one identity, one token, the auth-off path — is unchanged.

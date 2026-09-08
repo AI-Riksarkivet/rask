@@ -5,9 +5,10 @@ so a producer holding another subject's key is refused every time — and `Clien
 transport error, so the events vanish with one log line.
 
 MEASURED TWICE. The 2026-07-13 incident in `ServicePrincipal`'s docstring lost all training provenance
-exactly this way. Measured again 2026-09-08: the cascade's Ray stage jobs claim
-`service-medallion-producer` while the Ray head holds `service-token-service-trainer`, so the door
-answered `401 the presented credential may not claim 'service-medallion-producer'` on every emit while
+exactly this way. Measured against the live door 2026-09-08, replaying one POST twice from inside the
+Ray head: `service-trainer` -> 201, a second subject -> `401 the presented credential may not claim
+'<subject>'`. Latent on this estate rather than firing — `stage_lineage_url` is unwired, so only the
+trainer emits and its token is the mounted one — but the refusal is final when it does fire, while
 the job wrote its data and exited SUCCEEDED.
 
 ONE POD, SEVERAL IDENTITIES is what a single env var cannot express — the Ray head runs stage jobs and
@@ -23,24 +24,24 @@ from lineage_kit.config import LineageSettings
 
 
 def test_the_identity_scoped_token_wins_over_the_shared_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The cascade's case: a pod holding both credentials must send the one it claims."""
-    monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-medallion-producer")
+    """The stage lane's case: a pod holding both credentials must send the one it claims."""
+    monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-bronze-to-silver")
     monkeypatch.setenv("LINEAGE_SERVICE_TOKEN", "the-trainers-key")
-    monkeypatch.setenv("RASK_LINEAGE_TOKEN_SERVICE_MEDALLION_PRODUCER", "the-producers-key")
+    monkeypatch.setenv("RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER", "this-stages-own-key")
 
     settings = LineageSettings()
 
-    assert settings.app_token == "the-producers-key"
-    assert settings.service_identity == "service-medallion-producer"
+    assert settings.app_token == "this-stages-own-key"
+    assert settings.service_identity == "service-bronze-to-silver"
 
 
 def test_a_pod_serving_TWO_identities_answers_for_each(monkeypatch: pytest.MonkeyPatch) -> None:
     """Why the identity selects rather than the pod: the Ray head runs both job kinds."""
-    monkeypatch.setenv("RASK_LINEAGE_TOKEN_SERVICE_MEDALLION_PRODUCER", "producer-key")
+    monkeypatch.setenv("RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER", "this-stages-key")
     monkeypatch.setenv("RASK_LINEAGE_TOKEN_SERVICE_TRAINER", "trainer-key")
 
-    monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-medallion-producer")
-    assert LineageSettings().app_token == "producer-key"
+    monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-bronze-to-silver")
+    assert LineageSettings().app_token == "this-stages-key"
 
     monkeypatch.setenv("LINEAGE_SERVICE_ID", "service-trainer")
     assert LineageSettings().app_token == "trainer-key"

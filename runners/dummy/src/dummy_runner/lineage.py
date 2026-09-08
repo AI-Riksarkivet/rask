@@ -149,8 +149,22 @@ def emit(event: dict[str, Any]) -> bool:
     # is refused 403, and that branch is final by design: it never re-asks OIDC. The `elif` then meant
     # a perfectly good `LINEAGE_TOKEN` bearer was never tried. A job that lands its rows and loses its
     # provenance, invisibly from both ends.
-    service_token = os.environ.get("LINEAGE_SERVICE_TOKEN", "")
     service_id = os.environ.get("LINEAGE_SERVICE_ID", "")
+    # THE IDENTITY SELECTS THE CREDENTIAL, because ONE POD RUNS SEVERAL IDENTITIES. This head runs the
+    # train lane (claiming `service-trainer`) and every stage lane (each claiming its own stage runner
+    # subject), so a single shared token can only ever be right for one of them — and the door refuses a
+    # PRIVILEGED subject presenting a credential that is not its own, with no fallback
+    # (`dapr_auth.service_principal`). Measured against the live door 2026-09-08, the same POST twice
+    # from inside the Ray head: `service-trainer` -> 201, a second identity -> 401 "the presented
+    # credential may not claim …" — while the job writes its data and exits SUCCEEDED, the 2026-07-13
+    # trainer incident's exact shape, reported by nothing.
+    #
+    # `RASK_LINEAGE_TOKEN_<IDENTITY>` is that identity's own credential, mounted on the pod. Absent, the
+    # shared variable answers unchanged, which is every one-identity producer that works today. Neither
+    # ever rides `runtime_env` — Ray echoes it back on the job (`ray_submit` records that as a P0 leak);
+    # only the identity travels there, and it is not a secret.
+    scoped = os.environ.get(f"RASK_LINEAGE_TOKEN_{service_id.upper().replace('-', '_')}", "") if service_id else ""
+    service_token = scoped or os.environ.get("LINEAGE_SERVICE_TOKEN", "")
     if service_token and service_id:
         headers["dapr-api-token"] = service_token
         headers["x-lance-service-identity"] = service_id

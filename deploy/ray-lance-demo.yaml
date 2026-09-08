@@ -93,22 +93,31 @@ spec:
             - name: LINEAGE_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef: { name: rask-infra-credentials, key: service-token-service-trainer, optional: true }
-            # ONE POD, TWO IDENTITIES — this head runs `ray_train_job.py` (claiming service-trainer) AND
-            # `ray_stage_job.py` (claiming service-medallion-producer), and the single variable above
-            # can only be one of them. Measured 2026-09-08: the cascade's stage jobs presented the
-            # trainer's key and the door answered `401 the presented credential may not claim
-            # 'service-medallion-producer'` on every emit, while the job wrote its data and exited
-            # SUCCEEDED — the SAME failure the comment above records for the trainer, one lane over.
+            # ONE POD, SEVERAL IDENTITIES — this head runs `ray_train_job.py` (claiming service-trainer)
+            # AND every stage lane's job, which authenticates as its submitting stage runner's own
+            # identity, so the single variable above can be right for exactly one of them.
             #
-            # `LineageSettings` selects by the identity the job claims, so each job reaches its own
-            # credential and neither travels in the job's runtime_env (`ray_submit` records a secret
-            # there as a P0 leak, because Ray echoes it back on the job).
+            # LATENT, NOT FIRING: MEDALLION_STAGE_LINEAGE_URL is unset on all three stage runners
+            # (verified 2026-09-08), so `emit()` returns early and only the trainer — whose token IS
+            # the mounted one — posts today. What the door does with a mismatch was measured directly,
+            # one POST replayed twice from inside this head: service-trainer -> 201, a second subject
+            # -> 401 "the presented credential may not claim '<subject>'", while the job writes its
+            # data and exits SUCCEEDED. The credentials land before the lane is wired.
+            #
+            # The emitters select RASK_LINEAGE_TOKEN_<IDENTITY> for the identity they claim; neither
+            # credential travels in the job's runtime_env, which Ray echoes back on the job.
             - name: RASK_LINEAGE_TOKEN_SERVICE_TRAINER
               valueFrom:
                 secretKeyRef: { name: rask-infra-credentials, key: service-token-service-trainer, optional: true }
-            - name: RASK_LINEAGE_TOKEN_SERVICE_MEDALLION_PRODUCER
+            - name: RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER
               valueFrom:
-                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-medallion-producer, optional: true }
+                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-bronze-to-silver, optional: true }
+            - name: RASK_LINEAGE_TOKEN_SERVICE_SILVER_TO_GOLD
+              valueFrom:
+                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-silver-to-gold, optional: true }
+            - name: RASK_LINEAGE_TOKEN_SERVICE_MEDIA_TO_SILVER
+              valueFrom:
+                secretKeyRef: { name: rask-infra-credentials, key: service-token-service-media-to-silver, optional: true }
           ports:
             - { name: gcs, containerPort: 6379 }
             - { name: dashboard, containerPort: 8265 }

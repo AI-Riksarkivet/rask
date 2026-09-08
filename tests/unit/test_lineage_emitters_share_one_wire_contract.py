@@ -177,3 +177,52 @@ def test_a_named_service_id_still_takes_the_service_door(monkeypatch: Any) -> No
         )
         assert headers.get("dapr-api-token") == "app-token", name
         assert headers.get("x-lance-service-identity") == "service-trainer", name
+
+
+def test_the_identity_selects_its_own_credential(monkeypatch: Any) -> None:
+    """ONE POD, SEVERAL IDENTITIES — so one `LINEAGE_SERVICE_TOKEN` cannot be right for all of them.
+
+    The Ray head runs the train lane (claiming `service-trainer`) and every stage lane (each claiming
+    its OWN stage runner subject, `MEDALLION_FGA_SERVICE_IDENTITY`), and it mounts a single shared
+    token. `dapr_auth.service_principal` refuses a PRIVILEGED subject that presents a credential which
+    is not its own and does NOT fall back, so whichever identity the shared variable belongs to, every
+    other lane's emit is refused — while the job writes its data and exits SUCCEEDED, which is the
+    2026-07-13 trainer incident's exact shape and is reported by nothing.
+
+    Measured against the live door 2026-09-08, same POST twice from inside the Ray head:
+
+        service-trainer             -> 201
+        service-medallion-producer  -> 401 the presented credential may not claim …
+
+    So the credential is selected by the identity the job CLAIMS: `RASK_LINEAGE_TOKEN_<IDENTITY>`,
+    upper-cased with `-` as `_`. Only the identity ever rides `runtime_env` (Ray echoes runtime_env
+    back on the job, which is why `ray_submit` records a token there as a P0 leak); the credentials
+    are mounted on the pod.
+    """
+    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+        headers = _emit_headers(
+            module,
+            {
+                "LINEAGE_URL": "http://lineage:8000",
+                "LINEAGE_SERVICE_TOKEN": "the-trainers-key",
+                "LINEAGE_SERVICE_ID": "service-bronze-to-silver",
+                "RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER": "this-stages-own-key",
+            },
+            monkeypatch,
+        )
+        assert headers.get("dapr-api-token") == "this-stages-own-key", (
+            f"{name} presented another identity's credential — the door refuses it 401 and the job still exits SUCCEEDED"
+        )
+        assert headers.get("x-lance-service-identity") == "service-bronze-to-silver", name
+
+
+def test_the_shared_credential_still_serves_a_pod_of_one_identity(monkeypatch: Any) -> None:
+    """The selector must change nothing where it does not apply: no per-identity variable means the
+    shared token, exactly as before. Every producer that works today has one identity and one token."""
+    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+        headers = _emit_headers(
+            module,
+            {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
+            monkeypatch,
+        )
+        assert headers.get("dapr-api-token") == "app-token", f"{name} stopped honouring the shared credential"
