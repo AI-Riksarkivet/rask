@@ -15,7 +15,8 @@ level. Fields are consistent across every call site, so a record never misses wh
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Final
 
 
 #: The one well-known audit logger name (not a per-module logger) so audit records are a single stream.
@@ -37,6 +38,45 @@ def configure_audit(*, enabled: bool) -> None:
     startup. Without this call the logger inherits root (``WARNING``), so audit is OFF unless explicitly on.
     """
     _log.setLevel(logging.INFO if enabled else logging.CRITICAL + 1)
+
+
+#: The one action string every data READ is recorded under. Fixed here rather than passed by callers,
+#: because a read log is only useful if it can be FILTERED — four doors spelling the verb four ways is
+#: the same as no log for anyone trying to answer "who read this table".
+READ_ACTION: Final = "read_data"
+
+
+def audit_read(
+    *,
+    subject: str,
+    resource: str,
+    version: int | None = None,
+    columns: Sequence[str] | None = None,
+    **fields: Any,
+) -> None:
+    """Record that a subject READ data — the question a lakehouse buyer expects answered (§ J1).
+
+    The estate already authorizes every read and then forgot it happened, so "was this table ever read
+    by that subject" had no answer even though allowing it was a deliberate decision. That is a
+    zero-trust gap as much as a feature one.
+
+    NOT A MIDDLEWARE, which is what § J1 first proposed. A middleware sees the path and the principal
+    and nothing else, and `version` + `columns` are what make a read record worth keeping: only the
+    route knows which version it served and which columns it returned. So the doors call this, and this
+    fixes the action name and the field set — the part that makes the resulting log queryable.
+
+    ``columns`` is joined rather than passed as a list because the audit record is a FLAT structure by
+    design (`audit()`'s own contract), and a nested value would land differently in every sink.
+    """
+    audit(
+        READ_ACTION,
+        SUCCESS,
+        subject=subject,
+        resource=resource,
+        **({"version": version} if version is not None else {}),
+        **({"columns": ",".join(columns)} if columns else {}),
+        **fields,
+    )
 
 
 def audit(

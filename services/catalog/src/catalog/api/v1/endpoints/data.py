@@ -52,6 +52,7 @@ from catalog.schemas import (
     CompactionPlanResponse,
 )
 from catalog.services import blob_serving, dataplane, native, table_create
+from service_kit.governed.audit import audit_read
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
@@ -490,6 +491,7 @@ async def read_table_blob(
     row: Annotated[int, Query(ge=0)],
     version: Annotated[int | None, Query(ge=1)] = None,
     range_header: Annotated[str | None, Header(alias="Range")] = None,
+    token: CurrentToken = None,
     if_range: Annotated[str | None, Header(alias="If-Range")] = None,
 ) -> Response:
     """Serve one blob payload over plain HTTP — the credential-less consumer path (§9 P1).
@@ -521,6 +523,11 @@ async def read_table_blob(
         range_spec=_parse_range(range_header),
         if_range=if_range,
     )
+    # A BLOB READ IS THE MOST DISCLOSING READ THERE IS — it returns the bytes themselves — so it is
+    # recorded with the COLUMN it served, which is the closest this door has to J1's "which columns".
+    # Before the 416 branch on purpose: an unsatisfiable RANGE still told the caller the object's size
+    # and ETag, which is a probe worth having in the log.
+    audit_read(subject=_reader(token), resource=id, version=version, columns=[column])
     headers = {"Accept-Ranges": "bytes", "ETag": blob.etag}
     if not blob.satisfiable:
         headers["Content-Range"] = f"bytes */{blob.size}"
@@ -538,12 +545,43 @@ async def read_table_blob(
     )
 
 
+def _column_names(columns: object) -> list[str] | None:
+    """The column NAMES a request asked for, whatever shape the spec model wraps them in.
+
+    `QueryTableRequestColumns` is a generated union wrapper, so the names sit under `actual_instance`
+    on some spec revisions and are the object itself on others. Anything that is not a list of strings
+    records nothing rather than a repr: a column field carrying `<object at 0x...>` is worse than an
+    absent one, because it looks like data.
+    """
+    inner = getattr(columns, "actual_instance", columns)
+    if isinstance(inner, list) and all(isinstance(c, str) for c in inner):
+        return inner
+    return None
+
+
+def _reader(token: object) -> str:
+    """Who is reading — the verified subject, or the service itself on an unauthenticated profile.
+
+    Same expression the grant doors use (`members.py`), and it must never be blank: a read record whose
+    subject is empty answers the one question the log exists for with silence.
+    """
+    sub = getattr(token, "sub", None)
+    return str(sub) if sub else "system:catalog"
+
+
 @router.post("/{id}/query")
-def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
+def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken = None) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     data = native.call(ns, "query_table", body)
+    # AFTER the read, not before: an audit line for rows nobody received is a false record, and this
+    # door's refusals (branch, identifier) raise above. § J1 — the estate authorized every read and then
+    # forgot it happened.
+    # `columns` is the SPEC's union wrapper (`QueryTableRequestColumns`), not a list of names, so it is
+    # normalised here rather than typed loosely at the helper: the audit record is flat by contract,
+    # and a wrapper object would land differently in every sink.
+    audit_read(subject=_reader(token), resource=id, version=body.version, columns=_column_names(body.columns))
     return Response(content=data, media_type=ARROW_FILE)
 
 
@@ -562,7 +600,9 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @router.post("/{id}/count_rows", operation_id="count_table_rows")
 @router.get("/{id}/count_rows", operation_id="count_table_rows_compat_get")
-def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, body: CountTableRowsRequest | None = None) -> Response:
+def count_table_rows(
+    id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, body: CountTableRowsRequest | None = None, token: CurrentToken = None
+) -> Response:
     """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
 
     Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
@@ -575,11 +615,15 @@ def count_table_rows(id: str, ns: NamespaceDep, settings: SettingsDep, so: Stora
     # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
     # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
     # payload is a STRING, did not.
-    return JSONResponse(content=dataplane.count_rows(ns, so, req))
+    counted = dataplane.count_rows(ns, so, req)
+    # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
+    # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
+    audit_read(subject=_reader(token), resource=id, version=getattr(req, "version", None))
+    return JSONResponse(content=counted)
 
 
 @router.post("/{id}/explain_plan")
-def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep) -> Response:
+def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken = None) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
@@ -593,6 +637,10 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to
     # look like JSON round-trips as the opaque text it is rather than being mistaken for structure.
     plan = result if isinstance(result, str) else json.dumps(dump(result))
+    # AN EXPLAIN IS A READ OF THE SHAPE, not of the rows: it discloses the columns, the filters and
+    # the plan the engine would run — exactly what a subject probing a table it may not query would
+    # ask for. § J1 counts it as a read for that reason.
+    audit_read(subject=_reader(token), resource=id, columns=_column_names(getattr(body, "columns", None)))
     return JSONResponse(content=plan)
 
 
