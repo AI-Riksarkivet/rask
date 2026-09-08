@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 226 tracked, 145 open, 81 struck.**
-That splits into 63 lettered rows (50 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 227 tracked, 146 open, 81 struck.**
+That splits into 64 lettered rows (51 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1966,6 +1966,46 @@ rather than a blocked path.
 (widest authority, and § H8 measured ingest's governed writes as ALREADY vended, so the class is
 smaller than it looks), then the sidecar-bearing service tokens to the **Dapr store**, then the
 `APP_API_TOKEN` + zone/Ray secrets to **ESO** once its precondition is confirmed.
+
+### H10 · The drift report can never be clean while the estate uses branches, so the purge is permanently unreachable — **HIGH**
+**MEASURED LIVE 2026-09-08**, and the constancy is the tell — H2 recorded the same middle number a day
+earlier:
+
+    2026-09-07   total 611   incomplete 490
+    2026-09-08   total 615   incomplete 490   orphan_files 602
+
+`incomplete` is IDENTICAL across a day in which `total` moved. That is not a backlog draining; it is a
+structural count.
+
+**WHY IT CANNOT REACH ZERO.** `orphans.scan_estate` appends to `report.incomplete` for every dataset
+that returns `checked=False`, and `_unscannable_reason` refuses — correctly — on properties that are
+PERMANENT rather than transient:
+
+  * **a BRANCH** is unscannable by construction: its `_versions/`, `_transactions/`, `_deletions/` and
+    `_indices/` live under `tree/{branch}/`, `lance.dataset(uri)` opens MAIN, so every file of every
+    branch is unreferenced and the subtract-the-referenced-set method would name them all as orphans;
+  * **a multi-base / shallow CLONE** resolves DataFiles under another root (flag 16), same reason.
+
+The estate has **114 branches across 85 tables**. Those refusals are the guard doing exactly its job —
+the alternative is a reclaimer deleting a live branch — so the refusals are RIGHT and the CONSEQUENCE
+is the defect.
+
+**AND THE CONSEQUENCE IS A GATE THAT CANNOT OPEN.** `purge.report_is_clean` blocks on four conditions
+in order, and the third is `if report.incomplete: return "... a partial scan cannot certify the
+estate"`. So reclamation is gated on a report that the estate's own supported features guarantee will
+never be clean. Trash accumulates forever; nothing is red.
+
+**THIS IS THE SAME SHAPE THE FUNCTION ALREADY FIXED ONCE, one arm over.** Its docstring records the old
+blanket skip-pass and the circular reasoning that defended it — *"treating a skip as drift would make
+the purge unreachable in every real deployment"* — and the fix was a LEVER (`maintenance.orphanScan`)
+that made blocking reachable instead of fatal. The `incomplete` arm has no lever and no equivalent
+escape: an operator cannot make a branch scannable.
+
+**Closes it.** Distinguish an incomplete scan that is a COVERAGE GAP from one that is a STRUCTURAL
+REFUSAL, exactly as `CategorySkipped.coverage_gap` already distinguishes the two kinds of skip. A
+dataset refused because it is a branch or a clone was not "half-scanned" — it was correctly excluded,
+and the orphan method does not apply to it. Only a scan that TRIED and failed (an unreadable manifest,
+a truncated listing, a page ceiling) is a partial answer that must not certify the estate.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`
