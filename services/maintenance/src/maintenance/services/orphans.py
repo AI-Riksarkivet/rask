@@ -115,6 +115,19 @@ class DatasetOrphanScan(BaseModel):
     orphans: list[OrphanFile] = Field(default_factory=list)
     versions_scanned: int = 0
     reason: str | None = None
+    #: TRUE when the orphan method does not APPLY to this layout, as opposed to applying and failing
+    #: to run. Only the second is a partial answer, and only the second may block reclamation
+    #: (`purge.report_is_clean`) — a refusal that no retry can change would freeze that gate shut.
+    #:
+    #: The spec is what makes these permanent rather than merely sticky. `file_format.md` § Feature
+    #: Flags: a reader seeing a flag it does not know "should return an 'unsupported' error on any read
+    #: or write operation", and flag 16 `FLAG_BASE_PATHS` (shallow clones / multi-base) is Reader
+    #: Required. The flag lives in the MANIFEST, so the refusal clears when this code learns base_paths
+    #: and never on a later tick. Measured 2026-09-08: 419 of the estate's 490 incomplete notes were
+    #: that refusal, and `incomplete` held at exactly 490 across a day in which the finding total moved.
+    #:
+    #: Mirrors `CategorySkipped.coverage_gap`, which draws the same line one layer up.
+    structural: bool = False
 
 
 class OrphanReport(BaseModel):
@@ -123,10 +136,16 @@ class OrphanReport(BaseModel):
 
     datasets_scanned: int = 0
     datasets_unreadable: int = 0
+    #: Datasets the method does not APPLY to — correctly excluded, nothing missed.
+    datasets_excluded: int = 0
     orphans: list[OrphanFile] = Field(default_factory=list)
     #: Sources that answered PARTIALLY — a version ceiling, an unlistable prefix. Named so the reader
-    #: knows which findings to distrust rather than assuming completeness.
+    #: knows which findings to distrust rather than assuming completeness. **This list gates the
+    #: purge** (`purge.report_is_clean`), so only a scan that TRIED and failed belongs in it.
     incomplete: list[str] = Field(default_factory=list)
+    #: Datasets EXCLUDED by their own shape — reported so "we correctly skipped 419" stays visible and
+    #: distinguishable from "we scanned everything", without claiming the estate was half-inspected.
+    excluded: list[str] = Field(default_factory=list)
     total: int = 0
 
 
@@ -358,6 +377,11 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     try:
         ds = open_dataset(dataset_uri, storage_options)
         referenced, versions, note = referenced_paths_of(ds, dataset_uri)
+    except _OverlaysPresent as exc:
+        # A refusal by SHAPE that arrives as an exception because the walk is where an overlay becomes
+        # visible. Its own clause, so it is not sorted with the opens that merely failed.
+        log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": str(exc)})
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=str(exc), structural=True)
     except Exception as exc:
         # pylance refuses a manifest whose feature flags IT does not know (measured: a committed data
         # overlay, flag 64) — a REFUSAL, and it must read as one. Reported raw it is a Rust source
@@ -366,7 +390,10 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         refusal = unsupported_features_from_open_error(exc)
         reason = f"{prefix}: {refusal}" if refusal is not None else f"{type(exc).__name__}: {exc}"
         log.warning("orphan_scan_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason)
+        # A flag refusal is STRUCTURAL on this path too: the reader will refuse the same manifest on
+        # every future tick, so blocking reclamation on it never resolves. An open that failed for any
+        # OTHER reason is a scan that could succeed later and must keep blocking.
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason, structural=refusal is not None)
 
     # LAYOUT GATE FIRST, then the incomplete-set note. Both refuse, so the order changes only which
     # REASON is reported — and the layout answer is the better one: "this dataset spans base_paths" is a
@@ -376,7 +403,9 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     # told the least useful of the two true things.
     if (unscannable := _unscannable_reason(ds, fs=fs, prefix=prefix, referenced=referenced)) is not None:
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable)
+        # STRUCTURAL: the orphan method does not apply to this dataset's layout, so nothing was missed
+        # and this must not block reclamation. Every other `checked=False` below TRIED and failed.
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable, structural=True)
 
     if note:
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
@@ -414,18 +443,25 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
 def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_options: dict[str, str] | None = None) -> OrphanReport:
     """Run :func:`scan_dataset` over ``(dataset_uri, prefix)`` pairs and aggregate.
 
-    An unreadable dataset increments ``datasets_unreadable`` and lands in ``incomplete`` — it does NOT
-    silently reduce the orphan count, because "we could not look" and "there was nothing there" are
-    different answers and only one of them is safe to act on.
+    Three outcomes, and the reason they are three rather than two is that only ``incomplete`` blocks
+    reclamation: a dataset that could not be READ can be read on a later tick, while one the method
+    does not APPLY to cannot, so folding the second into the first freezes the purge gate shut.
+    Neither silently reduces the orphan count — "we could not look", "there was nothing to look at"
+    and "there was nothing there" stay distinguishable in the report.
     """
     report = OrphanReport()
     for dataset_uri, prefix in datasets:
         result = scan_dataset(fs, dataset_uri, prefix=prefix, storage_options=storage_options)
-        if not result.checked:
-            report.datasets_unreadable += 1
-            report.incomplete.append(result.reason or f"{dataset_uri}: unreadable")
+        if result.checked:
+            report.datasets_scanned += 1
+            report.orphans.extend(result.orphans)
             continue
-        report.datasets_scanned += 1
-        report.orphans.extend(result.orphans)
+        reason = result.reason or f"{dataset_uri}: unreadable"
+        if result.structural:
+            report.datasets_excluded += 1
+            report.excluded.append(reason)
+            continue
+        report.datasets_unreadable += 1
+        report.incomplete.append(reason)
     report.total = len(report.orphans)
     return report

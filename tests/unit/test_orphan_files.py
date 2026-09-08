@@ -167,6 +167,7 @@ def test_an_unreadable_dataset_yields_no_orphans_and_says_why(tmp_path: pathlib.
     orphan list EMPTY BY CONSTRUCTION."""
     result = orphans.scan_dataset(_fs(), str(tmp_path / "not-a-dataset"), prefix=str(tmp_path / "not-a-dataset"))
     assert result.checked is False
+    assert result.structural is False, "an absent dataset is a scan that FAILED — a later tick may find it, so it must keep blocking"
     assert result.orphans == []
     assert result.reason
 
@@ -327,6 +328,7 @@ def test_a_branched_dataset_is_refused_not_scanned(tmp_path: pathlib.Path) -> No
 
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
     assert result.checked is False, "a branched dataset must be refused, not scanned"
+    assert result.structural is True, "a branch is refused by SHAPE, and no retry ever makes it scannable"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
 
@@ -345,6 +347,7 @@ def test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere(tmp_path: p
 
     result = orphans.scan_dataset(_fs(), clone, prefix=clone)
     assert result.checked is False, "a dataset spanning base_paths must be refused"
+    assert result.structural is True, "base_paths is refused by SHAPE — the flag is a permanent property of the manifest"
     assert result.orphans == []
     assert "base_paths" in (result.reason or "")
 
@@ -359,17 +362,26 @@ def test_an_ordinary_dataset_is_still_scanned(tmp_path: pathlib.Path) -> None:
 
 
 def test_a_refused_dataset_does_not_read_as_clean_in_the_aggregate(tmp_path: pathlib.Path) -> None:
-    """Refusing must INCREASE `datasets_unreadable` and land in `incomplete` — never quietly lower
-    the orphan count. Otherwise the branchiest bucket in the estate reports as the tidiest."""
+    """Refusing must stay COUNTED and NAMED — never quietly lower the orphan count. Otherwise the
+    branchiest bucket in the estate reports as the tidiest.
+
+    It is counted as an EXCLUSION rather than as an unreadable scan, and the distinction is the whole
+    point: `purge.report_is_clean` blocks on `incomplete`, and a branch can never stop being refused —
+    its files live under `tree/{branch}/` while `lance.dataset()` opens MAIN — so counting it there
+    made reclamation unreachable. A branch is the cheapest fixture for that shape; on the live estate
+    it was the shallow clone that did it, 419 of 490 notes, with `incomplete` frozen at exactly 490
+    across a day in which the finding total moved.
+    """
     uri = str(tmp_path / "branched.lance")
     ds = lance.write_dataset(_table(), uri)
     ds.create_branch("feature-a")
 
     report = orphans.scan_datasets(_fs(), [(uri, uri)])
     assert report.datasets_scanned == 0
-    assert report.datasets_unreadable == 1
+    assert report.datasets_excluded == 1
     assert report.total == 0
-    assert report.incomplete and "tree/" in report.incomplete[0]
+    assert report.excluded and "tree/" in report.excluded[0]
+    assert not report.incomplete, f"a permanent exclusion must not block the purge forever: {report.incomplete}"
 
 
 def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
@@ -390,6 +402,7 @@ def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
 
     result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked is False
+    assert result.structural is True, "a _mem_wal shard tree is refused by SHAPE"
     assert result.orphans == []
     assert "_mem_wal/" in (result.reason or "")
     assert "fencing" in (result.reason or "")
@@ -436,6 +449,7 @@ def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tm
 
     result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked is False, "a dataset using overlays must be refused, not scanned"
+    assert result.structural is True, "overlays are refused by SHAPE"
     assert result.orphans == []
     assert "overlay" in (result.reason or "").lower()
     assert "64" in (result.reason or "")
@@ -471,6 +485,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is False, "a multi-base dataset must be refused — a prefix listing cannot be subtracted"
+    assert result.structural is True, "a multi-base dataset is refused by SHAPE"
     assert result.orphans == []
     assert "16" in (result.reason or "") and "base_paths" in (result.reason or "")
 
@@ -489,6 +504,7 @@ def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is False, "an overlay dataset must be refused, not scanned"
+    assert result.structural is True, "an overlay dataset is refused by SHAPE"
     assert result.orphans == []
     assert "64" in (result.reason or "") and "overlay" in (result.reason or "").lower(), result.reason
 

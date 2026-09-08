@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 227 tracked, 146 open, 81 struck.**
-That splits into 64 lettered rows (51 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 228 tracked, 147 open, 81 struck.**
+That splits into 65 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1967,7 +1967,7 @@ rather than a blocked path.
 smaller than it looks), then the sidecar-bearing service tokens to the **Dapr store**, then the
 `APP_API_TOKEN` + zone/Ray secrets to **ESO** once its precondition is confirmed.
 
-### H10 · The drift report can never be clean while the estate uses branches, so the purge is permanently unreachable — **HIGH**
+### H10 · A refusal no retry can clear gated reclamation, so the purge was permanently unreachable — **HIGH**
 **MEASURED LIVE 2026-09-08**, and the constancy is the tell — H2 recorded the same middle number a day
 earlier:
 
@@ -1977,18 +1977,27 @@ earlier:
 `incomplete` is IDENTICAL across a day in which `total` moved. That is not a backlog draining; it is a
 structural count.
 
-**WHY IT CANNOT REACH ZERO.** `orphans.scan_estate` appends to `report.incomplete` for every dataset
-that returns `checked=False`, and `_unscannable_reason` refuses — correctly — on properties that are
-PERMANENT rather than transient:
+**WHY IT CANNOT REACH ZERO.** `scan_datasets` appended to `report.incomplete` for every dataset that
+returned `checked=False`, and several of those refusals are PERMANENT rather than transient.
+Classifying the live 490 by reason shape settles which:
 
-  * **a BRANCH** is unscannable by construction: its `_versions/`, `_transactions/`, `_deletions/` and
-    `_indices/` live under `tree/{branch}/`, `lance.dataset(uri)` opens MAIN, so every file of every
-    branch is unreferenced and the subtract-the-referenced-set method would name them all as orphans;
-  * **a multi-base / shallow CLONE** resolves DataFiles under another root (flag 16), same reason.
+    419   unsupported manifest reader feature flags: 16 (base_paths (shallow clone / multi-base))
+     70   depth limit reached at <prefix> — datasets under it were not scanned
+      1   a dataset that could not be opened
 
-The estate has **114 branches across 85 tables**. Those refusals are the guard doing exactly its job —
-the alternative is a reclaimer deleting a live branch — so the refusals are RIGHT and the CONSEQUENCE
-is the defect.
+**The dominant cause is the SHALLOW CLONE, not the branch** — worth stating plainly because this row
+first claimed branches, on the strength of the estate's 114 of them, and the measurement says ZERO of
+the 490 are the `tree/` refusal. A branch IS refused for the same permanent reason (its `_versions/`,
+`_transactions/`, `_deletions/` and `_indices/` live under `tree/{branch}/` while `lance.dataset(uri)`
+opens MAIN), so it would freeze the gate identically — it simply is not what is freezing it today.
+
+Those 419 refusals are the guard doing its job, and the SPEC requires them: `lance_docs/
+file_format.md` § Feature Flags says a reader seeing a flag it does not know *"should return an
+'unsupported' error on any read or write operation"*, and flag 16 `FLAG_BASE_PATHS` is listed Reader
+Required. The flag is written into the MANIFEST, which is why no later tick clears it — only this code
+learning base_paths does. So the refusals are RIGHT and the CONSEQUENCE is the defect. **The 70 depth-limit
+notes are NOT of that kind**: a dataset nested below the walk's bound was never opened, which is a
+real coverage gap the report owes an answer for, and it keeps blocking.
 
 **AND THE CONSEQUENCE IS A GATE THAT CANNOT OPEN.** `purge.report_is_clean` blocks on four conditions
 in order, and the third is `if report.incomplete: return "... a partial scan cannot certify the
@@ -2003,9 +2012,53 @@ escape: an operator cannot make a branch scannable.
 
 **Closes it.** Distinguish an incomplete scan that is a COVERAGE GAP from one that is a STRUCTURAL
 REFUSAL, exactly as `CategorySkipped.coverage_gap` already distinguishes the two kinds of skip. A
-dataset refused because it is a branch or a clone was not "half-scanned" — it was correctly excluded,
-and the orphan method does not apply to it. Only a scan that TRIED and failed (an unreadable manifest,
-a truncated listing, a page ceiling) is a partial answer that must not certify the estate.
+dataset refused because it is a clone, a branch or a manifest the reader will not open was not
+"half-scanned" — it was correctly excluded, and the orphan method does not apply to it. Only a scan
+that TRIED and failed (an unreadable manifest, a truncated listing, a page ceiling) is a partial
+answer that must not certify the estate.
+
+**FOUR refusal arms set it, and finding the last two is the whole argument for testing near a bug.**
+The first pass marked only `_unscannable_reason` structural. Asserting the property at EVERY site that
+refuses — `tests/unit/test_orphan_files.py`, one line per arm — turned up two more that would have
+kept the gate frozen just as effectively: the manifest-flag refusal pylance raises from the OPEN
+(`unsupported_features_from_open_error`, which is how a committed data overlay arrives on today's
+pylance), and `_OverlaysPresent`, raised from inside the fragment walk and previously sorted with the
+opens that merely failed. Both are permanent; neither went through the gate the first fix guarded.
+
+### H11 · 70 prefixes of the live estate are below the discovery depth bound, which has no lever — **HIGH**
+**MEASURED LIVE 2026-09-08**, in the same classification that corrected § H10. Of the 490 incomplete
+notes, **70 are `depth limit reached at <prefix> — datasets under it were not scanned`.**
+
+Unlike H10's 419, these are NOT structural exclusions and H10's fix deliberately leaves them blocking:
+a dataset nested below the walk's bound was never opened, so the report genuinely cannot certify that
+part of the file layer. `Discovery.truncated` exists precisely to stop that being silent, and it works.
+
+**THE DEFECT IS THAT NOBODY CAN ACT ON IT.** `discover_datasets(fs, bucket, *, max_depth: int = 3)`
+and BOTH callers take the default — `reconcile.py:839` passes nothing, `sweep.py` passes nothing and
+then logs `"max_depth": 3` as a LITERAL beside the call, so the log would lie the moment the default
+moved. There is no setting, no chart value, nothing in `MaintenanceSettings`. An operator reading
+"depth limit reached" has no next move.
+
+**AND IT IS THE SHAPE `report_is_clean` ALREADY RULED ON.** Its docstring records the fix for the
+blanket skip-pass: the split between the two kinds of skip was only defensible once a LEVER
+(`maintenance.orphanScan`) made blocking reachable rather than fatal. The depth bound is the same
+argument one arm over — it blocks the purge, it is a real gap so it SHOULD block, and there is no
+lever to clear it. So after H10, reclamation is still unreachable on this estate, now for a reason
+nobody can fix without a code change.
+
+**Consequences beyond the gate:** the sweep does not maintain those datasets either (same walk, same
+bound) — so a prefix below depth 3 is uncompacted, unversioned-cleaned AND unscanned, and the only
+trace is one WARNING line per tick.
+
+**Closes it.** A `MaintenanceSettings` bound threaded to both callers and surfaced as a chart value,
+and the sweep's log line reading that value rather than restating a literal. The prefixes themselves
+are ALREADY named — the note is `depth limit reached at <prefix>`, and the classification above only
+looked anonymous because the query that produced it folded the URIs away. So the operator is told
+exactly where the walk stopped and has no way to act on it, which is the narrow thing to fix.
+
+Whether the right default is deeper is a separate question those prefixes answer, and it must be
+MEASURED before it is moved: the walk is the sweep's dominant cost, and `_protected_roots` opens every
+discovered dataset in every bucket before one is compacted.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`

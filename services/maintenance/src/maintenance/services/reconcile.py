@@ -234,6 +234,11 @@ class ReconcileReport(BaseModel):
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
     #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
     orphan_files: list[OrphanFile] = Field(default_factory=list)
+    #: Datasets the unreferenced-file method does not APPLY to — a shallow clone, a branch, an
+    #: unsupported feature flag. Reported so the coverage stays visible: "we correctly excluded 419"
+    #: and "we scanned everything" are different facts. Deliberately not in `incomplete`, which gates
+    #: the purge.
+    excluded_datasets: list[str] = Field(default_factory=list)
     unavailable: list[CategoryUnavailable] = Field(default_factory=list)
     skipped: list[CategorySkipped] = Field(default_factory=list)
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -852,6 +857,10 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     report.total += len(scan.orphans)
     for note in scan.incomplete:
         report.incomplete.append(IncompleteScan(source="storage:datasets", reason=note))
+    # Its OWN field, never `incomplete` (which gates the purge — see `DatasetOrphanScan.structural`)
+    # and never `counts` (which feeds `report.total` above and `report_is_clean`'s "drifting" message,
+    # so a key here would either inflate the finding total or name a correct exclusion as drift).
+    report.excluded_datasets = list(scan.excluded)
 
 
 async def reconcile(
@@ -936,6 +945,9 @@ async def reconcile(
             "counts": report.counts,
             "unavailable": [u.category for u in report.unavailable],
             "incomplete": len(report.incomplete),
+            # Beside `incomplete`: without it a correctly-excluded estate and a fully-scanned one
+            # print the same line.
+            "excluded": len(report.excluded_datasets),
         },
     )
     return report
