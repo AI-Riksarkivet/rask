@@ -1729,6 +1729,19 @@ endpoint and no key, which reads as "this service holds no credential" — the o
 estate's own rule applies exactly: verify where the value LANDS. `kubectl exec … printenv` answers in
 one command what the manifest cannot.
 
+**LANDED IN THE CHART, NOT YET ON THE ESTATE — 2026-09-08, and the distinction is the point.** The
+render now withholds the fleet secret from services with no storage code, and
+`tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` gates it. The LIVE cluster still
+shows all four holding it:
+
+    rask-gateway / rask-notifications / rask-compute / rask-flows   envFrom: rask-config, rask-app
+
+because a chart change reaches pods only through `helm upgrade`, and this estate has SEVEN hand-deployed
+images (`kubectl set image`) that a values-mismatched upgrade would revert to chart defaults — the
+recorded failure that once put the whole fleet on `:dev` tags. So this half is verified BY RENDER AND
+TEST and is not deployed hardening; it wants the owner's next release. The same applies to § H9's ESO
+provisioning, which additionally needs `externalSecrets.enabled=true`.
+
 **FOUR OF THE FIVE HOLD IT FOR NOTHING, and that half is safe to fix now.** The shared `rask-app`
 Secret carries exactly four keys — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `HCP_ENDPOINT`,
 `HF_TOKEN` — and `gateway`, `notifications`, `compute` and `flows` construct **no S3 client at all**:
@@ -1756,7 +1769,22 @@ convenience.**
     `service_kit.lakehouse` storage module), so the fix is to stop delivering the storage half of
     `rask-app` to them. Nothing can break, because nothing in them can make the call. This is the
     cheapest real reduction in blast radius available in the estate.
-  * **ingest — STS, and the machinery already exists.** `catalog.core.vending.build_session_policy`
+  * **ingest — ITS GOVERNED WRITES ALREADY USE STS, measured on the deployed pod 2026-09-08**, which
+    narrows this row's remaining half a long way. Driven inside the running container:
+
+        deployed catalog seam                 CatalogServiceClient
+        write_options for a governed write    VENDED (STS), not None
+
+    `RASK_INGEST_USE_CATALOG=true`, and `runtime.write_options_for(...)` hands the worker a
+    `VendedCredentialCache` callable, so every governed table write signs with a short-lived
+    catalog-vended credential. The ambient root pair is NOT what writes bronze.
+    **So what still needs the root credential is the SOURCE-READ path and dev mode**, not the governed
+    write: `objectstore.py` states it — *"a registered store that declares no secret shares the
+    deployment's credentials"* — i.e. reading an EXTERNAL bucket a run declares without its own secret,
+    plus the non-catalog path where `write_options_for` returns `None` and the write falls back to
+    ambient. Those are the two things to replace or refuse, and they are much smaller than "ingest needs
+    a storage identity".
+  * **ingest's outbox — STS too, and the machinery already exists.** `catalog.core.vending.build_session_policy`
     scopes an inline session policy by BUCKET + PREFIX (`s3:ListBucket` gated on an `s3:prefix`
     condition, object actions on `bucket/<prefix>/*`) with a 900 s TTL, and ingest already consumes
     vended credentials per dataset (`VendedCredentialCache`). A lineage-outbox credential is the same
@@ -1807,10 +1835,29 @@ trust"*, and *"Zero trust is the goal"*.
   * **~5 are STORAGE credentials** — `MEDIA_S3_ACCESS_KEY_ID` x3, the `AWS_*` pair, `S3_SECRET`. These
     are the **STS** cases: `vending.build_session_policy` already scopes by bucket + prefix at a 900 s
     TTL, so a long-lived key here is the shape § H8 exists to remove.
-  * **`APP_API_TOKEN` x10 is a BOOTSTRAP credential and needs its own answer.** daprd itself reads it
-    via `dapr.io/app-token-secret` before the app runs, so it cannot come from the store the sidecar
-    has not started yet. That is a chicken-and-egg case, not laziness — but it must be RECORDED as an
-    accepted exception rather than counted as compliance.
+    **AND `MEDIA_S3_ACCESS_KEY_ID` IS THE ROOT CREDENTIAL WEARING A SCOPED NAME** — a fourth instance of
+    the estate's pattern, found only by following the ref rather than reading the variable:
+
+        rask-annotator  MEDIA_S3_ACCESS_KEY_ID <- secret rask-app / AWS_ACCESS_KEY_ID
+        rask-search     MEDIA_S3_ACCESS_KEY_ID <- secret rask-app / AWS_ACCESS_KEY_ID
+        rask-viewer     MEDIA_S3_ACCESS_KEY_ID <- secret rask-app / AWS_ACCESS_KEY_ID
+
+    The name says "the media plane's S3 identity"; the value is `rustfsadmin`. A survey by variable
+    NAME would classify these as three scoped media credentials and count the estate as closer to zero
+    trust than it is. `annotator` and `search` are out of scope by the owner's ruling and are recorded
+    rather than worked; `viewer` serves `/api/explorer/*` and is lakehouse-adjacent.
+  * **`APP_API_TOKEN` x10 is a BOOTSTRAP credential — and the answer is ESO, not an exception.**
+    Measured on `rask-lineage` 2026-09-08: the pod carries `dapr.io/app-token-secret:
+    rask-dapr-app-token` AND the app container reads `APP_API_TOKEN` from that same Secret. Both halves
+    are real — daprd stamps the token on every call it delivers, and the app must VERIFY it, including
+    on the sidecar's very first call. So the app cannot fetch it from the Dapr secret store: the thing
+    that would authenticate that fetch is the token itself.
+    **That orders the paths, it does not exempt the secret.** ESO exists for exactly this — a workload
+    that must hold a credential before, or without, a usable sidecar — and it syncs from OpenBao into
+    the k8s Secret both halves already read, so the vault stays the source of truth and nothing about
+    the injector wiring changes. Calling this an "accepted exception" (as this row first did) would
+    have written off the largest single class in the survey on a premise that only rules out ONE of
+    the three sanctioned paths.
   * **The rest sit on pods that DO have a sidecar** (`LINEAGE_SERVICE_TOKEN` x8, the database
     passwords) and are the straightforward **Dapr secret store** migrations.
 
@@ -1820,9 +1867,62 @@ indirectly: a fresh `python -c` inside `rask-maintenance` read an EMPTY `s3_secr
 running app held a working one. **Before migrating any single row here, check whether the store already
 wins**; counting refs would otherwise report a service as non-compliant that is already correct.
 
-**Closes it.** A per-class migration, in blast-radius order: the storage credentials to STS first (they
-are the widest authority), then the sidecar-bearing service tokens to the Dapr store, then the zones to
-ESO. The `APP_API_TOKEN` exception written down where the render can point at it.
+**THE ESO PATH IS BUILT, DEPLOYED AND SWITCHED OFF — a fifth instance of the estate's pattern**,
+measured 2026-09-08:
+
+    external-secrets operator      3 pods, all 1/1 Running
+    ExternalSecrets / SecretStores / ClusterSecretStores anywhere in the cluster   ZERO
+    chart/templates/external-secrets.yaml   exists, renders a SecretStore + ExternalSecrets
+    values externalSecrets.enabled          false
+
+So the operator runs with nothing to reconcile — the same shape as the CNPG operator this file already
+records ("an enabled operator toggle is not evidence the resource exists"). **That matters more here
+than as a curiosity: ESO is the sanctioned destination for ~26 of the 43 refs** (the ten
+`APP_API_TOKEN`s and the sixteen sidecar-less zone/Ray secrets), so the largest class of this row is a
+values flip over machinery that already ships, not a thing to build.
+
+**AND ITS PRECONDITION IS CONFIRMED MISSING, which is why the toggle must not simply be flipped.**
+ESO's `SecretStore` authenticates to OpenBao with `kubernetesAuthPath: kubernetes` and
+`role: lance-infra`. Neither is provisioned: `chart/templates/openbao.yaml`'s seed Job writes the KV
+payload to `secret/lance` and authenticates with `BAO_TOKEN = openbao.devToken` (the dev root token),
+and **no template or script anywhere in the repo runs `bao auth enable kubernetes`** — grepped across
+`chart/templates/*.yaml` and `scripts/*.sh`. So the KV half of what ESO needs exists and the AUTH half
+does not.
+
+Enabling `externalSecrets.enabled=true` today would leave every ExternalSecret in `SecretSyncedError`,
+which reads as a broken deploy rather than a missing prerequisite — the failure mode that makes this
+worth stating before anyone tries it.
+
+**THE AUTH HALF NOW SHIPS — DONE 2026-09-08.** `chart/templates/openbao.yaml`'s seed Job provisions
+all three steps, rendered ONLY when `externalSecrets.enabled`:
+
+    bao auth enable -path=kubernetes kubernetes
+    bao write auth/kubernetes/config kubernetes_host=...
+    bao policy write lance-infra      ->  read on secret/data/lance, and nothing else
+    bao write auth/kubernetes/role/lance-infra
+        bound_service_account_names=external-secrets
+        bound_service_account_namespaces=external-secrets
+
+It lives in that Job because it is the one place already holding the root token AND already writing the
+exact path the role must read; a separate bootstrap would duplicate both. **The policy is scoped to one
+PATH rather than the mount** — ESO is a controller with STANDING access, so zero trust applies to the
+thing fetching the secrets too: read, no list, no wildcard, no write. **The role is BOUND to the
+operator's ServiceAccount**, because an unbound Vault role is assumable by any pod in the cluster, which
+would inverts the point. Provisioning renders only with the toggle on: a chart that enabled a Vault auth
+backend nobody asked for would change the estate's security posture as a side effect of installing it.
+
+Gated by `tests/unit/test_eso_gets_its_auth_half_not_just_its_kv_half.py`, which asserts all four
+properties — the backend is enabled, the role is bound, the granted capability set is exactly `{read}`
+on a non-wildcard path, and nothing is provisioned when ESO is off.
+
+**What remains for this class is the migration itself**: moving the ten `APP_API_TOKEN` refs and the
+sixteen zone/Ray secrets onto ExternalSecrets, which is now a values change plus per-secret wiring
+rather than a blocked path.
+
+**Closes it.** A per-class migration in blast-radius order: the storage credentials to **STS** first
+(widest authority, and § H8 measured ingest's governed writes as ALREADY vended, so the class is
+smaller than it looks), then the sidecar-bearing service tokens to the **Dapr store**, then the
+`APP_API_TOKEN` + zone/Ray secrets to **ESO** once its precondition is confirmed.
 
 ### H6 · Purge deletes any sub-prefix a trash record names — **THE DATASET CHECK LANDED 2026-09-07**
 **"Verify the location is a Lance root before `delete_dir`" — DONE.** The refusal ladder in `check`

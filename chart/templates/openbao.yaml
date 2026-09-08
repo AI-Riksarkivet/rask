@@ -228,5 +228,41 @@ spec:
                 {{- end }}
 
               echo "seeded secret/lance into OpenBao"
+
+              {{- if $.Values.externalSecrets.enabled }}
+              {{- /* THE AUTH HALF ESO NEEDS, and without it the KV half above is unreachable.
+
+                     `external-secrets.yaml` renders a SecretStore that authenticates to OpenBao with
+                     `auth.kubernetes` at mountPath `{{ $.Values.externalSecrets.kubernetesAuthPath }}`
+                     assuming role `{{ $.Values.externalSecrets.role }}`. Measured 2026-09-08: the
+                     operator ran 3/3 with ZERO SecretStores in the cluster, and nothing in this repo
+                     enabled that auth backend or created that role — so flipping
+                     `externalSecrets.enabled` alone leaves every ExternalSecret in SecretSyncedError,
+                     which reads as a broken deploy rather than a missing prerequisite.
+
+                     IT BELONGS IN THIS JOB because this is the one place that already holds the root
+                     token and already writes the exact path the role must be allowed to read; a
+                     separate bootstrap would need a second copy of both.
+
+                     THE POLICY IS SCOPED TO ONE PATH, not the mount. ESO is a controller with standing
+                     access, so `read` on `secret/data/lance` is the whole grant — no list, no other
+                     path, no write. Zero trust applies to the thing fetching the secrets too.
+
+                     EVERY STEP IS IDEMPOTENT: `auth enable` on an existing mount is the only one that
+                     errors, and it is the expected outcome on re-run. */}}
+              bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kubernetes auth already enabled"
+              bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/config \
+                kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
+              bao policy write {{ $.Values.externalSecrets.role }} - <<'POLICY'
+              path "{{ $.Values.externalSecrets.kvMount }}/data/{{ $.Values.externalSecrets.secretPath }}" {
+                capabilities = ["read"]
+              }
+              POLICY
+              bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \
+                bound_service_account_names={{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }} \
+                bound_service_account_namespaces={{ $.Values.externalSecrets.namespace | default "external-secrets" }} \
+                policies={{ $.Values.externalSecrets.role }} ttl=1h
+              echo "provisioned kubernetes auth + role {{ $.Values.externalSecrets.role }} for ESO"
+              {{- end }}
 {{- end }}{{/* devMode seed */}}
 {{- end }}{{/* openbao.enabled */}}

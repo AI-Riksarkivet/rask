@@ -2623,13 +2623,22 @@ openbao:
 # SecretStore (→ vaultAddr) + an ExternalSecret that OWNS <release>-infra-credentials, and the static
 # Secret in infra-credentials.yaml is skipped. Complements openbao.externalAddr (the app tier's Dapr path).
 externalSecrets:
+  # WHEN THIS IS TURNED ON, THE OPENBAO SEED JOB ALSO PROVISIONS THE AUTH HALF — the kubernetes auth
+  # backend, a policy granting READ on exactly `<kvMount>/data/<secretPath>`, and the role below bound
+  # to the operator's ServiceAccount. Measured 2026-09-08: without those, the operator ran 3/3 with ZERO
+  # SecretStores and every ExternalSecret would have sat in SecretSyncedError — the KV half of what ESO
+  # needs was seeded and the AUTH half was not, so the toggle alone was never sufficient.
   enabled: false
   refreshInterval: "1h"
   kvMount: secret # the Vault KV mount path
   kvVersion: "v2"
   secretPath: lance # the KV key holding postgres-password + rustfs-secret-key (e.g. secret/data/lance)
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
-  role: lance-infra # the Vault role the operator's ServiceAccount assumes
+  role: lance-infra # the Vault role the operator's ServiceAccount assumes (also names its policy)
+  # WHOSE ServiceAccount the role is bound to. Defaults match a stock external-secrets install; the
+  # binding is what stops any other pod in the cluster assuming the role and reading the bundle.
+  serviceAccount: external-secrets
+  namespace: external-secrets
 
 # CloudNativePG OPERATOR toggle (Chart.yaml condition cnpg.enabled). The rask app-DB
 # Cluster + its Alembic migration Job died at P7a (the batches table is gone — Lance +
