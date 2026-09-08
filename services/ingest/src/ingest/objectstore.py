@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 
 from ingest.config import settings
 from service_kit.governed.secrets import fetch_dapr_secret
-from service_kit.schemas.storage import Store, normalise_endpoint, store_for_endpoint
+from service_kit.schemas.storage import Store, normalise_endpoint, registered_stores, store_for_endpoint
 from storage import configured_endpoint
 
 
@@ -98,7 +98,8 @@ def resolve_source_connection(endpoint: str | None, bucket: str) -> SourceConnec
 
     Three answers, and no fourth:
 
-    1. No endpoint declared, or one that IS the deployment's own — the estate default, env chain.
+    1. No endpoint declared, or one that IS the deployment's own — a store registered for THAT
+       endpoint and bucket if the operator declared one, otherwise the estate default, env chain.
     2. A registered store for `(endpoint, bucket)` — its endpoint, its TLS posture, and either the
        credentials behind its `secret` or (a store that declares none) the deployment's env
        credentials, which is the OPERATOR's registered decision and not something a request chooses.
@@ -107,10 +108,20 @@ def resolve_source_connection(endpoint: str | None, bucket: str) -> SourceConnec
     Case 1's endpoint equality is why `storage.configured_endpoint` is public: a run that spells out
     the deployment's own endpoint is asking for the store we already use, and refusing it for want of
     a registry entry would be a refusal with no hazard behind it.
+
+    **NAMING THE DEFAULT ENDPOINT IS NOT DECLINING AN IDENTITY FOR IT.** This used to return the
+    ambient connection without consulting the registry, so `store_for_endpoint` was unreachable for
+    every ESTATE bucket — and measured 2026-09-08, every real read target is one
+    (`s3://lance-catalog/media-src/batch`, `s3://images-batch`, `s3://acme-bucket` …). The consequence
+    was that `rask-ingest`'s reads could only ever sign with the ambient ROOT pair, and no operator
+    action could narrow them: the registry's Dapr-secret-store path existed and could not be aimed at
+    the estate's own store. Refusal is still not the answer here — an unregistered estate bucket keeps
+    the default, which is why this changes nothing until a store is registered (§ H8).
     """
     declared = normalise_endpoint(endpoint)
     if not declared or declared == normalise_endpoint(configured_endpoint()):
-        return SourceConnection()
+        own = _own_store_for(bucket)
+        return _connection_for_store(own, declared or normalise_endpoint(configured_endpoint())) if own is not None else SourceConnection()
 
     store = store_for_endpoint(declared, bucket)
     if store is None:
@@ -120,6 +131,30 @@ def resolve_source_connection(endpoint: str | None, bucket: str) -> SourceConnec
             f"reading bucket {bucket!r} from the deployment's own store, which would silently ingest the wrong bytes."
         )
     return _connection_for_store(store, declared)
+
+
+def _own_store_for(bucket: str) -> Store | None:
+    """A store registered for ``bucket`` on the DEPLOYMENT'S OWN endpoint, or ``None``.
+
+    Not `store_for_endpoint`, and the difference is the whole reason this exists: a store on the
+    default endpoint is spelled with ``endpoint: None`` ("the deployment's configured default", per
+    `Store.endpoint`), so an endpoint-equality lookup for the default can never match it. Both
+    spellings are the same store and both are accepted here.
+
+    The bucket must still match exactly. A bucket name alone is the collision the registry exists to
+    disambiguate, so this narrows by bucket and only then admits the two ways of saying "here".
+
+    ONLY A STORE THAT DECLARES A `secret` COUNTS, and that is what keeps this inert until an operator
+    aims it. A store without one means "shares the deployment's credentials", which is what the
+    ambient answer already is — picking it up would return an explicit endpoint where callers expect
+    `None` and change nothing else. `DEFAULT_STORES` ships exactly such an entry for `lance-catalog`,
+    so without this clause the estate's own warehouse would have taken the new path on day one.
+    """
+    wanted = normalise_endpoint(configured_endpoint())
+    return next(
+        (s for s in registered_stores() if s.secret is not None and s.bucket == bucket and normalise_endpoint(s.endpoint) in ("", wanted)),
+        None,
+    )
 
 
 def _connection_for_store(store: Store, endpoint: str) -> SourceConnection:
