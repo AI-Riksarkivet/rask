@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 231 tracked, 148 open, 83 struck.**
-That splits into 68 lettered rows (53 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 231 tracked, 147 open, 84 struck.**
+That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1160,7 +1160,7 @@ no DELETE; `tests/unit/test_reconcile.py` pins `pruned_events` on every tick, pr
 because a key that appears only when it did something makes "nothing was pruned" and "the pass never
 ran" the same observation.
 
-### E7 · The lakehouse zone polls `/events` unauthenticated, forever
+### ~~E7 · The lakehouse zone polls `/events` unauthenticated, forever — **FIXED AND OBSERVED 2026-09-08: a ROTATED SECRET the pods never re-read**~~
 **Observed 2026-09-08** while verifying § E4, in `rask-lineage`'s own access log:
 
     10.42.0.147 - "GET /events?limit=1&summary=true HTTP/1.1" 401 Unauthorized
@@ -1175,10 +1175,38 @@ every 30 s — because it sends lineage's service-door PAIR (`dapr-api-token` + 
 both or neither, see `reconciler._headers`). The zone sends neither, and SSR has no user token on that
 path.
 
-**Closes it.** Decide which identity that panel reads with — the zone's own service identity, or the
-viewer's token forwarded from the BFF — and make the failure visible in the zone rather than an empty
-list. Edge/zone work: this row is recorded here because it was measured here, and belongs to
-`open_gateway.md` or the frontend register when it is worked.
+**THE CAUSE WAS NOT A MISSING IDENTITY, AND THIS ROW'S "Closes it" WAS THE WRONG FIX.** It proposed
+deciding which identity the panel reads with. The zone already had one: `LINEAGE_SERVICE_TOKEN`,
+`LINEAGE_SERVICE_ID=service-web`, `LINEAGE_API`, all present, and `feeds.remote.ts` already sends the
+pair through `lineageAuthHeaders`. Asking the door from inside the pod gave the real answer:
+
+    the presented credential may not claim 'service-web'
+
+**THE SECRET WAS ROTATED AND THE PODS NEVER RE-READ IT.** Hashed, rather than guessed:
+
+    zone   LINEAGE_SERVICE_TOKEN              1b55ba766c3e962c   <- matched NO key in the secret
+    secret service-token-service-web          482611fb9ab8c057
+    secret service-token-service-trainer      a50f2509c48e3190   (the Ray head correctly holds this)
+
+The Deployment references the RIGHT key (`rask-infra-credentials/service-token-service-web`). An env
+value from a `secretKeyRef` is injected AT POD CREATION and never refreshed, so a rotated Secret leaves
+every consuming pod holding a dead credential with no signal at all — the render is correct, the
+reference is correct, and the running pod is wrong. **Six of the seven zones were stale on the same
+value.**
+
+**FIXED BY RESTART, AND OBSERVED.** `kubectl rollout restart` on all seven, then measured on the live
+service:
+
+    before   2,627 x 401 on GET /events   (46% of ALL traffic to lineage was refused)
+    after    401: 0    200: 30    /events 200: 16     (90-second window)
+
+and the zone's own probe now answers `200 {"events":[],"next_cursor":102459,"oldest_seq":101229}`.
+
+**Closes the rest.** The restart fixes today; nothing stops the next rotation doing it again. The
+durable fix is the standard Helm one — a checksum of the secret on the pod template annotation, so
+changing it rolls its consumers — and it belongs beside every `secretKeyRef` env in the chart, not just
+this one. Until then a credential rotation silently breaks every pod that holds one, and the failure
+surfaces as an empty panel.
 
 ### E5 · Unbounded growth, O(history) hot paths, no default pruning
 
