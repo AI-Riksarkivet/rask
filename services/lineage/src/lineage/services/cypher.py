@@ -250,6 +250,20 @@ COUNT_OLD_RUNS: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff RETURN count
 # The interpolated value is a code-owned int constant, never caller input, so no injection surface.
 PRUNE_OLD_RUNS_TEMPLATE: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff WITH r LIMIT {limit} DETACH DELETE r"
 PRUNE_BATCH_SIZE: Final = 500
+# A Dataset node no run refers to any more — the residue run retention LEAVES BEHIND, and the reason
+# retention alone does not converge the graph. Measured on the live estate 2026-09-08: 1,271 Dataset
+# nodes, and every one of them had an incoming edge, so there is no isolated node to reclaim. They are
+# reachable only THROUGH their runs, so a dataset becomes prunable exactly when its last run is pruned
+# — which makes this the second half of `prune_runs`, never a standalone sweep.
+#
+# READ/WROTE ONLY, and the omission is the safety. A dataset that a User CREATED but no run has touched
+# is a declared table, not residue: dropping it would erase the record that someone made it. `MATCH`ing
+# the two run edges asks "has anything ever happened here", which is the question a lineage graph is for.
+COUNT_ORPHAN_DATASETS: Final = "MATCH (d:Dataset) WHERE NOT (d)<-[:READ]-(:Run) AND NOT (d)<-[:WROTE]-(:Run) AND NOT (d)<-[:CREATED]-(:User) RETURN count(d)"
+# Batched for the reason `PRUNE_OLD_RUNS_TEMPLATE` is, and with the same literal-LIMIT constraint.
+PRUNE_ORPHAN_DATASETS_TEMPLATE: Final = (
+    "MATCH (d:Dataset) WHERE NOT (d)<-[:READ]-(:Run) AND NOT (d)<-[:WROTE]-(:Run) AND NOT (d)<-[:CREATED]-(:User) WITH d LIMIT {limit} DETACH DELETE d"
+)
 # The per-version column schema rides the same WROTE edge as the version (#24 prerequisite). Stored as
 # a JSON **string** scalar — params are JSON-encoded and ``_parse`` json.loads each cell, so a scalar
 # round-trips cleanly; an array-in-SET is the risky path AGE 1.5.0 mishandles (same reason tags are a

@@ -183,6 +183,20 @@ async def _prune_old_runs(repository: RepositoryDep, settings: SettingsDep) -> i
         return 0
     if pruned:
         log.info("lineage_runs_pruned", extra={"pruned": pruned, "retention_days": settings.run_retention_days})
+    # THE SECOND HALF, and retention does not converge without it: pruning runs leaves their datasets
+    # behind, so the graph keeps a node per table any expired run ever touched and the reconcile keeps
+    # probing them. Measured 2026-09-08 — 1,271 Dataset nodes, every one still edge-reachable — which is
+    # why this cannot be a standalone sweep: a dataset becomes prunable exactly when its last run goes.
+    #
+    # ONLY AFTER a successful run prune, and contained the same way: an orphan-prune failure must not
+    # lose the run-prune count the caller already earned, and neither may end the reconcile.
+    try:
+        orphans = await repository.prune_orphan_datasets()
+    except Exception as exc:  # noqa: BLE001 — retention is best-effort; the sweep's report still lands
+        log.warning("lineage_dataset_prune_failed", extra={"error": str(exc)})
+        return pruned
+    if orphans:
+        log.info("lineage_orphan_datasets_pruned", extra={"pruned": orphans})
     return pruned
 
 

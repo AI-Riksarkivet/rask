@@ -938,6 +938,38 @@ class LineageRepository:
                     await run_cypher(conn, self._graph, delete, {"cutoff": cutoff_iso})
         return count
 
+    async def prune_orphan_datasets(self) -> int:
+        """DETACH DELETE Dataset nodes no run refers to any more. Returns the up-front count.
+
+        THE SECOND HALF OF RETENTION, and without it retention does not converge. `prune_runs` removes
+        old runs and leaves their datasets behind, so the graph keeps a node per table any expired run
+        ever touched. Measured on the live estate 2026-09-08: 1,271 Dataset nodes, EVERY one with an
+        incoming edge — there is no isolated node to reclaim, because the residue is reachable only
+        through the runs that are the thing being pruned.
+
+        WHY IT MATTERS IS THE CONTROL, NOT THE DISK. The reconcile probes every dataset node it holds,
+        so accumulated residue makes `storage_loss` and `unreadable` fire every tick with dead rows in
+        them, and a REAL storage loss arrives invisible among them — the estate's "a control that
+        cannot fire" pattern, reached by accumulation rather than by design. It also costs one failed S3
+        list per dead node per tick, inside the single-flight lock that gates the outbox drain.
+
+        A DATASET WITH A `CREATED` EDGE IS NOT RESIDUE: that is a declared table nobody has written yet,
+        and dropping it would erase the record that someone made it. Only "no run has ever touched this"
+        counts.
+
+        Batched under the same argument as :meth:`prune_runs` — one transaction per batch, so a large
+        backlog cannot push a statement past the pool's statement_timeout and rollback forever.
+        """
+        async with self._pool.connection() as conn:
+            rows = await run_cypher(conn, self._graph, cy.COUNT_ORPHAN_DATASETS, {})
+            count = int(rows[0][0]) if rows and rows[0] else 0
+            batches = -(-count // cy.PRUNE_BATCH_SIZE)
+            delete = cast("LiteralString", cy.PRUNE_ORPHAN_DATASETS_TEMPLATE.format(limit=cy.PRUNE_BATCH_SIZE))
+            for _ in range(batches):
+                async with conn.transaction():
+                    await run_cypher(conn, self._graph, delete, {})
+        return count
+
     async def ensure_events_table(self) -> None:
         """Create the durable events-feed table if absent (idempotent; called once at startup).
 
