@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 230 tracked, 147 open, 83 struck.**
-That splits into 67 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 231 tracked, 148 open, 83 struck.**
+That splits into 68 lettered rows (53 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -2250,6 +2250,60 @@ anything is hiding.
 
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
+
+### H14 · The cascade's Ray-lane lineage emits are refused, and the job reports SUCCEEDED — **HIGH**
+**MEASURED LIVE 2026-09-08.** `rask-lineage`'s access log over its last 3,000 lines: **1,331 x 401
+against 1,558 x 200** — 46% of everything reaching the service is refused. Two callers own all of it:
+
+    10.42.0.147  rask-web-lakehouse   1,314 x  GET /events?limit=1&summary=true   401   (§ E7)
+    10.42.0.229  ray-lance-head          16 x  POST /api/v1/lineage               401
+
+**§ E7 IS ~50x BIGGER THAN RECORDED** — it was written from "26 of the last 500 log lines"; the same
+poll is now 1,314 of ~2,900. But the SECOND caller is the serious one: a refused emit is lost
+provenance, and `ray-lance-head` runs `ray_stage_job.py` — the medallion cascade's stage runner, in
+scope — alongside `ray_dummy_job.py`.
+
+**REPLAYED FROM INSIDE THE RAY HEAD, with that pod's own credential, which is what makes this exact
+rather than inferred:**
+
+    service-trainer             -> 201
+    service-medallion-producer  -> 401  "the presented credential may not claim 'service-medallion-producer'"
+    service-bronze-to-silver    -> 403  "service identity not allowed: service-bronze-to-silver"
+    <no identity header>        -> 401  "Missing bearer token"
+
+**DEFECT 1 — the credential and the claimed identity belong to different subjects.** `ray_submit.py`
+puts `LINEAGE_SERVICE_ID: settings.fga_service_identity` into the job's `runtime_env` — for the cascade
+that is `service-medallion-producer` — and deliberately does NOT send the token, because "the Ray pods
+hold `LINEAGE_SERVICE_TOKEN` themselves". The pod holds `service-token-service-trainer`, the TRAINER's
+dedicated credential. So the job claims one subject and presents another's key, and
+`dapr_auth.service_principal` refuses exactly as designed: a privileged subject needs its OWN
+credential and the door will not fall back. **The two halves of the pair are provisioned by different
+mechanisms that nothing reconciles.**
+
+**DEFECT 2 — three subjects are PRIVILEGED but not ALLOWED, which is unusable by construction.**
+
+    LINEAGE_SERVICE_SUBJECTS     notifications, service-ingest, service-medallion-producer, service-trainer, service-web
+    LINEAGE_PRIVILEGED_SUBJECTS  service-bronze-to-silver, service-ingest, service-medallion-producer,
+                                 service-media-to-silver, service-silver-to-gold, service-trainer, service-web
+
+`service-bronze-to-silver`, `service-media-to-silver` and `service-silver-to-gold` appear only in the
+second list. The allowlist is checked FIRST, so those three are 403'd whatever credential they hold —
+naming a subject privileged while never admitting it is a grant that cannot be exercised.
+
+**DEFECT 3 — and this is why neither was noticed: THE JOB SUCCEEDS ANYWAY.** `infra-credentials.yaml`
+already records this exact shape for the trainer — *"a near-miss is `401 the presented credential may
+not claim 'service-trainer'` — which is what the estate served on every training run until this landed,
+while the job went on publishing its model and exiting SUCCEEDED"*. The trainer's case was fixed by
+provisioning its dedicated token; the cascade's was not, and the estate has been serving the identical
+401 for the cascade ever since. Ray-lane stage runs write their data and lose their provenance, and
+every surface reports success.
+
+**Closes it.** Provision a dedicated credential for every subject in `LINEAGE_PRIVILEGED_SUBJECTS`, and
+make the two lists agree — a privileged subject that is not an allowed one is a configuration error
+that should fail the render rather than 403 at runtime. For the Ray lane specifically the pair must be
+provisioned TOGETHER: whatever injects `LINEAGE_SERVICE_ID` must inject the credential for THAT
+identity, since the pod's own token is the trainer's by construction. `ray-lance-head` is hand-applied
+(`deploy/ray-lance-demo.yaml`, no Helm labels), which is how its half drifted from the chart's.
 
 ### ~~H13 · 207 of 285 rewrites a tick fall back to the RustFS ROOT key — **FIXED AND OBSERVED 2026-09-08** (`cd4697ab` + `8c92fa95`)~~
 **MEASURED LIVE 2026-09-08** on `c1-ec10c48f`, one sweep tick through `POST /maintenance-cron`:
