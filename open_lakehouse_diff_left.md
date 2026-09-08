@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 228 tracked, 147 open, 81 struck.**
-That splits into 65 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
+**Counted 2026-09-08, from the rows below rather than asserted: 228 tracked, 146 open, 82 struck.**
+That splits into 65 lettered rows (51 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
 you change them; the previous header claimed a freshness date two days older than rows struck beneath
@@ -1967,7 +1967,7 @@ rather than a blocked path.
 smaller than it looks), then the sidecar-bearing service tokens to the **Dapr store**, then the
 `APP_API_TOKEN` + zone/Ray secrets to **ESO** once its precondition is confirmed.
 
-### H10 · A refusal no retry can clear gated reclamation, so the purge was permanently unreachable — **HIGH**
+### ~~H10 · A refusal no retry can clear gated reclamation, so the purge was permanently unreachable — **FIXED AND OBSERVED 2026-09-08** (`ad111621`)~~
 **MEASURED LIVE 2026-09-08**, and the constancy is the tell — H2 recorded the same middle number a day
 earlier:
 
@@ -2016,6 +2016,22 @@ dataset refused because it is a clone, a branch or a manifest the reader will no
 "half-scanned" — it was correctly excluded, and the orphan method does not apply to it. Only a scan
 that TRIED and failed (an unreadable manifest, a truncated listing, a page ceiling) is a partial
 answer that must not certify the estate.
+
+**OBSERVED ON THE LIVE ESTATE**, `ad111621` built by Dagger and deployed as
+`lance-rest-catalog:h10-ad111621`, driven through the real `POST /maintenance-reconcile-cron` door:
+
+    before  (e2-791a5f5b, 07:11Z)   total 615   incomplete 490   excluded_datasets: field absent
+    after   (h10-ad111621)          total 615   incomplete  71   excluded_datasets 419
+
+The 419 are the whole `base_paths` population and nothing else — 390 at `reader=18`, 29 at
+`reader=19`. The 71 that remain are the 70 depth-limit truncations (§ H11) plus the one genuine open
+failure, and BOTH still block, which is the half of this change that had to stay true. `total` is
+unchanged at 615, so an exclusion moves nothing into or out of the finding count.
+
+**THE PURGE IS STILL BLOCKED, AND THAT IS THE GATE WORKING.** `report_is_clean` refuses on the first
+condition — 615 real findings, 602 of them orphan files — which is an operator's actual backlog rather
+than a condition the format guarantees can never clear. The defect was an UNSATISFIABLE gate, and the
+estate now has a satisfiable one; emptying it is different work.
 
 **FOUR refusal arms set it, and finding the last two is the whole argument for testing near a bug.**
 The first pass marked only `_unscannable_reason` structural. Asserting the property at EVERY site that
