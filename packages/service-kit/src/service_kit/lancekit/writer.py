@@ -23,11 +23,12 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import lance
 
-from service_kit.exceptions import ConflictError
+from service_kit.exceptions import ConflictError, ValidationError
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.catalog_client import catalog_api_client
 from service_kit.lancekit.catalog_client import request_headers as _request_headers
+from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.lancekit.reader import translate_catalog_errors
 
 
@@ -48,13 +49,6 @@ class TableWriter(Protocol):
     def merge_upsert(self, delta: pa.Table, on: str) -> None: ...
     def merge_insert_only(self, delta: pa.Table, on: str) -> None: ...
     def delete(self, predicate: str) -> None: ...
-
-
-#: A LOST COMMIT RACE, by message — pylance 9.0.0 exposes no typed error for it (probed: neither
-#: ``lance.error`` nor the native module carries one), so the message is the only signal there is.
-#: Same markers the catalog's own classifier uses (``catalog/services/dataplane.py``), kept identical
-#: on purpose: one vocabulary for one condition, whichever plane hits it.
-_COMMIT_CONFLICT_MARKERS = ("commit conflict", "concurrent")
 
 
 @contextmanager
@@ -79,8 +73,19 @@ def translate_commit_conflict() -> Iterator[None]:
     try:
         yield
     except OSError as exc:
-        if any(m in str(exc).lower() for m in _COMMIT_CONFLICT_MARKERS):
+        verdict = classify_commit_failure(exc)
+        if verdict is CommitVerdict.RETRYABLE_CONFLICT:
             raise ConflictError(f"annotations changed on the server while this save was committing — re-read and re-send: {exc}") from exc
+        if verdict is CommitVerdict.INCOMPATIBLE:
+            # THE OTHER CONFLICT, and the reason this branch exists at all. Both messages mention
+            # concurrency and only one is safe to retry: here the table was REPLACED underneath the
+            # writer, so the delta describes rows that no longer belong and re-sending it is what
+            # corrupts the table. Matching on the bare word `concurrent` answered this 409 "re-read
+            # and re-send" — the one instruction the caller must not follow.
+            raise ValidationError(
+                "the table changed underneath this save — a concurrent overwrite replaced its contents. "
+                f"This is NOT retryable: re-read the current version and rebuild from it; do not re-send: {exc}"
+            ) from exc
         raise
 
 

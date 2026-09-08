@@ -18,9 +18,11 @@ in both directions — a real conflict is translated, and an unrelated OSError i
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 
-from service_kit.exceptions import ConflictError
+from service_kit.exceptions import ConflictError, DomainError
 from service_kit.lancekit.writer import translate_commit_conflict
 
 
@@ -81,3 +83,35 @@ def test_a_clean_write_passes_through_untouched() -> None:
         seen.append("committed")
 
     assert seen == ["committed"]
+
+
+def test_a_NON_RETRYABLE_conflict_is_never_advised_to_re_send() -> None:
+    """The dangerous case, and the one this module could not see.
+
+    Lance's conflict taxonomy has two outcomes that both mention concurrency, and only one is safe to
+    retry. A RETRYABLE conflict is the ordinary OCC loss: re-read, rebuild, re-send. An INCOMPATIBLE
+    transaction means the table changed underneath the writer — a concurrent Overwrite REPLACED its
+    contents — and the catalog's own classifier says what advising a re-send there costs: "this is NOT
+    retryable... do not re-commit", because the delta describes rows that no longer belong.
+
+    `translate_commit_conflict` matched on the bare word `concurrent`, which appears in both messages,
+    so an incompatible transaction was answered with a 409 whose remedy is the one thing the caller
+    must not do. The catalog has ordered its markers for this since the 2026-07-14 audit; this plane
+    never learned them.
+    """
+    incompatible = OSError("Commit failed: incompatible transaction — a concurrent Overwrite replaced the table")
+    with pytest.raises(DomainError) as caught, translate_commit_conflict():
+        raise incompatible
+    assert not isinstance(caught.value, ConflictError), (
+        "an INCOMPATIBLE transaction was answered 409 're-read and re-send' — the caller's delta describes rows the table no longer has"
+    )
+    assert caught.value.status_code == HTTPStatus.BAD_REQUEST, f"a non-retryable conflict answered {caught.value.status_code}, not 400"
+    assert "not retryable" in str(caught.value.detail).lower(), "the answer does not tell the caller the one thing that matters: do not re-commit"
+
+
+def test_a_RETRYABLE_conflict_still_says_re_send() -> None:
+    """The other direction of the same ordering: the ordinary OCC loss must keep its 409, or a client
+    that correctly branches on 409 stops retrying a save it should retry."""
+    retryable = OSError("Retryable commit conflict for version 2: this Merge transaction was preempted by concurrent transaction")
+    with pytest.raises(ConflictError), translate_commit_conflict():
+        raise retryable

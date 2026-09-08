@@ -93,6 +93,7 @@ from catalog.services import native
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 
 
 log = logging.getLogger(__name__)
@@ -532,20 +533,9 @@ def _dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
 #: conflict (409, re-read + re-commit); anything ELSE — a RustFS 5xx surfaces as ``ArrowIOError``, itself an
 #: ``OSError`` subclass — is a store OUTAGE (503), NOT a client conflict. Collapsing all three to 409 (the
 #: naive design) would loop a doomed retry on a schema mismatch and mislabel an outage as contention.
-_COMMIT_CLIENT_ERROR_MARKERS = ("different schema", "fields did not match", "same version", "invalid input")
-#: NON-RETRYABLE per the format spec's conflict taxonomy (file_format.md, transaction.md: an *Incompatible*
-#: conflict "fails with a non-retryable error"). This was previously lumped in with the retryable conflicts
-#: below and answered with a 409 advising "re-read the table version and re-commit the fragments" — advice
-#: that is actively DANGEROUS: after a concurrent Overwrite, the table's contents were REPLACED, so a client
-#: obeying us would append fragments describing the OLD data into a semantically different table. Silent
-#: corruption, recommended by our own error message. It is a client error: those fragments are now void and
-#: the write must be redone against the current version, not re-committed.
-_COMMIT_INCOMPATIBLE_MARKERS = ("incompatible transaction",)
-#: RETRYABLE contention — the losing side of a genuine race can re-read and re-commit safely.
-_COMMIT_CONFLICT_MARKERS = ("commit conflict", "concurrent")
 #: An Append whose read_version has no committed base (a declared-only/never-written table, or a version
-#: compacted away) — a CLIENT error (400), NOT a store outage (audit 2026-07-14): otherwise a client that
-#: appends to a freshly-declared table (read_version=0) gets a 503 and retries the same version forever.
+#: compacted away). Kept here because `_ABSENCE_MARKERS` below reuses this exact vocabulary for a
+#: different question — "is the thing absent, or merely unreadable?" — which is not a commit verdict.
 _COMMIT_NO_BASE_MARKERS = ("must already exist unless", "manifest was not found", "no such file")
 #: The default non-retryable remedy — the client-direct append's. Its fragments describe data the table
 #: no longer accepts, so the data must be written again, not the metadata re-sent.
@@ -555,27 +545,36 @@ _APPEND_REMEDY = "Discard them, re-read the current version, and re-WRITE the da
 def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exception:
     """Map a raised ``LanceDataset.commit`` ``OSError`` to the right catalog error (audit 2026-07-14).
 
+    THE VERDICT IS SHARED, THE ERROR TYPE IS NOT. `service_kit.lancekit.commit_verdict` owns the
+    vocabulary — which phrases mean which outcome, and crucially the ORDER they are tested in — because
+    two planes were classifying the same condition and had drifted: this one carried the full taxonomy
+    while `lancekit/writer.py` carried two markers and could not see the non-retryable case at all,
+    answering it `409 re-read and re-send`, which is the advice below explains you must never give.
+    Each plane still raises its own errors (`lance_namespace` here, `DomainError` there), so what
+    crosses is the verdict.
+
     ``remedy`` is the sentence the non-retryable branch gives the caller — the work it must redo. It is
     per-door because the doors hold different things: an append holds fragments it must re-write, a
     compaction holds a result whose plan is void.
     """
-    msg = str(exc).lower()
-    if any(m in msg for m in _COMMIT_NO_BASE_MARKERS):
-        return InvalidInputError(f"append target has no committed base version — create or overwrite the table first: {exc}")
-    if any(m in msg for m in _COMMIT_CLIENT_ERROR_MARKERS):
-        return InvalidInputError(f"fragments are incompatible with the table: {exc}")
-    if any(m in msg for m in _COMMIT_INCOMPATIBLE_MARKERS):
-        # NON-RETRYABLE (spec). Do NOT tell the caller to re-commit: the table changed underneath them
-        # (e.g. a concurrent Overwrite), so what they hold describes data that no longer belongs. Advising
-        # a re-commit here is how you corrupt a table. The REMEDY differs by door — an append re-writes its
-        # fragments, a compaction re-plans and re-executes — so the caller names the work it must redo.
-        return InvalidInputError(
-            "commit is incompatible with the table's current transaction — this is NOT retryable: the "
-            f"table changed underneath it (e.g. a concurrent overwrite). {remedy}; do not re-commit: {exc}"
-        )
-    if any(m in msg for m in _COMMIT_CONFLICT_MARKERS):
-        return ConcurrentModificationError(f"commit conflict — re-read the table version and re-commit the fragments: {exc}")
-    return ServiceUnavailableError(f"object store unavailable during commit: {exc}")
+    match classify_commit_failure(exc):
+        case CommitVerdict.NO_BASE:
+            return InvalidInputError(f"append target has no committed base version — create or overwrite the table first: {exc}")
+        case CommitVerdict.CLIENT_ERROR:
+            return InvalidInputError(f"fragments are incompatible with the table: {exc}")
+        case CommitVerdict.INCOMPATIBLE:
+            # NON-RETRYABLE (spec). Do NOT tell the caller to re-commit: the table changed underneath them
+            # (e.g. a concurrent Overwrite), so what they hold describes data that no longer belongs. Advising
+            # a re-commit here is how you corrupt a table. The REMEDY differs by door — an append re-writes its
+            # fragments, a compaction re-plans and re-executes — so the caller names the work it must redo.
+            return InvalidInputError(
+                "commit is incompatible with the table's current transaction — this is NOT retryable: the "
+                f"table changed underneath it (e.g. a concurrent overwrite). {remedy}; do not re-commit: {exc}"
+            )
+        case CommitVerdict.RETRYABLE_CONFLICT:
+            return ConcurrentModificationError(f"commit conflict — re-read the table version and re-commit the fragments: {exc}")
+        case CommitVerdict.STORE_UNAVAILABLE:
+            return ServiceUnavailableError(f"object store unavailable during commit: {exc}")
 
 
 #: The transaction-property marker a run's commit carries, `rask.ingest.run_id=<run_id>`. Rides
@@ -1088,7 +1087,8 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
                 detail = f"{detail}. Valid fields are {', '.join(fields)}"
             log.info("column_op_rejected", extra={"action": action, "error": message})
             raise TableColumnNotFoundError(f"{action}: {detail}") from exc
-        if any(marker in message.lower() for marker in _COMMIT_CONFLICT_MARKERS):
+        verdict = classify_commit_failure(exc)
+        if verdict is CommitVerdict.RETRYABLE_CONFLICT:
             # A LOST RACE, NOT A BAD REQUEST — and the difference is what the caller should do next.
             # Measured 2026-09-07: six concurrent `add_columns` on one table, five lose with
             # `OSError("Retryable commit conflict for version 2: This Merge transaction was preempted by
@@ -1096,11 +1096,19 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
             # a client retries nothing and an operator is paged for contention that resolves itself.
             # Code 14 says re-read and re-commit, which is exactly what Lance calls it: retryable.
             #
-            # AFTER the missing-column test on purpose: `_COMMIT_CONFLICT_MARKERS` carries the bare word
+            # AFTER the missing-column test on purpose: the conflict vocabulary carries the bare word
             # `concurrent`, so a column actually NAMED `concurrent` would match here — it is caught above
             # as the 12 it really is, and a genuine conflict never looks like a missing column (both
             # directions verified against the two regexes).
             raise ConcurrentModificationError(f"{action}: {detail} — re-read the table version and retry") from exc
+        if verdict is CommitVerdict.INCOMPATIBLE:
+            # The OTHER conflict, which this guard could not see while it matched a flat tuple: the table
+            # was REPLACED underneath the op, so retrying is what corrupts it. Sharing the ordered verdict
+            # is what makes the distinction reach every door at once rather than one at a time.
+            raise InvalidInputError(
+                f"{action}: {detail} — this is NOT retryable: the table changed underneath it (e.g. a concurrent overwrite). "
+                "Re-read the current version and re-plan; do not retry this operation"
+            ) from exc
         if _USER_INPUT_MARKER in message or _COLUMN_BAD_REQUEST.search(message):
             log.info("column_op_rejected", extra={"action": action, "error": message})
             raise InvalidInputError(f"{action}: {detail}") from exc
