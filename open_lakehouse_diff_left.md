@@ -2203,12 +2203,37 @@ ingest side; this is its measured cost on the maintenance side.
 the test block asserts all four denials. It is not live: the model has not been pushed to OpenFGA, and
 the vend door does not consult it.
 
-**Closes it, in three parts, and only the first is mine:**
-  1. the write-tier vend accepts `can_maintain` as well as `can_write_data`, so a maintainer can obtain
-     the narrow credential its own rewrite needs;
-  2. the FGA model is pushed to the store — **owner action**, and without it part 1 cannot be OBSERVED,
-     only asserted, which the verification rule forbids;
-  3. the `maintainer` tuple exists for the maintenance service identity in the live store.
+**MEASURED AGAINST THE LIVE FGA STORE 2026-09-08, and part 2 turned out to be already done.** The
+catalog runs UNPINNED (`RASK_FGA_STORE_ID`/`MODEL_ID` unset), so `fga.provision` rewrites the model on
+every boot — deploying `c1-ec10c48f` therefore published `can_maintain` to store
+`01KYPGG8F8MAZTJANME4K077DE` without a separate act. Confirmed on the live model: `table` carries 28
+relations including `can_maintain` and `maintainer`.
+
+Checking the two questions the vend door asks, for `user:service-maintenance` on tables the sweep hit:
+
+    table:audx7ns$t1              can_write_data=False   can_maintain=False    -> 403, root key
+    table:acme-bronze$agnostic    can_write_data=True    can_maintain=False    -> 200, scoped
+    table:sec790713$owned         can_write_data=True    can_maintain=False    -> 200, scoped
+
+So the 78/207 split is explained exactly: the maintenance identity holds `can_write_data` on some
+tables AD HOC and on others not at all, and `can_maintain` is false everywhere because no `maintainer`
+tuple has ever been written. The relation is live and unused.
+
+**Closes it in two parts, and the FIRST IS A DECISION RATHER THAN A KEYSTROKE:**
+  1. **Should `can_maintain` yield a WRITE-TIER storage credential?** The model deliberately separates
+     them — its test block asserts a maintainer has `can_write_data: false` — because
+     `can_write_data` governs LOGICAL writes through the catalog (append, merge, delete rows) while
+     `can_maintain` governs PHYSICAL rewrites that preserve logical content (compaction, index
+     optimization, reclamation). The storage layer cannot express that distinction: both need
+     `PutObject`. So issuing a write-tier credential on `can_maintain` hands a maintainer a key that
+     could, within the table prefix and 900 s, write anything. Narrower than the ROOT key it replaces
+     by an enormous margin — but it is a deliberate widening of what the relation means, and it is a
+     policy judgement about a model authored the same day, not something the code settles.
+  2. the `maintainer` tuple for `user:service-maintenance`, one per warehouse (namespaces and tables
+     inherit it), which is a governance grant against the live store.
+
+**Until then the posture is unchanged and LOUD**: 207 of 285 rewrites a tick signed by the root key,
+announced in the pod's own log and reaching no report, counter or alert.
 
 **Until all three, the honest posture is that the fallback is LOUD rather than silent.** It already
 names itself in the log; what it does not do is reach any report, counter or alert, so an operator sees
