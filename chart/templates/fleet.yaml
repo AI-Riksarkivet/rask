@@ -40,6 +40,13 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- /* THE SECRET NEEDS ITS OWN HASH, and the ConfigMap's does not stand in for it. An env value
+               from a `secretKeyRef` is injected at pod CREATION and never refreshed, so a rotated
+               Secret leaves its consumers holding a dead credential while the render, the reference and
+               every readiness probe stay green. Measured 2026-09-08 on the zones: six of seven held a
+               stale token and every lineage read answered 401 — 2,627 of them, 46% of that service's
+               traffic, surfacing as an empty panel. */}}
+        checksum/dapr-app-token: {{ include (print $root.Template.BasePath "/dapr-app-token.yaml") $root | sha256sum }}
         {{- include "rask.daprAnnotations" (list $root $name $svc.port) | nindent 8 }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}

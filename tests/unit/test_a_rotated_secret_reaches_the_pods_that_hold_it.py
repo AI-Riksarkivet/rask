@@ -58,6 +58,38 @@ def test_every_zone_carries_the_infra_credentials_checksum() -> None:
     assert len(checksums) == 7, f"expected one per zone, found {len(checksums)}"
 
 
+#: Workloads that consume a Secret and do NOT yet hash it into their pod template. Named rather than
+#: excluded silently: each is infrastructure rendered by its own template (a subchart shape or a
+#: StatefulSet), so covering them is a separate change — and an empty list here would read as "all
+#: covered", which is the kind of quiet gap this whole test exists to prevent.
+_UNCOVERED = frozenset({"rask-age", "rask-greptimedb-standalone", "rask-openfga", "rask-otel-collector"})
+
+
+def test_no_lakehouse_workload_consumes_a_secret_it_would_not_be_rolled_for() -> None:
+    """The general rule, not just the zones — a rotation must reach EVERY pod holding the credential.
+
+    Measured 2026-09-08 before this landed: 14 of the 22 workloads that consume a Secret had no hash of
+    it, including the whole lakehouse plane (catalog, lineage, maintenance, the producer and all three
+    stage runners) and `rask-age`, which holds the database password.
+    """
+    docs = _render().split("\n---\n")
+    offenders: list[str] = []
+    for doc in docs:
+        if not re.search(r"^kind: (Deployment|StatefulSet)$", doc, re.MULTILINE):
+            continue
+        named = re.search(r"^  name: (\S+)$", doc, re.MULTILINE)
+        name = named.group(1) if named else "<unnamed>"
+        secrets = {s.strip('"') for s in re.findall(r"secretRef:\s*\n\s*name: (\S+)", doc)}
+        secrets |= {s.strip('"') for s in re.findall(r"secretKeyRef:\s*\n?\s*(?:\{\s*)?name: (\S+)", doc)}
+        if not {s for s in secrets if s} or name in _UNCOVERED:
+            continue
+        # `checksum/config` is the ConfigMap's and does not stand in for a Secret's.
+        if not {c for c in re.findall(r"checksum/(\S+):", doc) if c != "config"}:
+            offenders.append(name)
+
+    assert not offenders, f"consume a Secret with no checksum for it, so a rotation would not reach them: {sorted(offenders)}"
+
+
 def test_the_checksum_TRACKS_the_secret_rather_than_being_a_constant() -> None:
     """The half that makes the first test mean something.
 

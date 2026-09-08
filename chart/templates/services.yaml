@@ -19,6 +19,13 @@ spec:
     matchLabels: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
+      annotations:
+        {{- /* THE SECRET NEEDS ITS OWN HASH — a `secretKeyRef` env is injected at pod CREATION and
+               never refreshed, so a rotated Secret leaves this pod holding a dead credential while the
+               render, the reference and every probe stay green. Measured 2026-09-08 on the zones: six
+               of seven held a stale token, 2,627 refusals, 46 percent of lineage's traffic, surfacing
+               as an empty panel. */}}
+        checksum/dapr-app-token: {{ include (print $root.Template.BasePath "/dapr-app-token.yaml") $root | sha256sum }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: catalog
@@ -352,6 +359,13 @@ spec:
     matchLabels: { app.kubernetes.io/component: lineage, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
+      annotations:
+        {{- /* THE SECRET NEEDS ITS OWN HASH — a `secretKeyRef` env is injected at pod CREATION and
+               never refreshed, so a rotated Secret leaves this pod holding a dead credential while the
+               render, the reference and every probe stay green. Measured 2026-09-08 on the zones: six
+               of seven held a stale token, 2,627 refusals, 46 percent of lineage's traffic, surfacing
+               as an empty panel. */}}
+        checksum/dapr-app-token: {{ include (print $root.Template.BasePath "/dapr-app-token.yaml") $root | sha256sum }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: lineage
