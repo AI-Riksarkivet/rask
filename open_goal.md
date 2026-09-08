@@ -58,9 +58,11 @@ source. Comments carry rationale and provenance, never history.**
 
 ## VERIFICATION
 
-**Per commit: `uv run pytest` count, `uvx ty check`, `uv run ruff check`; anything deployable BUILT with
-Dagger, DEPLOYED to k3s, and OBSERVED working. Never claim a thing works before showing it working.
-PUSH every commit — 28 sat unpushed once already.**
+**Per commit: `uvx ty check`, `uv run ruff check`, and the TESTPATHS the change touches. The FULL
+`uv run pytest` is ~16 min — owner ruling 2026-09-08: not per commit. Run it once per batch, in the
+background, and never block a commit on it (two were killed by session teardown and bought nothing).
+Anything deployable BUILT with Dagger, DEPLOYED to k3s, and OBSERVED working. Never claim a thing works
+before showing it working. PUSH every commit — 28 sat unpushed once already.**
 
 ## STOPPING
 
