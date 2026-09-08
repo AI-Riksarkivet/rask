@@ -2171,7 +2171,7 @@ anything is hiding.
 **Not blocking today regardless:** `report_is_clean` refuses on the first condition, 615 real findings,
 so the depth gaps are not the binding constraint on the purge.
 
-### H13 · 207 of 285 rewrites a tick fall back to the RustFS ROOT key, and the estate says so out loud — **HIGH**
+### H13 · 207 of 285 rewrites a tick fall back to the RustFS ROOT key — **THE DOOR IS FIXED AND UNREACHABLE; A ROUTER RUNG DENIES FIRST**
 **MEASURED LIVE 2026-09-08** on `c1-ec10c48f`, one sweep tick through `POST /maintenance-cron`:
 
     credential vend 200 -> SCOPED    78
@@ -2232,8 +2232,35 @@ tuple has ever been written. The relation is live and unused.
   2. the `maintainer` tuple for `user:service-maintenance`, one per warehouse (namespaces and tables
      inherit it), which is a governance grant against the live store.
 
-**Until then the posture is unchanged and LOUD**: 207 of 285 rewrites a tick signed by the root key,
-announced in the pod's own log and reaching no report, counter or alert.
+**BOTH PARTS LANDED 2026-09-08 AND THE NUMBER DID NOT MOVE — the door fix is correct and UNREACHABLE.**
+`cd4697ab` deployed as `h13-cd4697ab`; 92 `maintainer` tuples written (one per warehouse, origin
+`admin_api`); `can_maintain` verified TRUE on the live store for the tables that were failing. Then a
+sweep tick:
+
+    before   outcomes 440   AMBIENT 207   SCOPED 78   vend 403 x207
+    after    outcomes 440   AMBIENT 207   SCOPED 78   vend 403 x207
+
+**A SECOND GATE, ONE LAYER UP, REFUSES FIRST.** `fga_deps` lists `credentials` in
+`_DATA_READ_ACTIONS`, so the ROUTER requires `can_read_data` on the table before the endpoint runs —
+the endpoint's own header says so ("the router-level `authorize` already required `can_read_data`").
+Measured for `user:service-maintenance` on a table that was falling back:
+
+    table:audx7ns$t1   can_read_data=False   can_get_metadata=False   can_write_data=False   can_maintain=True
+
+So the 403 was never the write-tier rung. **The model's own separation is what collides**: a maintainer
+is deliberately NOT a reader (`model.fga.yaml` asserts it), and the vend route assumes every credential
+request implies a data read. The two rules are individually right and jointly deny.
+
+**The tuples stay.** They confer `maintainer` and nothing else, `can_maintain` is consulted only by the
+door, and the door is currently unreachable — so they are inert today and correct for the end state.
+
+**What is left is ONE more decision of the same kind as the last:** `credentials` must stop being a
+pure `can_read_data` action. Either the router admits `can_maintain` as an alternative for that action,
+or the route's required rung becomes tier-aware. Both widen a central authz seam, which is the same
+class of change the owner ruled on for the door — so it is asked, not assumed. The three obvious
+non-answers: granting the maintenance identity a reader rung (defeats the separation the model exists
+to state), moving `credentials` out of the gated set (ungates the READ-tier vend), and leaving it
+(207 root-signed rewrites a tick).
 
 **Until all three, the honest posture is that the fallback is LOUD rather than silent.** It already
 names itself in the log; what it does not do is reach any report, counter or alert, so an operator sees
