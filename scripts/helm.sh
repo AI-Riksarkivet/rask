@@ -1,16 +1,33 @@
 #!/usr/bin/env bash
 # The ONE seam every helm call goes through — the same role scripts/dagger-image.sh plays for builds.
 #
-# WHY THIS EXISTS. The rask release lives in POSTGRES, not in a Kubernetes Secret, since 2026-08-15:
-# helm embeds the whole chart in every revision and ~880 KB of chart/charts/*.tgz is already-compressed
-# archives gzip cannot shrink, so the release secret crossed Kubernetes' hard 1 MiB object limit
-# (v28 964 KB -> v35 1,048.5 KB against a 1,024 KB ceiling) and NO upgrade could be stored at all.
+# WHY THIS EXISTS. Helm embeds the whole chart in every revision, and ~880 KB of chart/charts/*.tgz is
+# already-compressed archives gzip cannot shrink, so on 2026-08-15 the release SECRET crossed
+# Kubernetes' hard 1 MiB object limit (v28 964 KB -> v35 1,048.5 KB against a 1,024 KB ceiling) and no
+# upgrade could be stored at all. The release moved to POSTGRES.
 #
-# THE HAZARD THIS GUARDS, and it is not "helm errors". A helm invocation without HELM_DRIVER=sql reads
-# the EMPTY Secret backend, concludes the release is absent, and — since the deploy targets all use
-# `upgrade --install` — INSTALLS OVER A LIVE ESTATE instead of upgrading it. Nothing fails; it simply
-# answers from the wrong store. That is why this script exits rather than falling through: a silent
-# success against the wrong backend is worse than any error.
+# THE SECRET STORE IS AUTHORITATIVE AGAIN — owner ruling 2026-09-08, after both stores were found
+# holding `rask` and disagreeing (SQL rev 42, 2026-08-28; Secret rev 108, 2026-09-07). Everything since
+# late August was written to the Secret store, so the SQL rows are stale residue and upgrading from
+# them would roll the fleet back ten days of chart state.
+#
+# IT FITS TODAY AND THE MARGIN IS NOT LARGE, measured off the live objects rather than assumed — the
+# `data` field is base64 in the JSON view, so a size read from `kubectl get -o json` overstates the
+# stored object by a third:
+#
+#     v99  834.7 KB raw    v108  895.4 KB raw    ceiling 1,024 KB
+#     ~6.7 KB per revision -> roughly 19 revisions of headroom
+#
+# So this is a reprieve, not a resolution, and every KB added to `chart/` spends it: helm stores the
+# TEMPLATES too, so prose in a template counts against the same ceiling as a rendered manifest.
+#
+# THE REAL FIX IS STILL SPLITTING THE CHART (infra vs app), which is what would make the headroom
+# stop mattering. The decision not to split it now, with the four measured alternatives and the
+# conditions that reopen it, is in docs/DECISIONS.md.
+#
+# THE HAZARD THIS STILL GUARDS is answering from the wrong store. Every deploy target uses
+# `upgrade --install`, so a call that reads a store which does not hold the release concludes it is
+# absent and INSTALLS OVER A LIVE ESTATE. Nothing fails; it simply answers from the wrong history.
 #
 # THE REAL FIX IS STILL SPLITTING THE CHART (infra vs app), which would let the app release fit the
 # Secret backend again and delete this file. The decision NOT to split it now — with the four
@@ -91,22 +108,17 @@ fi
 # thing this file exists to prevent, and only a person knows which history is the real one.
 SECRET_RELEASES="$(helm list -aq 2>/dev/null || true)"
 if [[ -n "$SECRET_RELEASES" ]]; then
-  case "${1:-}" in
-    upgrade|install|uninstall|delete|rollback)
-      {
-        echo "!! helm: BOTH release stores hold a release — refusing to $1, because which history is real is not this script's call."
-        echo "     SQL/Postgres : $(echo "$SQL_RELEASES" | tr '\n' ' ')"
-        echo "     Secret store : $(echo "$SECRET_RELEASES" | tr '\n' ' ')"
-        echo "   Compare them, then re-run with the driver named explicitly:"
-        echo "     HELM_DRIVER=secret helm $*"
-        echo "     HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING='$DSN' helm $*"
-      } >&2
-      exit 3
-      ;;
-  esac
-  echo ">> helm: both stores hold a release — reading from SQL for '$1'. (Secret store also has one.)" >&2
+  # BOTH STORES HOLD ONE, and the owner ruled which is real (2026-09-08): the Secret store. Said out
+  # loud on every call rather than silently, because "both stores hold a release" is the state that
+  # produced a ten-day-stale upgrade, and an operator who sees this line and disagrees needs to stop.
+  echo ">> helm: both stores hold a release — using the SECRET store (owner ruling 2026-09-08; SQL rows are residue)." >&2
+  echo "   SQL/Postgres : $(echo "$SQL_RELEASES" | tr '\n' ' ')" >&2
+  echo "   Secret store : $(echo "$SECRET_RELEASES" | tr '\n' ' ')" >&2
+  unset HELM_DRIVER HELM_DRIVER_SQL_CONNECTION_STRING
+  exec helm "$@"
 fi
 
+# Only SQL holds it — the pre-ruling estate, or one restored from that history.
 export HELM_DRIVER=sql
 export HELM_DRIVER_SQL_CONNECTION_STRING="$DSN"
 exec helm "$@"
