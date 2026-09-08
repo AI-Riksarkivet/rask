@@ -209,6 +209,7 @@ class _Token:
 _OTHER_SERVICE_PAIRS: dict[tuple[str, str], str] = {
     ("table", "can_read_data"): "catalog tables.py (list_objects filter) + viewer pages.py (#90 page BYTES)",
     ("table", "can_write_data"): "catalog/api/v1/endpoints/credentials.py (write-tier vend)",
+    ("table", "can_maintain"): "catalog/api/v1/endpoints/credentials.py (write-tier vend, the maintainer rung)",
     ("table", "can_get_metadata"): "lineage fga_deps.py + viewer datasets.py/pages.py (#90 page LISTING)",
     ("namespace", "can_create_table"): "medallion/services/train.py + transform.py default",
     ("namespace", "can_promote"): "medallion silver->gold stage runner (chart requiredAction)",

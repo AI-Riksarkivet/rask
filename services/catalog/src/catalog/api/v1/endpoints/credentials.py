@@ -67,15 +67,33 @@ async def vend_credentials(
     # A write-tier vend needs the writer rung on top of the reader rung the router guard enforced.
     if tier == "write" and settings.fga_enabled and token is not None and client is not None:
         obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-        try:
-            ok = await fga.check(client, user=token.sub, relation="can_write_data", obj=obj)
-        except ServiceUnavailableError:  # authz outage during a WRITE-credential request — audit, fail closed
-            audit("can_write_data", FAILURE, subject=token.sub, resource=obj, reason="authz_unavailable")
-            raise
+        # EITHER RUNG OPENS THIS DOOR, and they mean different things. `can_write_data` is a LOGICAL
+        # writer — it may change what the table says. `can_maintain` is a PHYSICAL one: compaction,
+        # index optimization and version reclamation rewrite files while preserving content, and the
+        # model keeps the two apart (a maintainer is denied read, write, drop and promote).
+        #
+        # The object store cannot hold that distinction — a rewrite and a write are both `PutObject` —
+        # so a maintainer necessarily receives a write-TIER credential, scoped to this table's prefix
+        # for 900 s. That is the trade the owner ruled on 2026-09-08, and the alternative is what was
+        # measured before it: 207 of 285 rewrites a tick signed by the deployment's ROOT key, because a
+        # refused vend falls back to the ambient credential (`credentials.write_options_for`). Bounding
+        # a maintainer to its own table is the narrower of the two by an enormous margin.
+        granted_by: str | None = None
+        for relation in ("can_write_data", "can_maintain"):
+            try:
+                if await fga.check(client, user=token.sub, relation=relation, obj=obj):
+                    granted_by = relation
+                    break
+            except ServiceUnavailableError:  # authz outage during a WRITE-credential request — audit, fail closed
+                audit(relation, FAILURE, subject=token.sub, resource=obj, reason="authz_unavailable")
+                raise
         # #41 audit the write-tier authz decision — a denied attempt to obtain WRITE creds is high-value.
-        audit("can_write_data", ALLOW if ok else DENY, subject=token.sub, resource=obj, tier="write")
-        if not ok:
-            raise PermissionDeniedError(f"can_write_data required on {obj} for a write-tier credential")
+        # ONE line naming the rung that answered, never one per probe: a maintainer is denied
+        # `can_write_data` by design on every single tick, and auditing that would bury the denials that
+        # matter under hundreds of routine ones an hour.
+        audit(granted_by or "can_write_data", ALLOW if granted_by else DENY, subject=token.sub, resource=obj, tier="write")
+        if granted_by is None:
+            raise PermissionDeniedError(f"can_write_data or can_maintain required on {obj} for a write-tier credential")
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if described.location is None:  # no object-store location to scope to → fall back to server-mediated
         return CredentialResponse(mode="server_mediated")
