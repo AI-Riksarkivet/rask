@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 145 open, 87 struck.**
+**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 144 open, 88 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -2670,7 +2670,25 @@ registry does not account for. Worth its own row when someone reads them.
 names itself in the log; what it does not do is reach any report, counter or alert, so an operator sees
 73% root-signed rewrites only by reading the pod.
 
-### H12 · The scoped credential turns a base-ref "no" into an "unknown", falsely refusing 69 compactions a tick — **NAMED 2026-09-08 (`bddc415b`); THE REMEDY IS AN OWNER CALL**
+### ~~H12 · The scoped credential turns a base-ref "no" into an "unknown", falsely refusing 69 compactions a tick~~ — **CLOSED 2026-09-08, MEASURED LIVE**
+
+**IT NEEDED NO OWNER DECISION, AND THE HEADER SAYING SO WAS THE STALE PART.** This row's own body had
+already concluded it — *"H12 does not need a scope decision of its own — it needs C1 finished"* — and
+C1's remaining clause (per-base vending: the union of `base_paths` with read on the inherited ones)
+landed the same day as `ec10c48f`. The header was never updated, so a finished row sat in the register
+as blocked on a person. Found by READING it during a triage pass rather than by trusting its title.
+
+**BOTH CLAUSES MEASURED GONE on release 111**, over 40 minutes of sweep ticks and vends:
+
+    base_paths_compaction_refusal / probe denials     0
+    maintenance_refused_protected_base              802   (the shallow-clone guard, CORRECT)
+    POST /v1/table/{id}/credentials                  15   all 200, zero 403
+
+The 802 are not this row: a protected base is a positive determination that another dataset resolves
+its files through these bytes, which is the guard doing its job (§ H3's cross-root half). What this row
+was about — a DENIED probe read as an unknown, stalling compaction forever — no longer occurs, and the
+184 `403 Forbidden` vends its last open clause asked about are now zero.
+
 **MEASURED LIVE 2026-09-08** on `h11-24483c84`, from one sweep tick driven through `POST
 /maintenance-cron` (`planned 440, published 440`):
 
