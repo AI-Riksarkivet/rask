@@ -311,3 +311,42 @@ def test_the_isolation_e2e_reads_the_keys_the_vendors_actually_emit() -> None:
     # The e2e must read the prefixed spellings too — a rename applied to the vendors and not to the
     # one consumer that exercises them live is precisely what this pin exists to catch.
     assert not unknown, f"the isolation e2e reads {sorted(unknown)}, which no vendor emits (diff2 F5)"
+
+
+def test_a_declared_base_is_granted_READ_even_at_write_tier() -> None:
+    """A table whose fragments resolve through a base cannot use its credential without reading there.
+
+    MEASURED LIVE 2026-09-08 (§ H12): the sweep vends a table-scoped write credential — the right
+    mechanism — then probes a base the manifest declares. ACCESS_DENIED, so `probed=None`, so the
+    compaction gate refuses. 69 datasets a tick, against a base the root credential shows is not a
+    dataset root at all, i.e. every one of those refusals was false.
+
+    READ and never WRITE, at either tier. The table reads THROUGH the base; it does not own it, and a
+    write grant on another dataset's root is the blast radius the whole vending design exists to avoid.
+    § C1: "read on inherited bases, write on `target_bases`, never on reference-only bases" — this is
+    the first of the three, and the other two need `target_bases` evidence a manifest read does not yet
+    provide.
+    """
+    policy: Any = build_session_policy("bkt", "tables/db1$users", "write", bases=("s3://bkt/shared/src.lance",))
+    objects = [st for st in policy["Statement"] if st["Action"] != ["s3:ListBucket"]]
+
+    table = next(st for st in objects if "tables/db1$users" in st["Resource"])
+    base = next(st for st in objects if "shared/src.lance" in st["Resource"])
+
+    assert "s3:PutObject" in table["Action"], "the table's own prefix keeps its write tier"
+    assert base["Action"] == ["s3:GetObject"], f"a base must be readable and never writable: {base['Action']}"
+
+
+def test_a_base_carrying_an_IAM_METACHARACTER_is_refused_like_a_prefix() -> None:
+    """The prefix guard exists because `*`/`?` cannot be escaped inside a Resource ARN or an `s3:prefix`
+    condition. A base path arrives off a MANIFEST rather than through the create doors'
+    `require_safe_segments`, so it is the less trusted of the two and needs the guard more."""
+    for hostile in ("s3://bkt/shared/*", "s3://bkt/sh?red/src.lance"):
+        with pytest.raises(ValueError, match="wildcard metacharacter"):
+            build_session_policy("bkt", "tables/db1$users", "read", bases=(hostile,))
+
+
+def test_no_bases_leaves_the_policy_EXACTLY_as_it_was() -> None:
+    """The common case is a table with no bases at all, and it must not pay for this — byte-identical,
+    so the change cannot widen a single-bucket deployment's grant by accident."""
+    assert build_session_policy("bkt", "tables/db1$users", "write", bases=()) == build_session_policy("bkt", "tables/db1$users", "write")

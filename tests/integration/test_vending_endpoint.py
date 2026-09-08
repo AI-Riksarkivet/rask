@@ -7,6 +7,7 @@ in test_vending.py; the live STS path is proven by the e2e against RustFS.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
@@ -35,7 +36,7 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
     captured: dict[str, object] = {}
 
     class _FakeVendor:
-        def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials:
+        def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials:
             captured.update(table_location=table_location, tier=tier)
             return VendedCredentials(
                 storage_options={"access_key_id": "AK", "secret_access_key": "SK", "session_token": "ST"},

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol, assert_never, cast, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -54,7 +54,7 @@ class VendedCredentials(BaseModel):
 class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
         """Return creds for ``table_location`` at ``tier``.
 
         ``web_identity_token`` is the caller's OIDC JWT — used ONLY by :class:`WebIdentityVendor` (the store
@@ -90,7 +90,18 @@ _WRITE_ACTIONS = (
 _DEFAULT_VEND_ROLE_ARN = "arn:aws:iam::000000000000:role/lance-vend"
 
 
-def build_session_policy(bucket: str, prefix: str, tier: Tier) -> dict[str, object]:
+def _reject_iam_metacharacters(what: str, value: str) -> None:
+    """``*`` and ``?`` are wildcards inside a Resource ARN and an ``s3:prefix`` condition, with no escape.
+
+    A value carrying one widens the grant to siblings, so both the table prefix and every base path go
+    through here. The base path needs it MORE: a prefix comes off the create doors, which already ran
+    ``identifiers.require_safe_segments``, while a base path comes off a MANIFEST.
+    """
+    if any(c in value for c in ("*", "?")):
+        raise ValueError(f"{what} {value!r} contains an IAM wildcard metacharacter ('*'/'?'); it would widen the vended policy to sibling objects")
+
+
+def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[str] = ()) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
     Two statements: ``s3:ListBucket`` on the bucket gated by an ``s3:prefix``
@@ -99,42 +110,77 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier) -> dict[str, obje
     AbortMultipartUpload. As an STS *session* policy this can only RESTRICT the
     catalog's role (intersection-only), never widen it.
 
+    ``bases`` are the base paths the table's manifest declares, each granted READ and never write, at
+    either tier. A table whose fragments carry a ``base_id`` resolves them THROUGH those paths, so a
+    credential that cannot read them is scoped to less than the table actually is — measured 2026-09-08
+    as 69 datasets a tick refused compaction because the maintainer could not probe a declared base
+    (§ H12), against a base the root credential shows is not a dataset root at all.
+
+    READ ONLY is the whole of the privilege being added, and the asymmetry is deliberate: the table
+    reads through the base, it does not own it, and a write grant on another dataset's root is exactly
+    the blast radius vending exists to bound. § C1's remaining two rights — write on ``target_bases``,
+    nothing on reference-only bases — need evidence a manifest read does not yet distinguish.
+
+    One grant shape serves both base layouts, and the spec is why (``file_format.md`` § Base Path
+    System): for ``is_dataset_root`` the files sit under the base's ``data/``/``_deletions/``/
+    ``_indices/``, and for a plain base "the base path points directly to the file directory" — both
+    UNDER the base path, so ``<base>/*`` covers each without the policy having to read the flag. It also
+    covers ``_versions/``, which is what the maintainer's dataset-root probe actually asks for.
+
     Raises:
-        ValueError: if ``prefix`` carries an IAM wildcard metachar (``*``/``?``). These are wildcards
-            inside a Resource ARN and an ``s3:prefix`` condition with no way to escape them, so a prefix
-            holding one would widen the grant to siblings. The create doors already reject such a segment
-            (``identifiers.require_safe_segments``); this is the belt behind that suspenders.
+        ValueError: if ``prefix`` or any base carries an IAM wildcard metachar (``*``/``?``) — see
+            :func:`_reject_iam_metacharacters`.
     """
-    if any(c in prefix for c in ("*", "?")):
-        raise ValueError(f"prefix {prefix!r} contains an IAM wildcard metacharacter ('*'/'?'); it would widen the vended policy to sibling objects")
+    _reject_iam_metacharacters("prefix", prefix)
     prefix = prefix.rstrip("/")
     obj_actions = list(_WRITE_ACTIONS if tier == "write" else _READ_ACTIONS)
     list_prefixes = [f"{prefix}/*"] if prefix else ["*"]
     obj_resource = f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
-    return {
-        "Version": "2012-10-17",
-        "Statement": [
+    statements: list[dict[str, object]] = [
+        {
+            "Sid": "ListTablePrefix",
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": f"arn:aws:s3:::{bucket}",
+            "Condition": {"StringLike": {"s3:prefix": list_prefixes}},
+        },
+        {
+            "Sid": "TableObjects",
+            "Effect": "Allow",
+            "Action": obj_actions,
+            "Resource": obj_resource,
+        },
+    ]
+    for n, base in enumerate(bases):
+        _reject_iam_metacharacters("base path", base)
+        base_bucket, base_prefix = split_s3_location(base)
+        base_prefix = base_prefix.rstrip("/")
+        # A base may live in another BUCKET, so it needs its own pair of statements rather than another
+        # resource on the table's: the ListBucket resource IS the bucket ARN.
+        statements.append(
             {
-                "Sid": "ListTablePrefix",
+                "Sid": f"ListBase{n}",
                 "Effect": "Allow",
                 "Action": ["s3:ListBucket"],
-                "Resource": f"arn:aws:s3:::{bucket}",
-                "Condition": {"StringLike": {"s3:prefix": list_prefixes}},
-            },
+                "Resource": f"arn:aws:s3:::{base_bucket}",
+                "Condition": {"StringLike": {"s3:prefix": [f"{base_prefix}/*"] if base_prefix else ["*"]}},
+            }
+        )
+        statements.append(
             {
-                "Sid": "TableObjects",
+                "Sid": f"BaseObjects{n}",
                 "Effect": "Allow",
-                "Action": obj_actions,
-                "Resource": obj_resource,
-            },
-        ],
-    }
+                "Action": list(_READ_ACTIONS),
+                "Resource": f"arn:aws:s3:::{base_bucket}/{base_prefix}/*" if base_prefix else f"arn:aws:s3:::{base_bucket}/*",
+            }
+        )
+    return {"Version": "2012-10-17", "Statement": statements}
 
 
 class ModeBVendor:
     """No vending: data flows through the catalog's server-mediated endpoints."""
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
         return None
 
 
@@ -202,9 +248,9 @@ class StsVendor:
             self._client = sts_client(region=self._region, endpoint=self._endpoint, access_key=self._access_key, secret_key=self._secret_key)
         return cast(dict[str, object], self._client.assume_role(**kwargs))
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
         bucket, prefix = split_s3_location(table_location)
-        policy = build_session_policy(bucket, prefix, tier)
+        policy = build_session_policy(bucket, prefix, tier, bases)
         resp = self._assume_role(
             RoleArn=self._role_arn,
             RoleSessionName="lance-catalog-vend",
@@ -272,7 +318,7 @@ class WebIdentityVendor:
             self._client = sts_client(region=self._region, endpoint=self._endpoint, unsigned=True)
         return cast(dict[str, object], self._client.assume_role_with_web_identity(**kwargs))
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
         if not web_identity_token:  # no caller token to exchange → fall back to server-mediated
             return None
         bucket, prefix = split_s3_location(table_location)
@@ -280,7 +326,7 @@ class WebIdentityVendor:
             RoleArn=self._role_arn,
             RoleSessionName="lance-catalog-vend",
             WebIdentityToken=web_identity_token,
-            Policy=json.dumps(build_session_policy(bucket, prefix, tier)),
+            Policy=json.dumps(build_session_policy(bucket, prefix, tier, bases)),
             DurationSeconds=self._ttl,
         )
         creds = cast(dict[str, object], resp["Credentials"])

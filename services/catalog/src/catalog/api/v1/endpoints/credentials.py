@@ -14,6 +14,7 @@ session policy then enforces the same scope at the object store.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 import lance
@@ -36,6 +37,11 @@ from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
+from service_kit.lakehouse.features import manifest_base_path_refs
+from service_kit.lakehouse.objectfs import same_store_uri
+
+
+log = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/v1/table", tags=["credentials"])
@@ -81,12 +87,12 @@ async def vend_credentials(
         return CredentialResponse(mode="server_mediated")
     # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
     # A tiny ROOT-cred manifest read to learn the version — not the byte-proxy (no data bytes move).
-    read_version = await run_in_threadpool(_current_version, described.location, settings.storage_options())
+    read_version, declared_bases = await run_in_threadpool(_dataset_facts, described.location, settings.storage_options())
     # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool. A rejected
     # exchange is most often the caller's token (web_identity: expired / untrusted issuer) → 401; otherwise
     # the STS backend is unavailable/misconfigured → 503. Either way a meaningful 4xx/5xx, never a bare 500.
     try:
-        creds = await run_in_threadpool(vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token)
+        creds = await run_in_threadpool(vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=declared_bases)
     except ClientError as exc:
         # A REJECTED exchange (the STS backend refused the request). Only web_identity re-presents the
         # caller's token, so only there is a rejection an AUTH problem (401); a rejection in any other mode
@@ -111,10 +117,32 @@ async def vend_credentials(
     return CredentialResponse(mode=mode, credentials=creds, location=described.location, read_version=read_version)
 
 
-def _current_version(location: str, storage_options: dict[str, str]) -> int:
-    """The current Lance version at ``location`` (the client's optimistic-append base); 0 for a
-    declared-only/new table with no readable dataset yet."""
+def _dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, tuple[str, ...]]:
+    """``(current version, declared base paths)`` from ONE root-cred manifest read.
+
+    The version is the client's optimistic-append base; 0 for a declared-only/new table with no
+    readable dataset yet. The bases are what the vended policy must also be able to READ — a table
+    whose fragments carry a ``base_id`` resolves them through those paths, so a credential scoped to
+    the table prefix alone is scoped to less than the table is (§ H12, measured: 69 datasets a tick
+    refused compaction because the maintainer could not probe a declared base).
+
+    Both facts come off the same handle deliberately: this read already existed for the version, and a
+    second open to learn the bases would double the manifest reads on every vend.
+
+    Base spellings are normalised through :func:`same_store_uri` because a manifest states a base in
+    the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
+    """
     try:
-        return int(lance.dataset(location, storage_options=storage_options).version)
+        ds = lance.dataset(location, storage_options=storage_options)
     except (ValueError, OSError):
-        return 0
+        return 0, ()
+    bases: list[str] = []
+    try:
+        for ref in manifest_base_path_refs(ds):
+            bases.append(same_store_uri(location, ref.path))
+    except Exception:
+        # A base we cannot SPELL is one the policy must not guess at. Vending without it yields exactly
+        # today's behaviour — the narrower credential — rather than a wrong grant.
+        log.warning("vend_base_paths_unreadable", extra={"location": location}, exc_info=True)
+        bases = []
+    return int(ds.version), tuple(bases)
