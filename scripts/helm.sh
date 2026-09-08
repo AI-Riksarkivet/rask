@@ -73,9 +73,38 @@ DSN="postgresql://${AGE_USER}@${AGE_IP}:5432/${AGE_DB}?sslmode=disable"
 # Does the SQL store actually hold a release? `helm list -aq` under the driver answers without needing
 # any knowledge of the schema. Empty (or erroring) means this release is not there — pass through, and
 # say so, because a silent switch in either direction is the failure mode this file exists to prevent.
-if [[ -z "$(HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING="$DSN" helm list -aq 2>/dev/null)" ]]; then
+SQL_RELEASES="$(HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING="$DSN" helm list -aq 2>/dev/null || true)"
+if [[ -z "$SQL_RELEASES" ]]; then
   echo ">> helm: SQL release store reachable but EMPTY — using the default driver for '$1'." >&2
   exec helm "$@"
+fi
+
+# BOTH STORES POPULATED IS NOT A CHOICE THIS SCRIPT MAY MAKE. The rule above — "a store with releases
+# in it is the store in use" — is only sound while exactly ONE store has them. Measured 2026-09-08:
+# SQL held rask rev 42 (Aug 28) while the Secret store held rev 108 (Sep 7, written 24 h earlier), so
+# the probe selected a release ten days stale and an `upgrade` would have rewritten the whole fleet
+# from that manifest. That is the same class of harm the header describes, arrived at from the other
+# direction: not "installs over a live estate", but "upgrades it from the wrong history".
+#
+# A READ still answers, because refusing to answer makes the divergence harder to diagnose than it
+# already is — it just says which store it came from. A MUTATION refuses: picking one silently is the
+# thing this file exists to prevent, and only a person knows which history is the real one.
+SECRET_RELEASES="$(helm list -aq 2>/dev/null || true)"
+if [[ -n "$SECRET_RELEASES" ]]; then
+  case "${1:-}" in
+    upgrade|install|uninstall|delete|rollback)
+      {
+        echo "!! helm: BOTH release stores hold a release — refusing to $1, because which history is real is not this script's call."
+        echo "     SQL/Postgres : $(echo "$SQL_RELEASES" | tr '\n' ' ')"
+        echo "     Secret store : $(echo "$SECRET_RELEASES" | tr '\n' ' ')"
+        echo "   Compare them, then re-run with the driver named explicitly:"
+        echo "     HELM_DRIVER=secret helm $*"
+        echo "     HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING='$DSN' helm $*"
+      } >&2
+      exit 3
+      ;;
+  esac
+  echo ">> helm: both stores hold a release — reading from SQL for '$1'. (Secret store also has one.)" >&2
 fi
 
 export HELM_DRIVER=sql

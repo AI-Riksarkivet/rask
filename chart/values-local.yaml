@@ -92,3 +92,20 @@ docs:
 rustfs:
   maintenanceAccessKey: rask-maintenance
   medallionAccessKey: rask-medallion
+
+# EXTERNAL SECRETS OPERATOR — the sanctioned path for a pod with NO Dapr sidecar (the Ray lane, the
+# seven web zones, the runners), which cannot call `/v1.0/secrets/*` and therefore cannot use the
+# store the rest of the fleet uses. Owner ruling 2026-09-08: "Never secret through envs. Either from
+# ESO, secret store dapr and STS for zero trust."
+#
+# It lives HERE rather than as a `--set` for the reason this whole file exists: a flag omitted from
+# one later upgrade reverts the setting silently, and a credential path that reverts silently is
+# worse than one that was never enabled.
+#
+# Turning it on also makes the OpenBao seed Job provision ESO's AUTH half — the kubernetes auth
+# backend, a policy granting READ on exactly `<kvMount>/data/<secretPath>`, and the role bound to the
+# operator's ServiceAccount. Measured 2026-09-08: with only the KV half seeded the operator ran 3/3
+# with ZERO SecretStores and every ExternalSecret would have sat in SecretSyncedError, so the toggle
+# alone was never sufficient.
+externalSecrets:
+  enabled: true

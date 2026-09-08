@@ -700,7 +700,10 @@ k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the r
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	IMGARGS="--set image.localImages=true"; \
 	LIVE=$$(mktemp); \
-	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
+	if [ -s chart/values-live-pins.yaml ]; then \
+	  IMGARGS="-f chart/values-live-pins.yaml"; \
+	  echo ">> images pinned from chart/values-live-pins.yaml — what the CLUSTER runs (make k3s-pins to refresh)"; \
+	elif $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
 	  IMGARGS="-f $$LIVE"; \
 	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
 	fi; \
