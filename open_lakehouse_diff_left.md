@@ -1802,7 +1802,26 @@ recorded failure that once put the whole fleet on `:dev` tags. So this half is v
 TEST and is not deployed hardening; it wants the owner's next release. The same applies to § H9's ESO
 provisioning, which additionally needs `externalSecrets.enabled=true`.
 
-**FOUR OF THE FIVE HOLD IT FOR NOTHING, and that half is safe to fix now.** The shared `rask-app`
+**THE FOUR-SERVICE HALF IS NOW DEPLOYED AND VERIFIED IN THE RUNNING PODS — 2026-09-08.** The chart
+already withheld the fleet secret from every service without storage code, so the live Deployments were
+converged to what the chart renders (`envFrom` reduced to `rask-config` alone) rather than left waiting
+for a release. That direction matters: it removes drift instead of creating it, and `helm never
+corrects drift` (the estate's own recorded rule) means the reverse would have survived every upgrade.
+
+    before   gateway / notifications / compute / flows   envFrom: rask-config, rask-app
+    after    gateway / notifications / compute / flows   envFrom: rask-config
+
+    AWS_ACCESS_KEY_ID in the RUNNING pod   gateway <ABSENT>  notifications <ABSENT>
+                                           compute <ABSENT>  flows <ABSENT>
+                                           ingest  rustfsadmin  (unchanged — it is the one that uses it)
+
+Read from `printenv` inside each new pod, not from the manifest, because that is the surface this row
+exists to insist on. All four report READY 1/1 afterwards, the gateway answers `/livez` and `/readyz`
+200 through its own door, and none of the four logged a credential error in the window. **The tenant
+ROOT `AWS_*` pair and the `HF_TOKEN` are gone from four of the five services that held them**, and
+nothing needed them: the import check is why that was safe to assert in advance.
+
+**INGEST REMAINS, and it is the half with real work left.** The shared `rask-app`
 Secret carries exactly four keys — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `HCP_ENDPOINT`,
 `HF_TOKEN` — and `gateway`, `notifications`, `compute` and `flows` construct **no S3 client at all**:
 zero imports of `lance`, `pyarrow`, `boto3`, `storage` or any `service_kit.lakehouse` storage module
