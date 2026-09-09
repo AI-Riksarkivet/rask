@@ -110,6 +110,23 @@ _META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_
 #: `tests/integration/test_the_maintainer_rung_opens_the_write_tier_vend.py`.
 _ALTERNATIVE_RUNGS: dict[tuple[str, str], str] = {("table", "credentials"): "can_maintain"}
 
+#: The two doors distributed compaction calls, and the ONLY callers are the maintenance plane.
+#:
+#: E2 bootstrapped the sweep as a `maintainer` rather than a `writer` — a deliberate narrowing — and
+#: these suffixes were named in no rung map, so `_action_relation` fell them to the writer rung below.
+#: The two rules are individually right and jointly deny: the router refuses before the endpoint runs.
+#:
+#: MEASURED ON THE LIVE ESTATE 2026-09-09, and none of it was red. `maintenance.distributedCompaction`
+#: was True in the running pod while 7,920 of 7,920 dataset outcomes reported `mode: in_pod`, and the
+#: catalog audited ~5,200 `can_write_data` DENY an hour for `service-maintenance` — no `tier` attribute,
+#: so from THIS gate rather than the vending door. The sweep compacted in-pod and reported success, so
+#: the only symptom was the memory ceiling the feature exists to remove.
+#:
+#: `can_maintain` rather than a second alternative rung: unlike `credentials` — a data read for every
+#: other caller, which is why that one keeps `can_read_data` as its primary — these two doors have no
+#: audience but maintenance. A door only a maintainer calls asks for the maintainer rung outright.
+_MAINTENANCE_ACTIONS = frozenset({"compaction_plan", "compaction_commit"})
+
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
 _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
     "table": frozenset({"create", "declare", "register"}),
@@ -291,6 +308,8 @@ def _action_relation(fga_type: str, suffix: str) -> str:
             return "can_get_metadata"
         return "can_refresh"
     # table type (transaction is authorized parent-scoped by _authorize_transaction, never here)
+    if action in _MAINTENANCE_ACTIONS:
+        return "can_maintain"
     if action in _DATA_READ_ACTIONS:
         return "can_read_data"
     if action in _META_READ_ACTIONS:
