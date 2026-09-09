@@ -21,7 +21,7 @@ import logging
 
 import pyarrow.fs as pafs
 
-from catalog.services.control_records import ProjectRecord, read_json, validated, write_json
+from catalog.services.control_records import ProjectRecord, read_json, validated, validated_or_refuse, write_json
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import create_json, mutate_json
 
@@ -96,8 +96,14 @@ def create_project_record(control_root: str, storage_options: StorageOptions, re
 
 
 def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
-    """The project record, or ``None`` if the tenant does not exist."""
-    return read_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json")
+    """The project record, or ``None`` if the tenant does not exist.
+
+    A malformed record REFUSES rather than reading as a missing tenant: `require_project_exists` gates
+    warehouse creation on this answer, and project delete acts on it, so "does not exist" is a verdict
+    rather than an absence of information."""
+    key = f"{_PROJECTS_PREFIX}/{project_id}.json"
+    record = read_json(control_root, storage_options, key)
+    return validated_or_refuse(record, ProjectRecord, event="project_record_malformed", path=key) if record is not None else None
 
 
 def delete_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> None:

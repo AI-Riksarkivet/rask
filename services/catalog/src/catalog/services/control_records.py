@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 
+from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -93,6 +94,33 @@ class ProjectRecord(_Record):
     """A tenant. Existence lives in the record, so the id is the whole of its identity."""
 
     id: str = Field(min_length=1)
+
+
+def validated_or_refuse(record: object, model: type[_Record], *, event: str, path: str) -> dict[str, str]:
+    """``record`` as a plain dict if it matches ``model``, else REFUSE — the strict sibling of
+    :func:`validated`, for a reader that has no skip list to hand back.
+
+    THE TOLERANT FORM CANNOT SERVE A SINGULAR READ, and the difference is not strictness for its own
+    sake. `validated` answers ``None`` on a malformed record, which is exactly right for a listing —
+    one tenant's corruption must not void an estate-wide result, and the destructive callers get their
+    fail-closed behaviour from being told WHICH paths were skipped. A singular reader has no such
+    channel: its only return value is the record, so ``None`` there does not mean "unreadable", it
+    means ABSENT, and the caller acts on that.
+
+    THE CONSEQUENCE IS NOT SYMMETRIC BETWEEN CALLERS, which is why this raises rather than leaving each
+    one to decide. For `get_warehouse` an absent answer is a 404 and fail-closed. For
+    `warehouse_for_namespace` it is "unbound" — and an unbound namespace routes at the DEFAULT root, so
+    a binding nobody can parse would silently send a tenant's writes to the wrong bucket.
+
+    `ServiceUnavailableError` and not a new type: it is what `read_bindings`' delete-path caller already
+    raises for the same condition (*"N namespace binding(s) could not be read … refusing to"*), so one
+    unreadable record answers the same way whichever door reached it.
+    """
+    try:
+        return model.model_validate(record).model_dump()
+    except ValidationError as exc:
+        log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
+        raise ServiceUnavailableError(f"control record {path!r} could not be read as {model.__name__} — refusing rather than treating it as absent") from exc
 
 
 def validated(record: object, model: type[_Record], *, event: str, path: str) -> dict[str, str] | None:

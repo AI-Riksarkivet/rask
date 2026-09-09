@@ -23,7 +23,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
-from catalog.services.control_records import BindingRecord, WarehouseRecord, read_json, validated, write_json
+from catalog.services.control_records import BindingRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -194,8 +194,13 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
-    """The warehouse record, or ``None`` if unregistered."""
-    return read_json(control_root, storage_options, _warehouse_key(warehouse_id))
+    """The warehouse record, or ``None`` if unregistered.
+
+    A malformed record REFUSES rather than reading as unregistered: every destructive door starts here,
+    and "not found" is an answer they act on."""
+    key = _warehouse_key(warehouse_id)
+    record = read_json(control_root, storage_options, key)
+    return validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
 
 
 def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
@@ -255,16 +260,29 @@ def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: s
 
 def warehouse_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
     """The physical ``root_uri`` for top-level namespace ``top_ns``, or ``None`` when unbound (→ default
-    root). This is the routing lookup on the request hot path; callers cache the (immutable) result."""
-    record = read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
-    return record.get("root_uri") if record else None
+    root). This is the routing lookup on the request hot path; callers cache the (immutable) result.
+
+    A MALFORMED RECORD REFUSES RATHER THAN READING AS UNBOUND, and this is the reader where that matters
+    most: ``None`` here means "route at the default root", so a binding nobody can parse would send a
+    tenant's writes to the wrong bucket, silently, with the registry still naming the right one."""
+    key = f"{_BINDINGS_PREFIX}/{top_ns}.json"
+    record = read_json(control_root, storage_options, key)
+    if record is None:
+        return None
+    return validated_or_refuse(record, BindingRecord, event="binding_record_malformed", path=key).get("root_uri")
 
 
 def binding_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> dict[str, str] | None:
     """The FULL binding record (``{top_ns, warehouse_id, root_uri}``) for a top-level namespace, or ``None``
     when unbound. The resolver needs ``warehouse_id`` (not just ``root_uri``) to check the warehouse's
-    lifecycle status; the binding itself is immutable, so the record is safe to cache."""
-    return read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
+    lifecycle status; the binding itself is immutable, so the record is safe to cache.
+
+    Refuses a malformed record for the same reason as its `root_uri` sibling: the destructive doors read
+    through here (warehouse delete, the unbind door), and a record they cannot parse must not arrive as
+    "no binding"."""
+    key = f"{_BINDINGS_PREFIX}/{top_ns}.json"
+    record = read_json(control_root, storage_options, key)
+    return validated_or_refuse(record, BindingRecord, event="binding_record_malformed", path=key) if record is not None else None
 
 
 def project_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
