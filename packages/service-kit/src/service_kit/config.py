@@ -47,6 +47,20 @@ class Settings(BaseSettings):
     #: by fanning out to every backend it fronts.
     docs_enabled: bool = Field(default=False, alias="RASK_DOCS")
 
+    #: Whether this app emits the `lance.audit` compliance stream. ON by default, because the trail
+    #: it gates is evidence: a deployment that wants none says so, and one that forgets still has it.
+    #:
+    #: THE FLAG EXISTS SO THE TRAIL IS DECIDED RATHER THAN INHERITED. `governed/audit.py` gates the
+    #: stream by the dedicated logger's LEVEL, and a service that never sets it leaves `lance.audit`
+    #: at NOTSET — inheriting the root level `setup_logging` takes from `RASK_LOG_LEVEL`. Measured
+    #: 2026-09-09 across the ten services holding `audit()` call sites: three set it and seven
+    #: inherited, so for those seven `RASK_LOG_LEVEL=WARNING` — the documented volume lever — deleted
+    #: the compliance trail, and this flag could not turn it off. `make_service_app` now applies it,
+    #: for the same reason it applies the readiness flags: a convention most apps did not hold up is
+    #: not a convention. Pinned by
+    #: `test_the_audit_trail_is_armed_by_configuration_not_by_the_log_level.py`.
+    audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
+
     ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")
 
     http_timeout: float = Field(default=15.0, alias="RASK_HTTP_TIMEOUT")

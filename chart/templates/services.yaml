@@ -547,6 +547,13 @@ spec:
             # auth.enabled (a real subject exists), default ON like the catalog's write-side
             # LANCE_AUDIT_ENABLED — and hasKey+ternary for the same --reuse-values reason.
             - { name: LINEAGE_READ_AUDIT_ENABLED, value: {{ hasKey .Values.services.lineage "readAudit" | ternary .Values.services.lineage.readAudit true | quote }} }
+            {{- /* #41. The SAME `auth.audit` key the catalog reads, because this service declares the
+                 same `LANCE_AUDIT_ENABLED` alias and the chart rendered it into the catalog alone —
+                 measured live 2026-09-09, the lever reached ONE service of ten while every other pod
+                 ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at the
+                 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
+                 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot. */}}
+            - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             # The SERVICE door on the HTTP ingest (lineage/api/security.py ServicePrincipal): bare FGA
             # subjects that may ingest with the shared app token instead of an OIDC bearer. The Ray TRAIN
             # job is a sidecar-less in-cluster producer (RAY-TRAIN.md D2) — before this, every training

@@ -166,6 +166,15 @@ spec:
             {{- end }}
           env:
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
+            {{- /* The #41 compliance trail, for the FACTORY-BUILT half of the fleet. `auth.audit`
+                 already reached catalog, lineage and medallion, which arm the `lance.audit` logger
+                 themselves; every service in this loop leaves it at NOTSET and `make_service_app`
+                 now applies this flag instead — so without the row the operator's one lever silences
+                 three services of ten and the rest keep emitting. hasKey+ternary, not `| default`:
+                 Sprig's default() treats boolean false as empty, and a bare reference renders "" on a
+                 `--reuse-values` upgrade from a release predating the key, which is a pydantic
+                 bool_parsing crash at boot. Same convention as LANCE_AUDIT_ENABLED. */}}
+            - { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
             {{- /* The storage registry, when a deployment declares one — the same rows explorer.yaml
                  renders, and for a second consumer: `ingest` resolves a run's declared source
                  `endpoint` against it (`ingest/objectstore.py`). Without it the fleet sees only the

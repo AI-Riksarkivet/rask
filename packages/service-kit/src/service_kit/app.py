@@ -26,6 +26,7 @@ from fastapi import APIRouter, FastAPI
 from service_kit.config import Settings
 from service_kit.context import CorrelationFilter
 from service_kit.exceptions import register_handlers
+from service_kit.governed.audit import configure_audit
 from service_kit.lifecycle import mark_draining, mark_started
 from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
@@ -192,6 +193,11 @@ def make_service_app(
     # `build_settings()` is still the DEFAULT, not a fallback for a bad argument: `setup_logging()`
     # must run first either way, so a Settings validation failure is loggable rather than silent.
     settings = build_settings() if settings is None else settings
+    # THE COMPLIANCE TRAIL IS ARMED HERE, for every app this factory builds — see
+    # `Settings.audit_enabled`. Left to each service, seven of ten inherited it from `RASK_LOG_LEVEL`
+    # instead of deciding it. Immediately after `setup_logging`, which sets the root level this must
+    # override in both directions.
+    configure_audit(enabled=settings.audit_enabled)
     base_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
 
     def lifespan_factory(s: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:

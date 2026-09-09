@@ -22,7 +22,7 @@ import medallion.services.ray_submit as ray_submit
 import medallion.services.transform as stage_runner
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
-from medallion.schemas.events import build_run_event
+from medallion.schemas.events import _REPO_URL, build_run_event
 from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
@@ -97,11 +97,19 @@ def test_build_run_event_records_the_transform_edge() -> None:
     assert event["outputs"][0]["facets"]["version"]["datasetVersion"] == "2"
     assert event["run"]["facets"]["author"]["sub"] == "data_eng"
     assert event["job"]["name"] == "embed_features"
-    # The standard sourceCodeLocation job facet — where the job's code lives (a here-dummy of what rask's
-    # runner will auto-derive). type=git + the repo URL + the service path.
+    # The standard sourceCodeLocation job facet — where the job's code lives. type=git + the repo URL +
+    # the service path.
+    #
+    # THE URL IS READ FROM THE CONSTANT, NOT RE-SPELLED. This line held the literal
+    # `https://github.com/Borg93/lance-ns` — the RETIRED repo — and stayed green for as long as the
+    # emitter agreed with it, which is precisely the period during which the estate was stamping a
+    # dead URL onto 738 real runs. A second copy of a value cannot detect that the value is wrong; it
+    # only makes the wrong value harder to change. Whether the constant names a repo that EXISTS is a
+    # different question, asked where it can be answered: `test_every_lineage_producer_uri_resolves.py`
+    # finds every producer constant by parse and reads the org from `git remote`.
     source = event["job"]["facets"]["sourceCodeLocation"]
     assert source["type"] == "git"
-    assert source["url"] == "https://github.com/Borg93/lance-ns"
+    assert source["url"] == _REPO_URL
     assert source["path"] == "services/medallion"
     assert "SourceCodeLocationJobFacet" in source["_schemaURL"]
 

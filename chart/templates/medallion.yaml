@@ -59,6 +59,13 @@ spec:
           env:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root .Values.medallion.producer.daprAppId) | nindent 12 }}
+            {{- /* #41. The SAME `auth.audit` key the catalog reads, because this service declares the
+                 same `LANCE_AUDIT_ENABLED` alias and the chart rendered it into the catalog alone —
+                 measured live 2026-09-09, the lever reached ONE service of ten while every other pod
+                 ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at the
+                 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
+                 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot. */}}
+            - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
             {{- end }}
             - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
@@ -405,6 +412,13 @@ spec:
           env:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root .daprAppId) | nindent 12 }}
+            {{- /* #41. The SAME `auth.audit` key the catalog reads, because this service declares the
+                 same `LANCE_AUDIT_ENABLED` alias and the chart rendered it into the catalog alone —
+                 measured live 2026-09-09, the lever reached ONE service of ten while every other pod
+                 ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at the
+                 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
+                 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot. */}}
+            - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
             {{- end }}
             - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
