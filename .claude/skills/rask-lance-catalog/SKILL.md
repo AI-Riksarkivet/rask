@@ -339,11 +339,23 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `sweep.py::_did_material_work` gates the emit on `fragments_removed or old_versions_removed`, so a
   correctly-idle estate records nothing — deliberately, since a 120s cron would otherwise flood the
   graph with no-op compaction runs. Consequence for verification: a stamped medallion dataset does NOT
-  produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept. As of 2026-08-16 both
-  halves of the declared-id chain are live (producer stamps `lineage.dataset_id`, sweep prefers it),
-  and the read half is witnessed in AGE for `silver$emitproof` — but no medallion tier has yet been
-  observed emitting, because every sweep since has measured `fragments_removed: 0, versions_removed:
-  0`. That is the gate behaving correctly, not a defect.
+  produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept. The read half is
+  witnessed in AGE for `silver$emitproof` — but no medallion tier has yet been observed emitting,
+  because every sweep since has measured `fragments_removed: 0, versions_removed: 0`. That is the gate
+  behaving correctly, not a defect.
+
+  **THE CHAIN HAS THREE PARTIES, NOT TWO, AND THE THIRD IS WHERE IT BROKE.** A producer stamping
+  `lineage.dataset_id` and a sweep preferring it are necessary and not sufficient: `lineage.dataset_id`
+  is schema METADATA, and metadata survives `set_column` / `append_column` / `drop_columns`, so every
+  DERIVED tier silently inherited its upstream's name (measured 2026-09-09: bronze declaring
+  `acme$bronze` produced a stamped silver table, and the empty schema the distributed lane creates its
+  destination with, both declaring `acme$bronze`). Silver's compactions and silver's per-dataset FAIL
+  events were therefore filed against bronze's node, and attestation O12 passed the whole time — it
+  asks whether a name is stamped, never whose. Closed by making the STAMP own the question:
+  `stamp_stage(..., dataset_id=...)` re-declares the destination and DROPS an inherited id when
+  unwired, the same rule it already applied to the `lineage` document, and `scripts/ray_stage_job.py`
+  now reads the `RASK_DEST_TABLE` the work order always shipped. When you check a declared-id chain,
+  check the third party: not "is a name stamped" but "whose name, on the tier that derived it".
 
   **THE CASCADE'S TIERS ARE GOVERNED — ALL BUT ONE. This bullet said the opposite, and it was the most
   misleading sentence in the file.** It read *"the medallion tiers are DATA WITHOUT GOVERNANCE"* and
