@@ -210,3 +210,54 @@ class TestEveryTableDoorThatMintsOrRetiresConverges:
         _, required = _keyed_post_paths(real_ns_client.app)
 
         assert not required, f"these doors REQUIRE a header the Lance Namespace spec does not define: {required}"
+
+
+class TestAVendedCredentialSaysWhenItExpires:
+    """§ Q13-4 — the door must put the expiry where a stock client looks.
+
+    Driven through the DOOR and not the vendor: `VendedCredentials` carries `expires_at_millis` as a
+    sibling field, and the whole defect was that describe-vend forwarded `storage_options` without
+    folding it in. A test over the vendor alone would have passed against the broken door — the exact
+    pure-helper-beside-an-untested-shell shape this estate has now paid for twice.
+    """
+
+    def test_the_expiry_lands_INSIDE_storage_options(self, real_ns_client: TestClient) -> None:
+        from catalog.api.dependencies import get_vendor
+        from catalog.core.vending import VendedCredentials
+
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$vend/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+
+        class _Vendor:
+            def vend(self, *, table_location: str, tier: str, **_: Any) -> VendedCredentials:
+                return VendedCredentials(storage_options={"aws_access_key_id": "k"}, expires_at_millis=1_700_000_000_000)
+
+        real_ns_client.app.dependency_overrides[get_vendor] = _Vendor
+        try:
+            body = real_ns_client.post("/v1/table/db$vend/describe?vend_credentials=true", json={}).json()
+        finally:
+            real_ns_client.app.dependency_overrides.pop(get_vendor, None)
+
+        options = body.get("storage_options") or {}
+        assert options.get("expires_at_millis") == "1700000000000", f"the door dropped the expiry: {options}"
+
+    def test_a_PERMANENT_credential_adds_no_key(self, real_ns_client: TestClient) -> None:
+        """The spec's sentence is conditional — *if* the credentials are temporary. Emitting the key
+        for a static credential tells a client to refresh something that never expires."""
+        from catalog.api.dependencies import get_vendor
+        from catalog.core.vending import VendedCredentials
+
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$perm/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+
+        class _Static:
+            def vend(self, *, table_location: str, tier: str, **_: Any) -> VendedCredentials:
+                return VendedCredentials(storage_options={"aws_access_key_id": "k"})
+
+        real_ns_client.app.dependency_overrides[get_vendor] = _Static
+        try:
+            body = real_ns_client.post("/v1/table/db$perm/describe?vend_credentials=true", json={}).json()
+        finally:
+            real_ns_client.app.dependency_overrides.pop(get_vendor, None)
+
+        assert "expires_at_millis" not in (body.get("storage_options") or {})

@@ -417,7 +417,16 @@ def describe_table(
             return response  # multi-base: a root-scoped credential cannot reach the data bases
         creds = vendor.vend(table_location=response.location, tier="read")
         if creds is not None:
-            response.storage_options = creds.storage_options
+            # THE EXPIRY GOES INSIDE `storage_options`, which is where the spec puts it and the only
+            # place a stock client looks: `lance_docs/ns_catalog/spec.yaml:2878-2880` — *"If the vended
+            # credentials are temporary, the `expires_at_millis` key ..."*. `VendedCredentials` carries
+            # it as a sibling FIELD, which is right for rask's own callers and invisible to a client
+            # that refreshes on the key alone. Without it a temporary credential looks permanent, and
+            # the client discovers the TTL by failing at the 900-second mark instead of refreshing.
+            options = dict(creds.storage_options)
+            if creds.expires_at_millis is not None:
+                options["expires_at_millis"] = str(creds.expires_at_millis)
+            response.storage_options = options
     return response
 
 
