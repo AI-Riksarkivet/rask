@@ -109,22 +109,33 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # media rather than silenced globally.
 # ---- incoming lance-ns trees: rule families lance-ns never enabled -------------------------
 # lance-ns lints with select = [E,F,I,UP,B,SIM,C4] at line-length 110; rask adds W,S,RUF,C901,RET,
-# PERF,FURB,A,ANN at 160. The reformat to rask's style landed (separate commit); these four families
-# are scoped rather than rewritten across ~250 freshly-copied files, because in this code they are
-# wrong more often than right:
+# PERF,FURB,A,ANN at 160, so the freshly-copied trees carry rules their authors never ran. Why each
+# surviving rule is scoped rather than fixed:
 #   A002   — `filter=`, `id=`, `type=` are the LanceDB/lance-namespace PUBLIC parameter names;
 #            renaming them would break the call contract with the library.
 #   ANN401 — `Any` at the boundaries of pyarrow/lance/dapr, none of which ship precise stubs.
 #   RUF002/3 — typographically correct prose (MINUS SIGN, MULTIPLICATION SIGN, EN DASH) in docstrings
 #            and comments; "fixing" it degrades the writing.
-# NOT a permanent exemption — tracked as § Q3-37 in `open_lakehouse_diff_left.md`, the estate's one
-# lakehouse backlog. It said `docs/OPEN-WORK.md` until 2026-09-09, and that file does not exist: the
-# sentence promising the exemption would be revisited pointed at nothing, which is how a temporary
-# waiver becomes a permanent one without anyone deciding it should be.
-"services/catalog/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"services/lineage/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"services/medallion/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"services/maintenance/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+#   RUF100 — the directives it flags are `# noqa: BLE001` (41) and `# noqa: ANN001` (33), each
+#            carrying a written reason on its own line. They are dead only because rask selects
+#            neither BLE nor ANN001, so honouring RUF100 would delete 74 rationale comments to
+#            satisfy a rule about comments. The honest fix is to SELECT `BLE` — which fires 171
+#            further sites estate-wide (measured 2026-09-09) and so is not a lakehouse change.
+#   the rest — C901/E501/PERF401/RUF012/RUF043/SIM108/S608: real, small, and per-glob below.
+#
+# NARROWED PER GLOB 2026-09-09 (§ Q3-37, `open_lakehouse_diff_left.md`), by the same measurement that
+# narrowed `governed/**`: each list holds ONLY the rules with a site in that tree, so adding one back
+# requires naming the site. The 21-rule form suppressed FIVE security rules across the whole lakehouse
+# plane — S110 (try-except-pass), S112 (try-except-continue), S310 (suspicious URL open), S324
+# (insecure hash) and S608 (SQL injection) — and measured rule by rule, four of them had no site
+# anywhere in these six trees and S608 has exactly one, in lineage. A rule suppressing nothing while
+# reading as an accepted exemption is the worst of both: it buys no silence and it pre-forgives the
+# next occurrence. The out-of-scope globs below keep the 21-rule form under the owner's 2026-09-07
+# lakehouse-first ruling; narrowing them needs the same per-tree measurement, not a copied list.
+"services/catalog/**" = ["A002", "ANN401", "RUF002", "RUF003", "RUF043", "RUF100", "C901", "PERF401", "E501"]
+"services/lineage/**" = ["ANN401", "RUF002", "RUF003", "RUF100", "C901", "S608", "E501"]
+"services/medallion/**" = ["ANN401", "RUF002", "RUF012", "RUF100", "C901", "PERF401", "SIM108", "E501"]
+"services/maintenance/**" = ["ANN401", "RUF100", "C901", "PERF401", "E501"]
 "services/viewer/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "services/search/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "services/annotator/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
@@ -141,8 +152,8 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # (.dagger/checks.go linted `services tests` only), so no automated check read the kernel for the
 # rule classes it most needs. Adding a rule back here now requires saying which site needs it.
 "packages/service-kit/src/service_kit/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
-"packages/service-kit/src/service_kit/lakehouse/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/service-kit/src/service_kit/lancekit/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/lakehouse/**" = ["RUF002", "RUF003", "RUF100", "PERF401"]
+"packages/service-kit/src/service_kit/lancekit/**" = ["A002", "ANN401", "C901", "PERF401"]
 "packages/service-kit/src/service_kit/media/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
