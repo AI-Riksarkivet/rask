@@ -169,6 +169,20 @@ spec:
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
                 publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
                 dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable" \
+                {{- /* THE COMPUTE PLANE'S SCOPED PAIR. `external-secrets.yaml` READS these two
+                       properties out of this secret, and until 2026-09-09 nothing WROTE them — they
+                       existed only in `infra-credentials.yaml`, which renders on the ESO-OFF path.
+                       So with `externalSecrets.enabled` the ExternalSecret asked OpenBao for two
+                       properties that were never seeded, ESO failed the WHOLE object ("could not get
+                       secret data from provider"), and `rask-infra-credentials` was never created —
+                       taking every pod that mounts it with it: the AGE consumers, the OpenFGA migrate
+                       Job, the RustFS mkbucket Job, the OTel Collector and all seven web zones, each
+                       stuck in CreateContainerConfigError. A reader without a writer is not a partial
+                       control, it is an outage, because ESO syncs a Secret whole or not at all.
+                       Same expressions as the ESO-OFF path so the two agree by construction: empty
+                       falls back to the root credential, which is what every estate runs today. */}}
+                ray-compute-access-key={{ .Values.rustfs.rayComputeAccessKey | default .Values.rustfs.accessKey }} \
+                ray-compute-secret-key={{ .Values.rustfs.rayComputeSecretKey | default .Values.rustfs.secretKey }} \
                 {{- /* ONE DEDICATED CREDENTIAL PER PRIVILEGED IDENTITY. Without these the binding in
                        `dapr_auth.py` is unreachable: a subject not on *_PRIVILEGED_SUBJECTS
                        authenticates with the estate's SHARED APP_API_TOKEN, so any holder of that one

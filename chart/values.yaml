@@ -1494,16 +1494,33 @@ maintenance:
       # overhead. Raise this and `scanBatchSize` together — the batch is what the limit bounds.
       limits: { cpu: 2, memory: 4Gi }
   # Sign each compaction's WRITE with a credential vended per table by the catalog, instead of the
-  # deployment's ambient root key. OFF by default: it needs the catalog reachable AND the subject below
-  # holding `can_write_data` on what it maintains, and a deployment missing either falls back to the
-  # root key. Turning it on is the statement that both are in place.
+  # deployment's ambient root key. A compaction IS a write — it lands data files and commits a manifest
+  # — so with this off the service that rewrites every bucket in the estate does so with one long-lived
+  # key, which is the posture the vending door exists to end.
   #
-  # COVERAGE IS PER WAREHOUSE, not estate-wide: the bootstrap hook grants `writer` on the default
-  # warehouse, so a tenant warehouse (and any warehouse minted after install) still compacts on the
-  # root key until its own grant exists. The fallback is correct and is logged per dataset, so this is
-  # a bounded improvement rather than a switch that either works or fails. See `docs/DECISIONS.md`,
-  # "The lakehouse cloud-native cutover".
-  vendWriteCredentials: false
+  # ON BY DEFAULT, and the default is the decision. It shipped `false` under the reasoning that it
+  # "needs the catalog reachable AND the subject holding `can_write_data`", so turning it on was the
+  # operator's statement that both were true. Measured on the live estate 2026-09-09, that produced the
+  # opposite of the intent: `catalog_url` was empty in the running pod, every compaction signed with the
+  # root key, and the only evidence was the ABSENCE of a `vend_credentials` audit stream. `values.yaml`
+  # already carries the general form of this ruling for `docs_enabled` — "a security default that every
+  # deployment must remember to turn off is one nobody turns off" — and a hardening every deployment
+  # must remember to turn ON is the same defect facing the other way.
+  #
+  # Both preconditions hold and are narrower than the old comment claimed. The door accepts EITHER rung
+  # (`endpoints/credentials.py`: "can_write_data or can_maintain required ... for a write-tier
+  # credential"), so the E2 swap that bootstrapped the sweep as a `maintainer` rather than a `writer`
+  # does not block it; and the URL is rendered by this chart, so "catalog reachable" is a property of
+  # the deployment rather than of the operator's memory.
+  #
+  # COVERAGE IS PER WAREHOUSE, not estate-wide: the bootstrap hook grants the maintainer rung on the
+  # default warehouse, so a tenant warehouse (and any warehouse minted after install) still compacts on
+  # the root key until its own grant exists. That fallback is correct, is logged per dataset, and — since
+  # 2026-09-09 — the whole-service form of it announces itself once per process instead of silently
+  # (`maintenance/services/credentials.py::_announce_vending_is_off`), which is what made the estate-wide
+  # case invisible. So this is a bounded improvement that reports its own bounds, not a switch that
+  # either works or fails. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
+  vendWriteCredentials: true
   # WHERE THE REWRITE'S BYTES ARE MOVED. Off = one in-pod `compact_files()`, which plans, executes and
   # commits in a single call — so this pod's memory ceiling is a function of the largest table anyone
   # owns rather than of its request rate, and no amount of sizing fixes that for the next table.

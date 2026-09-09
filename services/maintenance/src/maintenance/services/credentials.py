@@ -72,6 +72,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     to derivation would hide the producer's bug behind a working sweep.
     """
     if not settings.catalog_url:
+        _announce_vending_is_off(declared_table_id or uri)
         return fallback
     table_id = declared_table_id or table_id_from_location(uri)
     if table_id is None:
@@ -84,6 +85,40 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
         return fallback
     logger.info("write credential SCOPED for %s — this rewrite is signed by a table-scoped credential", table_id)
     return vended
+
+
+#: Whether this process has already said that vending is switched off. The CONDITION is a whole-service
+#: one — an empty ``catalog_url`` does not vary between datasets — so it is reported at the volume of the
+#: configuration rather than of the sweep. A per-dataset line here would be thousands an hour that never
+#: change, which is how § Q17-26's detector drowned the audit trail it shared.
+_vending_off_announced = False
+
+
+def _reset_vending_notice() -> None:
+    """Test seam: the notice is once-per-PROCESS, and a test asserting that needs to start from unsaid."""
+    global _vending_off_announced
+    _vending_off_announced = False
+
+
+def _announce_vending_is_off(subject: str) -> None:
+    """Say, once, that every rewrite from here is signed by the root key.
+
+    THIS BRANCH USED TO BE THE SILENT ONE, and it is the branch that covers a whole-service
+    misconfiguration — so the module kept its "degrades and says so" promise for a single unreachable
+    table and broke it for an entire estate running unhardened. Measured 2026-09-09: the live
+    maintenance pod held ``catalog_url = ''`` (``maintenance.vendWriteCredentials`` was the chart
+    default), so every compaction signed with the root object-store key and the only evidence was the
+    ABSENCE of a stream nobody was watching.
+    """
+    global _vending_off_announced
+    if _vending_off_announced:
+        return
+    _vending_off_announced = True
+    logger.warning(
+        "write credential vending is NOT CONFIGURED (no catalog URL) — every rewrite from this process, "
+        "starting with %s, is signed by the root key. Set maintenance.vendWriteCredentials to scope it.",
+        subject,
+    )
 
 
 def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None:
