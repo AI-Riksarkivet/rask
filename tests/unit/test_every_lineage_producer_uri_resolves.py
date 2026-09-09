@@ -27,7 +27,6 @@ THE REPO IS READ FROM `git remote`, never written down here. A literal is what w
 from __future__ import annotations
 
 import ast
-import re
 import subprocess
 from pathlib import Path
 
@@ -35,8 +34,14 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
-#: Any module-level constant whose name ends in PRODUCER — the shape every emit kernel uses.
-_NAME = re.compile(r"(^|_)PRODUCER$")
+#: EVERY module-level constant holding a github URL, not only the ones named PRODUCER.
+#:
+#: THIS GATE SHIPPED NAME-MATCHING ON `PRODUCER` AND MISSED ONE WITHIN THE HOUR. `events.py` also
+#: defines `_REPO_URL`, emitted as the SourceCodeLocationJobFacet's `url`, and it still named the
+#: retired repository after every PRODUCER had been repointed — the same shape this file was written to
+#: catch, in the file written to catch it. Matching on the VALUE (a github URL) rather than the NAME is
+#: what makes the next differently-named constant covered without anyone remembering to add it.
+_GITHUB = "github.com/"
 
 
 def _canonical_repo() -> str:
@@ -76,7 +81,7 @@ def _producers() -> list[tuple[Path, str, str]]:
                     continue
                 for t in targets:
                     name = getattr(t, "id", "")
-                    if _NAME.search(name) and value.value.startswith("http"):
+                    if name and _GITHUB in value.value:
                         found.append((path, name, value.value))
     return found
 
@@ -95,8 +100,14 @@ def test_each_producer_uri_names_this_repository_and_an_existing_path(case: tupl
     the code."""
     path, name, uri = case
     repo = _canonical_repo()
+    assert uri.startswith(repo), f"{path.relative_to(REPO)}::{name} points at {uri!r}, not at this repository ({repo})"
+
+    # A BARE REPO URL IS LEGITIMATE and carries no path to check — `_REPO_URL` is the
+    # SourceCodeLocationJobFacet's repository, which names the repo and nothing inside it. Only a
+    # `/tree/main/<path>` form makes a claim about a file, and only that form is checked against the tree.
     prefix = f"{repo}/tree/main/"
-    assert uri.startswith(prefix), f"{path.relative_to(REPO)}::{name} points at {uri!r}, not at this repository ({repo})"
+    if not uri.startswith(prefix):
+        return
     relative = uri.removeprefix(prefix)
     assert relative, f"{path.relative_to(REPO)}::{name} carries no path"
     assert (REPO / relative).exists(), f"{path.relative_to(REPO)}::{name} points at {relative!r}, which does not exist here — the link 404s"

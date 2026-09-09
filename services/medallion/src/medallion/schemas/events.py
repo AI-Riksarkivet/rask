@@ -53,7 +53,7 @@ _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/medallion
 _DATASOURCE_FACET_SCHEMA = DATASOURCE_FACET_SCHEMA_URL
 
 #: The repo the medallion services live in — the ``sourceCodeLocation`` job facet's git URL.
-_REPO_URL = "https://github.com/Borg93/lance-ns"
+_REPO_URL = "https://github.com/AI-Riksarkivet/rask"
 #: Standard ``SourceCodeLocationJobFacet`` schema URL → *where the job's code lives* (git repo + path).
 _SOURCE_LOCATION_FACET_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/SourceCodeLocationJobFacet.json#/$defs/SourceCodeLocationJobFacet"
 

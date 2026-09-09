@@ -35,8 +35,13 @@ from service_kit.openlineage import (
 )
 
 
-_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/medallion"
-_REPO_URL = "https://github.com/Borg93/lance-ns"
+# The frozen builder's two repository strings, updated 2026-09-09 with the code they mirror. This suite
+# pins that the lineage-kit REFACTOR did not change the wire; it is not a pin on the producer's VALUE,
+# and that value was deliberately repointed — three services and this module named `Borg93/lance-ns`,
+# a retired repository, so every event's only link back to the code 404'd. Leaving the snapshot behind
+# would turn a parity pin into a pin on the defect.
+_PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/medallion/src/medallion/schemas/events.py"
+_REPO_URL = "https://github.com/AI-Riksarkivet/rask"
 _SOURCE_LOCATION_FACET_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/SourceCodeLocationJobFacet.json#/$defs/SourceCodeLocationJobFacet"
 _OUTPUT_STATS_FACET_SCHEMA = "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet"
 _DATA_QUALITY_FACET_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/DataQualityAssertionsDatasetFacet.json#/$defs/DataQualityAssertionsDatasetFacet"
