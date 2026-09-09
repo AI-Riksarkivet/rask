@@ -23,8 +23,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-from maintenance.services.sweep import audit_material_work
-from service_kit.governed.audit import AUDIT_LOGGER
+from maintenance.services.sweep import _record_dataset_outcome, audit_material_work
+from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 
 
 if TYPE_CHECKING:
@@ -46,6 +46,13 @@ class _Result:
     old_versions_removed = 5
     bytes_removed = 7567
     indices_optimized = 2
+    # The app-log half of the funnel names the three NON-outcomes too, so a double that omits
+    # them cannot reach the audit call below it.
+    refused = ""
+    skipped = ""
+    trashed = False
+    error = ""
+    error_type = ""
 
 
 class _Idle(_Result):
@@ -57,9 +64,25 @@ def _records(caplog) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.name == AUDIT_LOGGER]
 
 
+def _arm(caplog, *, enabled: bool = True) -> None:
+    """Arm the trail the way a service does, and capture WITHOUT touching the knob under test.
+
+    `caplog.at_level(logging.INFO, logger=AUDIT_LOGGER)` was the defect, and it made these tests unable
+    to fail for the reason they exist. That fixture SETS the level on the audit logger, which is the
+    exact thing `configure_audit` controls — measured: disabled leaves the logger at level 51, the
+    fixture puts it back to INFO. So the estate's audit trail could be disarmed and this file still
+    reported two passes.
+
+    `caplog.set_level` raises the ROOT handler's level instead and leaves the audit logger's own level
+    alone, so the switch decides, which is what production asks it to decide.
+    """
+    caplog.set_level(logging.INFO)
+    configure_audit(enabled=enabled)
+
+
 def test_a_rewrite_is_recorded_against_the_object_it_rewrote(caplog) -> None:
-    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER):
-        audit_material_work(cast("DatasetResult", _Result()), subject="service-maintenance")
+    _arm(caplog)
+    audit_material_work(cast("DatasetResult", _Result()), subject="service-maintenance")
 
     got = _records(caplog)
     assert len(got) == 1, f"expected one audit record for a material rewrite, got {len(got)}"
@@ -75,7 +98,38 @@ def test_a_rewrite_is_recorded_against_the_object_it_rewrote(caplog) -> None:
 
 def test_a_converged_dataset_records_NOTHING(caplog) -> None:
     """~423 datasets a tick are already converged; a record each would drown the stream it joins."""
-    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER):
-        audit_material_work(cast("DatasetResult", _Idle()), subject="service-maintenance")
+    _arm(caplog)
+    audit_material_work(cast("DatasetResult", _Idle()), subject="service-maintenance")
 
     assert not _records(caplog), "an idle dataset wrote an audit record — that is thousands an hour saying nothing"
+
+
+def test_a_DISARMED_trail_records_NOTHING(caplog) -> None:
+    """The case this file could not previously express, and the one it was written to protect.
+
+    `RASK_AUDIT_ENABLED=false` is a real deployment: an operator turning the stream off must actually
+    turn it off. Until this test existed the file forced the logger to INFO itself, so a disarmed
+    estate and an armed one were indistinguishable here.
+    """
+    _arm(caplog, enabled=False)
+
+    audit_material_work(cast("DatasetResult", _Result()), subject="service-maintenance")
+
+    assert not _records(caplog), "the audit trail is disarmed and a record was written anyway"
+
+
+def test_the_SWEEP_reaches_the_trail_and_not_only_the_helper(caplog) -> None:
+    """A helper that works, called by nobody, is the shape this file otherwise pins.
+
+    Coverage measured before this test: `sweep.py:596` — the one call site — did not execute at all in
+    this file, so both tests above proved `audit_material_work` correct and nothing about whether the
+    sweep uses it. Driving `_record_dataset_outcome`, the funnel BOTH of the sweep's callers go
+    through, is what connects them.
+    """
+    _arm(caplog)
+
+    _record_dataset_outcome(cast("DatasetResult", _Result()), subject="service-maintenance")
+
+    got = _records(caplog)
+    assert len(got) == 1, "the sweep's own outcome funnel did not reach the compliance trail"
+    assert getattr(got[0], "audit.resource") == "table:bronze$events"
