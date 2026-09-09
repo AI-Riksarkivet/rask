@@ -1,14 +1,14 @@
 # Catalog coverage — backend-backed validation (updated 2026-06-30, post version/branch backing)
 
 Authoritative result of a **live probe** against a real native pylance `DirectoryNamespace` (create a
-namespace + table, then call every op and classify 200 vs 501). Routes are 100% wired (54/54 spec ops);
-this measures which are **backend-backed (200)** vs **spec-correct 501** because the native Rust backend
+namespace + table, then call every op and classify 200 vs 406). Routes are 100% wired (54/54 spec ops);
+this measures which are **backend-backed (200)** vs **spec-correct 406** because the native Rust backend
 genuinely stubs them. Dispatch: most ops go to `native` (the Rust `DirectoryNamespace`); several go to the
 in-process `dataplane` (pylance, always 200) — see `services/catalog/services/{native,dataplane}.py`.
 
-**Tally: 48 / 54 backed (200), 6 spec-correct 501.** `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
+**Tally: 48 / 54 backed (200), 6 spec-correct 406.** `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
 
-> **Correction (2026-08-05):** `rename_table` was still listed as a 501 long after #5b backed it
+> **Correction (2026-08-05):** `rename_table` was still listed as unsupported long after #5b backed it
 > in-process (`dataplane.rename_table` — copy the dataset root to the destination, repoint the namespace,
 > deregister the source; `api/v1/endpoints/tables.py` never reaches `native.call`). The doc named the
 > native stub the endpoint deliberately stopped using.
@@ -16,13 +16,13 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 > **Correction (2026-06-30):** an earlier version of this doc reported 41/54 and listed version + branch
 > ops as "upstream-blocked / no pylance analog". That was **wrong**, and reading the Lance Namespace spec
 > docs + an adversarial audit found why: (a) `describe`/`create`/`batch-delete` table versions were **fake
-> 501s** — those three native bindings are typed `request: dict` and forward to Rust *without*
+> unsupported** — those three native bindings are typed `request: dict` and forward to Rust *without*
 > `model_dump()`, so passing the pydantic model raised a marshalling `TypeError` that a too-broad
-> `"is not an instance"` stub-hint laundered into a 501; (b) **branches** are a real native 501, but
+> `"is not an instance"` stub-hint laundered into an Unsupported; (b) **branches** are a real native stub, but
 > `lance.LanceDataset` implements Git-like branches, so they back in-process via the dataplane like tags.
-> Six ops moved 501 → 200; the hint was narrowed so a real marshalling bug surfaces as 500, not a fake 501.
+> Six ops moved Unsupported → 200; the hint was narrowed so a real marshalling bug surfaces as 500, not a fake refusal.
 
-| Group | Backed (200) | 501 (native stub) |
+| Group | Backed (200) | 406 (native stub) |
 |-------|--------------|-------------------|
 | Namespaces (5) | all 5 | — |
 | Tables lifecycle (10) | all 10 (`rename_table` via dataplane, #5b) | — |
@@ -40,7 +40,7 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 credential vending) and `GET /v1/table/{id}/blobs` (credential-less blob serving with RFC 9110 Range +
 ETag/If-Range, 2026-07-12) — both governed by the same router-level authorize (reader tier).
 
-The **6 remaining 501s are genuine native-backend stubs**, not catalog gaps:
+The **6 remaining 406s are genuine native-backend stubs**, not catalog gaps:
 - **`create_materialized_view` / `refresh_materialized_view`** — pylance ships the *complete* typed MV API
   (request/response models with `source_query` / `output_schema` / `udtf_spec` / `auto_refresh`) and wires
   delegation on `DirectoryNamespace`, but the native dir backend raises `NotImplementedError`. A real
@@ -51,8 +51,8 @@ The **6 remaining 501s are genuine native-backend stubs**, not catalog gaps:
   primitives the dir backend doesn't implement (it reads `_versions/` directly rather than acting as an
   external manifest store). A REST/managed backend would back these.
 - **`backfill_columns` / `alter_transaction`** — stubbed in the native Rust namespace. `backfill_columns`
-  answers `501 alter_table_backfill_columns not implemented`, and since #101 that MESSAGE reaches the
-  client: 501 is a capability statement, not a fault, so `ns_errors.problem_detail` exempts it from the
+  answers `alter_table_backfill_columns not implemented`, and since #101 that MESSAGE reaches the
+  client: Unsupported is a capability statement, not a fault, so `ns_errors.problem_detail` exempts it from the
   5xx detail redaction that used to render it as "Internal Server Error" in the lakehouse UI.
 
 So the catalog is complete **to the limit of its backend**; the remaining gaps need upstream work in the

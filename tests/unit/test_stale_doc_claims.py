@@ -131,13 +131,19 @@ def test_the_catalog_skill_does_not_still_call_the_producers_bronze_ungoverned()
     assert "the producer's bronze seed is the one that is not" not in skill, "SKILL.md still describes the head's tier as ungoverned."
 
 
-def test_the_catalog_skill_agrees_with_the_coverage_doc_on_the_501s() -> None:
-    """SIX spec-correct 501s, and `rename_table` is not one of them (`tables.py` backs it in-process)."""
+def test_the_catalog_skill_agrees_with_the_coverage_doc_on_the_unsupported_ops() -> None:
+    """SIX spec-correct 406s, and `rename_table` is not one of them (`tables.py` backs it in-process).
+
+    The STATUS moved 501 -> 406 on 2026-09-02 (the spec's own code; `docs/DECISIONS.md` records the
+    reversal), so this gate keys on the count and the op rather than on the number — a gate that
+    matched the status string would have to be edited every time the estate becomes MORE conformant.
+    """
     assert "async def rename_table(" in _read(REPO_ROOT / "services/catalog/src/catalog/api/v1/endpoints/tables.py")
 
     skill = _read(SKILL)
-    bullet = skill[skill.index("answer a spec-correct 501") - 400 : skill.index("answer a spec-correct 501") + 400]
-    assert "**7 answer a spec-correct 501**" not in skill, "docs/COVERAGE.md corrected this to SIX on 2026-08-05."
+    marker = "answer a spec-correct 406"
+    bullet = skill[skill.index(marker) - 400 : skill.index(marker) + 400]
+    assert "**7 answer a spec-correct 406**" not in skill, "docs/COVERAGE.md corrected this to SIX on 2026-08-05."
     assert "`rename_table`," not in bullet, "`rename_table` is backed in-process by the dataplane and answers 200."
 
 
