@@ -25,7 +25,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import Any, Final, LiteralString, cast
+from typing import Any, Final, LiteralString, TypedDict, cast
 
 import psycopg
 from psycopg import sql
@@ -91,7 +91,29 @@ _EVENT_PRUNE_BATCH: Final = 500
 _NO_WRITES: Final[tuple[list[str], bool]] = ([], False)
 
 
-def feed_columns(event: RunEvent) -> dict[str, Any]:
+class FeedColumns(TypedDict):
+    """The durable feed's row shape — the keys `_insert_feed_row` takes, named once.
+
+    A TypedDict because the caller SPLATS this into that method: `_insert_feed_row(conn,
+    **feed_columns(event))`. Untyped, a key renamed on one side is a TypeError at ingest time, on the
+    write path whose whole purpose is that provenance survives; typed, it is a `ty` error at the seam.
+
+    `event` stays `dict[str, Any]` deliberately — it is the full OpenLineage payload, whose `facets` map
+    is OPEN by specification (that map IS the extension mechanism), so a closed type there would be
+    inventing a contract the format does not have.
+    """
+
+    run_id: str | None
+    event_type: str | None
+    event_time: str | None
+    job: str
+    author: str | None
+    inputs: list[str]
+    outputs: list[str]
+    event: dict[str, Any]
+
+
+def feed_columns(event: RunEvent) -> FeedColumns:
     """The durable-events-feed columns for one ``RunEvent``.
 
     Lives beside the writer rather than beside a caller because :meth:`LineageRepository.ingest_event`
