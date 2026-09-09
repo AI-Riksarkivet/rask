@@ -25,6 +25,8 @@ bucket `purge_bucket` and `force` are three SEPARATE opt-ins that never share a 
 from __future__ import annotations
 
 import logging
+import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response
@@ -53,11 +55,13 @@ from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
     SettingsDep,
+    VendorDep,
     namespace_for_root,
 )
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
+from catalog.core.vending import CredentialVendor
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
     CreateWarehouseRequest,
@@ -68,10 +72,12 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import native, warehouses
+from catalog.services.vend_probe import SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
+from storage import s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -927,3 +933,110 @@ async def delete_warehouse(
         bucket_purged=purge_bucket,
         objects_purged=purged,
     )
+
+
+@router.post("/{warehouse_id}/validate", response_model_exclude_none=True)
+async def validate_warehouse_credentials(
+    warehouse_id: str,
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    vendor: VendorDep,
+) -> ProbeReport:
+    """Prove this warehouse's vended credentials are actually SCOPED, by using one.
+
+    THE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`
+    restricts every credential to one bucket + prefix, and the goal names STS as the answer for
+    storage — so if the object store ACCEPTS the inline session policy and IGNORES it, every credential
+    the estate has ever vended reached the whole bucket, every log line reads normal, and no audit
+    record could reconstruct which of them over-reached. Nothing asserted it: every vending defect in
+    this estate's history was found by a client failing later, never by the catalog.
+
+    IT WRITES, and that is the point — a policy document can be inspected without learning anything
+    about the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under
+    the warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix
+    which MUST be refused, and removes what it made. The failure of that last write is the finding.
+
+    Admin-gated on the warehouse's own project and collapsing denied → 404, the same
+    no-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's
+    bucket, so its gate is the create/lifecycle rung and not a read one.
+
+    Reports every check even after one fails (see :func:`summarize_probe`) — an over-permissive store
+    and an unreachable one need different answers, and a first-failure exit cannot tell them apart.
+    """
+    _require_enabled(settings)
+    so = settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    if record is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    try:
+        await fga_deps.require_can_create_warehouse(client, settings, token, project=record["project"])
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
+
+    checks = await run_in_threadpool(_run_scope_probe, str(record["root_uri"]), vendor, so)
+    return summarize_probe(checks)
+
+
+def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: dict[str, str]) -> list[ProbeCheck]:
+    """The IO half: vend, write in, read in, write OUT (must fail), clean up.
+
+    Every step records its own outcome and the ones it makes impossible are SKIPPED rather than
+    reported as failures — a probe that could not write has learned nothing about scope, and saying so
+    is the difference between "the store is over-permissive" and "the store was unreachable".
+    """
+    bucket, prefix = split_s3_uri(root_uri.rstrip("/"))
+    probe_prefix = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate/{uuid.uuid4().hex}"
+    inside = f"{probe_prefix}/probe"
+    # The PARENT, never a sibling: a credential scoped to `<probe>/` must not reach the warehouse root,
+    # and the root is where a policy that was ignored would let it write.
+    outside = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate_scope_probe_should_fail"
+
+    checks: list[ProbeCheck] = []
+    try:
+        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="write")
+    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
+        checks.append(ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
+        vended = None
+    else:
+        checks.append(
+            ProbeCheck(name="issue", outcome="pass")
+            if vended is not None
+            else ProbeCheck(name="issue", outcome="skip", detail="server_mediated: this warehouse vends no direct credentials")
+        )
+
+    if vended is None:
+        checks += [ProbeCheck(name=n, outcome="skip", detail="no credential") for n in ("write_inside", "read_inside", SCOPE_CHECK, "cleanup")]
+        return checks
+
+    options = vended.storage_options
+    s3 = s3_client(
+        options.get("endpoint") or options.get("aws_endpoint"),
+        access_key=options.get("aws_access_key_id") or options.get("access_key_id"),
+        secret_key=options.get("aws_secret_access_key") or options.get("secret_access_key"),
+        session_token=options.get("aws_session_token") or options.get("session_token"),
+        region=options.get("region") or options.get("aws_region"),
+    )
+
+    def _step(name: str, fn: Callable[[], object], *, expect_refusal: bool = False) -> bool:
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 — the store's refusal is the RESULT here, not an error
+            detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+            checks.append(ProbeCheck(name=name, outcome="pass" if expect_refusal else "fail", detail="" if expect_refusal else detail))
+            return expect_refusal
+        checks.append(
+            ProbeCheck(name=name, outcome="fail", detail="the store accepted a write OUTSIDE the credential's prefix")
+            if expect_refusal
+            else ProbeCheck(name=name, outcome="pass")
+        )
+        return not expect_refusal
+
+    wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
+    if wrote:
+        _step("read_inside", lambda: s3.get_object(Bucket=bucket, Key=inside))
+        _step(SCOPE_CHECK, lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"), expect_refusal=True)
+        _step("cleanup", lambda: s3.delete_object(Bucket=bucket, Key=inside))
+    else:
+        checks += [ProbeCheck(name=n, outcome="skip", detail="nothing was written") for n in ("read_inside", SCOPE_CHECK, "cleanup")]
+    return checks

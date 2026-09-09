@@ -3614,6 +3614,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouses/{warehouse_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Warehouse Credentials
+         * @description Prove this warehouse's vended credentials are actually SCOPED, by using one.
+         *
+         *     THE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`
+         *     restricts every credential to one bucket + prefix, and the goal names STS as the answer for
+         *     storage — so if the object store ACCEPTS the inline session policy and IGNORES it, every credential
+         *     the estate has ever vended reached the whole bucket, every log line reads normal, and no audit
+         *     record could reconstruct which of them over-reached. Nothing asserted it: every vending defect in
+         *     this estate's history was found by a client failing later, never by the catalog.
+         *
+         *     IT WRITES, and that is the point — a policy document can be inspected without learning anything
+         *     about the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under
+         *     the warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix
+         *     which MUST be refused, and removes what it made. The failure of that last write is the finding.
+         *
+         *     Admin-gated on the warehouse's own project and collapsing denied → 404, the same
+         *     no-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's
+         *     bucket, so its gate is the create/lifecycle rung and not a read one.
+         *
+         *     Reports every check even after one fails (see :func:`summarize_probe`) — an over-permissive store
+         *     and an unreachable one need different answers, and a first-failure exit cannot tell them apart.
+         */
+        post: operations["validate_warehouse_credentials_v1_warehouses__warehouse_id__validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7498,6 +7537,44 @@ export interface components {
             scan_batch_size?: number | null;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
+        };
+        /**
+         * ProbeCheck
+         * @description One step of the probe, with its own outcome — never folded into a neighbour's.
+         */
+        ProbeCheck: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Name */
+            name: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "pass" | "fail" | "skip";
+        };
+        /**
+         * ProbeReport
+         * @description What the door answers. `enforced` is deliberately three-valued.
+         *
+         *     `None` means the scope check never ran — a credential was not issued, or the write that would have
+         *     proven it failed for an unrelated reason. Reporting that as `False` would raise a false alarm about
+         *     the store, and reporting it as `True` would claim a guarantee nothing tested. An unexercised control
+         *     is UNKNOWN, which is the same rule `index_health` applies to an index whose stats will not read.
+         */
+        ProbeReport: {
+            /** Checks */
+            checks?: components["schemas"]["ProbeCheck"][];
+            /** Enforced */
+            enforced?: boolean | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "pass" | "fail" | "skip";
         };
         /**
          * ProjectPoliciesResponse
@@ -15457,6 +15534,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnbindWarehouseNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_warehouse_credentials_v1_warehouses__warehouse_id__validate_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeReport"];
                 };
             };
             /** @description Validation Error */

@@ -8830,6 +8830,72 @@
         "title": "PolicyResponse",
         "type": "object"
       },
+      "ProbeCheck": {
+        "description": "One step of the probe, with its own outcome \u2014 never folded into a neighbour's.",
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail",
+              "skip"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "outcome"
+        ],
+        "title": "ProbeCheck",
+        "type": "object"
+      },
+      "ProbeReport": {
+        "description": "What the door answers. `enforced` is deliberately three-valued.\n\n`None` means the scope check never ran \u2014 a credential was not issued, or the write that would have\nproven it failed for an unrelated reason. Reporting that as `False` would raise a false alarm about\nthe store, and reporting it as `True` would claim a guarantee nothing tested. An unexercised control\nis UNKNOWN, which is the same rule `index_health` applies to an index whose stats will not read.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ProbeCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "enforced": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enforced"
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail",
+              "skip"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "ProbeReport",
+        "type": "object"
+      },
       "ProjectPoliciesResponse": {
         "description": "Every maintenance policy record governing data inside ONE project (#65) \u2014 the tenant-scoped VIEW.\n\n``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is\nactually in force across a tenant, so a project admin could not tell which of their namespaces or\ntables carries a retention override without already knowing its id. This is that read.\n\n``buckets`` and ``namespaces`` are the SCOPE the listing was computed from \u2014 the project's warehouse\nbuckets and the top-level namespaces bound to those warehouses \u2014 reported so a surprising list can be\nexplained without a second call.\n\n``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the\nscope is derived from the namespace\u2192warehouse bindings, so a binding record that cannot be read is a\nnamespace whose policies cannot be seen: a silently-narrowed list would read as \"checked and clean\",\nwhich is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a\ndestructive door \u2014 see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may\nbe short.\n\n**Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record\nshadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not\nwhat governs any one dataset \u2014 a surface that renders them as an effective, merged policy is lying.",
         "properties": {
@@ -32626,6 +32692,120 @@
           }
         ],
         "summary": "Unbind Warehouse Namespace",
+        "tags": [
+          "warehouse"
+        ]
+      }
+    },
+    "/v1/warehouses/{warehouse_id}/validate": {
+      "post": {
+        "description": "Prove this warehouse's vended credentials are actually SCOPED, by using one.\n\nTHE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`\nrestricts every credential to one bucket + prefix, and the goal names STS as the answer for\nstorage \u2014 so if the object store ACCEPTS the inline session policy and IGNORES it, every credential\nthe estate has ever vended reached the whole bucket, every log line reads normal, and no audit\nrecord could reconstruct which of them over-reached. Nothing asserted it: every vending defect in\nthis estate's history was found by a client failing later, never by the catalog.\n\nIT WRITES, and that is the point \u2014 a policy document can be inspected without learning anything\nabout the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under\nthe warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix\nwhich MUST be refused, and removes what it made. The failure of that last write is the finding.\n\nAdmin-gated on the warehouse's own project and collapsing denied \u2192 404, the same\nno-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's\nbucket, so its gate is the create/lifecycle rung and not a read one.\n\nReports every check even after one fails (see :func:`summarize_probe`) \u2014 an over-permissive store\nand an unreachable one need different answers, and a first-failure exit cannot tell them apart.",
+        "operationId": "validate_warehouse_credentials_v1_warehouses__warehouse_id__validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Validate Warehouse Credentials",
         "tags": [
           "warehouse"
         ]
