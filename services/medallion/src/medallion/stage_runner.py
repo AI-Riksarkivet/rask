@@ -168,6 +168,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = build_lance_service_app(
     title=f"medallion stage runner ({_settings.from_namespace}->{_settings.to_namespace})",
     docs_enabled=_settings.docs_enabled,
+    audit_enabled=_settings.audit_enabled,
     lifespan=lifespan,
     log=log,
 )

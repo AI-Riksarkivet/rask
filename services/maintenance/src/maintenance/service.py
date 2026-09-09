@@ -183,6 +183,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = build_lance_service_app(
     title="Lance table maintenance",
     docs_enabled=get_settings().docs_enabled,
+    audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
 )

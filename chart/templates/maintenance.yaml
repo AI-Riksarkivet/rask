@@ -133,6 +133,13 @@ spec:
             # pre-pass, which must open every manifest in every bucket and cannot be expressed by any
             # per-table credential. Those are reads.
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
+            {{- /* #41. The SAME `auth.audit` key every other lakehouse service reads, so the
+                 operator's one lever reaches the component that REWRITES BYTES too — it had no
+                 setting at all until 2026-09-09, so there was nothing here to render (§ Q17-27).
+                 hasKey+ternary for the reason recorded at the catalog's copy: `| default` makes an
+                 explicit false un-settable, and a bare reference renders "" on a `--reuse-values`
+                 upgrade, which is a bool_parsing crash at boot. */}}
+            - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
             - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ $root.Values.maintenance.catalogServiceIdentity | quote }} }
             {{- if $root.Values.maintenance.distributedCompaction }}
             # THE REWRITE'S BYTES LEAVE THIS POD. `compact_files()` plans, executes and commits in one

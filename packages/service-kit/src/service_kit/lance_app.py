@@ -54,6 +54,7 @@ from fastapi import APIRouter, FastAPI
 
 from service_kit.app import setup_logging
 from service_kit.exceptions import register_handlers
+from service_kit.governed.audit import configure_audit
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import RequestIDMiddleware
 from service_kit.probes import ReadyCheck, make_probes_router
@@ -64,6 +65,7 @@ def build_lance_service_app(
     title: str,
     version: str = "0.1.0",
     docs_enabled: bool,
+    audit_enabled: bool,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
     log: logging.Logger,
     routers: Sequence[APIRouter] = (),
@@ -78,8 +80,18 @@ def build_lance_service_app(
     ``inner_middleware`` are ``http`` middleware functions that must run INSIDE the request-id layer
     (see the module docstring). Everything else the caller adds after this returns, which keeps it
     outer — the order those middlewares already had.
+
+    ``audit_enabled`` arms the `lance.audit` compliance stream, and is REQUIRED for the same reason
+    ``docs_enabled`` beside it is: a keyword with no default is enforced at every call site by the type
+    checker, so a new lakehouse service has to ANSWER rather than inherit. `governed/audit.py` gates
+    the stream by the dedicated logger's LEVEL, so a service that never calls `configure_audit` leaves
+    it at NOTSET and follows whatever `RASK_LOG_LEVEL` set — which meant the volume lever doubled as a
+    compliance lever. Three of this factory's four callers armed it in their own lifespans and two did
+    not; it was missing where it matters most, on `services/maintenance`, the component that rewrites
+    bytes.
     """
     setup_logging()
+    configure_audit(enabled=audit_enabled)
     app = FastAPI(
         title=title,
         version=version,

@@ -40,7 +40,6 @@ from medallion.core.config import get_settings
 from medallion.services.task_register import register_ray_tasks
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
-from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
@@ -61,7 +60,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # an open forged-trigger path (symmetric with the stage runners + lineage). No-op in dev (dapr_enabled off).
     app.state.startup_complete = False
     app.state.shutting_down = False
-    configure_audit(enabled=get_settings().audit_enabled)  # #41 gate the compliance audit stream
     assert_app_token_configured(dapr_enabled=get_settings().dapr_enabled)
     # Q17-6 / §F2-2: the CODE default is anonymous while the chart flips auth ON, so a service
     # started any other way serves every route to whoever reaches the port. Refused on the
@@ -170,6 +168,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = build_lance_service_app(
     title="medallion-producer (medallion producer)",
     docs_enabled=get_settings().docs_enabled,
+    audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
 )

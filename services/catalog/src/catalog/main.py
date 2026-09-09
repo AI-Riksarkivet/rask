@@ -31,7 +31,6 @@ from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import warehouses
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
-from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
@@ -86,7 +85,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.shutting_down = False
     app.state.startup_complete = False
-    configure_audit(enabled=settings.audit_enabled)  # #41 gate the compliance audit stream
     # Fail closed if control eventing is on but the ingest route (api/dapr.py /control-events) would be
     # unauthenticated: require_dapr_token silently no-ops on a blank APP_API_TOKEN, so an unset token with
     # the subscription live is a misconfiguration a forged in-cluster POST could exploit — refuse to boot.
@@ -302,6 +300,7 @@ app = build_lance_service_app(
     title="Lance Namespace REST Catalog",
     version="1.0.0",
     docs_enabled=_settings.docs_enabled,
+    audit_enabled=_settings.audit_enabled,
     lifespan=lifespan,
     log=log,
     routers=[api_router],

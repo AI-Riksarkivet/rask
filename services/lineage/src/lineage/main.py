@@ -23,7 +23,6 @@ from lineage.core.age import make_pool, run_cypher
 from lineage.core.config import apply_lineage_secrets, get_settings
 from lineage.services.repository import LineageRepository
 from service_kit.draining import arm_drain_on_sigterm
-from service_kit.governed.audit import configure_audit
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.settings import assert_authentication_configured
@@ -49,7 +48,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # shutting_down, so k8s pulls the pod from rotation during boot and graceful drain.
     app.state.startup_complete = False
     app.state.shutting_down = False
-    configure_audit(enabled=settings.audit_enabled)  # #41 gate the compliance audit stream (dlq_replay)
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Fail closed if ANY sidecar-delivered route mounts — the pub/sub ingest (dapr_enabled) OR the cron
     # reconcile binding — but the app-api-token is unset: either route would otherwise be an
@@ -179,6 +177,7 @@ async def _graph_ready(request: Request) -> Readiness:
 app = build_lance_service_app(
     title="Lance Lineage Service",
     docs_enabled=get_settings().docs_enabled,
+    audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
     routers=[api_router],

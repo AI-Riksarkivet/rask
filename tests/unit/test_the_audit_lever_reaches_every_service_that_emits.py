@@ -24,7 +24,7 @@ from tests.unit.test_invariants import _helm_template
 #: `make_service_app` reads the shared `RASK_AUDIT_ENABLED`. `LINEAGE_READ_AUDIT_ENABLED` is deliberately
 #: NOT here — it is a different control (`services.lineage.readAudit`, the per-read record), and folding
 #: it in would make this gate demand that `auth.audit=false` disable a feature it does not govern.
-_AUDIT_ENV = ("LANCE_AUDIT_ENABLED", "RASK_AUDIT_ENABLED")
+_AUDIT_ENV = ("LANCE_AUDIT_ENABLED", "RASK_AUDIT_ENABLED", "MAINTENANCE_AUDIT_ENABLED")
 
 
 def _audit_env(*values: str) -> list[tuple[str, str, str]]:
@@ -46,7 +46,7 @@ def test_the_lever_is_wired_at_all() -> None:
     # Three services that emit and were told nothing before 2026-09-09: the factory-built fleet had no
     # shared flag at all, and lineage + medallion declared the catalog's alias while the chart rendered
     # it into the catalog alone. Named individually so a regression says WHICH half came loose.
-    for expected in ("rask-ingest", "lineage", "medallion-producer"):
+    for expected in ("rask-ingest", "lineage", "medallion-producer", "maintenance"):
         assert any(expected in name for name in names), f"{expected} emits audit records and is told nothing; told: {sorted(names)}"
 
 

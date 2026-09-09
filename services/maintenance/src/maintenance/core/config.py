@@ -52,6 +52,16 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="MAINTENANCE_DOCS")
+
+    #: Whether this service emits the `lance.audit` compliance stream. ON by default — the trail is
+    #: evidence, so a deployment that forgets still has it.
+    #:
+    #: IT DID NOT EXIST UNTIL 2026-09-09, and the sweep is where that cost most: this is the component
+    #: that REWRITES BYTES, and with no field there was nothing for `build_lance_service_app` to arm,
+    #: so the `lance.audit` logger sat at NOTSET and followed `RASK_LOG_LEVEL` (§ Q17-27). Arming it is
+    #: the precondition for § Q17-36 — the sweep's per-object outcome becoming a governed record rather
+    #: than telemetry on a 14-day trace TTL.
+    audit_enabled: bool = Field(default=True, alias="MAINTENANCE_AUDIT_ENABLED")
     # Datasets whose newest version is older than this are eligible for version GC (keep recent history).
     # ge=1 (not 0): timedelta(0) is falsy, so pylance collapses `older_than` to None and silently drops the
     # threshold — to GC aggressively, use a small positive value, not 0.

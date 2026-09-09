@@ -1127,7 +1127,9 @@ def test_pool_closed_when_bootstrap_fails(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     monkeypatch.setattr(main_mod, "get_settings", lambda: settings)
-    monkeypatch.setattr(main_mod, "configure_audit", lambda **_k: None)
+    # The audit logger is armed by `build_lance_service_app` at import, not by this lifespan, so
+    # there is nothing here to neutralise — the patch this line replaced named a symbol the
+    # module no longer imports.
     monkeypatch.setattr(main_mod, "instrument_lance_if_available", lambda: None)
     monkeypatch.setattr(main_mod, "assert_app_token_configured", lambda **_k: None)
     monkeypatch.setattr(main_mod, "apply_lineage_secrets", lambda _s: None)
