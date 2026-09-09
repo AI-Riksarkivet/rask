@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     DeclareTableRequest,
@@ -430,11 +430,16 @@ def describe_table(
     return response
 
 
-@router.post("/{id}/exists", status_code=200)
-def table_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: TableExistsRequest | None = None) -> None:
+#: The spec gives `exists` a 200 with NO `content:` block — *"Success, no content"* — so a conforming
+#: server sends an empty body. A handler annotated `-> None` sends `application/json` with the four
+#: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
+#: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
+@router.post("/{id}/exists", status_code=200, response_class=Response)
+def table_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: TableExistsRequest | None = None) -> Response:
     """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error."""
     segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
     native.call(ns, "table_exists", TableExistsRequest(id=segments, version=body.version if body else None))
+    return Response(status_code=200)
 
 
 @router.post("/{id}/drop", response_model_exclude_none=True)

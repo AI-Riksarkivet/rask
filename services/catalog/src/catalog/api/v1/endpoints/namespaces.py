@@ -6,7 +6,7 @@ import asyncio
 import logging
 from contextlib import suppress
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -720,11 +720,16 @@ async def set_namespace_protection(
     return ProtectionResponse(id=canonical, protected=body.protected)
 
 
-@router.post("/{id}/exists", status_code=200)
-def namespace_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: NamespaceExistsRequest | None = None) -> None:
+#: The spec gives `exists` a 200 with NO `content:` block — *"Success, no content"* — so a conforming
+#: server sends an empty body. A handler annotated `-> None` sends `application/json` with the four
+#: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
+#: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
+@router.post("/{id}/exists", status_code=200, response_class=Response)
+def namespace_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: NamespaceExistsRequest | None = None) -> Response:
     """Check that namespace ``id`` exists via ``namespace_exists`` — 200 on success (spec 0.9), else error."""
     req = NamespaceExistsRequest(id=reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None))
     native.call(ns, "namespace_exists", req)
+    return Response(status_code=200)
 
 
 @router.get("/{id}/table/list", response_model_exclude_none=True)

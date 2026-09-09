@@ -10189,9 +10189,7 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
-                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -12514,6 +12512,7 @@ export interface operations {
             header?: {
                 "X-Lance-Run-Facets"?: string | null;
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
@@ -12774,6 +12773,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
@@ -12869,6 +12869,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
@@ -12972,9 +12973,7 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
-                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -13728,6 +13727,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
@@ -13773,6 +13773,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
@@ -13817,6 +13818,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;

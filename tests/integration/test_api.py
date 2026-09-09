@@ -244,10 +244,18 @@ def test_list_table_versions_maps_descending_and_branch(client: TestClient, fake
 # --- response shaping / content types (our logic) -------------------------- #
 
 
-def test_exists_returns_200(client: TestClient, fake_ns: MagicMock) -> None:
-    # Spec 0.9: existence is conveyed as 200 (was 204 in earlier revisions).
+def test_exists_returns_200_with_no_body(client: TestClient, fake_ns: MagicMock) -> None:
+    """Spec 0.9 conveys existence as a 200 whose response has **no `content:` block** —
+    `lance_docs/ns_catalog/spec.yaml` gives it `description: Success, no content` and nothing else.
+    A handler annotated `-> None` answers `application/json` with the four bytes `null`, which a
+    strict client reads as a JSON document where the contract promised none. Both doors are pinned,
+    because the two live in different modules and only one was ever measured."""
     fake_ns.table_exists.return_value = None
-    assert client.post("/v1/table/db$t/exists").status_code == 200
+    fake_ns.namespace_exists.return_value = None
+    for door in ("/v1/table/db$t/exists", "/v1/namespace/db/exists"):
+        resp = client.post(door)
+        assert resp.status_code == 200, door
+        assert resp.content == b"", (door, resp.headers.get("content-type"), resp.content)
 
 
 def test_count_rows_returns_a_json_integer(client: TestClient, fake_ns: MagicMock) -> None:
