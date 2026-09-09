@@ -431,18 +431,28 @@ def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tm
             return self._inner.data_files()
 
     class _DatasetWithOverlay:
+        """A REAL dataset with only the overlay seam replaced.
+
+        Everything the scan reads that this does not override is forwarded, so the double cannot rot
+        into a false refusal the next time the walk reaches for another dataset method — it did, on
+        `version_refs`, and the refusal it produced was an `AttributeError` wearing this test's name.
+        """
+
         def __init__(self, inner: Any) -> None:
             self._inner = inner
 
-        def versions(self) -> list:
-            return self._inner.versions()
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
 
         def get_fragments(self) -> list:
             return [_FragmentWithOverlay(f) for f in self._inner.get_fragments()]
 
         def checkout_version(self, _version: int) -> _DatasetWithOverlay:
-            # The #102 walk checks out versions on the HEAD handle; every version of this stand-in
-            # carries the overlay, so the refusal must fire regardless of which one is inspected.
+            # NOT forwarded, and this is the seam the whole test turns on. The #102 walk checks out
+            # each version on the HEAD handle and reads fragments from the RESULT, so forwarding here
+            # hands back a real dataset whose fragments carry no overlay — the refusal then fires for
+            # some other reason and the assertions still pass. Every version of this stand-in carries
+            # the overlay, so the refusal is the one being tested.
             return self
 
     monkeypatch.setattr(orphans.lance, "dataset", lambda *a, **k: _DatasetWithOverlay(real))

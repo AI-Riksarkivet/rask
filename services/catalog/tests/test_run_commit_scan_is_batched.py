@@ -36,7 +36,10 @@ class _OverlapRequiringDataset:
         # Two parties per wave; cyclic, so four reads pass as two overlapping pairs.
         self._barrier = threading.Barrier(2)
 
-    def versions(self) -> list[dict[str, int]]:
+    def version_refs(self) -> list[dict[str, int]]:
+        """`version_refs`, matching the accessor the scan calls — a double carrying only `versions()`
+        answers an `AttributeError` that the caller reports as an unreadable store, so the double
+        would fail the test for a reason the test is not about."""
         return [{"version": v} for v in self._versions]
 
     def read_transaction(self, version: int) -> _Transaction:

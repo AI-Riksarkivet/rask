@@ -646,7 +646,11 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
                 f"and proceeding would risk appending the same rows twice: {exc}"
             ) from exc
         return None  # genuinely no dataset yet -> certainly no prior commit by this run
-    candidates = [version for version_info in dataset.versions() if (version := int(version_info["version"])) > read_version]
+    # `version_refs()`, not `versions()`: this filter reads the NUMBER and nothing else, and pylance 11
+    # answers version_refs without reading or deserializing a manifest. On a table with history that is
+    # the difference between one listing and one object read per version, on a guard that runs before
+    # every commit — and this guard's whole job is to be cheap enough that nobody is tempted to skip it.
+    candidates = [version for version_info in dataset.version_refs() if (version := int(version_info["version"])) > read_version]
     if not candidates:
         return None
 

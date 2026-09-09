@@ -27,6 +27,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
+from lance.dataset import VersionRef
 from lance.fragment import write_fragments
 
 from catalog.services import dataplane
@@ -190,8 +191,13 @@ class _RaisingDataset:
         self._inner = inner
         self._boom = boom
 
-    def versions(self) -> list[dict]:
-        return self._inner.versions()
+    def version_refs(self) -> list[VersionRef]:
+        """The cheap accessor the scan uses — `versions()` is not called on this path.
+
+        Forwarded rather than restated so the double cannot disagree with the real handle about which
+        versions exist, which is the only thing it is standing in for here.
+        """
+        return self._inner.version_refs()
 
     def read_transaction(self, _version: int) -> object:
         raise self._boom
