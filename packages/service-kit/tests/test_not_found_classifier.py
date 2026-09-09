@@ -1,14 +1,16 @@
-"""SK-04 — ONE not-found message classifier for the two Lance "missing thing" sites.
+"""SK-04 — the SERVING layer's three "missing thing" sites, on the estate's one absence vocabulary.
 
-pylance exposes no typed error for a missing table/version, so both the registry's
-``table_dataset`` and the reader's ``_at_version`` classify by message substring.
-Before the shared helper they had already drifted: the reader matched only
-"not found", so an OSError saying "does not exist" (the wording object stores
-actually produce for a missing path) escaped as a raw 500 instead of the 404 the
-registry path returns for the very same condition.
+pylance exposes no typed error for a missing table/version, so the registry's ``table_dataset``, the
+reader's ``_at_version`` and ``introspect.discover_tables`` classify by message substring. Before the
+shared helper they had already drifted: the reader matched only "not found", so an OSError saying
+"does not exist" escaped as a raw 500 instead of the 404 the registry returned for the same condition.
 
-The writer's commit-conflict markers are deliberately NOT part of this: a lost
-OCC race is a different condition (409, re-read and re-send), not a not-found.
+That helper was `lancekit.errors.is_not_found`, and it has been folded into
+`lancekit.absence.reads_as_absent` — the write and reconcile paths were asking the same question of a
+second shared classifier with the opposite width, which is the drift this file gates, one level up.
+
+The writer's commit-conflict markers are deliberately NOT part of this: a lost OCC race is a different
+condition (409, re-read and re-send), not a not-found.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import pytest
 
 from service_kit.exceptions import NotFoundError
 from service_kit.lancekit import registry as registry_mod
-from service_kit.lancekit.errors import is_not_found
+from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.reader import LocalCatalogTransport
 
 
@@ -45,9 +47,9 @@ def _transport(exc: BaseException) -> LocalCatalogTransport:
 
 
 def test_helper_classifies_both_missing_wordings() -> None:
-    assert is_not_found(OSError("LanceError(IO): Object at location foo does not exist"))
-    assert is_not_found(ValueError("Table bar was not found"))
-    assert not is_not_found(OSError("Commit conflict for version 7: concurrent writer"))
+    assert reads_as_absent(OSError("LanceError(IO): Object at location foo does not exist"))
+    assert reads_as_absent(ValueError("Table bar was not found"))
+    assert not reads_as_absent(OSError("Commit conflict for version 7: concurrent writer"))
 
 
 def test_reader_translates_does_not_exist_into_not_found() -> None:
@@ -59,8 +61,27 @@ def test_reader_translates_does_not_exist_into_not_found() -> None:
 
 
 def test_reader_still_translates_not_found() -> None:
-    transport = _transport(OSError("version 9 not found"))
+    """The message is pylance's OWN, measured — the fixture used to be an invented `"version 9 not found"`.
+
+    That string is not a wording pylance produces, so the test proved only that the classifier matched
+    the phrase the test had written. Driven on 11.0.0, `checkout_version` on a version that is not
+    there says this, over both a local path and S3.
+    """
+    transport = _transport(OSError("Dataset at path t/_versions/9.manifest was not found: Error performing HEAD http://s/b/t/_versions/9.manifest"))
     with pytest.raises(NotFoundError):
+        transport._at_version(9)
+
+
+def test_the_reader_does_not_call_a_CORRUPT_dataset_a_missing_one() -> None:
+    """A deleted data file is not a 404, and the wide classifier said it was.
+
+    MEASURED on pylance 11.0.0: deleting one object under `t/data/` and reading gives the message
+    below — `Not found:` for a file the manifest still references. The dataset EXISTS and is damaged,
+    so answering "no such table" reports data loss as a typo and sends nobody to look at the store.
+    """
+    corrupt = OSError("External error: LanceError(IO): Generic N/A error: Wrapped error: Not found: t/data/9d3f.lance")
+    transport = _transport(corrupt)
+    with pytest.raises(OSError, match="Not found"):
         transport._at_version(9)
 
 
@@ -90,11 +111,11 @@ def test_registry_translates_missing_table_into_not_found(monkeypatch: pytest.Mo
 
 
 def test_the_two_sites_share_one_classifier() -> None:
-    """The inline substring matching is gone — both sites go through errors.is_not_found."""
+    """The inline substring matching is gone — every site goes through `lancekit.absence`."""
     src_dir = Path(registry_mod.__file__).parent
-    for name in ("registry.py", "reader.py"):
+    for name in ("registry.py", "reader.py", "introspect.py"):
         source = (src_dir / name).read_text()
         assert '"does not exist" in' not in source and '"not found" in' not in source, (
-            f"{name} still classifies not-found inline instead of via lancekit.errors"
+            f"{name} still classifies not-found inline instead of via lancekit.absence"
         )
-        assert "is_not_found" in source
+        assert "reads_as_absent" in source

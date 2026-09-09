@@ -17,8 +17,8 @@ import pyarrow as pa
 from pydantic import BaseModel
 
 from service_kit.lancekit import store
+from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.blobs import is_blob_field
-from service_kit.lancekit.errors import is_not_found
 
 
 logger = logging.getLogger(__name__)
@@ -101,12 +101,12 @@ def discover_tables(db_path: str | Path, storage_options: dict[str, str] | None 
             # must propagate so registry.get() fails loudly and retriably, rather than laundering a
             # flaky read into a permanent "row_table does not exist" for the whole dataset.
             #
-            # Classified by the SHARED `is_not_found`, not by a private marker tuple. This module
+            # Classified by the SHARED `reads_as_absent`, not by a private marker tuple. This module
             # carried a third verbatim copy of ("not found", "does not exist") — the same two markers
             # the registry and the reader had already been de-duplicated onto — so a marker added for
             # one store's wording would have been honoured on two paths out of three, and the same
             # condition would be a 404 in one place and a hard failure here.
-            if not is_not_found(exc):
+            if not reads_as_absent(exc):
                 raise
             logger.warning("skipping %s: listed but not a readable Lance dataset: %s", uri, exc)
     return out

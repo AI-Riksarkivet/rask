@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ingest.lander import create_empty
+from service_kit.lancekit.absence import reads_as_absent
 
 
 if TYPE_CHECKING:
@@ -181,11 +182,14 @@ class LocalCatalog:
                 # dataset whose history it just discarded.
                 #
                 # Matched on the MESSAGE because pylance raises a bare `ValueError` for a missing
-                # dataset and exports no typed error to catch (verified against the pinned version:
-                # `ValueError('Dataset at <uri> was not found: ...')`). Narrow enough to be safe —
-                # anything whose own text does not say "not found" is re-raised, so an unreadable
-                # dataset now fails the run loudly instead of being overwritten quietly.
-                if not _reads_as_absent(exc):
+                # dataset and exports no typed error to catch. `reads_as_absent` is the estate's ONE
+                # answer to that question (`service_kit.lancekit.absence`), and it is shared because
+                # this door's use of it is the destructive one: the marker list here was
+                # `"not found"`, which matches the HTTP status line of ANY object-store 404 — so a
+                # deleted warehouse bucket or an endpoint pointed at the wrong host read as "no
+                # dataset yet" and reached `create_empty`. Measured on pylance 11.0.0: a 403 and a
+                # 500 were already re-raised correctly; a 404 was not.
+                if not reads_as_absent(exc):
                     raise
                 create_empty(uri, self._schema, external_base)
             assert_creation_contract(uri)
@@ -204,17 +208,6 @@ class LocalCatalog:
     def register_version(self, dataset_uri: str, version: int, run_id: str) -> None:
         """Record the committed version with the run id — the reconciliation anchor."""
         self.registered.append((dataset_uri, version, run_id))
-
-
-def _reads_as_absent(exc: BaseException) -> bool:
-    """Does this failure mean the dataset IS NOT THERE, as opposed to "we could not look"?
-
-    `FileNotFoundError` is unambiguous. Otherwise pylance's own wording is the only signal it gives:
-    it raises `ValueError("Dataset at <uri> was not found: Not found: <uri>/_versions, ...")` and
-    exports no typed error. Anything else — permission, credentials, transport, a bad URI — is an
-    unanswered question, and the caller must not act on it.
-    """
-    return isinstance(exc, FileNotFoundError) or "not found" in str(exc).lower()
 
 
 class CreationContractError(ValueError):

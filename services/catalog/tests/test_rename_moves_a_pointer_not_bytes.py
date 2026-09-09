@@ -28,7 +28,15 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from lance_namespace import CreateNamespaceRequest, DeclareTableRequest, DescribeTableRequest, InvalidInputError, TableNotFoundError, connect
+from lance_namespace import (
+    CreateNamespaceRequest,
+    DeclareTableRequest,
+    DescribeTableRequest,
+    InvalidInputError,
+    ServiceUnavailableError,
+    TableNotFoundError,
+    connect,
+)
 
 from catalog.services import dataplane
 
@@ -310,27 +318,51 @@ def test_plan_compaction_answers_NOT_FOUND_for_a_table_whose_bytes_are_absent(tm
         dataplane.plan_compaction(location, {}, target_rows_per_fragment=100)
 
 
-def test_plan_compaction_does_not_call_an_INTERNAL_ERROR_a_missing_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Verbatim pylance 11.0.0 wordings, captured against a stub S3 endpoint. Driven through the
+        # classifier rather than provoked through a local path, because a `file://` dataset ignores
+        # AWS options and raises nothing at all.
+        pytest.param(
+            'LanceError(IO): Generic Config error: failed to parse "x" as Duration, /rust/lance-io/src/object_store/providers/aws.rs',
+            id="a malformed storage option",
+        ),
+        pytest.param(
+            "LanceError(IO): Generic S3 error: Error performing list request: Error performing GET http://s/b?list-type=2 in 1ms - "
+            'Server returned non-2xx status code: 404 Not Found: <?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket'
+            "</Code><Message>The specified bucket does not exist</Message></Error>",
+            id="the warehouse BUCKET does not exist",
+        ),
+        pytest.param(
+            "LanceError(IO): Generic S3 error: Error performing list request: Server returned non-2xx status code: 403 Forbidden: "
+            "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>",
+            id="the credential cannot look",
+        ),
+    ],
+)
+def test_plan_compaction_does_not_call_a_STORAGE_FAULT_a_missing_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str) -> None:
     """The catch was `except ValueError`, and pylance raises `ValueError` for far more than absence.
 
-    MEASURED on pylance 10.0.0: an absent dataset gives `LanceError(IO) … not found`, while a
-    malformed storage option gives `LanceError(IO): Generic N/A error: Encountered internal error.
-    Please file a bug report`. Both reached one handler that reported "declared or registered but was
-    never written" — so a configuration fault was rendered as a missing table and sent the operator
-    to look for data that was there all along.
+    All three of these reached one handler that reported "declared or registered but was never
+    written" — so a configuration fault, a deleted bucket and a permission failure were each rendered
+    as a missing table, sending the operator to look for data that was there all along. The bucket case
+    is not hypothetical: § Q8-15 measured 79 datasets registered into buckets that do not exist.
+
+    They answer `ServiceUnavailableError` (503) and not a bare re-raise, because a bare one returned a
+    500 and a 500 says the CATALOG is broken. Nothing about the request is wrong; the store did not
+    answer, which is what the sibling `_already_committed` has always said for the same condition.
     """
     ns = _namespace(tmp_path)
     written = _written(ns, ["ns1", "real"])
 
-    def _internal(*_a: object, **_k: object) -> object:
-        # Verbatim from pylance 10.0.0 for a malformed storage option — driven against a real s3 URI,
-        # because a `file://` dataset ignores AWS options and raises nothing at all, which is why this
-        # asserts the CLASSIFIER rather than provoking the fault through a local path.
-        raise ValueError("LanceError(IO): Generic N/A error: Encountered internal error. Please file a bug report")
+    def _fault(*_a: object, **_k: object) -> object:
+        raise ValueError(message)
 
-    monkeypatch.setattr(dataplane.lance, "dataset", _internal)
-    with pytest.raises(ValueError) as caught:
+    monkeypatch.setattr(dataplane.lance, "dataset", _fault)
+    with pytest.raises(ServiceUnavailableError) as caught:
         dataplane.plan_compaction(written, {})
 
-    assert "never written" not in str(caught.value), f"an internal error was reported as a missing table: {caught.value}"
-    assert not isinstance(caught.value, TableNotFoundError), "an internal error was given the not-found code"
+    assert "never written" not in str(caught.value), f"a storage fault was reported as a missing table: {caught.value}"
+    assert not isinstance(caught.value, TableNotFoundError), "a storage fault was given the not-found code"
+    assert message.split(",")[0][:40] in str(caught.value), "the underlying cause was swallowed rather than carried"

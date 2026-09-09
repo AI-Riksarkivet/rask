@@ -20,6 +20,7 @@ from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.features import unsupported_features_from_open_error
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
+from service_kit.lancekit.absence import reads_as_absent
 
 
 def _swallow_dataset_error(exc: BaseException) -> None:
@@ -49,16 +50,18 @@ def read_storage_version(uri: str, storage_options: dict[str, str]) -> int | Non
     operator acts on. Measured 2026-08-26: six live datasets reported as storage loss while
     ``services/maintenance`` was reading their manifests in the same hour.
 
-    The absent marker is deliberately NARROW. pylance's wording for a genuinely missing dataset is
-    "was not found"; a loose "not found" would also match S3's "Bucket 'x' not found", so a
-    misconfigured endpoint would go on reading as a deleted dataset — the very bug this closes, one
-    layer out.
+    The absent marker is deliberately NARROW, and that reasoning is now the estate's rather than this
+    module's: pylance's wording for a genuinely missing dataset is "was not found", while a loose
+    "not found" also matches the `404 Not Found` status line every object-store error carries — so a
+    misconfigured endpoint would go on reading as a deleted dataset, the very bug this closes one layer
+    out. `service_kit.lancekit.absence` holds the vocabulary because three other seams asked the same
+    question with wider lists and got the opposite answer for a missing bucket.
     """
     try:
         return int(lance.dataset(uri, storage_options=storage_options).version)
     except BaseException as exc:
         _swallow_dataset_error(exc)
-        if "was not found" in str(exc):
+        if reads_as_absent(exc):
             return None
         reason = unsupported_features_from_open_error(exc) or f"{type(exc).__name__}: {exc}"
         raise StorageUnreadable(reason) from exc

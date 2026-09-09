@@ -50,9 +50,9 @@ from service_kit.exceptions import (
     ValidationError,
 )
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.catalog_client import catalog_api_client
 from service_kit.lancekit.catalog_client import request_headers as _request_headers
-from service_kit.lancekit.errors import is_not_found
 
 
 log = logging.getLogger(__name__)
@@ -267,7 +267,7 @@ class LocalCatalogTransport:
         except (ValueError, FileNotFoundError) as exc:
             raise NotFoundError(f"table version {version} not found") from exc
         except OSError as exc:
-            if is_not_found(exc):
+            if reads_as_absent(exc):
                 raise NotFoundError(f"table version {version} not found") from exc
             raise
 

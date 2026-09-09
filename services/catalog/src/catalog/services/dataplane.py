@@ -92,6 +92,7 @@ from catalog.core.namespace import open_dataset
 from catalog.services import changes, native
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
+from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 
@@ -528,15 +529,6 @@ def _dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     return resolved, path
 
 
-#: Lance commit OSError message markers (transaction.md conflict taxonomy). A schema/version mismatch can
-#: NEVER succeed on retry (client error → 400); an incompatible transaction is a retryable concurrency
-#: conflict (409, re-read + re-commit); anything ELSE — a RustFS 5xx surfaces as ``ArrowIOError``, itself an
-#: ``OSError`` subclass — is a store OUTAGE (503), NOT a client conflict. Collapsing all three to 409 (the
-#: naive design) would loop a doomed retry on a schema mismatch and mislabel an outage as contention.
-#: An Append whose read_version has no committed base (a declared-only/never-written table, or a version
-#: compacted away). Kept here because `_ABSENCE_MARKERS` below reuses this exact vocabulary for a
-#: different question — "is the thing absent, or merely unreadable?" — which is not a commit verdict.
-_COMMIT_NO_BASE_MARKERS = ("must already exist unless", "manifest was not found", "no such file")
 #: The default non-retryable remedy — the client-direct append's. Its fragments describe data the table
 #: no longer accepts, so the data must be written again, not the metadata re-sent.
 _APPEND_REMEDY = "Discard them, re-read the current version, and re-WRITE the data"
@@ -584,26 +576,6 @@ def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exc
 #: run finds its own earlier version instead of appending twice.
 _RUN_MARKER_PREFIX = "rask.ingest.run_id="
 
-#: Substrings that PROVE a read failed because the thing is not there — as opposed to unreachable.
-#: Reuses `_COMMIT_NO_BASE_MARKERS`' vocabulary (the sibling commit path already discriminates the
-#: same two cases) plus the dataset-level phrasing `read_table_version` matches on. Kept as a
-#: substring match rather than an exception type because the object-store layer flattens absence into
-#: `OSError` with the reason only in the message — the same reason `_classify_commit_error` matches on
-#: text. A phrase that is NOT here fails closed, which is the safe direction for a new store's wording.
-_ABSENCE_MARKERS = (*_COMMIT_NO_BASE_MARKERS, "was not found", "not found", "does not exist", "no such")
-
-
-def _is_absence(exc: BaseException) -> bool:
-    """Does this error prove the target is ABSENT (vs merely unreadable)?
-
-    `FileNotFoundError` is definitive; everything else is judged on the message, and anything
-    unrecognized is treated as unreadable — the direction that refuses rather than duplicates.
-    """
-    if isinstance(exc, FileNotFoundError):
-        return True
-    message = str(exc).lower()
-    return any(marker in message for marker in _ABSENCE_MARKERS)
-
 
 def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_version: int) -> tuple[int, int] | None:
     """Did THIS run already commit? Scan versions after ``read_version`` for the run's marker.
@@ -640,7 +612,7 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
     try:
         dataset = lance.dataset(location, storage_options=dict(so) if so else None)
     except Exception as exc:
-        if not _is_absence(exc):
+        if not reads_as_absent(exc):
             raise ServiceUnavailableError(
                 f"cannot determine whether run {run_id!r} already committed to {location!r} — the object store is unreadable, "
                 f"and proceeding would risk appending the same rows twice: {exc}"
@@ -666,7 +638,7 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
         results = list(pool.map(_read_props, candidates))
     for version, props, exc in results:
         if exc is not None:
-            if not _is_absence(exc):
+            if not reads_as_absent(exc):
                 raise ServiceUnavailableError(
                     f"cannot read version {version} while checking whether run {run_id!r} already committed — "
                     f"this may be the run's own commit, and skipping it would append the rows twice: {exc}"
@@ -855,13 +827,28 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
         # Server Error" — which tells an operator nothing and looks like a catalog fault rather than
         # a table that was never written.
         #
-        # NARROWED, because `ValueError` is not that condition. Measured on pylance 10.0.0: an absent
-        # dataset raises `LanceError(IO) … not found`, and a malformed storage option raises
-        # `LanceError(IO): Generic N/A error: Encountered internal error. Please file a bug report` —
-        # both `ValueError`. Reporting the second as "never written" sends an operator to look for
-        # data that was there all along, so anything that is not a not-found propagates as itself.
-        if "not found" not in str(exc).lower():
-            raise
+        # NARROWED, because `ValueError` is not that condition. Measured on pylance 11.0.0: an absent
+        # dataset raises `Dataset at path … was not found`, a malformed storage option raises
+        # `LanceError(IO): Generic Config error: failed to parse "x" as Duration`, and a bucket that
+        # does not exist raises `Generic S3 error: … 404 Not Found: <Code>NoSuchBucket</Code>` — all
+        # three `ValueError`. Reporting any of the last two as "never written" sends an operator to
+        # look for data that was there all along, so only a PROVEN absence answers 404.
+        #
+        # `reads_as_absent` rather than this door's own marker: the question is the estate's, not
+        # compaction's, and four seams had each answered it differently. A local `"not found" in ...`
+        # was one of them — it matches the HTTP status line every object-store error carries, so a
+        # missing warehouse bucket read as a table nobody wrote (§ Q8-15 measured 79 such datasets).
+        # AND THE OTHER TWO GET THE ANSWER THE SIBLING ALREADY GIVES. Re-raising them bare returned a
+        # 500 — the very complaint above, one class over: a store the catalog could not read reported
+        # as a catalog fault. `_already_committed` maps the same condition to `ServiceUnavailableError`
+        # (503) on the line that says "the object store is unreadable", which is the honest answer:
+        # nothing about the REQUEST is wrong, and the operator's next move is the warehouse, not the
+        # policy. The cause is carried in the message rather than swallowed.
+        if not reads_as_absent(exc):
+            raise ServiceUnavailableError(
+                f"cannot read the table at {location!r} to plan a compaction — the object store did not answer for it. "
+                f"This is a STORAGE fault, not a bad request: check the warehouse binding, the bucket and the credential: {exc}"
+            ) from exc
         # `TableNotFoundError`, not `InvalidInputError`: code 13 tells a client its REQUEST is
         # malformed and nothing about the policy is. What is absent is the DATA, which is what code 3
         # says — the same answer `rename_table` gives a source that resolves to nothing, so one client

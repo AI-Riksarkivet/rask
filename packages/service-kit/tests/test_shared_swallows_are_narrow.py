@@ -8,14 +8,16 @@ one and the whole estate quietly listed the wrong stores.
 
 `discover_tables` kept a THIRD verbatim copy of the not-found marker vocabulary that the registry and
 the reader had already been de-duplicated onto, so a marker added for one object store's wording
-would have been honoured on two of the three paths that classify the same condition.
+would have been honoured on two of the three paths that classify the same condition. That vocabulary
+is now `lancekit.absence`, which every plane shares — the write and reconcile paths included — so
+patching it in one place is what proves the sharing.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from service_kit.lancekit import errors, introspect
+from service_kit.lancekit import absence, introspect
 from service_kit.schemas import storage
 
 
@@ -43,7 +45,7 @@ def test_a_fault_in_our_own_code_is_no_longer_answered_with_the_defaults(monkeyp
 
 
 def test_discovery_classifies_absence_through_the_shared_vocabulary(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(errors, "_NOT_FOUND_MARKERS", ("not found", "does not exist", "no such table"))
+    monkeypatch.setattr(absence, "_ABSENCE_MARKERS", ("was not found", "no such table"))
     monkeypatch.setattr(introspect.store, "list_lance_stems", lambda *_a, **_k: ["t"])
 
     def _raise(_uri: object, _opts: object = None) -> object:

@@ -20,8 +20,8 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from service_kit.exceptions import NotFoundError
 from service_kit.lancekit import store
+from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.descriptor import DatasetDescriptor, load_dataset_descriptor
-from service_kit.lancekit.errors import is_not_found
 from service_kit.lancekit.introspect import table_info
 
 
@@ -155,7 +155,7 @@ def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
     try:
         ds = lance.dataset(uri, storage_options=handle.storage_options)
     except (ValueError, OSError) as e:
-        if is_not_found(e):
+        if reads_as_absent(e):
             raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}") from e
         raise
     # Fold observed drift back into the cached descriptor (a write bumped the
