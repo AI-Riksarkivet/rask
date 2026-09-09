@@ -19,6 +19,7 @@ a guess. Each test below fails on the ORIGINAL buggy code and passes now.
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import pathlib
 import re
@@ -2451,8 +2452,26 @@ def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one(
 # --------------------------------------------------------------------------------------------------
 
 
+#: The parsed chart, memoised on the render's arguments and parsed by libyaml.
+#:
+#: BOTH HALVES ARE PURE COST REMOVAL, measured 2026-09-09 against the real chart. The render is a pure
+#: function of its `--set` arguments and the chart does not change inside a session, yet a full
+#: `tests/unit` run made >=278 `helm template` invocations for only ~146 distinct argument sets — over
+#: half of them byte-identical recomputations, ~123s of subprocess thrown away. And helm was never the
+#: larger half: one render is 0.45s while `yaml.safe_load_all` over its 2.3 MB / 293-document output is
+#: 1.50s, against 0.15s for the `CSafeLoader` that was already installed in this venv and referenced
+#: nowhere in the repo — a 10x penalty, paid on every parse, ~400s of the directory's ~730s.
+#:
+#: CACHED HERE AND NOT ON `_helm_template`, deliberately: three of that function's callers need a real
+#: subprocess each time — one renders a DIFFERENT chart path out of a tmpdir, one passes `check=False`
+#: and asserts on the returncode, one expects `CalledProcessError`. Every caller of THIS function takes
+#: the default chart and the successful path, which is what makes memoising it safe.
+#:
+#: The list is returned by reference, so a caller that MUTATES the documents would corrupt every later
+#: caller. None does — these gates read the render and assert on it.
+@functools.cache
 def _rendered_docs(*set_values: str) -> list[dict]:
-    return [doc for doc in yaml.safe_load_all(_helm_template(*set_values)) if isinstance(doc, dict)]
+    return [doc for doc in yaml.load_all(_helm_template(*set_values), Loader=yaml.CSafeLoader) if isinstance(doc, dict)]
 
 
 def _collector_config(docs: list[dict]) -> dict:
