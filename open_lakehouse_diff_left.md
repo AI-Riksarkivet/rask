@@ -1725,6 +1725,24 @@ turned out to be are § Q16.
 service-only ungoverned projection of the feed gated by `can_observe_events`; `can_be_notified` stays the
 sole disclosure gate.
 
+**PROVEN ON THE ESTATE 2026-09-09 — it was asserted until now.** Driven as `service-ingest`, which holds
+`can_get_metadata` on `table:acme-gold$catalog` = **False**, against a run the graph demonstrably holds
+(`42d5180d-…`, `WROTE acme-gold$catalog`):
+
+    GET /runs/42d5180d-…            -> 404      (the run exists; the caller is told it does not)
+    GET /runs/42d5180d-…/inputs     -> 200 []   (governed-drop: an empty list, not a refusal)
+    GET /datasets/acme-gold$catalog/producers -> 403
+
+So the feed a SERVICE sees is bounded by that service's own grants, and the two failure shapes are both
+silent: a 404 that means "not yours" and an empty list that means "nothing here". A reconciler walking
+this runs cleanly and reconciles nothing, which is indistinguishable from an estate with no work.
+
+**IN SCOPE ON ITS OWN MERITS, not because of its consumer.** `_governed_datasets`' own docstring names
+the blast radius — "every event naming one was hidden from EVERY caller — the lakehouse events board as
+much as the notifications reconciler" — so the defect harms the `lakehouse` zone's board too, and the
+fix lives in lineage. **THE RUNG EXISTS AND LINEAGE USES IT NOWHERE:** `can_observe_events` is defined
+`owner` on the estate root (`model.fga:200`) and grepped zero times under `services/lineage`.
+
 ### ~~G2 · Unbounded producer strings become permanent retry loops~~ — **STRUCK 2026-09-08: OUT OF SCOPE**
 Owner ruling 2026-09-07 puts notifications outside this drain (lakehouse first, then compute). VERIFIED
 BY LOCATION rather than by the section's title, because § G is where in-scope rows hide: both files it
