@@ -392,7 +392,25 @@ def driven() -> Iterator[dict[str, Any]]:
         "RASK_PROJECT": PROJECT,
         "RASK_ORIGINATOR": _subject_of(ADMIN_TOKEN),
         "LINEAGE_URL": LINEAGE_IN_CLUSTER,
-        "LINEAGE_TOKEN": ADMIN_TOKEN,
+        # THE IDENTITY, NEVER THE BEARER — and this dict is why the distinction is not cosmetic.
+        # `_submit_on_head` serialises it into `runtime_env`, and the Ray Jobs API echoes that back on
+        # `GET /api/jobs/`, which answers 200 with no credential at all (`ray.auth.enabled` is false by
+        # default and this estate does not override it). Measured 2026-09-09: that endpoint returned 7
+        # jobs and this key was echoed on 5 of them. It carried `ADMIN_TOKEN` — a PROJECT-ADMIN OIDC
+        # bearer — so on an estate where the suite runs configured, an admin credential is readable by
+        # anyone for the job's whole retention.
+        #
+        # `medallion/services/ray_submit.py` already settled this for both production paths (the S3
+        # secret 2026-08-28, the key id 2026-08-30) and sends only the identity; the receiving side
+        # resolves it the same way either caller reaches it — `dummy_runner/lineage.py` reads
+        # `LINEAGE_SERVICE_ID` -> `RASK_LINEAGE_TOKEN_<IDENTITY>` from the POD, and only falls back to
+        # `LINEAGE_TOKEN`. This was the one caller still using the fallback. The value matches what the
+        # live bronze-to-silver runner sends (`MEDALLION_FGA_SERVICE_IDENTITY`), so the lane emits as
+        # the service it actually is rather than borrowing an operator's rights.
+        #
+        # `RASK_ORIGINATOR` above is unchanged and unrelated: it names WHO the run is for, which is
+        # still the admin subject. Attribution and authentication are different questions.
+        "LINEAGE_SERVICE_ID": "service-bronze-to-silver",
     }
     logs = []
     for attempt in ("first", "replay"):

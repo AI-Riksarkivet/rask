@@ -31,16 +31,21 @@ import lance_ray as lr  #   # ships in the Ray image, not our services' venv
 import pyarrow as pa
 from lance.optimize import CompactionOptions
 
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 
-def _storage_options() -> dict[str, str]:
-    return {
-        "endpoint": os.environ["S3_ENDPOINT"],
-        "access_key_id": os.environ["S3_KEY"],
-        "secret_access_key": os.environ["S3_SECRET"],
-        "region": os.environ.get("S3_REGION", "us-east-1"),
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",  # path-style, like the sibling ray jobs (RustFS 403s else)
-    }
+
+def _storage_options() -> StorageOptions:
+    """The estate's builder, not a hand-rolled copy — see `ray_stage_job._storage_options`.
+
+    Path-style addressing (RustFS 403s on virtual-hosted signing) is the builder's default, so the
+    copy's trailing comment about it described a value it was restating rather than choosing.
+    """
+    return lance_storage_options(
+        os.environ["S3_ENDPOINT"],
+        os.environ["S3_KEY"],
+        os.environ["S3_SECRET"],
+        os.environ.get("S3_REGION", "us-east-1"),
+    )
 
 
 def _add_tripled(batch: pa.RecordBatch) -> pa.RecordBatch:

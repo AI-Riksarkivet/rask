@@ -46,6 +46,32 @@ def _load_job() -> ModuleType:
 job = _load_job()
 
 
+def test_storage_options_come_from_the_SHARED_builder_in_the_aws_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Identity AND the property that identity buys — the same B14 rule this module already states.
+
+    The script hand-rolled this dict until 2026-09-09, in the BARE spelling (`access_key_id`).
+    object_store blends the ambient `AWS_*` environment with bare keys and signs with a pair belonging
+    to neither identity — a `403 SignatureDoesNotMatch` measured in-cluster 2026-09-03 that reads as an
+    expired credential. **No test process carries an ambient AWS_* environment**, so no behavioural
+    test can catch that spelling; this asserts the SPELLING itself, which is the half that is checkable
+    here. The identity assert is what stops a future edit reintroducing a local copy.
+    """
+    from service_kit.lakehouse.objectfs import lance_storage_options
+
+    assert job.lance_storage_options is lance_storage_options, "the job rebound the builder to a local copy"
+
+    for name, value in (("S3_ENDPOINT", "http://rustfs:9000"), ("S3_KEY", "k"), ("S3_SECRET", "s")):
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("S3_REGION", raising=False)
+
+    options = job._storage_options()  # noqa: SLF001 — the module under test is a script, not a package
+
+    assert options["aws_access_key_id"] == "k"
+    assert options["aws_secret_access_key"] == "s"
+    assert "access_key_id" not in options, "the bare spelling loses a precedence contest to the ambient AWS_* environment"
+    assert "secret_access_key" not in options
+
+
 @pytest.fixture(scope="module")
 def png_bytes() -> bytes:
     """A tiny real PNG (needs Pillow, which the unit venv has via the deriver deps)."""

@@ -50,7 +50,6 @@ from typing import Any
 
 import lance
 import pyarrow as pa
-import pyarrow.fs as pafs
 from lance import blob_array, blob_field
 
 # lance_ray ships in the Ray image, NOT our services' venv — imported LAZILY (inside the tabular branch
@@ -66,41 +65,47 @@ from lance import blob_array, blob_field
 # `service-kit[media]` extra, which the ray-cluster image installs.
 from service_kit.lakehouse import media
 from service_kit.lakehouse.blobs import blob_field_names
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
 from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, ensure_declared_dataset_id
 
 
-def _storage_options() -> dict[str, str]:
-    return {
-        "endpoint": os.environ["S3_ENDPOINT"],
-        "access_key_id": os.environ["S3_KEY"],
-        "secret_access_key": os.environ["S3_SECRET"],
-        "region": os.environ.get("S3_REGION", "us-east-1"),
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-    }
+def _storage_options() -> StorageOptions:
+    """The estate's builder, not a hand-rolled copy — the B14 ruling this file already records.
+
+    Two things the copy got wrong, and the second is the one that matters. It spelled the credential
+    keys BARE (`access_key_id`), where object_store BLENDS the ambient `AWS_*` environment with bare
+    keys and signs with a pair belonging to neither identity — measured in-cluster 2026-09-03, a
+    `403 SignatureDoesNotMatch` that reads as an expired credential, and one that NO test can catch
+    because no test process carries an ambient AWS_* environment. And it had no `session_token` field
+    at all, so this lane could not hold an STS credential even once one was vended to it: a triple
+    arriving at a builder that accepts a pair signs as the wrong identity or not at all.
+    """
+    return lance_storage_options(
+        os.environ["S3_ENDPOINT"],
+        os.environ["S3_KEY"],
+        os.environ["S3_SECRET"],
+        os.environ.get("S3_REGION", "us-east-1"),
+    )
 
 
-def _reset_dataset(to_uri: str, so: dict[str, str]) -> None:
+def _reset_dataset(to_uri: str, so: StorageOptions) -> None:
     """Delete any existing dataset at ``to_uri`` so the create-with-stable-ids below is truly fresh.
 
     ``enable_stable_row_ids`` is a create-time-only property: ``mode="overwrite"`` on a dataset that already
     exists WITHOUT stable ids (e.g. one a prior in-process run created) does NOT flip it on. The cascade uses
     overwrite semantics (each run's output IS the whole dataset), so clearing the dir first is correct here.
     """
-    endpoint = so["endpoint"]
-    scheme, _, host = endpoint.partition("://")
-    fs = pafs.S3FileSystem(
-        endpoint_override=host or endpoint,
-        access_key=so["access_key_id"],
-        secret_key=so["secret_access_key"],
-        region=so.get("region", "us-east-1"),
-        scheme=scheme if host else "http",
-    )
+    # `s3_filesystem`, not a hand-built one: it derives the scheme from the endpoint (a hardcoded
+    # `http` once silently downgraded a secured connection) and it FORWARDS the session token. pyarrow
+    # falls back to the default credential chain for anything it was not given, so a half-forwarded
+    # vended credential signs with the pod's own role — broader rights than the catalog scoped, not
+    # narrower. Dropping it fails OPEN, which is why this belongs to one builder and not to a copy.
+    fs = s3_filesystem(so)
     with contextlib.suppress(OSError):
         fs.delete_dir_contents(to_uri.removeprefix("s3://"), missing_dir_ok=True)
 
 
-def _reset_if_legacy(to_uri: str, so: dict[str, str]) -> None:
+def _reset_if_legacy(to_uri: str, so: StorageOptions) -> None:
     """Clear the target ONLY if a legacy dataset (created without stable ids) exists there.
 
     ``enable_stable_row_ids`` is create-time-only, so overwrite alone won't flip it on a pre-existing no-id
@@ -193,7 +198,7 @@ def _derivable_blob_column(ds: Any, blob_cols: list[str]) -> str | None:
     return None
 
 
-def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str, lineage: str = "", dataset_id: str = "") -> None:
+def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: str, lineage: str = "", dataset_id: str = "") -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
     Same contract as compute.transform_stage + derivers.derive_artifacts: re-materialise each blob column
@@ -462,7 +467,7 @@ def _delta_filter(base_version: int | None) -> str | None:
     return None if base_version is None else f"_row_created_at_version > {base_version}"
 
 
-def _mergeable(to_uri: str, so: dict[str, str]) -> bool:
+def _mergeable(to_uri: str, so: StorageOptions) -> bool:
     """Can this destination take a delta, or must the run rebuild it whole?
 
     A destination that does not exist yet, or one written before stable row ids, cannot accept a
@@ -475,7 +480,7 @@ def _mergeable(to_uri: str, so: dict[str, str]) -> bool:
     return False
 
 
-def _dataset_exists(to_uri: str, so: dict[str, str]) -> bool:
+def _dataset_exists(to_uri: str, so: StorageOptions) -> bool:
     """Whether `to_uri` already holds a dataset — the create-vs-merge question.
 
     A read, not a stat: an object store has no directories. Mirrors `compute._dataset_exists`, which is
@@ -491,7 +496,7 @@ def _dataset_exists(to_uri: str, so: dict[str, str]) -> bool:
     return True
 
 
-def _merge_into(to_uri: str, table: pa.Table, so: dict[str, str]) -> None:
+def _merge_into(to_uri: str, table: pa.Table, so: StorageOptions) -> None:
     """Converge this run's rows into the destination on the tier's key.
 
     `merge_insert`, never `append`: Dapr delivers at least once, so a redelivered publication event
@@ -506,7 +511,7 @@ def _run_stage(
     from_uri: str,
     to_uri: str,
     stage: str,
-    so: dict[str, str],
+    so: StorageOptions,
     *,
     lineage: str = "",
     base_version: int | None = None,
