@@ -43,7 +43,9 @@ Env: RASK_SOURCE_URI RASK_DEST_URI RASK_STAGE [RASK_LINEAGE_DOCUMENT RASK_VERSIO
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import re
 import sys
 from collections.abc import Iterator
 from typing import Any
@@ -198,6 +200,28 @@ def _derivable_blob_column(ds: Any, blob_cols: list[str]) -> str | None:
     return None
 
 
+#: A run id the retraction predicate can be built from safely. The document is the platform's own, but
+#: the value is INTERPOLATED into a filter string, so anything outside this alphabet is refused rather
+#: than escaped — a predicate that cannot be built correctly must not be built at all.
+_SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _run_id_of(lineage: str) -> str | None:
+    """This run's `run_id` from its lineage document, or ``None`` when there is not a usable one.
+
+    ``None`` means the caller must not retract: an unwired lane (`lineage` empty), a document that is
+    not JSON, or an id that cannot be interpolated into a filter. Every one of those is "we cannot tell
+    which rows are ours", and the only safe answer to that is to leave the tier alone.
+    """
+    if not lineage:
+        return None
+    try:
+        run = json.loads(lineage).get("run_id")
+    except (ValueError, AttributeError):
+        return None
+    return run if isinstance(run, str) and _SAFE_RUN_ID.match(run) else None
+
+
 def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: str, lineage: str = "", dataset_id: str = "") -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
@@ -218,10 +242,20 @@ def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: s
     forward as a null blob with null artifacts.
 
     STREAMED, in ``MEDIA_BATCH_ROWS`` slices. The scan, the derivation and the write are one pass per
-    batch, so what the driver holds is bounded by the batch rather than by the run. The FIRST write
-    overwrites and the rest append: that keeps the create-time-only ``enable_stable_row_ids``
-    contract exactly as before, and it is what stops a rerun of the same stage from doubling the
-    table instead of replacing it.
+    batch, so what the driver holds is bounded by the batch rather than by the run.
+
+    A RERUN MERGES AND THEN RETRACTS ONCE, and that is what preserves row identity. The tier ABOVE
+    stores this tier's stable ``_rowid`` as its ``source_rowid``, so re-creating the target re-mints
+    every parent id it holds — measured on the live estate as silver's 8 ``source_rowid`` values naming
+    bronze rows that no longer existed, 8 of 8. The tabular head became a full-sync merge for exactly
+    that reason, and this lane could not take the same change per batch: a per-batch
+    ``when_not_matched_by_source_delete`` deletes the rows earlier batches just wrote. So the delete is
+    lifted OUT of the batch loop — every batch merges, and ONE pass afterwards retracts whatever this
+    run did not write, keyed on the ``run_id`` each row carries in its own ``lineage`` document. That is
+    only expressible because ``lineage`` is JSONB and therefore filterable in place.
+
+    The first write of a target that does not exist still CREATES it, because ``enable_stable_row_ids``
+    is create-time-only and a merge cannot turn it on.
     """
     ds = lance.dataset(from_uri, storage_options=so)
     blob_cols = blob_field_names(ds.schema)
@@ -232,26 +266,27 @@ def _media_transform(from_uri: str, to_uri: str, so: StorageOptions, *, stage: s
     # plain column already in this read); mirrors compute._carry_forward's blob path.
     scanner = ds.scanner(columns=carried, blob_handling="all_binary", with_row_id=True, batch_size=MEDIA_BATCH_ROWS)
 
+    run = _run_id_of(lineage)
+    fresh = not _dataset_exists(to_uri, so)
     written = 0
     for batch in scanner.to_batches():
         out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage, dataset_id=dataset_id)
-        # STILL OVERWRITE-THEN-APPEND, and deliberately so for now. `enable_stable_row_ids` is
-        # create-time-only, so the first batch creates the target and later batches append into it.
-        # The tabular head became a full-sync merge 2026-09-06 because overwrite re-mints every `_rowid`
-        # and the tier above resolves `source_rowid` against them; this lane cannot take that change
-        # batch-by-batch, because a per-batch `when_not_matched_by_source_delete` would delete the rows
-        # earlier batches just wrote. Converting it needs one merge over the whole scan (or an
-        # accumulate-then-sync), which is a streaming-shape change rather than a call swap — recorded as
-        # open work in `open_lakehouse_diff_left.md` rather than half-applied here.
-        lance.write_dataset(
-            out,
-            to_uri,
-            mode="overwrite" if written == 0 else "append",
-            storage_options=so,
-            data_storage_version="2.2",
-            enable_stable_row_ids=True,
-        )
+        if fresh:
+            # CREATE, not merge: `enable_stable_row_ids` is create-time-only, so a target that does not
+            # exist yet has to be written into being before anything can merge into it.
+            lance.write_dataset(out, to_uri, mode="overwrite", storage_options=so, data_storage_version="2.2", enable_stable_row_ids=True)
+            fresh = False
+        else:
+            lance.dataset(to_uri, storage_options=so).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(out)
         written += out.num_rows
+
+    if written and run:
+        # THE RETRACTION, ONCE, AFTER THE LAST BATCH. Every row this run wrote carries this run's id in
+        # its own `lineage` document, so "not written by this run" is a filter rather than a set the
+        # driver has to hold. Skipped entirely when the lane is unwired (`lineage` empty, so `run` is
+        # None): with nothing identifying this run, the predicate would match every row and the
+        # retraction would empty the tier — absent provenance must fail SAFE, not destructively.
+        lance.dataset(to_uri, storage_options=so).delete(f"json_get_string({LINEAGE_COLUMN}, 'run_id') != '{run}'")
 
     if written == 0:
         # An empty source still has to produce the target — an absent dataset is not the same answer

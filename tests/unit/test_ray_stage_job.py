@@ -112,6 +112,53 @@ def test_media_transform_round_trips_blob_and_derives(tmp_path: Path, png_bytes:
     assert out.to_table(columns=["source_rowid"]).column("source_rowid").to_pylist() == src_rowids
 
 
+def test_a_media_RERUN_keeps_the_row_identity_the_tier_above_resolves_against(tmp_path: Path, png_bytes: bytes) -> None:
+    """A second run must RETRACT what the source dropped without re-minting the survivors' `_rowid`.
+
+    The tier above stores `source_rowid`, which is this tier's stable `_rowid`. An overwrite re-mints
+    every one of them, so the parent ids the tier above holds stop naming the rows they were written
+    for — measured on the live estate as "silver's 8 `source_rowid` values named bronze rows that no
+    longer existed, 8 of 8". The tabular head became a full-sync merge for exactly this; the media lane
+    could not take that change per-batch, because a per-batch `when_not_matched_by_source_delete` would
+    delete the rows earlier batches just wrote.
+    """
+    import json
+
+    import lance
+
+    src = str(tmp_path / "bronze_media")
+
+    def _write(ids: list[int]) -> None:
+        lance.write_dataset(
+            pa.table(
+                {"id": pa.array(ids, pa.int64()), "payload": blob_array([png_bytes] * len(ids))},
+                schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
+            ),
+            src,
+            mode="overwrite",
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
+        )
+
+    dst = str(tmp_path / "silver_media")
+    doc = json.dumps({"schema": "rask.lineage/1", "run_id": "run-one", "job": {"namespace": "n", "name": "j"}, "event_time": "2026-01-01T00:00:00Z"})
+    _write([10, 11, 12])
+    job._media_transform(src, dst, {}, stage="silver-media", lineage=doc)
+    first = {r["id"]: r["_rowid"] for r in lance.dataset(dst).to_table(columns=["id"], with_row_id=True).to_pylist()}
+    assert sorted(first) == [10, 11, 12]
+
+    # The source drops 11. A second run must retract it and leave 10 and 12 where they were.
+    _write([10, 12])
+    doc2 = json.dumps({"schema": "rask.lineage/1", "run_id": "run-two", "job": {"namespace": "n", "name": "j"}, "event_time": "2026-01-02T00:00:00Z"})
+    job._media_transform(src, dst, {}, stage="silver-media", lineage=doc2)
+
+    second = {r["id"]: r["_rowid"] for r in lance.dataset(dst).to_table(columns=["id"], with_row_id=True).to_pylist()}
+    assert sorted(second) == [10, 12], f"the retraction did not happen: {sorted(second)}"
+    assert second[10] == first[10] and second[12] == first[12], (
+        f"the survivors' stable row ids were re-minted ({first} -> {second}) — every `source_rowid` the tier above holds now names a row that no longer exists"
+    )
+
+
 def test_stamp_stage_mints_source_rowid_at_the_head_and_carries_it_forward() -> None:
     """The tabular map function's provenance logic (the distributed path can't run in the unit venv).
 
@@ -238,8 +285,11 @@ def _bronze_media(tmp_path: Path, png_bytes: bytes, rows: int) -> str:
 def test_the_media_transform_never_holds_the_whole_dataset(tmp_path: Path, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
     """The property the pattern is about: what the driver holds is bounded by the BATCH, not the run.
 
-    Measured at the write, because every intermediate copy is derived from the same slice — a write
-    of N rows means N rows' payloads, pylists, thumbnails and embeddings were all live at once.
+    Measured at `_media_batch`, the ONE seam every write path takes: it returns the slice that is about
+    to be persisted, so a batch of N rows means N rows' payloads, pylists, thumbnails and embeddings
+    were all live at once. Spying on `write_dataset` instead measures the write SHAPE — it stopped
+    seeing most batches the moment a rerun began merging them rather than appending, while the property
+    under test had not changed at all.
     """
     import lance
 
@@ -247,17 +297,20 @@ def test_the_media_transform_never_holds_the_whole_dataset(tmp_path: Path, png_b
     monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 2)
 
     widths: list[int] = []
-    real_write = lance.write_dataset
+    real_batch = job._media_batch
 
-    def spy(data, uri, **kwargs):  # noqa: ANN001, ANN202
-        widths.append(data.num_rows)
-        return real_write(data, uri, **kwargs)
+    def spy(aligned, *args, **kwargs):  # noqa: ANN001, ANN202
+        out = real_batch(aligned, *args, **kwargs)
+        widths.append(out.num_rows)
+        return out
 
-    monkeypatch.setattr(job.lance, "write_dataset", spy)
-    job._media_transform(src, str(tmp_path / "silver_stream"), {}, stage="silver-media")
+    monkeypatch.setattr(job, "_media_batch", spy)
+    dst = str(tmp_path / "silver_stream")
+    job._media_transform(src, dst, {}, stage="silver-media")
 
     assert max(widths) <= 2, f"the driver materialised {max(widths)} rows at once with a batch of 2 — it is not streaming"
     assert sum(widths) == 7, f"rows were lost or duplicated across batches: {widths}"
+    assert lance.dataset(dst).count_rows() == 7, "the streamed batches did not all reach the target"
 
 
 def test_streaming_produces_exactly_what_one_shot_did(tmp_path: Path, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
