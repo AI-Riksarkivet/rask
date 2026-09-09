@@ -37,6 +37,7 @@ from maintenance.services import catalog_compaction, compaction_executor, creden
 from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
+from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import base_refs, maintenance_policies, trash, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
@@ -516,7 +517,7 @@ def _maintain_one(
             # outcome a reader asks about — "why did this dataset not move this tick" — so omitting it
             # would make the per-dataset record answer only for the datasets that ran.
             skipped_result = DatasetResult(uri=uri, skipped=plan.skipped)
-            _record_dataset_outcome(skipped_result)
+            _record_dataset_outcome(skipped_result, subject=settings.catalog_service_identity)
             return skipped_result
         result = compact_one(
             uri,
@@ -542,11 +543,11 @@ def _maintain_one(
             span.set_status(StatusCode.ERROR, result.error)
             if result.error_type:  # error.type: stable class name so error spans aggregate
                 span.set_attribute("error.type", result.error_type)
-        _record_dataset_outcome(result)
+        _record_dataset_outcome(result, subject=settings.catalog_service_identity)
         return result
 
 
-def _record_dataset_outcome(result: DatasetResult) -> None:
+def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
     """One structured line per dataset per tick — §H5's first clause.
 
     THE SWEEP WAS THE ONE PATH IN THIS SERVICE THAT LEFT NO PER-OBJECT TRACE. The purge emits a
@@ -587,6 +588,12 @@ def _record_dataset_outcome(result: DatasetResult) -> None:
             "error_type": result.error_type,
         },
     )
+    # AND ON THE COMPLIANCE STREAM, for the material ones. The record above is an app log — rich,
+    # queryable, and gone with `observability.enabled=false`, on a TTL chosen for traces. A rewrite is
+    # a security-relevant action on a named object, so it also belongs where the estate's other such
+    # actions live. One funnel rather than a call beside each of this function's two callers, which is
+    # the shape that drifts.
+    audit_material_work(result, subject=subject)
 
 
 def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, options: dict[str, str], now: datetime) -> DatasetResult:
@@ -765,6 +772,43 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # is the lost-pass count, so this fires once per tick and only after every unit has been executed.
     record_run()
     return results
+
+
+def audit_material_work(result: DatasetResult, *, subject: str) -> None:
+    """Record a rewrite on the `lance.audit` compliance stream, keyed on the object it rewrote.
+
+    THE ESTATE AUDITS EVERY DECISION AND FORGOT THE ONE THAT MOVES BYTES. `governed/audit.py` carries
+    authn, authz and credential vending; `services/maintenance` held zero call sites, so compaction —
+    which merges fragments, reclaims versions and deletes files — reached the trail through nothing.
+    `audit_read` makes the same argument for reads and states the stake: attribution the estate
+    decided on and then did not keep is a zero-trust gap as much as a feature one.
+
+    GATED ON MATERIAL WORK, reusing `_did_material_work` rather than restating it. The sweep walks
+    hundreds of datasets a tick and most are converged; a record each is thousands an hour that say
+    nothing, in the very stream that flood was measured in (§ Q17-26). Sharing the gate with the
+    lineage emit also keeps the two agreeing about what counted as work, which a second predicate
+    would not.
+
+    The RESOURCE is the FGA object (`table:<id>`), not the URI: a compliance query joins on the object
+    the rest of the trail already names, and a dataset with no declared id has nothing to join to — so
+    it is recorded under its URI instead of being dropped, since the rewrite still happened.
+    """
+    if not _did_material_work(result):
+        return
+    table_id = result.declared_table_id
+    audit(
+        "compact_dataset",
+        SUCCESS,
+        subject=subject,
+        resource=f"table:{table_id}" if table_id else result.uri,
+        dataset=result.uri,
+        mode=result.compaction_mode,
+        fragments_removed=result.fragments_removed,
+        fragments_added=result.fragments_added,
+        old_versions_removed=result.old_versions_removed,
+        bytes_removed=result.bytes_removed,
+        indices_optimized=result.indices_optimized,
+    )
 
 
 def _did_material_work(result: DatasetResult) -> bool:
