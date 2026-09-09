@@ -207,6 +207,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
                 emitter=_NoopLineage(),
                 control=NoopControlEmitter(),
                 token=None,
+                so={},
                 authorization=None,
             )
         )

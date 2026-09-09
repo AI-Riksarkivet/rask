@@ -559,9 +559,11 @@ async def deregister_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     token: CurrentToken,
+    so: StorageOptionsDep,
     body: DeregisterTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
     force: bool = False,
+    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> DeregisterTableResponse:
     """Deregister the table at ``id`` (detach it without deleting data) via lance_namespace
     ``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.
@@ -569,6 +571,12 @@ async def deregister_table(
     Protection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance —
     the flag's whole jurisdiction — so leaving it ungated would make "deregister, then delete the
     files by hand" the unprotected path around the protected drop."""
+    # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
+    # retires the id while the bytes stay. OPTIONAL, because the spec defines no such header and a stock client must keep working.
+    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/deregister")
+    if converge.replay is not None:
+        return DeregisterTableResponse.model_validate(converge.replay.body)
+
     segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
@@ -600,6 +608,7 @@ async def deregister_table(
         actor=f"user:{token.sub}" if token is not None else None,
         extra={},
     )
+    await converge.remember(200, response)
     return response
 
 
@@ -610,13 +619,21 @@ async def register_table(
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
+    so: StorageOptionsDep,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
+    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RegisterTableResponse:
     """Register an existing table location at ``id`` via ``register_table``, then seed the caller's FGA
     ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
+    # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
+    # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
+    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/register")
+    if converge.replay is not None:
+        return RegisterTableResponse.model_validate(converge.replay.body)
+
     # LANCE-ONLY (2026-08-15 ruling) — same bypass as `declare_table`; `body` is required here.
     reject_unsupported_format(body.properties)
     segments = parse_identifier(id, settings.delimiter)
@@ -656,6 +673,7 @@ async def register_table(
         actor=f"user:{token.sub}" if token is not None else None,
         extra={"location": response.location},
     )
+    await converge.remember(200, response)
     return response
 
 
@@ -992,9 +1010,16 @@ async def restore_table(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
+    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RestoreTableResponse:
     """Restore the table at ``id`` to a prior version via ``restore_table``; emits a RESTORE_TABLE event at
     the NEW current version (restore mints a fresh version pointing at the restored data)."""
+    # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
+    # REWINDS the table to an older version. OPTIONAL, because the spec defines no such header and a stock client must keep working.
+    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/restore")
+    if converge.replay is not None:
+        return RestoreTableResponse.model_validate(converge.replay.body)
+
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response: RestoreTableResponse = await run_in_threadpool(native.call, ns, "restore_table", body)
@@ -1010,6 +1035,7 @@ async def restore_table(
         operation=RESTORE_TABLE,
         authorization=authorization,
     )
+    await converge.remember(200, response)
     return response
 
 

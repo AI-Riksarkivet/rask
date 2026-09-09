@@ -41,6 +41,26 @@ def _versions(client: TestClient, tid: str) -> Any:
     return client.post(f"/v1/table/{tid}/describe", json={}).json()
 
 
+def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
+    """`(paths declaring Idempotency-Key, paths REQUIRING it)`, read off the generated OpenAPI.
+
+    NOT off `app.routes`: the catalog mounts its versioned routers, so a walk over that finds ONE
+    APIRoute and a roster gate built on it would pass by finding nothing — which is precisely the
+    failure a roster gate exists to prevent. `app.openapi()` is the same document a stock Lance client
+    reads, which also makes this the right surface for a claim about spec conformance.
+    """
+    spec = app.openapi()
+    declared: set[str] = set()
+    required: set[str] = set()
+    for path, ops in spec.get("paths", {}).items():
+        for param in (ops.get("post") or {}).get("parameters", []):
+            if param.get("in") == "header" and param.get("name") == "Idempotency-Key":
+                declared.add(path)
+                if param.get("required"):
+                    required.add(path)
+    return declared, required
+
+
 class TestTheKeyIsOptional:
     def test_a_client_that_sends_no_key_creates_exactly_as_before(self, real_ns_client: TestClient) -> None:
         """The spec conformance guard. A stock Lance client sends no `Idempotency-Key`."""
@@ -162,3 +182,31 @@ class TestTheDestructiveDoorsConvergeToo:
         crossed = real_ns_client.post("/v1/table/db$shared/drop", headers={"Idempotency-Key": "shared-key"})
 
         assert crossed.status_code == 400, crossed.text
+
+
+class TestEveryTableDoorThatMintsOrRetiresConverges:
+    """`create`/`drop`/`rename` were the first three; these are the rest of the same amplifier.
+
+    Pinned as a ROSTER rather than one test each, because the failure this guards is a door ADDED later
+    without the key — and a per-door test cannot notice a door nobody wrote a test for.
+    """
+
+    def test_the_full_roster_declares_the_header(self, real_ns_client: TestClient) -> None:
+        want = {
+            "/v1/table/{id}/create",
+            "/v1/table/{id}/drop",
+            "/v1/table/{id}/rename",
+            "/v1/table/{id}/deregister",
+            "/v1/table/{id}/register",
+            "/v1/table/{id}/restore",
+        }
+        keyed, _ = _keyed_post_paths(real_ns_client.app)
+
+        assert want <= keyed, f"these doors mint or retire an id and take no idempotency key: {sorted(want - keyed)}"
+
+    def test_the_key_stays_OPTIONAL_on_every_one_of_them(self, real_ns_client: TestClient) -> None:
+        """Requiring it anywhere on the spec surface breaks a stock Lance client, which is a worse
+        defect than the replay. Asserted for the whole roster so one door cannot drift alone."""
+        _, required = _keyed_post_paths(real_ns_client.app)
+
+        assert not required, f"these doors REQUIRE a header the Lance Namespace spec does not define: {required}"
