@@ -5349,8 +5349,13 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
     dockerfile = REPO / ".docker" / f"{configured}.dockerfile"
     assert dockerfile.exists(), f"chart ray.image.repository is {configured!r} but .docker/{configured}.dockerfile does not exist"
 
-    rayservice = (REPO / "chart" / "templates" / "rayservice.yaml").read_text()
-    modules = {m.group(1) for m in re.finditer(r'"([\w.]+):(?:setup_tracing|serve_span_processors)"', rayservice)}
+    # EVERY template, not `rayservice.yaml` by name. The hook names are chart CONFIG and may sit in
+    # whichever template renders the cluster — they moved into `_ray-cluster-config.tpl` the moment that
+    # spec was shared between a RayService and a RayCluster, and a gate keyed on one filename reported
+    # "the chart names no hook at all" for a chart that names two. Scanning the directory keeps the
+    # assertion about the CONTRACT rather than about where it currently lives.
+    chart_text = "\n".join(p.read_text() for p in sorted((REPO / "chart" / "templates").rglob("*")) if p.is_file())
+    modules = {m.group(1) for m in re.finditer(r'"([\w.]+):(?:setup_tracing|serve_span_processors)"', chart_text)}
     assert modules, "the chart names no Ray tracing hook at all — if the hooks were removed, remove this test with them"
 
     text = dockerfile.read_text()
