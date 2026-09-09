@@ -143,13 +143,13 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # `provision=False` IS THE WHOLE POSTURE OF THIS DOOR. A data writer that mints a store or
-        # writes an authorization model becomes the source of truth for everyone else's permissions,
-        # and that is not ingest's job. Reading which store the estate already uses is not authoring
-        # one — the distinction ingest originally missed, which made it the only service that could
-        # not boot on the chart's own default (`auth.fgaStoreId: ""`, a per-cluster ULID that cannot
-        # be a committed default). It still fails closed: no store to resolve means no client, and
-        # the door 503s.
+        # `provision=False` — now the estate-wide default, kept explicit here because this is the door
+        # where it is most load-bearing. A data writer that mints a store or writes an authorization
+        # model becomes the source of truth for everyone else's permissions, and that is not ingest's
+        # job. Reading which store the estate already uses is not authoring one — the distinction
+        # ingest originally missed, which made it the only service that could not boot on the chart's
+        # own default (`auth.fgaStoreId: ""`, a per-cluster ULID that cannot be a committed default).
+        # It still fails closed: no store to resolve means no client, and the door 503s.
         #
         # Non-fatal, deliberately: OpenFGA being slow to accept connections is an ordering blip, not
         # a reason to CrashLoopBackOff.

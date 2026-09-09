@@ -77,12 +77,20 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 
 
 @pytest.mark.asyncio
-async def test_the_default_posture_provisions_when_unpinned(fga_calls: _Recorder) -> None:
-    """Behavioural baseline for the eight services that DO bootstrap the estate's store."""
+async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) -> None:
+    """Behavioural baseline for every service but the ONE bootstrap — saying nothing must not publish.
+
+    `fga.provision` writes a new immutable authorization model on every call and `fga.resolve` returns
+    the NEWEST, so a default that provisions makes the estate's authoritative model a function of boot
+    order. Measured live 2026-09-09: 1,256 models in the store and three services carrying an older
+    `model.fga` with no `maintainer` rung, one restart from withdrawing it estate-wide. The catalog
+    opts in explicitly; everything else reads.
+    """
     app = FastAPI()
     await attach_auth(app, _Settings(), service="t")
 
-    assert fga_calls.calls == ["provision", "make_client:01PROVISIONED"]
+    assert "provision" not in fga_calls.calls, "the DEFAULT posture published a model — boot order now decides the estate's permissions"
+    assert fga_calls.calls == ["resolve", "make_client:01RESOLVED"]
     assert getattr(app.state, "fga", None) is not None
     assert getattr(app.state, "oidc", None) is not None
 
@@ -123,7 +131,9 @@ async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.Monkey
     async def boom(api_url: str, **_: object) -> tuple[str, str]:
         raise RuntimeError("openfga unreachable")
 
-    monkeypatch.setattr(fga_mod, "provision", boom)
+    # `resolve`, not `provision`: the default posture is read-only, so that is the call this failure
+    # has to arrive on for the assertion to be about `fatal` rather than about which half was patched.
+    monkeypatch.setattr(fga_mod, "resolve", boom)
     app = FastAPI()
     with pytest.raises(RuntimeError, match="openfga unreachable"):
         await attach_auth(app, _Settings(), service="t", fatal=True)
@@ -151,7 +161,8 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
     async def boom(api_url: str, **_: object) -> tuple[str, str]:
         raise RuntimeError("openfga unreachable")
 
-    monkeypatch.setattr(fga_mod, "provision", boom)
+    # The read half, for the same reason as the fatal case above: it is the one the default takes.
+    monkeypatch.setattr(fga_mod, "resolve", boom)
     app = FastAPI()
     await attach_auth(app, _Settings(), service="t")
 

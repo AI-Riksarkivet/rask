@@ -129,7 +129,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
     # visible as a CrashLoopBackOff, not as a fleet of ready pods answering 503 to everyone.
-    await attach_auth(app, settings, service="catalog", fatal=True)
+    await attach_auth(
+        app,
+        settings,
+        service="catalog",
+        fatal=True,
+        # THE ESTATE'S ONE PUBLISHER OF THE AUTHORIZATION MODEL. Every other service resolves what
+        # this one wrote; `build_fga_client` defaults to the read-only half for that reason.
+        # The catalog is the publisher because it owns the governed plane the model describes, it
+        # is `fatal=True` so a failure to build is a refusal to serve rather than an open door,
+        # and the chart's bootstrap-admin hook already seeds the first tuples against its objects.
+        provision=True,
+    )
     # Credential vending (data plane): turn an authorized (table location, tier) into the scoped
     # storage_options a client uses to reach object storage DIRECTLY. mode_b (default) vends nothing —
     # clients use the server-mediated Arrow-IPC endpoints; sts (AssumeRole + per-table session policy) /

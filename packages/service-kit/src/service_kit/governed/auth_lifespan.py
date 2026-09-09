@@ -12,7 +12,15 @@ THE POSTURES ARE PARAMETERS, and that is what makes the collapse honest rather t
 were not stylistic variants; they encoded three decisions, and a single-posture helper is why ten of
 them survived the first extraction:
 
-  * **`provision`** — whether an unpinned store may be CREATED. `ingest` and `maintenance` pass
+  * **`provision`** — whether this service may CREATE the store and PUBLISH the authorization model.
+    **False by default, and the default is the control.** `fga.provision` writes the model
+    unconditionally and OpenFGA mints a new immutable id per call, while `fga.resolve` returns the
+    NEWEST — so the estate's authoritative model is decided by boot order unless exactly one service
+    publishes. Measured live 2026-09-09: 1,256 models in the store, the oldest carrying no
+    `pass_grants`, `managed_access` or `maintainer`, and three services running images whose vendored
+    `model.fga` had no `maintainer` rung at all — one restart from silently withdrawing it estate-wide.
+    Pinned by `tests/unit/test_only_one_service_may_publish_the_authorization_model.py`. Older text
+    read `ingest` and `maintenance` pass
     `False`: a data writer that mints a store and writes an authorization model becomes the source of
     truth for everyone else's permissions. They resolve read-only and fail closed against an estate
     that has not been bootstrapped. Reading which store exists is not authoring one, which is the
@@ -96,7 +104,7 @@ async def build_fga_client(
     settings: _FgaSettings,
     *,
     service: str,
-    provision: bool = True,
+    provision: bool = False,
     fatal: bool = False,
 ) -> OpenFgaClient | None:
     """The FGA client for this service, or `None` when it is off or could not be built.
@@ -160,7 +168,7 @@ async def attach_auth(
     settings: _GovernedSettings,
     *,
     service: str,
-    provision: bool = True,
+    provision: bool = False,
     fatal: bool = False,
 ) -> None:
     """Put `app.state.oidc` and `app.state.fga` in place when configured.

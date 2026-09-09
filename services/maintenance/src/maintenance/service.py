@@ -64,7 +64,8 @@ async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa
       origin, on the governed allowlist at `service_kit.governed.fga`; `purge.py` passes it. An
       earlier prose pass invented `trash-purge`, which is on no allowlist and matches nothing.)
 
-    Neither may AUTHOR the estate's model, so this passes ``provision=False``: the shared bootstrap
+    Neither may AUTHOR the estate's model, so this passes ``provision=False`` — the estate-wide
+    default since 2026-09-09, stated here because the sweep runs outside a lifespan: the shared bootstrap
     then takes `fga.resolve`, which is read-only, can never create a store or write a model, and
     returns ``None`` when the estate is not bootstrapped. That principle once covered the LOOKUP too,
     and the cost is recorded in `fga.resolve`'s own docstring — on the chart's DEFAULT posture

@@ -123,8 +123,19 @@ def _stub_client(monkeypatch) -> None:
     from service_kit.governed import fga
 
     monkeypatch.setattr(fga, "make_client", lambda *a, **k: _Client())
+    # BOTH HALVES, because which one the bootstrap takes is a POSTURE and postures change: since
+    # 2026-09-09 `build_fga_client` defaults `provision=False`, so an unpinned build resolves rather
+    # than publishes (only the catalog's own lifespan opts in — see
+    # `tests/unit/test_only_one_service_may_publish_the_authorization_model.py`). Stubbing only the
+    # write half left the read half dialling a real `openfga:8080`, which fails as a DNS error rather
+    # than as anything about the walk these tests are for.
     monkeypatch.setattr(fga, "provision", _provision)
+    monkeypatch.setattr(fga, "resolve", _resolve)
 
 
 async def _provision(_url: str) -> tuple[str, str]:
+    return ("store", "model")
+
+
+async def _resolve(_url: str) -> tuple[str, str]:
     return ("store", "model")
