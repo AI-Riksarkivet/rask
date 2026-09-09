@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-09, from the rows below rather than asserted: 232 tracked, 129 open, 103 struck.**
+**Counted 2026-09-09, from the rows below rather than asserted: 232 tracked, 127 open, 105 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1720,7 +1720,7 @@ turned out to be are § Q16.
 
 ## G. Notifications (from the notifications sweep)
 
-### G1 · Feed-lane coverage depends on the service principal's own grants — **HIGH**
+### ~~G1 · Feed-lane coverage depends on the service principal's own grants — **CLOSED 2026-09-09, GATE OBSERVED LIVE**~~
 **Where.** `lineage/.../runs.py:116-148`, `notifications/.../reconciler.py:19-21`. **Closes it.** A
 service-only ungoverned projection of the feed gated by `can_observe_events`; `can_be_notified` stays the
 sole disclosure gate.
@@ -1961,7 +1961,7 @@ CONFIGURATION"*, and *"when a measurement is a COUNT, ask what surface the count
 settings and never asked what the sweep computed from them. Logged here rather than quietly deleted
 because a register that shows only its correct findings teaches nothing about how the wrong ones happen.
 
-### H8 · The ingest plane runs as storage ROOT, and four other services with it — **HIGH** — CHART HALF CLOSED 2026-09-09
+### ~~H8 · The ingest plane runs as storage ROOT, and four other services with it — **CLOSED 2026-09-09, OBSERVED IN THE RUNNING POD**~~
 
 **THE ROOT CREDENTIAL NOW REACHES NO POD IN THE RENDER.** `ingest` was the LAST holder — measured, not
 assumed: it was the only service in `values.yaml` carrying `lanceWriter`, the flag the mount rode. The
