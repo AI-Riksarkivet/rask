@@ -76,7 +76,7 @@ log = logging.getLogger(__name__)
 _CREATE_OPS: Final = frozenset({"create_table", "register_table", "declare_table"})
 # OpenLineage ``producer`` URI for the back-fill's synthetic event — spec-required, and what a Marquez-style
 # consumer records as the event source (here: the lineage service repairing its own graph, not a producer).
-_RECONCILE_PRODUCER: Final = "https://github.com/Borg93/lance-ns/tree/main/services/lineage"
+_RECONCILE_PRODUCER: Final = "https://github.com/AI-Riksarkivet/rask/tree/main/services/lineage/src/lineage/services/repository.py"
 
 
 def _tags_from(value: object) -> list[str]:

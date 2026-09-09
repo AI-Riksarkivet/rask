@@ -45,7 +45,7 @@ from service_kit.openlineage import (
 
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event.
-_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/medallion"
+_PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/medallion/src/medallion/schemas/events.py"
 
 #: OpenLineage standard ``DatasourceDatasetFacet`` schema URL — the physical Lance URI on the output,
 #: so the B4 reconcile back-fill can read the on-disk version of a dataset the CASCADE wrote (without

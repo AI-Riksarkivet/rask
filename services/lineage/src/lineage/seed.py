@@ -40,7 +40,7 @@ from openlineage.client.serde import Serde
 from openlineage.client.transport.http import HttpConfig, HttpTransport
 
 
-_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/lineage"
+_PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/lineage/src/lineage/seed.py"
 # Ray is the compute engine that runs these jobs (the OpenLineage ``Job``); Lance is the data
 # they read/write (the ``Dataset``). The ``jobType`` facet's integration records that.
 _JOB_NS = "ray-jobs"

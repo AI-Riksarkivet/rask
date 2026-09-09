@@ -116,7 +116,7 @@ PROMOTE_MODEL = "promote_model"
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required,
 #: and what a Marquez-style consumer records as the event source).
-_PRODUCER = "https://github.com/Borg93/rask/tree/main/services/catalog/src/catalog/core/lineage_emit.py"
+_PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/catalog/src/catalog/core/lineage_emit.py"
 
 #: OpenLineage standard ``DatasetVersionDatasetFacet`` schema URL. The output dataset carries this
 #: facet so the lineage service records the Lance version on the ``WROTE`` edge

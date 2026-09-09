@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 #: This library, as every emitted event's ``producer`` / facet ``_producer``.
-PRODUCER = "https://github.com/Borg93/rask/tree/main/packages/lineage-kit"
+PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lineage-kit"
 
 #: The top-level ``schemaURL`` every OpenLineage ``RunEvent`` must carry.
 RUN_EVENT_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
