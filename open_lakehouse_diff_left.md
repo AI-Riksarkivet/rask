@@ -7,8 +7,8 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-09, from the rows below rather than asserted: 257 tracked, 123 open, 134 struck.**
-That is WORK ONLY — 69 lettered `###` rows (28 struck) and 188 Q-section table rows (106 struck) —
+**Counted 2026-09-09, from the rows below rather than asserted: 257 tracked, 121 open, 136 struck.**
+That is WORK ONLY — 69 lettered `###` rows (28 struck) and 188 Q-section table rows (108 struck) —
 and `tests/unit/test_the_lakehouse_backlog_counts_itself.py` re-derives all three from the rows.
 
 **Beside the work, and never counted with it: 5 D rows, 11 R rows, 12 M rows.** D is a decision the
@@ -3433,8 +3433,8 @@ subject is granted on a tenant that did not exist at bootstrap.
 | ~~Q6-3~~ | `RayJobExecutor` treats any 409 as REATTACHED without reading the CR, and the CR name omits `code_version` | med | **DISSOLVED HERE, CARRIED TO THE COMPUTE GOAL.** Real and unfixed: a 409 may mean a DIFFERENT job holds that name, and the name omitting `code_version` makes that reachable — a same-token re-run after a deploy reattaches to the previous build's job. Same scope reason as Q6-2 |
 | Q6-4 | A queued index build emits no lineage anywhere | med | The door skips the emit and the worker never makes one, so an index that took an hour is invisible to the run board |
 | Q6-5 | `plan_compaction` answers 400 where every sibling door answers 404 | med | "registered but never written" is mapped to `InvalidInputError` off a bare `ValueError`; siblings raise `TableNotFoundError`. A client dispatching on the code sees a different class for the same condition |
-| Q6-6 | The halt-counter alert gate is a substring search over the whole rules dump | med | It matches annotation prose, so a rule could be deleted and the gate stay green on its own description |
-| Q6-7 | The promtool-expectation gate silently skips unknown alertnames and missing annotation keys | med | A typo in an alertname makes the expectation vacuous rather than failing |
+| ~~Q6-6~~ | ~~The halt-counter alert gate is a substring search over the whole rules dump~~ | ~~med~~ | It matches annotation prose, so a rule could be deleted and the gate stay green on its own description. **STRUCK 2026-09-09 — fixed and unmarked.** `test_a_counted_halt_is_an_audible_halt.py::_promql` is documented as *"Every rule's `expr`, and nothing else"* and joins only `rule["expr"]`, so annotation prose can no longer satisfy the search. The file also guards the gate's own vacuity one level up — *"no counters parsed from the medallion metrics module — this gate would pass vacuously"* |
+| ~~Q6-7~~ | ~~The promtool-expectation gate silently skips unknown alertnames and missing annotation keys~~ | ~~med~~ | A typo in an alertname makes the expectation vacuous rather than failing. **STRUCK 2026-09-09 — fixed and unmarked.** Both vacuous shapes are now NAMED failures: an expectation whose `alertname` is not declared appends `<no such alert rule>`, and one on an annotation the rule does not carry appends `<not declared on the rule>`. The site's own comment states this row's argument — *"A typo in an alertname is exactly how a suite keeps reporting coverage it lost."* Templated annotations are still skipped, correctly, because promtool renders `{{ $labels.x }}` against the firing series |
 | Q6-8 | The RayJob Role grants `list` and `watch` the executor never issues | low | Narrow to `create,get,delete` |
 
 ## Q7. What deleting a register leaves behind (2026-09-06)
