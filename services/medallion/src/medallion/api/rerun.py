@@ -48,6 +48,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
+from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, Field
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
@@ -113,7 +114,7 @@ class RerunAccepted(BaseModel):
     note: str = ""
 
 
-async def _require_edge_rung(fga_client: Any, *, subject: str, project: str, gate: StageRunnerGate) -> None:  # noqa: ANN401 — OpenFgaClient
+async def _require_edge_rung(fga_client: OpenFgaClient, *, subject: str, project: str, gate: StageRunnerGate) -> None:
     """The stage runner's own rung on the tier this edge writes, audited like every other authz decision.
 
     Fails CLOSED on an authz outage, and audits that separately from a denial: "we could not ask" and
