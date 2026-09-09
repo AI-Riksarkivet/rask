@@ -40,6 +40,7 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps, lineage_deps
+from catalog.api import idempotency as idem
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
@@ -436,9 +437,11 @@ async def drop_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     token: CurrentToken,
+    so: StorageOptionsDep,
     authorization: Annotated[str | None, Header()] = None,
     force: bool = False,
     purge: bool = False,
+    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> DropTableResponse:
     """Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and
     emit a best-effort ``drop_table`` lineage event.
@@ -447,6 +450,12 @@ async def drop_table(
     drop deletes BYTES): a ``protected`` control-root record refuses 409 unless ``force=true``, and
     ``force`` turns the protection lock ONLY — the FGA gate ran before this handler, identically
     with or without it."""
+    # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
+    # DELETES BYTES or files a trash record. OPTIONAL, because the spec defines no such header and a stock client must keep working.
+    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/drop")
+    if converge.replay is not None:
+        return DropTableResponse.model_validate(converge.replay.body)
+
     segments = parse_identifier(id, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
@@ -537,6 +546,7 @@ async def drop_table(
         actor=f"user:{token.sub}" if token is not None else None,
         extra={"recoverable": trashed},
     )
+    await converge.remember(200, response)
     return response
 
 
@@ -821,6 +831,7 @@ async def rename_table(
     control: ControlEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
     force: bool = False,
+    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RenameTableResponse:
     """Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.
 
@@ -838,6 +849,12 @@ async def rename_table(
     versionless REGISTER marker records the attachment at the new id so the destination appears in the
     graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``."""
+    # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
+    # retires the source id and re-registers the destination. OPTIONAL, because the spec defines no such header and a stock client must keep working.
+    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/rename")
+    if converge.replay is not None:
+        return RenameTableResponse.model_validate(converge.replay.body)
+
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)  # a contradictory body id is a 400, like every {id} route
     # #73: a rename RETIRES the source id, so the source's protection gates it exactly like drop even
@@ -960,7 +977,9 @@ async def rename_table(
             "to": fga.canonical_object_id(new_segments, delimiter=settings.delimiter),
         },
     )
-    return RenameTableResponse()
+    response = RenameTableResponse()
+    await converge.remember(200, response)
+    return response
 
 
 @router.post("/{id}/restore", response_model_exclude_none=True)

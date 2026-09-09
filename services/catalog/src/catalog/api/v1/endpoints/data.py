@@ -135,7 +135,7 @@ async def create_table(
     )
     # AFTER the door succeeded, and only then: a failure raises past this line, leaving the claim
     # in-flight until its lease expires rather than recording an outcome the caller never received.
-    await converge.remember(200, response.model_dump(mode="json", exclude_none=True))
+    await converge.remember(200, response)
     return response
 
 

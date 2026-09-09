@@ -112,3 +112,53 @@ class TestTheHeaderIsConstrainedAtTheDoor:
         response = real_ns_client.post("/v1/table/db$y/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": bad})
 
         assert response.status_code == 422, response.text
+
+
+class TestTheDestructiveDoorsConvergeToo:
+    """`drop` and `rename` carry the same amplifier as `create` and a worse consequence.
+
+    A replayed drop re-enters a door that DELETES BYTES (or files a second trash record for an object
+    already gone). A replayed rename re-enters one that retires the source id and re-registers the
+    destination — and the second pass finds no source, so a rename that SUCCEEDED reports as a failure
+    the caller cannot distinguish from a name that never existed.
+    """
+
+    def test_a_replayed_drop_answers_once_and_the_second_call_does_not_re_enter(self, real_ns_client: TestClient) -> None:
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$doomed/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+        headers = {"Idempotency-Key": "drop-1"}
+
+        first = real_ns_client.post("/v1/table/db$doomed/drop", headers=headers)
+        assert first.status_code == 200, first.text
+
+        # Without convergence this re-enters the door and answers NotFound — a successful drop
+        # reported as a failure, which is the create door's 409 problem wearing another status.
+        second = real_ns_client.post("/v1/table/db$doomed/drop", headers=headers)
+
+        assert second.status_code == 200, second.text
+        assert second.json() == first.json()
+
+    def test_a_replayed_rename_does_not_report_the_success_as_a_missing_source(self, real_ns_client: TestClient) -> None:
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$before/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+        headers = {"Idempotency-Key": "rename-1"}
+        body = {"id": ["db", "before"], "new_table_name": "after"}
+
+        first = real_ns_client.post("/v1/table/db$before/rename", json=body, headers=headers)
+        assert first.status_code == 200, first.text
+
+        second = real_ns_client.post("/v1/table/db$before/rename", json=body, headers=headers)
+
+        assert second.status_code == 200, second.text
+        assert real_ns_client.post("/v1/table/db$after/describe", json={}).status_code == 200, "the destination must still be there"
+
+    def test_each_door_owns_its_key_namespace(self, real_ns_client: TestClient) -> None:
+        """One key across create and drop is the cross-endpoint refusal, not a replay — proven here at
+        the doors rather than only at the seam, because the endpoint string is what binds them and a
+        typo in one would silently merge two operations' keys."""
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$shared/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "shared-key"}).status_code == 200
+
+        crossed = real_ns_client.post("/v1/table/db$shared/drop", headers={"Idempotency-Key": "shared-key"})
+
+        assert crossed.status_code == 400, crossed.text

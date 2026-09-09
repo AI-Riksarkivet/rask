@@ -71,9 +71,17 @@ class Converge:
     key: str | None
     replay: idempotency.Replay | None
 
-    async def remember(self, status: int, body: Any) -> None:  # noqa: ANN401 — the door's own response model, already serialised
+    async def remember(self, status: int, response: Any) -> None:  # noqa: ANN401 — the door's own response model
+        """Store what this attempt answered. A no-op without a key, so a door calls it unconditionally.
+
+        SERIALISES INSIDE THE GUARD, and that is not only a saved cycle: the keyless path is every
+        existing caller and every unit test that drives a handler with a stand-in response object, so
+        a `model_dump` outside the guard would make the seam's presence change behaviour for callers
+        who never asked for it — which is exactly what a door-level opt-in must not do.
+        """
         if self.key is None:
             return
+        body = response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
         await run_in_threadpool(
             idempotency.record_outcome,
             self.settings.registry_root,

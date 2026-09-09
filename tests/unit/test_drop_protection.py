@@ -156,6 +156,7 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
             emitter=_NoopLineage(),
             control=NoopControlEmitter(),
             token=None,
+            so={},
             authorization=None,
             force=force,
         )
@@ -362,6 +363,7 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
             emitter=_NoopLineage(),
             control=NoopControlEmitter(),
             token=None,
+            so={},
             authorization=None,
             force=False,
             purge=True,
