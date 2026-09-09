@@ -1847,6 +1847,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Table Changes
+         * @description Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
+         *
+         *     Composes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is
+         *     `dataplane.read_changes`, which is its OWN scan and not the query door's — `QueryTableRequest`
+         *     requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
+         *     with nothing to do with similarity. What the two doors DO share is the framing they answer in.
+         *
+         *     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
+         *     one (§ J1), because following every row a table ever received is the most disclosing read
+         *     available, not a metadata lookup.
+         *
+         *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
+         *     shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
+         *     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
+         *     reader who was not also a writer — the feed's whole audience — was refused. Pinned by
+         *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
+         */
+        post: operations["table_changes_v1_table__id__changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/commit": {
         parameters: {
             query?: never;
@@ -2309,6 +2344,12 @@ export interface paths {
          *     Reader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
          *     metadata about the data, and it leaks real information (predicates name values, field names name
          *     columns), so it is gated exactly like the schema is rather than being treated as public.
+         *
+         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
+         *     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
+         *     dependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever
+         *     arrives to be metadata-checked. Pinned by
+         *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
          *
          *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
          *     into 10k object-store round trips.
@@ -3529,6 +3570,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouses/{warehouse_id}/namespaces/{top_ns}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unbind Warehouse Namespace
+         * @description Detach a top-level namespace from its warehouse WITHOUT dropping either.
+         *
+         *     THE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record —
+         *     `top_ns -> warehouse_id -> root_uri` — and until this door existed the only way to remove one was
+         *     `POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.
+         *     Three such records were found stranded on this estate (§ Q15-1), naming warehouses that hold no
+         *     bytes, and the repair was blocked on having no non-destructive door.
+         *
+         *     THE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:
+         *
+         *     1. the warehouse record must exist (404);
+         *     2. **authorize first** on ``project#can_administer`` — detaching a namespace's storage routing is a
+         *        tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar
+         *        rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the
+         *        missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here
+         *        that the louder doors protect;
+         *     3. the binding must name THIS warehouse (404 otherwise) — a tenant may not unbind a namespace
+         *        through a warehouse id that does not hold it;
+         *     4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live
+         *        namespace does not delete a byte and is still the worst outcome available — every table in it
+         *        becomes unresolvable, because routing no longer knows which bucket holds it. Silent
+         *        unreachability beats a loud refusal for nobody;
+         *     5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding
+         *        cache is positive-and-forever, so without the broadcast the registry says unbound while running
+         *        pods keep routing — the repair would report success and change nothing.
+         */
+        delete: operations["unbind_warehouse_namespace_v1_warehouses__warehouse_id__namespaces__top_ns__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4741,7 +4826,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -8208,6 +8293,32 @@ export interface components {
             num_fragments: number;
         };
         /**
+         * TableChangesRequest
+         * @description What a consumer asks for when following a table (§ J4).
+         *
+         *     NOT a spec model — the Lance Namespace spec has no change-feed op — so it is declared here rather
+         *     than imported. That makes this a NON-SPEC route on a spec-conformant surface, which § B2 is already
+         *     carving out (25 route groups); this is a deliberate 26th, placed with `query`/`count_rows`/`blobs`
+         *     because a change feed is a DATA-PLANE read, not a management operation. When B2 carves, it moves
+         *     with the data doors, not with the admin ones.
+         */
+        TableChangesRequest: {
+            /** Begin Version */
+            begin_version: number;
+            /** Branch */
+            branch?: string | null;
+            /** Columns */
+            columns?: string[] | null;
+            /** End Version */
+            end_version?: number | null;
+            /**
+             * Kind
+             * @default inserted
+             * @enum {string}
+             */
+            kind: "inserted" | "updated";
+        };
+        /**
          * TableExistsRequest
          * @description TableExistsRequest
          */
@@ -8403,6 +8514,22 @@ export interface components {
             };
             /** Name */
             name: string;
+        };
+        /**
+         * UnbindWarehouseNamespaceResponse
+         * @description What the unbind actually did — the binding, and whether any replica was still caching it.
+         *
+         *     `evicted` is reported rather than assumed because the binding cache is positive-and-forever: the
+         *     registry record going away is only half the repair, and an operator who cannot see the other half
+         *     has no way to tell a completed unbind from one the running estate never heard about.
+         */
+        UnbindWarehouseNamespaceResponse: {
+            /** Namespace */
+            namespace: string;
+            /** Unbound */
+            unbound: boolean;
+            /** Warehouse Id */
+            warehouse_id: string;
         };
         /**
          * UpdateFieldMetadataEntry
@@ -12038,6 +12165,48 @@ export interface operations {
             };
         };
     };
+    table_changes_v1_table__id__changes_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TableChangesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     commit_fragments_v1_table__id__commit_post: {
         parameters: {
             query?: {
@@ -15249,6 +15418,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unbind_warehouse_namespace_v1_warehouses__warehouse_id__namespaces__top_ns__delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                warehouse_id: string;
+                top_ns: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnbindWarehouseNamespaceResponse"];
                 };
             };
             /** @description Validation Error */

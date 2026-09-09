@@ -1157,6 +1157,21 @@ class EstateBindingsResponse(BaseModel):
     authorization_truncated: bool = False
 
 
+class UnbindWarehouseNamespaceResponse(BaseModel):
+    """What the unbind actually did — the binding, and whether any replica was still caching it.
+
+    `evicted` is reported rather than assumed because the binding cache is positive-and-forever: the
+    registry record going away is only half the repair, and an operator who cannot see the other half
+    has no way to tell a completed unbind from one the running estate never heard about.
+    """
+
+    warehouse_id: str
+    namespace: str
+    #: False when the binding was already absent — the door is idempotent, so a retry after a partial
+    #: failure converges rather than 404ing on the half that already succeeded.
+    unbound: bool
+
+
 class DeleteWarehouseResponse(BaseModel):
     """What the delete ACTUALLY did — reported step by step, never assumed.
 

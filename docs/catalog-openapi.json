@@ -2682,6 +2682,7 @@
               "warehouse_activated",
               "warehouse_deactivated",
               "warehouse_bound",
+              "warehouse_unbound",
               "warehouse_deleted",
               "policy_set",
               "policy_deleted",
@@ -10995,6 +10996,30 @@
           "name"
         ],
         "title": "TupleCondition",
+        "type": "object"
+      },
+      "UnbindWarehouseNamespaceResponse": {
+        "description": "What the unbind actually did \u2014 the binding, and whether any replica was still caching it.\n\n`evicted` is reported rather than assumed because the binding cache is positive-and-forever: the\nregistry record going away is only half the repair, and an operator who cannot see the other half\nhas no way to tell a completed unbind from one the running estate never heard about.",
+        "properties": {
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "unbound": {
+            "title": "Unbound",
+            "type": "boolean"
+          },
+          "warehouse_id": {
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "namespace",
+          "unbound"
+        ],
+        "title": "UnbindWarehouseNamespaceResponse",
         "type": "object"
       },
       "UpdateFieldMetadataEntry": {
@@ -24550,7 +24575,7 @@
     },
     "/v1/table/{id}/history": {
       "get": {
-        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
+        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\nTHE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.\nThe check below is the second one a request meets, not the first: ``authorize`` is a router-wide\ndependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever\narrives to be metadata-checked. Pinned by\n``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
         "operationId": "table_history_v1_table__id__history_get",
         "parameters": [
           {
@@ -32478,6 +32503,129 @@
           }
         ],
         "summary": "Create Warehouse Namespace",
+        "tags": [
+          "warehouse"
+        ]
+      }
+    },
+    "/v1/warehouses/{warehouse_id}/namespaces/{top_ns}": {
+      "delete": {
+        "description": "Detach a top-level namespace from its warehouse WITHOUT dropping either.\n\nTHE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record \u2014\n`top_ns -> warehouse_id -> root_uri` \u2014 and until this door existed the only way to remove one was\n`POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.\nThree such records were found stranded on this estate (\u00a7 Q15-1), naming warehouses that hold no\nbytes, and the repair was blocked on having no non-destructive door.\n\nTHE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:\n\n1. the warehouse record must exist (404);\n2. **authorize first** on ``project#can_administer`` \u2014 detaching a namespace's storage routing is a\n   tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar\n   rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the\n   missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here\n   that the louder doors protect;\n3. the binding must name THIS warehouse (404 otherwise) \u2014 a tenant may not unbind a namespace\n   through a warehouse id that does not hold it;\n4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live\n   namespace does not delete a byte and is still the worst outcome available \u2014 every table in it\n   becomes unresolvable, because routing no longer knows which bucket holds it. Silent\n   unreachability beats a loud refusal for nobody;\n5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding\n   cache is positive-and-forever, so without the broadcast the registry says unbound while running\n   pods keep routing \u2014 the repair would report success and change nothing.",
+        "operationId": "unbind_warehouse_namespace_v1_warehouses__warehouse_id__namespaces__top_ns__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "top_ns",
+            "required": true,
+            "schema": {
+              "title": "Top Ns",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnbindWarehouseNamespaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unbind Warehouse Namespace",
         "tags": [
           "warehouse"
         ]

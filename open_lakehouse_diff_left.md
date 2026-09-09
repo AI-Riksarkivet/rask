@@ -2952,6 +2952,22 @@ producer that stages.
 out-of-band tuples (`provision()` writes none). **Closes it.** C2's `branch`; a column-policy relation
 (§J3); an `estate` root with `can_create_project`; `.fga.yaml` cases; `_CHILD_EDGE_PARENT_TYPES`.
 
+**AND THE FIVE LAKEKEEPER RUNGS ARE STILL ABSENT — re-measured 2026-09-09, owner asked.**
+`catalog-build-vs-buy.md` compared rask's model against Lakekeeper 0.13.1's and named five per-action
+rungs as "absent" from ours: `can_undrop`, `can_set_protection`, `can_get_tasks`, `can_control_tasks`,
+`can_manage_tags`. Grepped at HEAD: **all five are still zero.** rask collapses them onto the
+destructive rung — `_OWNER_SUFFIX_RELATION` maps `undrop` and `protection` to `can_drop` (table) and
+`can_delete` (namespace).
+
+**ONE OF THE FIVE IS A REAL CONTROL WEAKENING, and the others are defensible.** `undrop` on `can_drop`
+is right (whoever dropped it should be able to restore it), and `tasks` is now correctly on the metadata
+read rung. But **`protection` on `can_drop` makes deletion protection a speed bump rather than a
+control**: the flag exists to stop a drop, and the person it is meant to stop is the one holding the
+rung that disarms it. Lakekeeper separates `can_set_protection` from the delete permission precisely so
+protection can be armed by someone the deleter cannot overrule — the four-eyes shape. rask cannot
+express that today. That is a model change (a new rung + the `_OWNER_SUFFIX_RELATION` mapping + the
+`.fga.yaml` cases), not a code fix, and it is the highest-value item in this row.
+
 ### I5 · Duplicated seams
 
 > MERGED into **Q3-14** — the same defect (three hand-rolled storage_options builders) was tracked here and in the Python-audit ledger under two ids. Q3-14 is canonical: it carries the finding id and severity the audit assigned. Kept as a pointer rather than deleted, because this section's framing is how the defect was first seen.

@@ -416,7 +416,7 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
     """Evict every binding-cache entry a control event just invalidated; return the evicted keys (#46).
 
     The cache's premise — a binding is immutable, cache positives forever — is broken by exactly
-    three mutations, and each replica hears about all of them on the broadcast control-event
+    four mutations, and each replica hears about all of them on the broadcast control-event
     subscription (no queueGroup: every replica, including the publisher, receives every event):
 
     - ``warehouse_deleted``: the event's ``namespaces_dropped`` names the unbound namespaces, and a
@@ -426,6 +426,12 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
     - ``warehouse_bound``: a top-level namespace was just bound. The only way this replica holds a
       cached entry for it is a re-bind after a delete it never processed — evict so the next request
       reads the authoritative record.
+    - ``warehouse_unbound``: a namespace was DETACHED from its warehouse without being dropped — the
+      repair for a binding that outlived what it pointed at. Nothing else in this list covers it: the
+      namespace still exists, so no ``namespace_dropped`` fires, and the warehouse still exists, so no
+      ``warehouse_deleted`` does either. Without this branch the unbind is a no-op on every replica
+      already holding the entry, which is the worst shape available — the registry says unbound and the
+      running estate keeps routing.
     - ``namespace_dropped``: the cache is keyed by TOP-LEVEL namespace, so evict the id's first
       segment (dropping a nested namespace does not move its warehouse).
 
@@ -447,7 +453,7 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
             _pop(str(top_ns))
         for top_ns in [k for k, b in cache.items() if b.get("warehouse_id") == warehouse_id]:
             _pop(top_ns)
-    elif action == "warehouse_bound":
+    elif action in {"warehouse_bound", "warehouse_unbound"}:
         namespace = extra.get("namespace")
         if isinstance(namespace, str) and namespace:
             _pop(namespace)

@@ -42,6 +42,11 @@ ControlAction = Literal[
     "warehouse_activated",
     "warehouse_deactivated",
     "warehouse_bound",
+    # A namespace DETACHED from its warehouse without dropping it — the repair for a binding that
+    # outlived what it pointed at. It is its own action rather than a `warehouse_bound` with an empty
+    # target because the binding cache is positive-and-forever: a replica that never hears the specific
+    # word keeps routing a namespace at a warehouse nothing binds it to any more.
+    "warehouse_unbound",
     "warehouse_deleted",
     "policy_set",
     "policy_deleted",

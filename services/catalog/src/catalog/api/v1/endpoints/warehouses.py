@@ -36,6 +36,7 @@ from lance_namespace import (
     DropNamespaceRequest,
     InvalidInputError,
     LanceNamespace,
+    ListTablesRequest,
     NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
     NamespaceNotEmptyError,
@@ -62,6 +63,7 @@ from catalog.schemas import (
     CreateWarehouseRequest,
     DeleteWarehouseResponse,
     EstateBindingsResponse,
+    UnbindWarehouseNamespaceResponse,
     WarehouseNamespacesResponse,
     WarehouseResponse,
 )
@@ -595,6 +597,112 @@ async def create_warehouse_namespace(
         extra={"namespace": ns_name},
     )
     return response
+
+
+@router.delete("/{warehouse_id}/namespaces/{top_ns}", response_model_exclude_none=True)
+async def unbind_warehouse_namespace(
+    warehouse_id: str,
+    top_ns: str,
+    request: Request,
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+) -> UnbindWarehouseNamespaceResponse:
+    """Detach a top-level namespace from its warehouse WITHOUT dropping either.
+
+    THE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record —
+    `top_ns -> warehouse_id -> root_uri` — and until this door existed the only way to remove one was
+    `POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.
+    Three such records were found stranded on this estate (§ Q15-1), naming warehouses that hold no
+    bytes, and the repair was blocked on having no non-destructive door.
+
+    THE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:
+
+    1. the warehouse record must exist (404);
+    2. **authorize first** on ``project#can_administer`` — detaching a namespace's storage routing is a
+       tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar
+       rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the
+       missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here
+       that the louder doors protect;
+    3. the binding must name THIS warehouse (404 otherwise) — a tenant may not unbind a namespace
+       through a warehouse id that does not hold it;
+    4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live
+       namespace does not delete a byte and is still the worst outcome available — every table in it
+       becomes unresolvable, because routing no longer knows which bucket holds it. Silent
+       unreachability beats a loud refusal for nobody;
+    5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding
+       cache is positive-and-forever, so without the broadcast the registry says unbound while running
+       pods keep routing — the repair would report success and change nothing.
+    """
+    _require_enabled(settings)
+    so = settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    if record is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    try:
+        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{record['project']}")
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
+
+    # DEACTIVATION GATE, mirroring `create_warehouse_namespace`: this handler resolves the bucket
+    # connection directly from the binding's `root_uri` and never routes through `get_namespace`, so the
+    # resolver's quarantine does not cover it (audit #2/#6, pinned by
+    # `test_no_warehouse_bucket_access_bypasses_the_deactivation_gate`). A quarantined warehouse is a
+    # tenant mid-offboarding: unbinding it there would let a principal who still holds the rung dismantle
+    # the routing the quarantine froze, and the offboarding path is the warehouse delete's cascade.
+    if (record.get("status") or "active") != "active":
+        raise PermissionDeniedError(f"warehouse {warehouse_id!r} is deactivated (quarantined); unbind through the warehouse delete instead")
+
+    binding = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, so, top_ns)
+    if binding is None or binding.get("warehouse_id") != warehouse_id:
+        raise TableNotFoundError(f"namespace {top_ns!r} is not bound to warehouse {warehouse_id!r}")
+
+    ns = await run_in_threadpool(namespace_for_root, request, settings, str(binding["root_uri"]))
+    tables = await run_in_threadpool(_tables_in_namespace, ns, top_ns)
+    if tables:
+        raise NamespaceNotEmptyError(
+            f"namespace '{top_ns}' still holds {len(tables)} table(s): {', '.join(tables)}. "
+            f"Unbinding it would leave them unresolvable — drop or move them first."
+        )
+
+    await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)
+    log.info("warehouse_namespace_unbound", extra={"warehouse": warehouse_id, "namespace": top_ns})
+    await emit_control(
+        control,
+        action="warehouse_unbound",
+        object_type="warehouse",
+        object_id=f"warehouse:{warehouse_id}",
+        actor=f"user:{token.sub}" if token else None,
+        extra={"namespace": top_ns},
+    )
+    return UnbindWarehouseNamespaceResponse(warehouse_id=warehouse_id, namespace=top_ns, unbound=True)
+
+
+#: Page ceiling for the unbind's emptiness probe. Matches the drop path's own cap for the same reason —
+#: a listing is bounded work, and an unbounded loop on a pathological namespace turns a safety check
+#: into the outage it was protecting against.
+_MAX_LIST_PAGES = 100
+
+
+def _tables_in_namespace(ns: LanceNamespace, top_ns: str) -> list[str]:
+    """Every table directly under ``top_ns``, paged to the same ceiling the drop path uses.
+
+    A TRUNCATED enumeration must not read as empty: the unbind's whole safety argument is "nothing is
+    left to strand", and a page cap that silently drops the tail turns that into a guess. So a listing
+    that runs out of pages reports what it saw plus a marker, which the caller refuses on.
+    """
+    found: list[str] = []
+    page: str | None = None
+    for _ in range(_MAX_LIST_PAGES):
+        listed = native.call(ns, "list_tables", ListTablesRequest(id=[top_ns], include_declared=True, page_token=page))
+        found.extend(listed.tables or [])
+        page = listed.page_token or None
+        if not page:
+            return found
+    log.warning("unbind_table_listing_truncated", extra={"namespace": top_ns})
+    found.append("… (listing truncated; refusing rather than guessing)")
+    return found
 
 
 # --------------------------------------------------------------------------- #
