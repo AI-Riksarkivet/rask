@@ -1928,7 +1928,36 @@ CONFIGURATION"*, and *"when a measurement is a COUNT, ask what surface the count
 settings and never asked what the sweep computed from them. Logged here rather than quietly deleted
 because a register that shows only its correct findings teaches nothing about how the wrong ones happen.
 
-### H8 · The ingest plane runs as storage ROOT, and four other services with it — **HIGH**
+### H8 · The ingest plane runs as storage ROOT, and four other services with it — **HIGH** — CHART HALF CLOSED 2026-09-09
+
+**THE ROOT CREDENTIAL NOW REACHES NO POD IN THE RENDER.** `ingest` was the LAST holder — measured, not
+assumed: it was the only service in `values.yaml` carrying `lanceWriter`, the flag the mount rode. The
+defect was the flag itself. `lanceWriter` means "this one writes Lance" and was being used to decide
+"this one gets the root key", and for ingest those diverged the moment its writes became vended: the
+fragments take a table-scoped 900 s credential (`runtime.write_options_for`) and the staging ledger
+takes the SAME one (`runtime.ledger_options`), because the ledger lives under the dataset. This file
+had already recorded the same conflation biting twice — values calls `lanceWriter` "an unrelated
+storage flag" at one service and "which this service is not" at another. The mount moved onto its own
+`ambientStorage` declaration, DEFAULT OFF, which nothing sets.
+
+**WHAT THAT COSTS, STATED PLAINLY:** the SOURCE read loses the ambient chain, and losing it is the
+point — an unregistered source now fails CLOSED instead of being read with the widest credential in the
+estate. The scoped answer is already built and inert: `objectstore._own_store_for` supplies a store's
+own credential from the Dapr secret store and counts only a store that declares a `secret`. **Measured
+before flipping it:** `rask-ingest` made ZERO source reads in 72 hours and the deployment registers no
+stores at all, so nothing on this estate reaches for the credential being withdrawn.
+
+**AND THE GATE MOVED WITH THE POSTURE RATHER THAN BEING DELETED.**
+`test_the_root_storage_secret_reaches_only_its_users.py` asserted "ingest still gets one" — a correct
+test of the old shape and a false alarm in the new. Its holder set is now EMPTY, its precondition
+renders a mount deliberately (`ambientStorage=true`) so a rename cannot silently empty every assertion,
+and the starvation check asserts the two vended paths exist rather than asserting the secret does.
+
+**RESIDUE:** the live Deployment still carries `envFrom: rask-app` until the next `helm upgrade` — the
+chart is the fix, the estate is not converged, and `helm never corrects drift` only for fields that
+CHANGED, so this one does move on upgrade because the block is removed rather than altered.
+
+
 
 **THE STS HALF IS PROVEN WORKING LIVE (2026-09-08), so what is left is narrower than this row reads.**
 Driven from inside `rask-ingest` through the service's OWN client, presenting its OWN dedicated token:

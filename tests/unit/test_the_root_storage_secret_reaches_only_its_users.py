@@ -35,18 +35,21 @@ import yaml
 from tests.unit.test_invariants import _helm_template
 
 
-#: The ONLY fleet service that still receives the root storage credential, and the reason it is a list
-#: of one rather than a boolean: it is expected to become empty, not to gain members. `ingest` writes
-#: table bytes through both a catalog-VENDED credential and the ambient `AWS_*` chain
-#: (`objectstore.py`: "a registered store that declares no secret shares the deployment's
-#: credentials"), so removing it before measuring which writes depend on the ambient pair would break
-#: ingestion — which is the whole of why the two halves of § H8 are separate.
-_MAY_HOLD_THE_ROOT_CREDENTIAL: Final = frozenset({"ingest"})
+#: EMPTY, and it is meant to stay that way. This was `{"ingest"}` while ingest was the last holder;
+#: the mount moved off `lanceWriter` onto its own `ambientStorage` declaration, which nothing sets, so
+#: the estate's widest storage credential now reaches no pod at all through env.
+#:
+#: A NAME ADDED HERE IS A DECISION, not a convenience: it hands that service AWS_ACCESS_KEY_ID=<root>
+#: (measured: 106 buckets, the whole estate) through the mechanism the owner's rule forbids. The answer
+#: for a service that genuinely needs storage is a scoped 900 s STS vend
+#: (`vending.build_session_policy`, by bucket + prefix), or a registered store declaring a `secret` the
+#: Dapr store holds — both already implemented.
+_MAY_HOLD_THE_ROOT_CREDENTIAL: Final = frozenset()
 
 
-def _fleet_secret_holders() -> set[str]:
+def _fleet_secret_holders(*set_values: str) -> set[str]:
     """Every Deployment mounting the app secret, by its service suffix."""
-    docs = [d for d in yaml.safe_load_all(_helm_template("dapr.enabled=true")) if d and d.get("kind") == "Deployment"]
+    docs = [d for d in yaml.safe_load_all(_helm_template("dapr.enabled=true", *set_values)) if d and d.get("kind") == "Deployment"]
     holders: set[str] = set()
     for doc in docs:
         name = doc["metadata"]["name"]
@@ -59,9 +62,16 @@ def _fleet_secret_holders() -> set[str]:
 
 
 def test_the_gate_can_see_the_mount_at_all() -> None:
-    """The precondition: if no Deployment mounts it, the demand below is vacuous and this file is
-    decoration rather than a gate."""
-    assert _fleet_secret_holders(), "no Deployment mounts the app secret — the extraction has drifted from the chart"
+    """The precondition, and it had to change with the posture.
+
+    It used to assert that SOME Deployment mounts the secret — which was a fine precondition while one
+    did, and becomes a false alarm the moment the estate reaches zero holders. The property that keeps
+    this file a gate rather than decoration is that the extraction can SEE a mount when one exists, so
+    it renders one deliberately: with `ambientStorage` on, ingest must appear. That also pins the flag
+    as the switch — a rename would silently empty every assertion below.
+    """
+    holders = _fleet_secret_holders("services.ingest.ambientStorage=true")
+    assert "ingest" in holders, f"the extraction cannot see an app-secret mount even when one is rendered: {sorted(holders)}"
 
 
 def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
@@ -76,10 +86,21 @@ def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
     )
 
 
-def test_the_service_that_does_use_storage_still_gets_one() -> None:
-    """The other direction, so the fix cannot pass by starving the estate: withholding a credential
-    from a service that writes Lance would break ingestion rather than harden it."""
-    assert "ingest" in _fleet_secret_holders(), (
-        "ingest no longer receives a storage credential — it writes table bytes through the ambient "
-        "AWS_* chain as well as vended ones, so this starves the ingest plane instead of scoping it"
-    )
+def test_withholding_it_does_not_STARVE_the_ingest_plane() -> None:
+    """The other direction, and the reason the holder set could reach zero at all.
+
+    Removing a credential is only hardening if the work it paid for has somewhere else to go. Ingest's
+    two writes do: fragments take a table-scoped 900 s vend and the staging ledger takes the SAME one,
+    because the ledger lives under the dataset (`<dataset>.lance/_ingest_staging/`). Asserting both
+    are wired keeps this from passing by simply starving the plane — which is what "withhold the
+    secret" would otherwise mean.
+
+    The SOURCE read is the half that genuinely loses the ambient chain, and losing it is the point: an
+    unregistered source now fails closed rather than being read with the estate's widest credential.
+    Its scoped answer is `objectstore._own_store_for`, which supplies a store's own credential from the
+    Dapr secret store and stays inert until an operator registers a store declaring a `secret`.
+    """
+    from ingest import runtime
+
+    assert callable(runtime.write_options_for), "the vended write path is gone — withholding the secret would starve ingestion"
+    assert callable(runtime.ledger_options), "the staging ledger has no vended credential — it would fall back to the ambient chain"

@@ -143,9 +143,24 @@ spec:
                  `vending.build_session_policy` already implements by bucket + prefix); it removes the
                  blast radius that no code was using.
 
-                 `lanceWriter` is the flag those services already carry for "this one writes Lance", so
-                 the secret follows the same declaration rather than a second list that can disagree. */}}
-            {{- if $svc.lanceWriter }}
+                 THE MOUNT FOLLOWS "NEEDS THE AMBIENT CREDENTIAL", NOT "WRITES LANCE", and those two
+                 have now diverged for the only service that still held the secret. `lanceWriter` rode
+                 both meanings, and this file has recorded the conflation biting twice already — values
+                 calls it "an unrelated storage flag" at one service and "which this service is not" at
+                 another. Ingest IS a Lance writer and no longer needs the ambient credential to be one:
+                 its fragment writes take a table-scoped 900 s vend (`runtime.write_options_for`) and its
+                 staging ledger takes the same one (`runtime.ledger_options`), both measured. What the
+                 root pair still served was the SOURCE READ, and that path has a scoped answer waiting —
+                 `objectstore._own_store_for` supplies a store's own credential from the Dapr secret
+                 store, and stays inert until an operator registers a store that declares a `secret`.
+
+                 DEFAULT OFF, which is the posture rather than the convenience. An unregistered source
+                 now fails CLOSED instead of being read with the widest credential in the estate; the
+                 fix an operator needs is naming the store, and the goal's rule is that a scoped static
+                 key is not a fix and a fallback chain is not either. Measured before flipping it:
+                 `rask-ingest` had made ZERO source reads in 72 hours and the deployment registers no
+                 stores at all, so nothing on this estate reaches for it. */}}
+            {{- if $svc.ambientStorage }}
             - secretRef:
                 name: {{ $secretName }}
             {{- end }}
