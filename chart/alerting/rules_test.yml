@@ -476,9 +476,10 @@ tests:
   - interval: 1m
     input_series:
       - series: "lineage_events_processed_total{lance_lineage_outcome=\"refused\"}"
-        values: "0+1x11"
+        values: "0+1x19"
     alert_rule_test:
-      - eval_time: 8m
+      # Past the 10m `for`, which the restart-replay case below is what widened.
+      - eval_time: 14m
         alertname: LineageIngestRefusingProvenance
         exp_alerts:
           - exp_labels:
@@ -487,6 +488,18 @@ tests:
             exp_annotations:
               summary: "Lineage ingest is REFUSING events — a producer's provenance is being dropped"
               description: "A bus-delivered run was refused because its stamped author does not hold the rung its operation demands on the datasets it claims to have written, and a refusal is ACKED — so the loss is silent and permanent without this alert. Either a producer is claiming an identity it has no grant for (the case the gate exists to catch) or a legitimate producer lost a grant it needs (a broken cascade wearing an authorization costume). Distinct from `dropped`, which is a malformed payload and a question about the producer's schema rather than its permissions. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # E2 c. THE RESTART REPLAY: a bounded burst then silence must NOT page. Shaped on the measured roll —
+  # a short run of refusals inside two minutes, then nothing — because an alert that fires on every
+  # deploy is one nobody reads by the second week.
+  - interval: 1m
+    input_series:
+      - series: "lineage_events_processed_total{lance_lineage_outcome=\"refused\"}"
+        values: "0+7x2 14+0x14"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LineageIngestRefusingProvenance
+        exp_alerts: []
 
   # E2 b. A flat refusal counter is the healthy estate — the arming measurement says no live producer is
   # refused — so a steady value must stay silent or the alert is noise from its first day.

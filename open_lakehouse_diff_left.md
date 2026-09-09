@@ -1039,7 +1039,18 @@ lineage; a lost write on a known table is back-filled version-only. **Where.** `
 `catalog/core/lineage_emit.py:598-604`, `lineage_kit/emitter.py:193-197`. **Closes it.** Enumerate the
 catalog registry / warehouse roots; create the Dataset vertex from on-disk `lineage.dataset_id`; R10.
 
-### E2 · Bus door trusts a producer-stamped author behind one shared token — **HIGH** — PRODUCER HALF DONE 2026-09-08
+### ~~E2~~ · Bus door trusts a producer-stamped author behind one shared token — **CLOSED 2026-09-09, OBSERVED LIVE**
+
+**OBSERVED ON A REAL ROLL at `main-a007b224`.** Restarting lineage re-presents the whole retained
+stream, which is the hardest case this gate meets: **772 deliveries in 90 seconds — 658 authorized
+normally, 107 exempted as byte-identical replays, 7 refused.** All 7 are e2e probe residue
+(`author=e2e`, `operation=e2e_outbox_probe`, output `e2e_outbox_ds`) whose author genuinely holds no
+grant — correct refusals, and the population the arming measurement predicted. Down from ~600/min
+before the replay exemption. The alert's `for` moved 5m → 10m for the same reason, with a promtool case
+proving a bounded burst does NOT page while a sustained rate does: an alert that fires on every deploy
+is one an operator learns to ignore, and that is how a real refusal gets missed.
+
+
 **Where.** `lineage/api/dapr.py::on_lineage_event` — authenticated by `require_dapr_token` (the
 SIDECAR's shared credential) and then straight into `handle_cloud_event`, applying neither
 `enforce_author` nor `enforce_output_authz`, both of which the HTTP door at `endpoints/ingest.py`

@@ -51,7 +51,14 @@ groups:
 
       - alert: LineageIngestRefusingProvenance
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="refused"}[5m])) > 0
-        for: 5m
+        # 10m, not 5m, and the extra five minutes are the restart replay. The bus consumer is ephemeral
+        # with `deliverPolicy: all`, so every lineage roll re-presents the whole retained stream;
+        # byte-identical replays are exempt, but genuinely unauthorized history in that stream is
+        # refused again each time. Measured 2026-09-09 on a real roll: 772 deliveries, 107 exempted,
+        # 7 refused inside 90 seconds and then silent. A 5m `for` cannot tell that bounded burst from a
+        # producer being refused continuously — the rate stays positive for a full 5m window after the
+        # last increment — and an alert that pages on every deploy is one an operator learns to ignore.
+        for: 10m
         labels:
           severity: warning
           service: lineage
