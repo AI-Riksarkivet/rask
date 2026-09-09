@@ -2006,7 +2006,7 @@ because a register that shows only its correct findings teaches nothing about ho
 
 ### ~~H8 · The ingest plane runs as storage ROOT, and four other services with it — **CLOSED 2026-09-09, OBSERVED IN THE RUNNING POD**~~
 
-**THE ROOT CREDENTIAL NOW REACHES NO POD IN THE RENDER.** `ingest` was the LAST holder — measured, not
+**THE ROOT CREDENTIAL NOW REACHES NO POD IN THE RENDER — and that sentence is exactly as narrow as it says, which cost a second finding.** The DEFAULT render omits `explorer.enabled`, so `rask-viewer`'s Deployment is not in it; on the estate, which enables it, the viewer held `AWS_ACCESS_KEY_ID=rustfsadmin` in its own env until 2026-09-09 (`bf1d514d`). Same class as the `envFrom` lesson one level up: a claim about the render is not a claim about the estate, and the gate that made it rendered defaults only. Both closed — the gate now renders the optional planes and scans `secretKeyRef` as well as `envFrom`. **RE-MEASURED after that fix, in the running pods**: `ingest` and `search` report an empty `AWS_ACCESS_KEY_ID` and zero S3 secrets in env, and the one remaining `envFrom` S3 credential (`rask-observability-s3` on GreptimeDB) is ESO-managed for a pod with no sidecar — the goal's path 2, not a violation. `ingest` was the LAST holder — measured, not
 assumed: it was the only service in `values.yaml` carrying `lanceWriter`, the flag the mount rode. The
 defect was the flag itself. `lanceWriter` means "this one writes Lance" and was being used to decide
 "this one gets the root key", and for ingest those diverged the moment its writes became vended: the
