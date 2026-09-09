@@ -36,7 +36,7 @@ def _render(**sets: str) -> list[dict]:
     for key, value in sets.items():
         cmd += ["--set", f"{key.replace('__', '.')}={value}"]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    return [d for d in yaml.safe_load_all(out) if d]
+    return [d for d in yaml.load_all(out, Loader=yaml.CSafeLoader) if d]
 
 
 def _annotator_env(docs: list[dict]) -> dict[str, str]:

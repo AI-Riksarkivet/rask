@@ -59,7 +59,7 @@ def _actor_statestore_scopes(rendered: str) -> list[str]:
     Read off the rendered manifest rather than grepped, so a scope list that moves under a different
     component does not quietly pass.
     """
-    for doc in yaml.safe_load_all(rendered):
+    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
         if not doc or doc.get("kind") != "Component":
             continue
         meta = doc.get("metadata") or {}

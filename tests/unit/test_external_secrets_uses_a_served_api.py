@@ -59,7 +59,7 @@ def _rendered_eso() -> list[dict]:
         text=True,
         check=True,
     ).stdout
-    return [d for d in yaml.safe_load_all(out) if d and d.get("kind") in {"ExternalSecret", "SecretStore", "ClusterSecretStore"}]
+    return [d for d in yaml.load_all(out, Loader=yaml.CSafeLoader) if d and d.get("kind") in {"ExternalSecret", "SecretStore", "ClusterSecretStore"}]
 
 
 def test_every_eso_document_names_the_served_api() -> None:

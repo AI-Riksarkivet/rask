@@ -19,7 +19,7 @@ from tests.unit.test_invariants import _helm_template
 
 
 def _render() -> list[dict]:
-    return [d for d in yaml.safe_load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true")) if d]
+    return [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=yaml.CSafeLoader) if d]
 
 
 def test_the_component_and_the_env_var_carry_the_SAME_name() -> None:

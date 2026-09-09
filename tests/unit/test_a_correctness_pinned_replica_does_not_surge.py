@@ -40,7 +40,7 @@ _PINNED_FOR_CORRECTNESS = "-maintenance"
 
 
 def _deployments() -> dict[str, dict]:
-    docs = [d for d in yaml.safe_load_all(_helm_template("dapr.enabled=true")) if d]
+    docs = [d for d in yaml.load_all(_helm_template("dapr.enabled=true"), Loader=yaml.CSafeLoader) if d]
     return {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"}
 
 

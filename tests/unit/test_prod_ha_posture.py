@@ -90,7 +90,7 @@ def _prod_docs() -> list[dict]:
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(REPO / "chart"), "-f", str(REPO / "chart/values-prod.yaml"), *_PROD_ARGS]
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return [doc for doc in yaml.safe_load_all(out) if isinstance(doc, dict)]
+    return [doc for doc in yaml.load_all(out, Loader=yaml.CSafeLoader) if isinstance(doc, dict)]
 
 
 _DOCS = _prod_docs()

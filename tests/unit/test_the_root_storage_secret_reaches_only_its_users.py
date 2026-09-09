@@ -49,7 +49,7 @@ _MAY_HOLD_THE_ROOT_CREDENTIAL: Final = frozenset()
 
 def _fleet_secret_holders(*set_values: str) -> set[str]:
     """Every Deployment mounting the app secret, by its service suffix."""
-    docs = [d for d in yaml.safe_load_all(_helm_template("dapr.enabled=true", *set_values)) if d and d.get("kind") == "Deployment"]
+    docs = [d for d in yaml.load_all(_helm_template("dapr.enabled=true", *set_values), Loader=yaml.CSafeLoader) if d and d.get("kind") == "Deployment"]
     holders: set[str] = set()
     for doc in docs:
         name = doc["metadata"]["name"]

@@ -56,7 +56,7 @@ def _render(*extra: str) -> str:
 def _stage_runner_env(rendered: str) -> dict[str, dict[str, str]]:
     """`{stage runner name: {env name: value}}` for every rendered stage runner Deployment."""
     out: dict[str, dict[str, str]] = {}
-    for doc in yaml.safe_load_all(rendered):
+    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
         if not doc or doc.get("kind") != "Deployment":
             continue
         name = doc["metadata"]["name"]

@@ -29,7 +29,7 @@ _AUDIT_ENV = ("LANCE_AUDIT_ENABLED", "RASK_AUDIT_ENABLED", "MAINTENANCE_AUDIT_EN
 
 def _audit_env(*values: str) -> list[tuple[str, str, str]]:
     found: list[tuple[str, str, str]] = []
-    for doc in yaml.safe_load_all(_helm_template(*values)):
+    for doc in yaml.load_all(_helm_template(*values), Loader=yaml.CSafeLoader):
         if not doc or doc.get("kind") != "Deployment":
             continue
         for container in doc["spec"]["template"]["spec"]["containers"]:

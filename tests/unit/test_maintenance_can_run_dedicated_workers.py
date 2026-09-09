@@ -26,7 +26,7 @@ _QUEUE = "maintenance.workTopic=maintenance.work.v1"
 
 
 def _deployments(*sets: str) -> dict[str, dict]:
-    docs = [d for d in yaml.safe_load_all(_helm_template(*sets)) if d]
+    docs = [d for d in yaml.load_all(_helm_template(*sets), Loader=yaml.CSafeLoader) if d]
     return {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"}
 
 

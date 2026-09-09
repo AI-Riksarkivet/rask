@@ -187,7 +187,7 @@ def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> N
     rendered = _render("image.localImages=true", "rustfs.enabled=true")
     assert rendered.returncode == 0, rendered.stderr
 
-    tenants = [doc for doc in yaml.safe_load_all(rendered.stdout) if doc and doc.get("kind") == "Tenant"]
+    tenants = [doc for doc in yaml.load_all(rendered.stdout, Loader=yaml.CSafeLoader) if doc and doc.get("kind") == "Tenant"]
     assert tenants, "the RustFS Tenant did not render — this test would pass vacuously"
 
     def _mib(quantity: str) -> int:
@@ -209,7 +209,7 @@ def test_the_recoverable_drop_plane_is_actually_WIRED_into_the_catalog() -> None
     rendered = _render("image.localImages=true")
     assert rendered.returncode == 0, rendered.stderr
 
-    for doc in yaml.safe_load_all(rendered.stdout):
+    for doc in yaml.load_all(rendered.stdout, Loader=yaml.CSafeLoader):
         if not doc or doc.get("kind") != "Deployment":
             continue
         for container in doc["spec"]["template"]["spec"]["containers"]:
