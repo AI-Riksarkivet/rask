@@ -70,7 +70,7 @@ GOVERNED_SCHEMA = pa.schema(
         pa.field("id", pa.int64()),
         pa.field("payload", pa.string()),
         pa.field("stage", pa.string()),
-        pa.field("lineage", pa.string()),
+        pa.field("lineage", pa.json_()),
         pa.field("source_rowid", pa.uint64()),
     ]
 )
@@ -105,7 +105,7 @@ def _governed() -> bytes:
                 "id": pa.array([1, 2, 3], pa.int64()),
                 "payload": pa.array(["p1", "p2", "p3"]),
                 "stage": pa.array(["silver"] * 3),
-                "lineage": pa.array(['{"run_id":"r1"}'] * 3),
+                "lineage": pa.array(['{"run_id":"r1"}'] * 3).cast(pa.json_()),
                 "source_rowid": pa.array([11, 12, 13], pa.uint64()),
             },
             schema=GOVERNED_SCHEMA,
@@ -179,7 +179,9 @@ def test_a_source_rowid_of_the_wrong_TYPE_is_REFUSED(tmp_path: Path, monkeypatch
                 "id": pa.array([1, 2, 3], pa.int64()),
                 "payload": pa.array(["p1", "p2", "p3"]),
                 "stage": pa.array(["silver"] * 3),
-                "lineage": pa.array(['{"run_id":"r1"}'] * 3),
+                # JSONB, so this drive isolates the WIDTH defect: a string here is a second violation
+                # and the 400 would no longer prove which one the door caught.
+                "lineage": pa.array(['{"run_id":"r1"}'] * 3).cast(pa.json_()),
                 "source_rowid": pa.array([11, 12, 13], pa.int64()),
             },
             schema=pa.schema(
@@ -187,8 +189,42 @@ def test_a_source_rowid_of_the_wrong_TYPE_is_REFUSED(tmp_path: Path, monkeypatch
                     pa.field("id", pa.int64()),
                     pa.field("payload", pa.string()),
                     pa.field("stage", pa.string()),
-                    pa.field("lineage", pa.string()),
+                    pa.field("lineage", pa.json_()),
                     pa.field("source_rowid", pa.int64()),
+                ]
+            ),
+        )
+    )
+    client, _ = next(_client_over(payload, tmp_path, monkeypatch, registry_root))
+
+    assert _publish(client, key_column="id").status_code == 400
+
+
+def test_a_lineage_of_the_wrong_TYPE_is_REFUSED(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> None:
+    """`pa.string()` where the platform mints `pa.json_()` — the same shape as the `source_rowid` width.
+
+    Lance persists the Arrow JSON extension as JSONB, and that is what the platform INDEXES:
+    `compute._index_lineage` builds a JSON scalar index over `lineage -> run_id`. lance 11 refuses one
+    on anything else — "A JSON index can only be created on a Binary or LargeBinary field" (measured
+    2026-09-09, both types driven against a real dataset). A string column holding the same bytes reads
+    back, is never null, and quietly cannot carry the index the tier is supposed to have.
+    """
+    payload = _ipc(
+        pa.table(
+            {
+                "id": pa.array([1, 2, 3], pa.int64()),
+                "payload": pa.array(["p1", "p2", "p3"]),
+                "stage": pa.array(["silver"] * 3),
+                "lineage": pa.array(['{"run_id":"r1"}'] * 3),
+                "source_rowid": pa.array([11, 12, 13], pa.uint64()),
+            },
+            schema=pa.schema(
+                [
+                    pa.field("id", pa.int64()),
+                    pa.field("payload", pa.string()),
+                    pa.field("stage", pa.string()),
+                    pa.field("lineage", pa.string()),
+                    pa.field("source_rowid", pa.uint64()),
                 ]
             ),
         )

@@ -89,6 +89,10 @@ def test_the_silver_schema_carries_every_governed_column() -> None:
 
     assert {"stage", "lineage", "source_rowid"} <= set(out.schema.names)
     assert pa.types.is_uint64(out.schema.field("source_rowid").type), "uint64 is the width Lance's stable row id uses"
+    assert out.schema.field("lineage").type == pa.json_(), (
+        "JSONB is what the platform indexes: it builds a JSON scalar index over `lineage -> run_id`, and lance refuses "
+        "one on any other type — a string column holding the same bytes can never carry it"
+    )
     assert out.column("source_rowid").to_pylist() == [77], "the REAL parent, not the row's position"
 
 

@@ -35,7 +35,7 @@ TIER = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("stage", pa.string()),
-        pa.field("lineage", pa.string()),
+        pa.field("lineage", pa.json_()),
         pa.field("source_rowid", pa.uint64()),
     ]
 )
@@ -48,7 +48,7 @@ def _rows(schema: pa.Schema) -> pa.Table:
             {
                 "id": pa.array([1, 2], pa.int64()),
                 "stage": pa.array(["silver"] * 2),
-                "lineage": pa.array(['{"run_id":"r"}'] * 2),
+                "lineage": pa.array(['{"run_id":"r"}'] * 2).cast(pa.json_()),
                 "source_rowid": pa.array([7, 8], pa.uint64()),
             },
             schema=schema,

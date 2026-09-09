@@ -170,7 +170,9 @@ def _tier(rows: int = 2, *, source_rowid_type: pa.DataType | None = None) -> pa.
             "id": pa.array([f"row-{i}" for i in range(rows)], pa.string()),
             "payload": pa.array([f"payload-{i}" for i in range(rows)], pa.string()),
             "stage": pa.array(["silver"] * rows, pa.string()),
-            "lineage": pa.array(["run-track-a"] * rows, pa.string()),
+            # JSONB is the tier contract's type for this column — the publish door refuses a string,
+            # because the platform's JSON scalar index over `lineage -> run_id` cannot be built on one.
+            "lineage": pa.array(['{"run_id": "run-track-a"}'] * rows, pa.string()).cast(pa.json_()),
             "source_rowid": pa.array(list(range(rows)), source_rowid_type or pa.uint64()),
         }
     )

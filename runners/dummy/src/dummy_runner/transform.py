@@ -46,7 +46,13 @@ SILVER_SCHEMA = pa.schema(
         # authority that refuses a tier which does not. That is the seam working as intended: a runner
         # is told it is wrong at the door, not coupled to the rule.
         pa.field("stage", pa.string()),
-        pa.field("lineage", pa.string()),
+        # `pa.json_()`, not `pa.string()`: Lance persists the Arrow JSON extension as JSONB, which is
+        # what makes the cell queryable in place and INDEXABLE — the platform builds a JSON scalar
+        # index over `lineage -> run_id`, and lance refuses one on any other type ("A JSON index can
+        # only be created on a Binary or LargeBinary field"). A string column holding the same bytes
+        # reads back fine and can never carry that index, which is the same shape as the `source_rowid`
+        # width above: a different column wearing the right name.
+        pa.field("lineage", pa.json_()),
         pa.field("checksum", pa.string()),
         pa.field("word_count", pa.int64()),
         pa.field("embedding", pa.list_(pa.float32(), EMBED_DIM)),
@@ -99,7 +105,7 @@ def transform_batch(batch: pa.Table, *, stage: str = "silver", lineage: str = ""
             "word_count": pa.array(counts, pa.int64()),
             "embedding": pa.array(embeddings, pa.list_(pa.float32(), EMBED_DIM)),
             "stage": pa.array([stage] * len(ids), pa.string()),
-            "lineage": pa.array([lineage] * len(ids), pa.string()),
+            "lineage": pa.array([lineage] * len(ids), pa.string()).cast(pa.json_()),
         },
         schema=SILVER_SCHEMA,
     )

@@ -39,7 +39,7 @@ DUMMY_SILVER = pa.schema(
         # authority and this restatement is what keeps the two from drifting apart unnoticed.
         pa.field("source_rowid", pa.uint64()),
         pa.field("stage", pa.string()),
-        pa.field("lineage", pa.string()),
+        pa.field("lineage", pa.json_()),
         pa.field("checksum", pa.string()),
         pa.field("word_count", pa.int64()),
         pa.field("embedding", pa.list_(pa.float32(), EMBED_DIM)),
@@ -115,6 +115,31 @@ def test_a_held_batch_reports_WHICH_assertion_failed() -> None:
     assert all(a.assertion for a in failures)
 
 
+def _declared_fields(source: str) -> list[tuple[str, str]]:
+    """`(name, type)` for every `pa.field(...)` in the runner's `SILVER_SCHEMA`, by parsing its source.
+
+    `ast.unparse` renders the type EXPRESSION as written (`pa.json_()`, `pa.list_(pa.float32(),
+    EMBED_DIM)`); the mirror renders the RESOLVED type (`extension<arrow.json>`), so the two are
+    compared through `eval` of the expression in a namespace holding just `pa` and the runner's own
+    constants — the only way to compare a source-level declaration against a live schema without
+    importing the sealed package.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "SILVER_SCHEMA" for t in node.targets)):
+            continue
+        namespace = {"pa": pa, "EMBED_DIM": EMBED_DIM}
+        fields: list[tuple[str, str]] = []
+        for call in ast.walk(node.value):
+            if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "field":
+                name = ast.literal_eval(call.args[0])
+                fields.append((name, str(eval(ast.unparse(call.args[1]), namespace))))  # noqa: S307 — the runner's own source, parsed above
+        return fields
+    raise AssertionError("the runner no longer declares SILVER_SCHEMA — this gate is asserting about nothing")
+
+
 def test_the_restated_schema_matches_the_sealed_runners_own() -> None:
     """Guard the one risk this file's design accepts: a restated schema drifting from its source.
 
@@ -122,17 +147,20 @@ def test_the_restated_schema_matches_the_sealed_runners_own() -> None:
     has to restate it. That is a real drift risk, taken deliberately — un-sealing a runner to avoid it
     would set the precedent the estate refuses (the next runner brings torch in with it).
 
-    So the drift is detected instead of prevented: read the runner's source and compare field names.
-    Text, not an import, because importing is precisely what sealing forbids.
+    So the drift is detected instead of prevented: read the runner's source and compare fields.
+
+    NAME AND TYPE, because name alone is the drift that costs nothing to have. `source_rowid` at the
+    wrong WIDTH and `lineage` at the wrong TYPE are both a different column wearing the right name —
+    present, non-null, passing every count-based check — and a name-only comparison sees neither.
+    Parsed with `ast`, not a regex: the field types are call expressions (`pa.list_(pa.float32(),
+    EMBED_DIM)`), and a regex over them either stops at the first `)` or has to re-implement matching.
     """
-    import re
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[2] / "runners" / "dummy" / "src" / "dummy_runner" / "transform.py").read_text(encoding="utf-8")
-    block = source.split("SILVER_SCHEMA = pa.schema(", 1)[1]
-    declared = re.findall(r'pa\.field\("(\w+)"', block.split("]", 1)[0])
+    declared = _declared_fields(source)
 
-    assert declared == [f.name for f in DUMMY_SILVER], (
+    assert declared == [(f.name, str(f.type)) for f in DUMMY_SILVER], (
         f"the sealed runner's silver schema changed to {declared} — this file's copy is stale, and the "
         f"A11 gate is now asserting against a shape the lane no longer produces"
     )

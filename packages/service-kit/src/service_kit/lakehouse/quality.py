@@ -66,7 +66,8 @@ def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | No
     OPT-IN BY CLAIM, and that is the whole reason this is safe to apply at a door every publish passes
     through. A table carrying NONE of the three is not a governed tier — a registered external dataset,
     a user's own table — and is left alone. A table carrying ANY of them is claiming to be one, and must
-    then carry all three, correctly typed. That rule refuses exactly the shape that ships today
+    then carry all three, with the two types that have a CONSEQUENCE checked (`source_rowid`'s width and
+    `lineage`'s JSON extension — see below for why `stage` is not). That rule refuses exactly the shape that ships today
     (`source_rowid` present, `stage` and `lineage` absent) without touching a plain table.
 
     STRUCTURAL, not referential, and deliberately so: `publish` is handed a table id and a version and
@@ -90,6 +91,23 @@ def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | No
         actual = schema.field(SOURCE_ROWID_COLUMN).type
         if not pa.types.is_uint64(actual):
             problems.append(f"{SOURCE_ROWID_COLUMN!r} is {actual}, not uint64 — the width Lance's stable row id uses")
+
+    # `lineage` IS TYPED, and the type is the whole reason the column is worth having. `stamp_stage`
+    # and the medallion both mint `pa.json_()` — the Arrow JSON extension Lance persists as JSONB —
+    # because that is what makes the cell queryable IN PLACE (`json_get_string` / `json_extract` in a
+    # filter) and indexable: `compute._index_lineage` builds a JSON scalar index over `lineage -> run_id`,
+    # and lance 11 refuses one on anything else — *"A JSON index can only be created on a Binary or
+    # LargeBinary field"* (measured 2026-09-09, both types driven). A `pa.string()` column holding the
+    # same bytes is a DIFFERENT column wearing the right name: it reads back, it is never null, and the
+    # tier it belongs to can never carry the index the platform builds for it.
+    #
+    # `stage` is deliberately NOT type-checked. Nothing indexes or json-parses it, so string vs
+    # large_string has no consequence to name, and a refusal with no consequence behind it trains a
+    # reader to route around the gate.
+    if LINEAGE_COLUMN in names:
+        actual = schema.field(LINEAGE_COLUMN).type
+        if actual != pa.json_():
+            problems.append(f"{LINEAGE_COLUMN!r} is {actual}, not {pa.json_()} — a JSON index can only be built on a JSON/binary column")
 
     # THE DEEPER FAILURE THE COLUMNS CANNOT SHOW. `source_rowid` holds a Lance STABLE row id, and
     # `enable_stable_row_ids` is CREATE-TIME ONLY — set later it is a silent no-op. So a dataset

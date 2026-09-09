@@ -43,7 +43,7 @@ CONFORMING = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("stage", pa.string()),
-        pa.field("lineage", pa.string()),
+        pa.field("lineage", pa.json_()),
         pa.field("source_rowid", pa.uint64()),
     ]
 )
