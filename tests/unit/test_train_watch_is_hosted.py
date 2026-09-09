@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -59,7 +60,7 @@ def _actor_statestore_scopes(rendered: str) -> list[str]:
     Read off the rendered manifest rather than grepped, so a scope list that moves under a different
     component does not quietly pass.
     """
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "Component":
             continue
         meta = doc.get("metadata") or {}

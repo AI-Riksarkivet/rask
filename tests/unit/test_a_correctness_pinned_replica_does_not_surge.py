@@ -31,6 +31,7 @@ deployment" would assert a constraint for six services on no evidence.
 from __future__ import annotations
 
 import yaml
+from chart_yaml import FAST_LOADER
 
 from tests.unit.test_invariants import _helm_template
 
@@ -40,7 +41,7 @@ _PINNED_FOR_CORRECTNESS = "-maintenance"
 
 
 def _deployments() -> dict[str, dict]:
-    docs = [d for d in yaml.load_all(_helm_template("dapr.enabled=true"), Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(_helm_template("dapr.enabled=true"), Loader=FAST_LOADER) if d]
     return {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"}
 
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -36,7 +37,7 @@ def _render(**sets: str) -> list[dict]:
     for key, value in sets.items():
         cmd += ["--set", f"{key.replace('__', '.')}={value}"]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    return [d for d in yaml.load_all(out, Loader=yaml.CSafeLoader) if d]
+    return [d for d in yaml.load_all(out, Loader=FAST_LOADER) if d]
 
 
 def _annotator_env(docs: list[dict]) -> dict[str, str]:

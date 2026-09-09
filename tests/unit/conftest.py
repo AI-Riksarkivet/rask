@@ -13,8 +13,17 @@ self-consistent.
 from __future__ import annotations
 
 import pathlib
+import sys
 import uuid
 from collections.abc import Callable
+
+
+# THIS DIRECTORY, IMPORTABLE. Nineteen files here do `from test_invariants import _rendered_docs` to
+# share the memoised chart render, and under `--import-mode=importlib` that resolves only because some
+# earlier module's import happened to put this directory on the path first — so it works for a whole
+# directory run and fails for a single file. A conftest is loaded before collection begins, which makes
+# the sharing seam deliberate instead of incidental.
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 import lance
 import pyarrow as pa

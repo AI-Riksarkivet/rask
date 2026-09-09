@@ -22,6 +22,7 @@ import pathlib
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -59,7 +60,7 @@ def _rendered_eso() -> list[dict]:
         text=True,
         check=True,
     ).stdout
-    return [d for d in yaml.load_all(out, Loader=yaml.CSafeLoader) if d and d.get("kind") in {"ExternalSecret", "SecretStore", "ClusterSecretStore"}]
+    return [d for d in yaml.load_all(out, Loader=FAST_LOADER) if d and d.get("kind") in {"ExternalSecret", "SecretStore", "ClusterSecretStore"}]
 
 
 def test_every_eso_document_names_the_served_api() -> None:

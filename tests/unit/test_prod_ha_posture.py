@@ -51,6 +51,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+from chart_yaml import FAST_LOADER
 from test_invariants import _first_party_deployments  # noqa: E402
 
 
@@ -90,7 +91,7 @@ def _prod_docs() -> list[dict]:
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(REPO / "chart"), "-f", str(REPO / "chart/values-prod.yaml"), *_PROD_ARGS]
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return [doc for doc in yaml.load_all(out, Loader=yaml.CSafeLoader) if isinstance(doc, dict)]
+    return [doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict)]
 
 
 _DOCS = _prod_docs()

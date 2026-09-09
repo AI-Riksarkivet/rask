@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -614,7 +615,7 @@ def _chart_rendered_envs() -> set[str]:
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    docs = [doc for doc in yaml.load_all(out, Loader=yaml.CSafeLoader) if isinstance(doc, dict)]
+    docs = [doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict)]
     bundles = {
         (doc["kind"], (doc.get("metadata") or {}).get("name")): set(doc.get("data") or {}) | set(doc.get("stringData") or {})
         for doc in docs
@@ -1961,7 +1962,7 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
     import yaml
 
     rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
-    docs = [d for d in yaml.load_all(rendered, Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
 
     webhook = next(
         (w for d in docs if d.get("kind") == "MutatingWebhookConfiguration" for w in (d.get("webhooks") or []) if w.get("name") == "sidecar-injector.dapr.io"),
@@ -2024,7 +2025,7 @@ def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> Non
     module_re = re.compile(r'^\s*-\s+"?([a-z_]+)(?:\.[a-z_.]+)?:app"?\s*$', re.MULTILINE)
     checked = 0
     missing: list[str] = []
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
             continue
         raw = yaml.safe_dump(doc)
@@ -2155,7 +2156,7 @@ def test_no_env_var_is_rendered_TWICE_on_any_workload(ray_enabled: str) -> None:
     """
     rendered = _helm_template(f"ray.enabled={ray_enabled}")
     offenders: list[str] = []
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") not in {"Deployment", "StatefulSet", "Job", "CronJob"}:
             continue
         spec = doc["spec"]["template"]["spec"] if doc["kind"] != "CronJob" else doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
@@ -2288,7 +2289,7 @@ def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
         "maintenance.workTopic=maintenance.work.v1",
         "maintenance.indexTopic=maintenance.index.v1",
     )
-    docs = [d for d in yaml.load_all(rendered, Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
 
     durable = {
         d["metadata"]["name"]
@@ -2334,7 +2335,7 @@ def test_the_rustfs_tenant_carries_NO_plaintext_credential() -> None:
     secret is worth the most.
     """
     rendered = _helm_template("rustfs.enabled=true", "rustfs.oidc.enabled=true")
-    docs = [d for d in yaml.load_all(rendered, Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
 
     tenants = [d for d in docs if d.get("kind") == "Tenant"]
     assert tenants, "no Tenant rendered — this gate would pass vacuously"
@@ -2422,7 +2423,7 @@ def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one(
     pod = next(
         (
             (doc.get("spec") or {}).get("template")
-            for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader)
+            for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
             if isinstance(doc, dict) and doc.get("kind") == "Deployment" and "notifications" in ((doc.get("metadata") or {}).get("name") or "")
         ),
         None,
@@ -2471,7 +2472,7 @@ def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one(
 #: caller. None does — these gates read the render and assert on it.
 @functools.cache
 def _rendered_docs(*set_values: str) -> list[dict]:
-    return [doc for doc in yaml.load_all(_helm_template(*set_values), Loader=yaml.CSafeLoader) if isinstance(doc, dict)]
+    return [doc for doc in yaml.load_all(_helm_template(*set_values), Loader=FAST_LOADER) if isinstance(doc, dict)]
 
 
 def _collector_config(docs: list[dict]) -> dict:
@@ -3622,7 +3623,7 @@ def test_the_notifications_reconciler_is_admitted_to_the_lineage_service_door() 
 
 def _lance_tracing_config(rendered: str) -> dict[str, Any] | None:
     """The one Dapr `Configuration` every sidecar references, or None if it did not render."""
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if doc and doc.get("kind") == "Configuration" and doc.get("metadata", {}).get("name") == "lance-tracing":
             spec: dict[str, Any] = doc.get("spec") or {}
             return spec
@@ -3795,7 +3796,7 @@ def test_inbound_retry_is_declared_on_the_COMPONENT_never_on_the_app() -> None:
     import yaml as _yaml
 
     rendered = _helm_template("dapr.resiliency.enabled=true")
-    policies = [d for d in _yaml.load_all(rendered, Loader=yaml.CSafeLoader) if d and d.get("kind") == "Resiliency"]
+    policies = [d for d in _yaml.load_all(rendered, Loader=FAST_LOADER) if d and d.get("kind") == "Resiliency"]
 
     assert policies, "no Resiliency CR rendered — this gate would pass vacuously"
 
@@ -4896,7 +4897,7 @@ def test_every_perses_dashboard_is_declared_ONCE_and_is_valid_json() -> None:
     assert dupes == [], f"these Perses documents are declared more than once, so all but the last are silently dropped: {dupes}"
 
     # Render it, so the assertion covers what SHIPS rather than the pre-template text.
-    docs = [d for d in yaml.load_all(_helm_template("observability.enabled=true"), Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(_helm_template("observability.enabled=true"), Loader=FAST_LOADER) if d]
     configmaps = [d for d in docs if d.get("kind") == "ConfigMap" and "perses-dashboards" in d.get("metadata", {}).get("name", "")]
     assert len(configmaps) == 1, f"expected exactly one perses-dashboards ConfigMap, got {len(configmaps)}"
     data = configmaps[0].get("data", {})
@@ -5231,7 +5232,7 @@ def test_every_PANEL_query_names_a_series_some_instrument_emits() -> None:
 
     rendered = _helm_template("observability.enabled=true")
     phantom: set[str] = set()
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "ConfigMap":
             continue
         for key, value in (doc.get("data") or {}).items():
@@ -5981,7 +5982,7 @@ def test_dapr_hot_reload_is_off_because_this_estate_cannot_converge_it() -> None
     rendered = _helm_template()
     configs = [
         doc
-        for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader)
+        for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
         if doc and doc.get("kind") == "Configuration" and doc.get("metadata", {}).get("name") == "lance-tracing"
     ]
     assert configs, "the sidecars' `lance-tracing` Dapr Configuration is not rendered at all"
@@ -6378,7 +6379,7 @@ def test_the_producer_can_reach_the_catalog_regardless_of_the_quality_review_fla
         producer = next(
             (
                 doc
-                for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader)
+                for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
                 if doc and doc.get("kind") == "Deployment" and "medallion-producer" in doc["metadata"]["name"]
             ),
             None,
@@ -6415,7 +6416,7 @@ def test_the_media_head_can_register_the_bronze_it_lands() -> None:
         producer = next(
             (
                 doc
-                for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader)
+                for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
                 if doc and doc.get("kind") == "Deployment" and "medallion-producer" in doc["metadata"]["name"]
             ),
             None,
@@ -6455,7 +6456,7 @@ def test_the_ingest_pod_gets_the_SAME_external_blob_bases_as_the_catalog() -> No
     rendered = _helm_template("vending.externalBlobBases=s3://probe-bucket/blobs/")
 
     carriers = set()
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "Deployment":
             continue
         for container in doc["spec"]["template"]["spec"]["containers"]:

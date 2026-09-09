@@ -16,6 +16,7 @@ arriving by upgrade would move compaction to a pod nobody sized.
 from __future__ import annotations
 
 import yaml
+from chart_yaml import FAST_LOADER
 
 from tests.unit.test_invariants import _helm_template
 
@@ -26,7 +27,7 @@ _QUEUE = "maintenance.workTopic=maintenance.work.v1"
 
 
 def _deployments(*sets: str) -> dict[str, dict]:
-    docs = [d for d in yaml.load_all(_helm_template(*sets), Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(_helm_template(*sets), Loader=FAST_LOADER) if d]
     return {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"}
 
 

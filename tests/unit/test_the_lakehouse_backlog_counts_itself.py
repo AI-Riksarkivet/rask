@@ -67,3 +67,22 @@ def test_no_row_is_both_struck_and_open() -> None:
     unstruck = {rid for mark, rid in rows if not mark}
     both = sorted(struck & unstruck)
     assert not both, f"ids listed as both struck and open: {both}"
+
+
+#: The three tables that are NOT work — decisions the owner made, recommendations awaiting an
+#: acknowledgement, questions that precede a decision. They were being summed into the backlog and
+#: overstating it by 28, which is the same failure this gate exists for one level up: a number nobody
+#: re-derives stops being evidence, whether it is too high or too low.
+_KINDS = {"D": re.compile(r"^\| D\d+ \|", re.MULTILINE), "R": re.compile(r"^\| R\d+ \|", re.MULTILINE), "M": re.compile(r"^\| M\d+ \|", re.MULTILINE)}
+_KIND_HEADER = re.compile(r"\*\*Beside the work, and never counted with it: (\d+) D rows, (\d+) R rows, (\d+) M rows\.\*\*")
+
+
+def test_the_non_work_tables_are_counted_and_kept_out_of_the_backlog() -> None:
+    """D/R/M are not defects. Stating their sizes beside the work is what stops the next reader (or
+    the next agent) folding them back in, and stating them unchecked is what let it happen once."""
+    text = _text()
+    stated = _KIND_HEADER.search(text)
+    assert stated, "the header no longer states the D/R/M counts in the checkable form"
+
+    real = tuple(len(pattern.findall(text)) for pattern in (_KINDS["D"], _KINDS["R"], _KINDS["M"]))
+    assert tuple(int(g) for g in stated.groups()) == real, f"header says {stated.groups()} D/R/M rows; the tables say {real}"

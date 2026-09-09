@@ -22,6 +22,7 @@ import pathlib
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -56,7 +57,7 @@ def _render(*sets: str) -> str:
 
 def _secret_keys(rendered: str, name_fragment: str) -> set[str]:
     keys: set[str] = set()
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if doc and doc.get("kind") == "Secret" and name_fragment in doc["metadata"]["name"]:
             keys |= set((doc.get("data") or {}) | (doc.get("stringData") or {}))
     return keys
@@ -76,7 +77,7 @@ def test_external_secrets_syncs_it_too() -> None:
     that exists in dev and is empty in production — the failure this one-object rule prevents."""
     rendered = _render("externalSecrets.enabled=true")
     synced: set[str] = set()
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if doc and doc.get("kind") == "ExternalSecret" and "infra-credentials" in doc["metadata"]["name"]:
             synced |= set(((doc["spec"].get("target") or {}).get("template") or {}).get("data") or {})
     assert {"ray-compute-access-key", "ray-compute-secret-key"} <= synced, (
@@ -91,7 +92,7 @@ def test_the_ray_pod_takes_BOTH_halves_from_that_secret() -> None:
     # BOTH flags: `rayservice.yaml` is guarded on `ray.enabled AND singleTenant.enabled`.
     rendered = _render("ray.enabled=true", "singleTenant.enabled=true")
     found: dict[str, str] = {}
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "RayService":
             continue
         # A RayService nests its pod spec under `rayClusterConfig.headGroupSpec`, NOT `spec.template` —

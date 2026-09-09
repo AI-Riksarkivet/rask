@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,7 +57,7 @@ def _render(*extra: str) -> str:
 def _stage_runner_env(rendered: str) -> dict[str, dict[str, str]]:
     """`{stage runner name: {env name: value}}` for every rendered stage runner Deployment."""
     out: dict[str, dict[str, str]] = {}
-    for doc in yaml.load_all(rendered, Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "Deployment":
             continue
         name = doc["metadata"]["name"]

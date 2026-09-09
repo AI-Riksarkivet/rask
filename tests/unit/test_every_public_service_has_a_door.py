@@ -35,6 +35,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from chart_yaml import FAST_LOADER
+
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -113,7 +115,7 @@ def test_the_chart_FEEDS_the_door_it_now_has() -> None:
 
     from tests.unit.test_invariants import _helm_template  # the shared renderer, so flags stay in one place
 
-    docs = [d for d in yaml.load_all(_helm_template("auth.enabled=true"), Loader=yaml.CSafeLoader) if isinstance(d, dict)]
+    docs = [d for d in yaml.load_all(_helm_template("auth.enabled=true"), Loader=FAST_LOADER) if isinstance(d, dict)]
     missing: list[str] = []
     for service in PUBLICLY_PROXIED:
         deployment = next(

@@ -14,12 +14,13 @@ rendered from one values key for exactly this reason.
 from __future__ import annotations
 
 import yaml
+from chart_yaml import FAST_LOADER
 
 from tests.unit.test_invariants import _helm_template
 
 
 def _render() -> list[dict]:
-    return [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=yaml.CSafeLoader) if d]
+    return [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=FAST_LOADER) if d]
 
 
 def test_the_component_and_the_env_var_carry_the_SAME_name() -> None:

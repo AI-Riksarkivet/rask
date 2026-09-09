@@ -15,6 +15,7 @@ the estate — which is the same defect wearing a different file.
 from __future__ import annotations
 
 import yaml
+from chart_yaml import FAST_LOADER
 
 from tests.unit.test_invariants import _helm_template
 
@@ -29,7 +30,7 @@ _AUDIT_ENV = ("LANCE_AUDIT_ENABLED", "RASK_AUDIT_ENABLED", "MAINTENANCE_AUDIT_EN
 
 def _audit_env(*values: str) -> list[tuple[str, str, str]]:
     found: list[tuple[str, str, str]] = []
-    for doc in yaml.load_all(_helm_template(*values), Loader=yaml.CSafeLoader):
+    for doc in yaml.load_all(_helm_template(*values), Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "Deployment":
             continue
         for container in doc["spec"]["template"]["spec"]["containers"]:

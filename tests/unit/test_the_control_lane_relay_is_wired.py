@@ -30,6 +30,7 @@ import sys
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -47,7 +48,7 @@ def _render(*set_values: str) -> list[dict]:
     for value in set_values:
         argv += ["--set", value]
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return [doc for doc in yaml.load_all(out, Loader=yaml.CSafeLoader) if isinstance(doc, dict)]
+    return [doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict)]
 
 
 def _catalog_env(docs: list[dict]) -> dict[str, str]:

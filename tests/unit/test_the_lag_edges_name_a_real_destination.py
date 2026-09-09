@@ -20,12 +20,13 @@ from typing import Any
 
 import pytest
 import yaml
+from chart_yaml import FAST_LOADER
 
 from tests.unit.test_invariants import _helm_template
 
 
 def _producer_env() -> dict[str, str]:
-    docs = [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=FAST_LOADER) if d]
     producer = next(d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-medallion-producer"))
     return {e["name"]: e.get("value", "") for c in producer["spec"]["template"]["spec"]["containers"] for e in (c.get("env") or [])}
 
@@ -54,7 +55,7 @@ def test_the_destinations_come_from_the_STAGE_RUNNER_declarations() -> None:
     cannot half-move."""
     env = _producer_env()
     destinations = json.loads(env["MEDALLION_LANE_DESTINATIONS"])
-    docs = [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=yaml.CSafeLoader) if d]
+    docs = [d for d in yaml.load_all(_helm_template("medallion.enabled=true", "dapr.enabled=true"), Loader=FAST_LOADER) if d]
     declared_to = {
         e["value"]
         for d in docs
