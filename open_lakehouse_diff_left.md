@@ -1953,9 +1953,18 @@ test of the old shape and a false alarm in the new. Its holder set is now EMPTY,
 renders a mount deliberately (`ambientStorage=true`) so a rename cannot silently empty every assertion,
 and the starvation check asserts the two vended paths exist rather than asserting the secret does.
 
-**RESIDUE:** the live Deployment still carries `envFrom: rask-app` until the next `helm upgrade` — the
-chart is the fix, the estate is not converged, and `helm never corrects drift` only for fields that
-CHANGED, so this one does move on upgrade because the block is removed rather than altered.
+**AND THE ESTATE IS CONVERGED — OBSERVED 2026-09-09, in the RUNNING POD, which is the only surface
+this row accepts.** The live Deployment's `envFrom: rask-app` was removed rather than left waiting for a
+release, the same direction §H8's four-service half took: it removes drift instead of creating it, and
+`helm never corrects drift` would have let the reverse survive every upgrade.
+
+    before   rask-ingest   AWS_ACCESS_KEY_ID=rustfsadmin   AWS_SECRET_ACCESS_KEY=rustfsadmin
+    after    rask-ingest   <both ABSENT>                   RASK_S3_ENDPOINT_URL still present
+
+Both containers READY, zero credential errors in the window, and — the half that makes it hardening
+rather than starvation — a write-tier vend driven FROM the credential-less pod answers **200** for
+`bronze$pages` and `bronze$events`, returning a scoped `credentials` block. The service that accepts
+external untrusted bytes no longer holds the widest storage credential in the estate, and still writes.
 
 
 
