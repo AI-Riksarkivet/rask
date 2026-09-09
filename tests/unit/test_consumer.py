@@ -53,7 +53,7 @@ def test_handle_drops_a_malformed_payload() -> None:
     repo = _FakeRepo()
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": {"not": "an event"}}))
     assert repo.ingested is None
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
 
 
 def test_handle_retries_on_transient_ingest_failure() -> None:

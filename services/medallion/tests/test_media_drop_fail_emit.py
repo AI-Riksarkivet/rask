@@ -79,7 +79,7 @@ def test_underivable_media_records_a_FAIL_run_and_drops(tmp_path: Any, underivab
 
     status = asyncio.run(tf.handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok-media", "originator": "alice"}}))
 
-    assert status == {"status": "DROP"}, f"a deterministic media failure must DROP, not retry: {status}"
+    assert status["status"] == "DROP", f"a deterministic media failure must DROP, not retry: {status}"
 
     fails = _fail_events(dapr, settings)
     assert len(fails) == 1, f"expected exactly one FAIL run recorded, got {len(fails)}"
@@ -124,7 +124,7 @@ def test_a_broken_compensating_control_is_logged_instead_of_swallowed(
     with caplog.at_level(logging.ERROR):
         status = asyncio.run(tf.handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok-media", "originator": "alice"}}))
 
-    assert status == {"status": "DROP"}, "a failed FAIL-emit must still DROP — that guarantee is the point"
+    assert status["status"] == "DROP", "a failed FAIL-emit must still DROP — that guarantee is the point"
     assert any("medallion_best_effort_emit_failed" in r.message for r in caplog.records), (
         "the compensating control failed and said nothing; that is the silence this helper removes"
     )

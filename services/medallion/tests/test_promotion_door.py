@@ -114,7 +114,7 @@ class TestTheHoldReachesTheProducerOverTheBus:
 
         result = await handle_promotion_held({"data": {"nonsense": True}}, client=client)
 
-        assert result == {"status": "DROP"}
+        assert result["status"] == "DROP"
         assert client.scheduled == []
 
     @pytest.mark.asyncio

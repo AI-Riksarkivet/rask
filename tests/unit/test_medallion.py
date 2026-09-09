@@ -508,7 +508,7 @@ def test_stage_runner_denied_when_not_authorized(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(stage_runner.fga, "check", _deny)
     dapr = _FakeDapr()
     status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert dapr.calls == []  # not authorized → no lineage emitted, no next stage triggered
 
 

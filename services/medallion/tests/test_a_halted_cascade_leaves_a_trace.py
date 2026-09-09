@@ -74,7 +74,7 @@ async def test_an_unsafe_project_is_counted_not_only_logged(refusals: list[tuple
     """A tenant id that would become an S3 prefix and a lineage name. Refusing is right; silence is not."""
     status = await transform.handle_stage(cast(Any, _Dapr()), _settings(tmp_path), {"data": {"token": "t", "project": "../evil"}})
 
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert refusals == [("bronze->silver", "bad_project")], f"the refusal left no series to alert on: {refusals}"
 
 
@@ -84,7 +84,7 @@ async def test_a_tenant_trigger_with_routing_OFF_is_counted(refusals: list[tuple
     cascade on this stage runner stops here until an operator acts — which they cannot do unprompted."""
     status = await transform.handle_stage(cast(Any, _Dapr()), _settings(tmp_path), {"data": {"token": "t", "project": "acme"}})
 
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert refusals == [("bronze->silver", "routing_disabled")], f"a permanently halted tenant lane is invisible: {refusals}"
 
 
@@ -110,7 +110,7 @@ async def test_a_declared_lane_with_no_namespace_is_counted(refusals: list[tuple
     settings = _settings(tmp_path, MEDALLION_TRANSFORM="derive", MEDALLION_CONTROL_ROOT=str(tmp_path / "control"))
     status = await transform.handle_stage(cast(Any, _Dapr()), settings, {"data": {"token": "t", "project": "acme"}})
 
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert refusals == [("bronze->silver", "unresolvable_lane")], f"an undeclared-shaped lane halted the stage runner silently: {refusals}"
 
 
@@ -128,7 +128,7 @@ async def test_an_UNDECLARED_transform_DROPS_rather_than_poisoning_the_subscript
 
     status = await transform.handle_stage(cast(Any, _Dapr()), settings, {"data": {"token": "t", "project": "acme"}})
 
-    assert status == {"status": "DROP"}, f"a deterministic declaration failure must ack, not raise: {status}"
+    assert status["status"] == "DROP", f"a deterministic declaration failure must ack, not raise: {status}"
     assert refusals == [("bronze->silver", "unresolvable_lane")], f"and it must leave the same trace as its sibling: {refusals}"
 
 

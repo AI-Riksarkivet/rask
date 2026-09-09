@@ -143,7 +143,7 @@ class TestARefusalBecomesTheHold:
 
         status = asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream), _event()))
 
-        assert status == {"status": "DROP"}
+        assert status["status"] == "DROP"
         assert "medallion.silver" not in dapr.topics
         assert holds and holds[0]["reasons"] == ["row_count_positive"], (
             "the catalog's verdict must reach the review — without the assertion names it cannot tell a corrupt finding from a reviewable one"

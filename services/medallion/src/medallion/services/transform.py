@@ -91,7 +91,25 @@ _write_lock = asyncio.Lock()
 
 _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
-_DROP = {"status": "DROP"}
+
+
+def _drop(reason: str) -> dict[str, str]:
+    """A DROP that SAYS WHY, using the same string the refusal counter already records.
+
+    Dapr neither redelivers nor dead-letters a DROP, so the ack is the last word a caller gets — and
+    it was the same four bytes for a routing drop, an unresolvable lane, an FGA denial and a held
+    promotion. The reason was never missing: every one of these sites already passes it to
+    `record_refused`, so the wire was discarding a value the code had in hand, and an operator could
+    not tell governance from misrouting. That opacity is how § Q16-6's assertion passed on a trigger
+    that never reached the gate.
+
+    ONE string feeds both the counter and the ack, so the metric and the wire cannot drift into
+    describing the same drop two ways. `status` is unchanged — the ack contract is deliberate and the
+    sidecar ignores the extra key.
+    """
+    return {"status": "DROP", "reason": reason}
+
+
 # A quality-blocked run was handled (its failed assertions are recorded in lineage), it just must not
 # promote — DROP so Dapr doesn't redeliver (the data is deterministically bad; no DLQ is configured,
 # so the drop is final — the failed run in the lineage graph is the audit trail).
@@ -373,7 +391,7 @@ async def _authorize(
                     "object": settings.fga_object(to_namespace),
                 },
             )
-            return _DROP
+            return _drop("fga_denied")
 
     return None
 
@@ -420,7 +438,7 @@ async def _preflight(
     if trigger is None:
         log.warning("medallion_stage_malformed", extra={"transition": transition, "event": str(event)[:200]})
         record_refused(transition, "malformed")
-        return _DROP
+        return _drop("malformed")
     token = trigger.token
 
     # LANE DISCRIMINATION. Two ingest lanes — bronze$events and the page lane bronze$pages —
@@ -460,7 +478,7 @@ async def _preflight(
             extra={"transition": transition, "token": token, "project": trigger.project or "", "error": str(exc)},
         )
         record_refused(transition, "unresolvable_lane")
-        return _DROP
+        return _drop("unresolvable_lane")
     accepted = accepted_input_names(env_from_dataset=settings.from_dataset, declared=declared_lane)
     if arrived is not None and arrived not in accepted:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
@@ -475,7 +493,7 @@ async def _preflight(
             "medallion_stage_other_lane",
             extra={"transition": transition, "token": token, "arrived": arrived, "expects": settings.from_dataset},
         )
-        return _DROP  # deterministic — redelivery cannot make this the right stage runner
+        return _drop("wrong_stage_runner")  # deterministic — redelivery cannot make this the right stage runner
 
     raw_project = trigger.project
     project = ""
@@ -488,7 +506,7 @@ async def _preflight(
             # offending value stays on the log line; the counter carries only the closed reason.
             log.warning("medallion_stage_bad_project", extra={"transition": transition, "token": token})
             record_refused(transition, "bad_project")
-            return _DROP
+            return _drop("bad_project")
         project = raw_project
     if project and not settings.control_root:
         # Fail closed (#84): with resolution disabled the default roots MUST NOT serve a tenant trigger.
@@ -502,7 +520,7 @@ async def _preflight(
         # log line nobody is reading. A counted, alertable steady state is the instrument
         # `docs/DECISIONS.md` names for exactly this (a repeating operational condition is a metric).
         record_refused(transition, "routing_disabled")
-        return _DROP
+        return _drop("routing_disabled")
     # WHAT THIS RUN READS AND WRITES — the declared lane record when there is one, else the env,
     # project-qualified exactly as before. This is the line that decided a stage runner served one edge:
     # `stage_run` has always been parameterised by from_uri/to_uri, so the pinning lived here and
@@ -521,7 +539,7 @@ async def _preflight(
             extra={"transition": transition, "token": token, "project": project, "error": str(exc)},
         )
         record_refused(transition, "unresolvable_lane")
-        return _DROP
+        return _drop("unresolvable_lane")
     to_namespace = identity.to_namespace
 
     verdict = await _authorize(fga_client, settings, to_namespace=to_namespace, transition=transition, token=token)
@@ -1606,7 +1624,7 @@ async def handle_stage(
         roots = await _resolve_roots(settings, project=project, from_dataset=identity.from_dataset)
         from_uri = _confine_from_uri(trigger, from_uri=roots.from_uri, read_root=roots.read_root, transition=transition, token=token, project=project)
         if from_uri is None:
-            return _DROP
+            return _drop("from_uri_outside_read_root")
         write = await _run_compute(
             settings,
             trigger,
@@ -1673,7 +1691,7 @@ async def handle_stage(
         await _emit_stage_failure(
             dapr, settings, identity, trigger, label="project_unresolvable", transition=transition, project=project, token=token, error_message=str(exc)
         )
-        return _DROP
+        return _drop("project_unresolvable")
     except UnderivableMediaError as exc:
         # DETERMINISTIC bad media (a payload matched the content probe but cannot decode): redelivery
         # cannot fix bytes, so mirror the quality-gate OUTCOME contract — record the FAIL run (the audit
@@ -1686,7 +1704,7 @@ async def handle_stage(
             "medallion_media_underivable",
             extra={"transition": transition, "token": token, "error": str(exc)},
         )
-        # Through the OUTBOX (#4), like every other lineage emit. This path returns _DROP — Dapr will NOT
+        # Through the OUTBOX (#4), like every other lineage emit. This path DROPS — Dapr will NOT
         # redeliver — so a lost FAIL publish means the failed run is NEVER recorded and NEVER retried:
         # the graph silently forgets it. Staging (inside the shared emit) makes the failure durable. A
         # staged FAIL is not a phantom: the relay re-ingests a truthful "this run failed" record; it
@@ -1694,7 +1712,7 @@ async def handle_stage(
         await _emit_stage_failure(
             dapr, settings, identity, trigger, label="media_underivable", transition=transition, project=project, token=token, error_message=str(exc)
         )
-        return _DROP
+        return _drop("media_underivable")
     except Exception as exc:
         log.warning("medallion_stage_failed", extra={"transition": transition, "token": token, "error": str(exc)})
         # Record the failed run ONLY if the transform itself failed — i.e. the COMPLETE was never emitted.
@@ -1705,7 +1723,7 @@ async def handle_stage(
         # edge, no version) + the errorMessage facet; best-effort + suppressed so it can't mask the RETRY;
         # idempotent on the deterministic run_id.
         if not completed:
-            # Through the OUTBOX (#4) — see the _DROP path above. Dapr DOES redeliver here, so a lost FAIL
+            # Through the OUTBOX (#4) — see the DROP path above. Dapr DOES redeliver here, so a lost FAIL
             # is eventually re-emitted; staging it anyway (inside the shared emit) keeps the invariant
             # UNIFORM ("every lineage publish is staged") rather than a special case that the next audit
             # has to re-derive.

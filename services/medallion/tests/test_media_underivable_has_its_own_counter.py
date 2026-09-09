@@ -65,6 +65,6 @@ def test_underivable_media_bumps_its_own_counter_and_not_the_quality_gates(tmp_p
     dapr, settings = _FakeDapr(), _settings(tmp_path)
     status = asyncio.run(tf.handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok-media", "originator": "alice"}}))
 
-    assert status == {"status": "DROP"}, f"the DROP contract must survive the metric split: {status}"
+    assert status["status"] == "DROP", f"the DROP contract must survive the metric split: {status}"
     assert quality_bumps == [], "an undecodable payload ran no quality assertion — it must not count as a quality-gate block"
     assert media_bumps == ["bronze->silver"], f"the media failure left no series of its own: {media_bumps}"

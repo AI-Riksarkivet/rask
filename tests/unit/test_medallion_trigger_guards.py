@@ -42,7 +42,9 @@ from medallion.services.trigger_guards import SAFE_TOKEN_PATTERN, StageTrigger, 
 from service_kit.lakehouse import warehouse_registry
 
 
-_DROP = {"status": "DROP"}
+#: The ack CONTRACT. Compared field-wise, never whole-dict: since § Q16-7 a drop also carries a
+#: `reason`, and an equality here would pin the opacity that row removed.
+_DROP_STATUS = "DROP"
 _SUCCESS = {"status": "SUCCESS"}
 
 
@@ -127,7 +129,7 @@ def test_a_from_uri_outside_the_resolved_root_is_refused_and_never_opened(tmp_pa
     trigger = {"data": {"token": "t", "project": "acme", "from_uri": "s3://someone-elses-warehouse/medallion/bronze"}}
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
 
-    assert status == _DROP
+    assert status["status"] == _DROP_STATUS
     assert reads.opened == [], f"the stage_runner opened a location outside its own root: {reads.opened}"
     assert dapr.published == [], "a refused trigger must leave no lineage and no downstream trigger"
 
@@ -162,7 +164,7 @@ def test_a_traversal_segment_cannot_climb_back_out_of_the_root(tmp_path: Path, r
 
     trigger = {"data": {"token": "t", "project": "acme", "from_uri": f"{wh}/../globex-wh/medallion/bronze"}}
 
-    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger)) == _DROP
+    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))["status"] == _DROP_STATUS
     assert reads.opened == []
 
 
@@ -174,7 +176,7 @@ def test_a_from_uri_is_refused_when_the_stage_has_no_root_to_confine_it_to(tmp_p
 
     trigger = {"data": {"token": "t", "from_uri": str(tmp_path / "somebody-elses" / "bronze")}}
 
-    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger)) == _DROP
+    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))["status"] == _DROP_STATUS
     assert reads.opened == []
 
 
@@ -185,7 +187,7 @@ def test_a_non_string_from_uri_is_refused_rather_than_coerced(tmp_path: Path, re
 
     trigger = {"data": {"token": "t", "from_uri": {"bucket": "elsewhere"}}}
 
-    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger)) == _DROP
+    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))["status"] == _DROP_STATUS
     assert reads.opened == []
 
 
@@ -223,7 +225,7 @@ def test_a_token_outside_the_shape_is_dropped(tmp_path: Path, reads: _Reads, tok
     dapr = _FakeDapr()
     settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
-    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}})) == _DROP
+    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}}))["status"] == _DROP_STATUS
     assert reads.opened == [] and dapr.published == []
 
 
@@ -274,7 +276,7 @@ def test_an_unparseable_envelope_is_dropped_instead_of_transformed(tmp_path: Pat
     dapr = _FakeDapr()
     settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
-    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, event)) == _DROP
+    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, event))["status"] == _DROP_STATUS
     assert reads.opened == [] and dapr.published == []
 
 

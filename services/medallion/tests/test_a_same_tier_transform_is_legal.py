@@ -102,7 +102,7 @@ class TestTheMoverImposesNoTierLadder:
         # reason, so it HOLDs for a person ("a destination we cannot read is given a person's attention
         # rather than a silent promote", compute.py:272). What this test exists to prove is that a
         # same-tier lane is not refused FOR BEING SAME-TIER, and a drop would say so by name.
-        assert result != {"status": "DROP"}, f"a same-tier derivation was refused as another lane's: {result}"
+        assert result["status"] != "DROP", f"a same-tier derivation was refused as another lane's: {result}"
         assert "medallion_stage_other_lane" not in caplog.text
 
     def test_it_really_derived_a_second_dataset(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:

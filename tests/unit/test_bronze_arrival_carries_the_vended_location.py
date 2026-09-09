@@ -234,5 +234,5 @@ def test_a_vended_location_outside_the_read_root_is_still_refused(tmp_path: Path
     trigger = next(p["data"] for p in dapr.published if p["topic"] == head.bronze_topic)
 
     stage_runner = _stage_runner_settings(control, decoys)
-    assert asyncio.run(handle_stage(cast("DaprClient", dapr), stage_runner, {"data": trigger})) == {"status": "DROP"}
+    assert asyncio.run(handle_stage(cast("DaprClient", dapr), stage_runner, {"data": trigger}))["status"] == "DROP"
     assert not Path(wh / "medallion" / "silver").exists()

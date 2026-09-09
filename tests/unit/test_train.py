@@ -188,14 +188,14 @@ def test_consumer_denied_input_or_models_rung_drops(monkeypatch: pytest.MonkeyPa
     )
     _gate(monkeypatch, {"can_read_data:table:silver$features": False})
     result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
-    assert result == {"status": "DROP"} and submitted == []  # denied BEFORE any compute is spent
+    assert result["status"] == "DROP" and submitted == []  # denied BEFORE any compute is spent
 
     _gate(
         monkeypatch,
         {"can_read_data:table:silver$features": True, "can_create_table:namespace:models": False},
     )
     result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
-    assert result == {"status": "DROP"} and submitted == []
+    assert result["status"] == "DROP" and submitted == []
 
 
 def test_consumer_fga_outage_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +259,7 @@ def test_consumer_submits_and_acks_and_maps_outcomes(monkeypatch: pytest.MonkeyP
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT)) == {"status": "SUCCESS"}
     assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT)) == {"status": "SUCCESS"}  # re-attach
     # a terminally FAILED prior job is DROPPED — training is never auto-resubmitted (D2)
-    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT)) == {"status": "DROP"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT))["status"] == "DROP"
     assert calls == ["t1", "t1", "t1"]
 
     async def transport_error(*_a: Any, **_kw: Any) -> str:
@@ -279,11 +279,11 @@ def test_consumer_drops_unpinned_or_empty_features(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", never)
     unpinned = {"data": {"token": "t", "model": "m", "features": [{"dataset": "silver$features"}]}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), unpinned)) == {"status": "DROP"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), unpinned))["status"] == "DROP"
     junk = {"data": {"token": "t", "model": "m", "features": ["junk"]}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), junk)) == {"status": "DROP"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), junk))["status"] == "DROP"
     empty = {"data": {"token": "t", "model": "m", "features": []}}
-    assert asyncio.run(train.handle_train_trigger(_settings(), empty)) == {"status": "DROP"}
+    assert asyncio.run(train.handle_train_trigger(_settings(), empty))["status"] == "DROP"
 
 
 def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> None:

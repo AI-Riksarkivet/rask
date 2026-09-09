@@ -300,7 +300,7 @@ def test_project_trigger_with_routing_disabled_is_dropped_fail_closed(tmp_path: 
     dapr = _FakeDapr()
     settings = _stage_runner_settings(_HOPS[0], uris)  # control_root unset (the default)
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "acme"}}))
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert dapr.published == []  # no lineage emit, no next trigger
     assert not Path(uris["silver"]).exists()  # and the default root was never written
 
@@ -312,7 +312,7 @@ def test_project_trigger_with_no_active_warehouse_records_fail_and_drops(tmp_pat
     dapr = _FakeDapr()
     settings = _stage_runner_settings(_HOPS[0], uris, control_root=str(control))
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "ghost"}}))
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert not Path(uris["silver"]).exists()
     (fail,) = [p["data"] for p in dapr.published if p["topic"] == settings.lineage_topic]
     assert fail["eventType"] == "FAIL"  # the audit trail: the refused run is recorded, project-qualified
@@ -324,7 +324,7 @@ def test_unsafe_project_in_trigger_is_dropped_without_any_emit(tmp_path: Any) ->
     dapr = _FakeDapr()
     settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "../evil"}}))
-    assert status == {"status": "DROP"} and dapr.published == []
+    assert status["status"] == "DROP" and dapr.published == []
 
 
 def test_the_default_config_still_cascades_with_compute_off(tmp_path: Any) -> None:
@@ -381,7 +381,7 @@ def test_page_lane_arrival_does_not_fire_the_events_lane_stage_runner(tmp_path: 
 
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
 
-    assert status == {"status": "DROP"}
+    assert status["status"] == "DROP"
     assert dapr.published == [], f"the events-lane stage runner emitted on a page arrival: {dapr.published}"
     assert not (tmp_path / "silver").exists(), "the events-lane stage runner wrote silver from a page trigger"
 
