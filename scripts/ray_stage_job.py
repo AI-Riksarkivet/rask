@@ -484,7 +484,9 @@ def _dataset_exists(to_uri: str, so: dict[str, str]) -> bool:
     """
     try:
         lance.dataset(to_uri, storage_options=so)
-    except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "create"
+    # Absent, unreadable, or not a dataset: all three mean "create". (No `noqa` — `BLE001` is not
+    # enabled for `scripts/`, so the directive was dead and RUF100 said so.)
+    except Exception:
         return False
     return True
 

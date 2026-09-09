@@ -158,11 +158,9 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 "packages/service-kit/src/service_kit/obs.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/service-kit/src/service_kit/openlineage.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/service-kit/src/service_kit/dapr_publish.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/service-kit/src/service_kit/control_events.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/dapr_publish.py" = ["ANN401"]
 "runners/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"scripts/ray_stage_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"scripts/ray_stage_job.py" = ["ANN401"]
 "scripts/ray_train_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 # The other two baked Ray entrypoints. They inline the SAME trace-continuity helpers as the two above
 # — byte-identical and pinned by tests/unit/test_ray_trace_continuity.py — so they need the same
