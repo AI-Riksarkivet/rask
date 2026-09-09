@@ -175,18 +175,6 @@ _FLAG_NAMES = {
 _MANIFEST_READER_FLAGS_FIELD = 9
 _MANIFEST_WRITER_FLAGS_FIELD = 10
 
-#: ``base_paths`` — repeated ``BasePath``, and ``BasePath.path`` inside it. MEASURED, not read: the
-#: format doc gives the BasePath message (``id=1, name=2, is_dataset_root=3, path=4``) but never the
-#: manifest field number that carries it. Taken off a real shallow clone's manifest bytes —
-#: ``92 01`` decodes as varint 146 → field 18, wire 2 — with the source path following at field 4.
-_MANIFEST_BASE_PATHS_FIELD = 18
-_BASE_PATH_PATH_FIELD = 4
-#: ``BasePath.is_dataset_root`` — the bit that separates a shallow clone from an external blob base.
-#: MEASURED on pylance 10.0.0 off both manifests: a clone's submessage is
-#: ``18 01 22 1a <source path>`` (field 3 = 1, then the path), an ``initial_bases`` blob prefix's is
-#: ``08 01 12 03 <name> 22 19 <path>`` — id and name, and field 3 ABSENT, which proto3 means as false.
-_BASE_PATH_IS_DATASET_ROOT_FIELD = 3
-
 #: pylance's own refusal names the offending bits: "… Please upgrade Lance to read this dataset.
 #: Flags: 64, /home/runner/work/lance/…". Match on Lance's WORDING, never on "the open failed" —
 #: a missing directory must keep reading as an ordinary ``open:`` error, not as a feature refusal.
@@ -299,31 +287,6 @@ def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
     time — one source, so a pylance change cannot fix one reader and leave the other misreading.
     """
     return [ref.path for ref in manifest_base_path_refs(ds)]
-
-
-def _base_path_ref(message: bytes) -> BasePathRef:
-    """One ``BasePath`` submessage. Skips by wire type, so added fields cannot shift it."""
-    path, is_dataset_root = "", False
-    i, n = 0, len(message)
-    while i < n:
-        key, i = _varint(message, i)
-        field, wire = key >> 3, key & 7
-        if wire == 2:
-            length, i = _varint(message, i)
-            if field == _BASE_PATH_PATH_FIELD:
-                path = message[i : i + length].decode("utf-8", errors="replace")
-            i += length
-        elif wire == 0:
-            value, i = _varint(message, i)
-            if field == _BASE_PATH_IS_DATASET_ROOT_FIELD:
-                is_dataset_root = bool(value)
-        elif wire == 5:
-            i += 4
-        elif wire == 1:
-            i += 8
-        else:
-            break
-    return BasePathRef(path=path, is_dataset_root=is_dataset_root)
 
 
 def _varint(blob: bytes, i: int) -> tuple[int, int]:

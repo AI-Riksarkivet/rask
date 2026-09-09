@@ -14,9 +14,12 @@ fetched 2026-08-04):
 * `data/*.lance` files listed in no live manifest;
 * `_deletions/*` vectors no fragment references;
 * `_indices/<uuid>/` directories absent from every live manifest;
-* `_transactions/*.txn` files from failed or rolled-back commits — **these accumulate BY DESIGN**:
-  on a conflict "transaction files remain in storage describing each commit attempt", so a busy table
-  grows them forever and nothing prunes them;
+* `_transactions/*.txn` files from failed or rolled-back commits — a conflict leaves them behind
+  ("transaction files remain in storage describing each commit attempt"), so a busy table accrues
+  them. They are RECLAIMABLE, not permanent: measured on pylance 11.0.0, `cleanup_old_versions`
+  reports `transaction_files_removed: 6` on a six-version dataset and takes a planted unreferenced
+  8-day-old txn with it, because a file older than the unverified threshold is no longer held back.
+  What this scan adds is the window BEFORE that — and the datasets whose cleanup never runs;
 * manifests of versions that were deleted;
 * `_versions/latest_version_hint.json`, which the spec calls "purely an optimization" and "always
   safe to delete".
