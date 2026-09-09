@@ -1737,6 +1737,21 @@ So the feed a SERVICE sees is bounded by that service's own grants, and the two 
 silent: a 404 that means "not yours" and an empty list that means "nothing here". A reconciler walking
 this runs cleanly and reconciles nothing, which is indistinguishable from an estate with no work.
 
+**THE PROJECTION LANDED AND IS OBSERVED — `main-b7640f4d`, 2026-09-09.** `GET /events/projection`
+serves the durable feed WITHOUT the per-dataset filter, gated on `can_observe_events` at the root
+object — the rung `POST /v1/projects` and `POST /v1/stores` already use, so an estate privilege means
+one thing everywhere. Driven live as `service-ingest`:
+
+    GET /events?limit=5             -> 200  rows=5   (the governed feed, unchanged — additive)
+    GET /events/projection?limit=5  -> 403  can_observe_events required on warehouse:lance_catalog
+
+So the door is mounted, gated, and names its reason. **Nobody holds the rung by accident:** checked on
+the live store, `service-ingest` False, `notifications` False, `root_admin` True, the estate's OIDC
+owner True. **The positive path is therefore a DELIBERATE GRANT, which is the design rather than a
+gap** — a service that must reconcile the estate is given `can_observe_events` explicitly, and until
+someone does, the projection discloses nothing to anyone. `can_be_notified` remains the sole disclosure
+gate at delivery, so the reader's view and the recipient's view stay separate questions.
+
 **IN SCOPE ON ITS OWN MERITS, not because of its consumer.** `_governed_datasets`' own docstring names
 the blast radius — "every event naming one was hidden from EVERY caller — the lakehouse events board as
 much as the notifications reconciler" — so the defect harms the `lakehouse` zone's board too, and the
