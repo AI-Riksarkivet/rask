@@ -234,6 +234,28 @@ def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[s
                 # `path()` renders the on-disk name from (fragment id, read version, unique id); the
                 # naming is Lance's, so asking it beats reconstructing the convention here.
                 referenced.add(deletion.path(fragment.fragment_id))
+        # INDEX SEGMENTS. An index's files live in `_indices/<segment-uuid>/`, and no manifest walk
+        # names them: `data_files()` does not reach them and nothing here did either, so EVERY index
+        # in the estate was reported reclaimable. Measured 2026-09-09 on pylance 10.0.0 — a freshly
+        # built BTREE had both `page_data.lance` and `page_lookup.lance` named as orphans with
+        # `checked=True`, which is this module's own worst failure mode: live files certified garbage.
+        #
+        # `describe_indices()`, not `list_indices()`: the latter is deprecated on 10.0.0 (it warns),
+        # and the former is the more correct call anyway because it reports SEGMENTS — one index may
+        # hold several, each its own directory, so a uuid-per-index view under-covers a split index.
+        #
+        # Read per VERSION, like everything else here. `create_scalar_index(replace=True)` mints a new
+        # segment uuid and leaves the old directory in place; measured, v2 cites the old and v3 the
+        # new, so a referenced set built from the latest version alone reclaims the index that
+        # time-travel to v2 still reads through.
+        #
+        # A segment carrying a `base_id` resolves under ANOTHER dataset root — the multi-base layout
+        # `_unscannable_reason` refuses outright — so its directory is simply absent here and the
+        # entry matches nothing. It costs a set entry and keeps this loop free of a layout question
+        # that is already answered, once, by the gate.
+        for index in at.describe_indices():
+            for segment in index.segments:
+                referenced_dirs.add(f"{_INDICES_DIR}/{segment.uuid}")
     # THE TRANSACTION FILE OF EVERY LIVE COMMIT IS REFERENCED, and omitting it reported the whole
     # class as garbage. Nothing here ever added a `_transactions/*.txn` path, so a dataset with N live
     # versions had all N of its transaction files named as orphans — including the one that produced
@@ -417,18 +439,21 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         log.warning("orphan_listing_failed", extra={"dataset": dataset_uri, "error": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=f"listing failed: {exc}")
 
-    # Materialized ONCE, outside the loop. The sidecar test used to re-filter the whole referenced set
-    # for every listed file that was not an exact match — O(files x referenced) Python-level work per
+    # Every referenced DIRECTORY — a data file's blob sidecar, an index segment — matched by prefix
+    # rather than exactly, because what is referenced is the directory and its whole contents.
+    #
+    # Materialized ONCE, outside the loop. This test used to re-filter the whole referenced set for
+    # every listed file that was not an exact match — O(files x referenced) Python-level work per
     # dataset, on the same hot path as the probe batching above (the audit's HOUSE-RULE-16 addendum).
-    sidecar_dirs = tuple(d for d in referenced if d.endswith("/"))
+    referenced_dirs = tuple(d for d in referenced if d.endswith("/"))
     for info in entries:
         if info.type != pafs.FileType.File:
             continue
         rel = posixpath.relpath(info.path, prefix)
         if rel in referenced:
             continue
-        # ...or it sits under a referenced data file's blob-sidecar directory.
-        if rel.startswith(sidecar_dirs):
+        # ...or it sits under a referenced directory: a data file's blob sidecar, an index segment.
+        if rel.startswith(referenced_dirs):
             continue
         # Manifests and the hint are the VERSION INDEX itself, not payload: a manifest is what makes a
         # version live, so it can never be "unreferenced" while it is present, and the hint is

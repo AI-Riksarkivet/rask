@@ -39,6 +39,19 @@ def dataset(tmp_path: Path) -> str:
     return uri
 
 
+@pytest.fixture
+def indexed_dataset(tmp_path: Path) -> str:
+    """A table carrying a real scalar index, so `_indices/<uuid>/` holds LIVE files.
+
+    256 rows, not three: measured, a BTREE over a handful of rows still writes `page_data.lance` and
+    `page_lookup.lance`, but the size is what makes the fixture recognisably an index rather than an
+    artefact of a degenerate build.
+    """
+    uri = str(tmp_path / "indexed.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(256), pa.int64())}), uri).create_scalar_index("id", index_type="BTREE")
+    return uri
+
+
 #: Payload size that forces a blob column OUT of the data file and into a sidecar. Measured: at 40 KB
 #: the bytes inline into the `.lance` and no sidecar exists at all, so a smaller fixture would assert
 #: nothing while passing.
@@ -70,7 +83,7 @@ def _plant(uri: str, rel: str, body: bytes = b"x") -> None:
     path.write_bytes(body)
 
 
-class TestTheThreeThingsThatLookLikeGarbageAndAreNot:
+class TestTheLiveFilesThatLookLikeGarbage:
     def test_a_TAG_is_never_an_orphan(self, dataset: str) -> None:
         """The failure this module exists to avoid: the first live run reported every `publish-*`
         promotion tag in the estate. A tag PINS a version, so deleting one unpins published data."""
@@ -99,6 +112,29 @@ class TestTheThreeThingsThatLookLikeGarbageAndAreNot:
         """A manifest is what makes a version live; it cannot be unreferenced while it is present."""
         assert not [p for p in _scan(dataset) if p.startswith("_versions/")]
 
+    def test_a_LIVE_INDEX_is_never_an_orphan(self, indexed_dataset: str) -> None:
+        """Measured 2026-09-09 on pylance 10.0.0: a freshly built BTREE had BOTH of its files reported
+        as orphans, with `checked=True` — nothing ever added an index to the referenced set. Same shape
+        as the blob-sidecar bug above (a live file class no manifest walk names), on the class the
+        catalog is slowest to rebuild."""
+        live = {segment.uuid for index in lance.dataset(indexed_dataset).describe_indices() for segment in index.segments}
+        assert live, "the fixture built no index — the assertion below would hold vacuously"
+
+        orphans = _scan(indexed_dataset)
+
+        assert not [p for p in orphans if p.startswith(tuple(f"_indices/{uuid}/" for uuid in live))], f"live index files reported reclaimable: {orphans}"
+
+    def test_a_REPLACED_index_is_spared_while_the_version_that_cites_it_lives(self, indexed_dataset: str) -> None:
+        """`create_scalar_index(replace=True)` mints a NEW uuid and leaves the old directory in place.
+        Measured: v2 cites the old uuid, v3 the new, and both dirs are on disk — so a referenced set
+        built from the LATEST version alone reclaims an index that time-travel to v2 still needs. The
+        union across live versions is the same rule the module already applies to data files."""
+        old = lance.dataset(indexed_dataset).describe_indices()[0].segments[0].uuid
+        lance.dataset(indexed_dataset).create_scalar_index("id", index_type="BTREE", replace=True)
+        assert lance.dataset(indexed_dataset).describe_indices()[0].segments[0].uuid != old, "replace reused the uuid — the fixture proves nothing"
+
+        assert not [p for p in _scan(indexed_dataset) if p.startswith(f"_indices/{old}/")]
+
 
 class TestItStillFindsRealGarbage:
     def test_an_unreferenced_data_file_IS_reported(self, dataset: str) -> None:
@@ -107,6 +143,13 @@ class TestItStillFindsRealGarbage:
         _plant(dataset, "data/stray-0000.lance", b"not a real fragment")
 
         assert "data/stray-0000.lance" in _scan(dataset)
+
+    def test_an_index_directory_NO_live_version_cites_IS_reported(self, indexed_dataset: str) -> None:
+        """The fix must spare LIVE indices, not the `_indices/` prefix. A blanket skip would pass every
+        test above while making the one file class it was written for permanently invisible."""
+        _plant(indexed_dataset, "_indices/00000000-0000-0000-0000-000000000000/page_data.lance")
+
+        assert "_indices/00000000-0000-0000-0000-000000000000/page_data.lance" in _scan(indexed_dataset)
 
     def test_the_finding_is_classified_by_AREA(self, dataset: str) -> None:
         _plant(dataset, "data/stray-0000.lance")
