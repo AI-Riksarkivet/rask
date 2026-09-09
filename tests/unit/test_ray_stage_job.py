@@ -363,7 +363,7 @@ def test_the_distributed_destination_is_created_with_the_schema_the_transform_em
     upstream = lance.dataset(silver)
     assert upstream.schema.names == ["id", "payload", "stage", "source_rowid", "lineage"]
 
-    target = job._target_schema(upstream, "gold", doc)
+    target = job._target_schema(upstream, "gold", doc, "acme$gold")
     emitted = job._stamp_stage(upstream.to_table(), "gold", doc)
 
     assert emitted.schema.names == target.names, "the destination and the blocks are two constructions again"
@@ -785,3 +785,68 @@ def test_the_catalog_DOOR_accepts_a_declared_cardinality() -> None:
     body = TransformSpecRequest(name="frames", from_id="bronze$events", to_id="silver$frames", task="stage-transform", cardinality="1:N")
     assert body.cardinality == "1:N"
     assert "cardinality" in TransformSpecResponse.model_fields, "a declared cardinality must be readable back, or nobody can audit what governs a lane"
+
+
+def test_a_derived_TIER_declares_ITS_OWN_canonical_name_not_its_parents(tmp_path: Path) -> None:
+    """`lineage.dataset_id` is schema METADATA, so it survives every column operation the stamp performs.
+
+    The order has always carried `RASK_DEST_TABLE` and this job never read it, so each derived tier
+    inherited its UPSTREAM's canonical name — and `maintenance.core.lineage_emit.declared_table_id`
+    reads exactly that key to decide which dataset a maintenance run is filed against. Silver's
+    compactions, and silver's per-dataset FAIL events (the estate's only per-dataset maintenance
+    failure surface), were being written against bronze's node.
+
+    Driven through `_run_stage` rather than the stamp alone, because the defect was in the THREAD, not
+    in the stamp: every piece existed and nothing connected them.
+    """
+    import lance
+
+    from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY
+
+    bronze_uri = _bronze_tabular(tmp_path)
+    bronze = lance.dataset(bronze_uri)
+    lance.write_dataset(
+        bronze.to_table().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"}),
+        bronze_uri,
+        mode="overwrite",
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+    )
+    assert (lance.dataset(bronze_uri).schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$bronze"
+
+    silver_uri = str(tmp_path / "silver_declared")
+    job._run_stage(bronze_uri, silver_uri, "silver", {}, lineage='{"run_id": "r-silver"}', dataset_id="acme$silver")
+
+    declared = (lance.dataset(silver_uri).schema.metadata or {}).get(LINEAGE_DATASET_ID_KEY.encode())
+    assert declared == b"acme$silver", f"silver declares {declared!r}, so its maintenance provenance is filed against the wrong dataset"
+
+
+def test_an_UNWIRED_run_declares_NOTHING_rather_than_its_parents_name(tmp_path: Path) -> None:
+    """Absent is not blank and neither is inherited. A run with no destination name on the wire must
+    publish no name at all: `declared_table_id` then returns None and the sweep falls back to the URI
+    derivation, which is a weaker answer but a TRUE one — where an inherited name is a confident lie."""
+    import lance
+
+    from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY
+
+    bronze_uri = _bronze_tabular(tmp_path)
+    bronze = lance.dataset(bronze_uri)
+    lance.write_dataset(
+        bronze.to_table().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"}),
+        bronze_uri,
+        mode="overwrite",
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+    )
+
+    silver_uri = str(tmp_path / "silver_unwired")
+    job._run_stage(bronze_uri, silver_uri, "silver", {}, lineage='{"run_id": "r-silver"}')
+
+    assert LINEAGE_DATASET_ID_KEY.encode() not in (lance.dataset(silver_uri).schema.metadata or {})
+
+
+def test_the_job_READS_the_destination_name_the_order_already_puts_on_the_wire() -> None:
+    """`WorkOrder.to_env()` has always emitted `RASK_DEST_TABLE`; the gap was a reader, not a writer."""
+    import inspect
+
+    assert 'os.environ.get("RASK_DEST_TABLE"' in inspect.getsource(job.main), "the job ignores the destination name the order ships"

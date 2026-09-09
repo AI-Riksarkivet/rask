@@ -32,6 +32,11 @@ from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
 from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
 from service_kit.lakehouse import blobs, schema
 
+# ONE implementation, shared with the Ray driver — the same reason the stage stamp itself lives
+# there. A second copy is how the two drivers came to disagree about `stage`'s column position,
+# and this key decides a more expensive question: which dataset a maintenance run is filed against.
+from service_kit.lakehouse.stage_stamp import declare_dataset_id
+
 
 _STAGE_COLUMN = "stage"
 #: The consume-layer provenance column (R26, executing R25b): a ``pa.json_()`` (JSONB) cell per row
@@ -192,20 +197,6 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
 #: Read by `maintenance.core.lineage_emit.declared_table_id`. Without it the sweep emits no maintenance
 #: provenance for these datasets AND no per-dataset FAIL event — which is the estate's only per-dataset
 #: maintenance failure surface.
-LINEAGE_DATASET_ID_KEY = "lineage.dataset_id"
-
-
-def _with_declared_id(table: pa.Table, dataset_id: str | None) -> pa.Table:
-    """Stamp the canonical name onto the table's schema metadata, preserving what is already there.
-
-    MERGES rather than replaces: Lance keeps other producers' schema metadata (the #21 self-describing
-    coordinates among them), and a replace would silently destroy it.
-    """
-    if not dataset_id:
-        return table
-    existing = dict(table.schema.metadata or {})
-    existing[LINEAGE_DATASET_ID_KEY.encode()] = dataset_id.encode()
-    return table.replace_schema_metadata(existing)
 
 
 def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dataset_id: str | None = None) -> WriteResult:
@@ -245,10 +236,10 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
         # dropping id=3 deletes it while id=1 keeps `_rowid` 0. Same semantics, surviving identity.
         lance.dataset(uri, storage_options=storage_options).merge_insert(
             "id"
-        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(_with_declared_id(table, dataset_id))
+        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(table, dataset_id))
     else:
         lance.write_dataset(
-            _with_declared_id(table, dataset_id),
+            declare_dataset_id(table, dataset_id),
             uri,
             mode="create",
             storage_options=storage_options,
@@ -382,10 +373,10 @@ def transform_stage(
     if _dataset_exists(to_uri, storage_options):
         lance.dataset(to_uri, storage_options=storage_options).merge_insert(
             "id"
-        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(_with_declared_id(out, dataset_id))
+        ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
     else:
         lance.write_dataset(
-            _with_declared_id(out, dataset_id),
+            declare_dataset_id(out, dataset_id),
             to_uri,
             mode="create",
             storage_options=storage_options,

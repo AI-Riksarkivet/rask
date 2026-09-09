@@ -32,7 +32,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, SOURCE_ROWID_COLUMN, stamp_stage
+from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, LINEAGE_DATASET_ID_KEY, SOURCE_ROWID_COLUMN, stamp_stage
 
 
 def _rows(**extra: object) -> pa.Table:
@@ -128,6 +128,59 @@ class TestTheLineageColumn:
         out = stamp_stage(table, stage="gold", lineage="")
 
         assert LINEAGE_COLUMN not in out.column_names
+
+
+class TestTheDeclaredIdNamesTHISTier:
+    """`lineage.dataset_id` is schema METADATA, and metadata survives every column operation.
+
+    `set_column` / `append_column` / `drop_columns` all preserve it, so a stamp that says nothing about
+    it hands the child its PARENT's canonical name — silently, and on both drivers. The rule is the one
+    this module already applies to the `lineage` document one line up: the parent's identity describes
+    the parent, so leaving it on a child is a false claim, and the honest default is to drop it.
+
+    It is not cosmetic. `maintenance.core.lineage_emit.declared_table_id` reads exactly this key to
+    name the dataset a maintenance run is about, so an inherited one files silver's compactions — and
+    silver's per-dataset FAIL events, the estate's only per-dataset maintenance failure surface —
+    against bronze's node.
+    """
+
+    def test_the_stamp_declares_the_destination_it_was_given(self) -> None:
+        out = stamp_stage(_rows(), stage="silver", dataset_id="acme$silver")
+
+        assert (out.schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
+
+    def test_no_declared_id_drops_an_inherited_one(self) -> None:
+        """The half that was missing: an unwired driver must not publish its parent's name."""
+        bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
+
+        out = stamp_stage(bronze, stage="silver")
+
+        assert LINEAGE_DATASET_ID_KEY.encode() not in (out.schema.metadata or {})
+
+    def test_a_declared_id_REPLACES_an_inherited_one(self) -> None:
+        bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
+
+        out = stamp_stage(bronze, stage="silver", dataset_id="acme$silver")
+
+        assert (out.schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
+
+    def test_other_producers_metadata_survives(self) -> None:
+        """Lance keeps other producers' schema metadata (the #21 self-describing coordinates among
+        them); a replace would silently destroy it, so this merges."""
+        bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze", "lance.coords": "kept"})
+
+        out = stamp_stage(bronze, stage="silver", dataset_id="acme$silver")
+
+        assert (out.schema.metadata or {})[b"lance.coords"] == b"kept"
+
+    def test_the_empty_schema_a_distributed_lane_creates_its_destination_with_agrees(self) -> None:
+        """The distributed lane derives its destination schema from a zero-row slice of the upstream
+        (`ray_stage_job._target_schema`), so the metadata rule has to hold with no rows to stamp."""
+        bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
+
+        target = stamp_stage(bronze.schema.empty_table(), stage="silver", dataset_id="acme$silver").schema
+
+        assert (target.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
 
 
 class TestBothDriversUseIt:

@@ -477,27 +477,30 @@ def test_the_PRODUCER_stamp_and_the_SWEEP_read_agree(tmp_path: Any) -> None:
     import pyarrow as pa
 
     from maintenance.core.lineage_emit import declared_table_id
-    from medallion.services.compute import LINEAGE_DATASET_ID_KEY, _with_declared_id
+    from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
-    stamped = _with_declared_id(pa.table({"v": [1, 2, 3]}), "silver$features")
+    stamped = declare_dataset_id(pa.table({"v": [1, 2, 3]}), "silver$features")
     uri = str(tmp_path / "medallion-silver.lance")
     lance.write_dataset(stamped, uri)
 
     assert declared_table_id(lance.dataset(uri)) == "silver$features", "the sweep must read what the producer stamped"
-    # The two modules must name the SAME key — they are in different services and cannot share a constant.
+    # ONE constant, not two that agree. Both services depend on service-kit, so the key is defined
+    # beside the stamp that writes it and imported by the reader — an identity assertion here would
+    # now be tautological, while the import itself is what makes disagreement unrepresentable.
     from maintenance.core.lineage_emit import LINEAGE_DATASET_ID_KEY as READER_KEY
+    from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY as STAMP_KEY
 
-    assert LINEAGE_DATASET_ID_KEY == READER_KEY, "producer and reader disagree about the metadata key"
+    assert READER_KEY is STAMP_KEY, "the sweep must read the key the stamp module defines, not a copy"
 
 
 def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     """A replace would destroy the #21 self-describing coordinates other producers write. Merge only."""
     import pyarrow as pa
 
-    from medallion.services.compute import _with_declared_id
+    from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
     table = pa.table({"v": [1]}).replace_schema_metadata({"lineage.run_id": "r-1", "owner": "data_eng"})
-    out = _with_declared_id(table, "gold$catalog")
+    out = declare_dataset_id(table, "gold$catalog")
 
     metadata = {k.decode(): v.decode() for k, v in (out.schema.metadata or {}).items()}
     assert metadata["lineage.dataset_id"] == "gold$catalog"
@@ -522,10 +525,10 @@ def test_the_DECLARED_name_is_what_the_sweep_EMITS_under(tmp_path: Any) -> None:
     import pyarrow as pa
 
     from maintenance.services.optimize import compact_one
-    from medallion.services.compute import _with_declared_id
+    from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
     uri = str(tmp_path / "medallion-gold.lance")
-    lance.write_dataset(_with_declared_id(pa.table({"v": [1, 2, 3]}), "gold$catalog"), uri)
+    lance.write_dataset(declare_dataset_id(pa.table({"v": [1, 2, 3]}), "gold$catalog"), uri)
 
     result = compact_one(uri, {}, timedelta(days=7))
 

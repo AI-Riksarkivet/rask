@@ -38,6 +38,11 @@ from typing import Any, Protocol, runtime_checkable
 from dapr.aio.clients import DaprClient
 
 from service_kit.lakehouse import outbox
+
+# The key the medallion's stage stamp WRITES. Imported rather than restated: a reader and a writer
+# that each spell a metadata key for themselves agree only by luck, and this one decides whether a
+# dataset has a per-dataset maintenance-failure surface at all.
+from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY
 from service_kit.lakehouse.table_locations import table_id_from_location
 from service_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
@@ -128,25 +133,6 @@ def build_maintenance_fail_event(
     event["eventType"] = "FAIL"
     event["run"]["facets"]["errorMessage"] = error_facet
     return event
-
-
-#: Schema-metadata key a PRODUCER may stamp to declare its dataset's canonical lineage name.
-#:
-#: The derivation below cannot name the medallion cascade's own datasets, and that is not a parsing
-#: shortfall — the mapping does not exist. The chart composes those URIs from the namespace alone
-#: (`.../medallion/<fromNamespace>`) while the canonical id is a separate literal (`bronze$events`,
-#: `gold$htr`), so `medallion/bronze` is BOTH `bronze$events` and `bronze$pages`. No cleverer split can
-#: recover a name the path never carried.
-#:
-#: The name must equal the OpenFGA object id: delivery re-checks `can_get_metadata` against
-#: `table:<output name>`, so a wrong name counts every recipient HIDDEN — worse than emitting nothing.
-#: Hence a DECLARED key rather than a guess.
-#:
-#: Reading it here is deliberately landed ahead of any producer writing it: the read is inert until a
-#: dataset carries the key, and it makes the producer side a one-line stamp rather than a coordinated
-#: change. Datasets already on disk carry no key and keep the URI derivation — the backfill gap is real
-#: and is why this is additive rather than a replacement.
-LINEAGE_DATASET_ID_KEY = "lineage.dataset_id"
 
 
 def declared_table_id(dataset: Any) -> str | None:  # noqa: ANN401 — LanceDataset, no protocol

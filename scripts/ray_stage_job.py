@@ -114,7 +114,7 @@ def _reset_if_legacy(to_uri: str, so: dict[str, str]) -> None:
         _reset_dataset(to_uri, so)
 
 
-def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
+def _stamp_stage(table: pa.Table, stage: str, lineage: str = "", dataset_id: str = "") -> pa.Table:
     """The per-stage provenance stamp — delegated to the ONE implementation both drivers share.
 
     This was a hand-maintained mirror of the medallion's copy and it had already drifted: on a
@@ -128,10 +128,10 @@ def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
     """
     from service_kit.lakehouse.stage_stamp import stamp_stage
 
-    return stamp_stage(table, stage=stage, lineage=lineage)
+    return stamp_stage(table, stage=stage, lineage=lineage, dataset_id=dataset_id)
 
 
-def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str) -> pa.Schema:
+def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str, dataset_id: str) -> pa.Schema:
     """The schema the distributed lane must create its destination with: the transform's OWN output.
 
     Derived by running the real stamp over a zero-row slice of the real upstream — not rebuilt from a
@@ -147,7 +147,7 @@ def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str) -> pa
     Two constructions of one schema can only ever agree by luck, which is the class `stage_stamp`'s
     own module docstring records for the two drivers. One function answers for both sides here.
     """
-    return _stamp_stage(upstream.schema.empty_table(), stage, lineage).schema
+    return _stamp_stage(upstream.schema.empty_table(), stage, lineage, dataset_id).schema
 
 
 #: How many rows the media lane holds in the driver at once.
@@ -193,7 +193,7 @@ def _derivable_blob_column(ds: Any, blob_cols: list[str]) -> str | None:
     return None
 
 
-def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str, lineage: str = "") -> None:
+def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str, lineage: str = "", dataset_id: str = "") -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
     Same contract as compute.transform_stage + derivers.derive_artifacts: re-materialise each blob column
@@ -229,7 +229,7 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
 
     written = 0
     for batch in scanner.to_batches():
-        out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage)
+        out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage, dataset_id=dataset_id)
         # STILL OVERWRITE-THEN-APPEND, and deliberately so for now. `enable_stable_row_ids` is
         # create-time-only, so the first batch creates the target and later batches append into it.
         # The tabular head became a full-sync merge 2026-09-06 because overwrite re-mints every `_rowid`
@@ -252,12 +252,17 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
         # An empty source still has to produce the target — an absent dataset is not the same answer
         # as an empty one, and the tier's readers open it either way.
         empty = _media_batch(
-            ds.scanner(columns=carried, blob_handling="all_binary", with_row_id=True, limit=0).to_table(), blob_cols, derive_from, stage=stage, lineage=lineage
+            ds.scanner(columns=carried, blob_handling="all_binary", with_row_id=True, limit=0).to_table(),
+            blob_cols,
+            derive_from,
+            stage=stage,
+            lineage=lineage,
+            dataset_id=dataset_id,
         )
         lance.write_dataset(empty, to_uri, mode="overwrite", storage_options=so, data_storage_version="2.2", enable_stable_row_ids=True)
 
 
-def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | None, *, stage: str, lineage: str) -> pa.Table:
+def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | None, *, stage: str, lineage: str, dataset_id: str = "") -> pa.Table:
     """One slice: re-wrap its blobs, stamp its provenance, derive its artifacts.
 
     Every batch takes the same branches and therefore produces the same schema, which is what lets
@@ -280,7 +285,7 @@ def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | Non
             # head and drops it (it is Lance's reserved metacolumn and is never persisted).
             fields.append(aligned.schema.field(name))
             columns[name] = aligned.column(name)
-    out = _stamp_stage(pa.table(columns, schema=pa.schema(fields)), stage, lineage)
+    out = _stamp_stage(pa.table(columns, schema=pa.schema(fields)), stage, lineage, dataset_id)
 
     # Row-wise, image payloads only — a payload past the header probe that fails full decode raises,
     # FAILing the run; a NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
@@ -405,11 +410,17 @@ def main() -> None:
     base_version = int(raw_base) if raw_base else None
     # The lane's declared row cardinality. Absent means 1:1, which is what every default stage runner is.
     cardinality = os.environ.get("RASK_CARDINALITY", "").strip() or ONE_TO_ONE
+    # THE DESTINATION'S canonical catalog name, stamped onto the schema this run writes. The order has
+    # always carried it and this job never read it, so every derived tier inherited its UPSTREAM's name
+    # through schema metadata — silver's compactions and silver's per-dataset FAIL events filed against
+    # bronze's node. Absent means unwired, and the stamp then DROPS the inherited one rather than
+    # publishing a name that describes another dataset.
+    dataset_id = os.environ.get("RASK_DEST_TABLE", "").strip()
 
     # Continue the submitting stage runner's trace (P3): the whole stage transform runs as one child span of
     # the stage runner's medallion.transform span; without a handed-over context it runs exactly as before.
     with _traced_root("ray.stage_job", {"lance.medallion.stage": stage}):
-        _run_stage(from_uri, to_uri, stage, so, lineage=lineage, base_version=base_version, cardinality=cardinality)
+        _run_stage(from_uri, to_uri, stage, so, lineage=lineage, base_version=base_version, cardinality=cardinality, dataset_id=dataset_id)
 
 
 def _assert_stage_contract(*, rows_in: int, rows_out: int, cardinality: str, parentless: int) -> None:
@@ -498,6 +509,7 @@ def _run_stage(
     lineage: str = "",
     base_version: int | None = None,
     cardinality: str = ONE_TO_ONE,
+    dataset_id: str = "",
 ) -> None:
     upstream = lance.dataset(from_uri, storage_options=so)
     # THE DELTA BOUNDARY (D1). `submit_stage_job` has always exported BASE_VERSION and this job never
@@ -515,7 +527,7 @@ def _run_stage(
 
     if blob_field_names(upstream.schema):
         # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
-        _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage)
+        _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage, dataset_id=dataset_id)
     elif delta is not None:
         # BACKFILL LANE. The delta is by construction small, so it is stamped and merged on the driver
         # — the same argument the cascade head below already makes for handling the bronze root
@@ -529,7 +541,7 @@ def _run_stage(
             # nobody added.
             print(f"RAY-STAGE OK stage={stage} lane=delta rows=0 delta_empty=1 base_version={base_version}")
             return
-        produced = _stamp_stage(source, stage, lineage)
+        produced = _stamp_stage(source, stage, lineage, dataset_id)
         rows_out = produced.num_rows
         _merge_into(to_uri, produced, so)
     elif "source_rowid" not in upstream.schema.names:
@@ -547,7 +559,7 @@ def _run_stage(
         # production cascade head and this audit could not run Ray (worker startup fails in the dev
         # sandbox), so it is recorded as a follow-up to prove on kind, not flipped on a signature read.
         _reset_if_legacy(to_uri, so)
-        stamped = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage)
+        stamped = _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage, dataset_id)
         # A FULL-SYNC MERGE, NOT AN OVERWRITE — the same change the in-process head took 2026-09-06.
         # Overwrite re-mints every `_rowid`, and the tier above resolves its `source_rowid` against
         # exactly those, so a re-derivation silently detached the whole chain (measured live: 8 of 8
@@ -569,7 +581,7 @@ def _run_stage(
     else:
         # The destination is created with the schema the transform EMITS (see _target_schema): every
         # block lance_ray appends is cast to it positionally, so the two must be one construction.
-        out_schema = _target_schema(upstream, stage, lineage)
+        out_schema = _target_schema(upstream, stage, lineage, dataset_id)
 
         import lance_ray as lr  #   # Ray-image only; lazy (see module top)
 
@@ -578,7 +590,9 @@ def _run_stage(
         # inherit it). concurrency>1 → fragments written in parallel + one commit. source_rowid is already a
         # plain column in `base`, so it flows through map_batches + write as ordinary data (no distributed
         # _rowid needed) — only the head, handled natively above, has to mint it.
-        transformed = lr.read_lance(from_uri, storage_options=so).map_batches(lambda table: _stamp_stage(table, stage, lineage), batch_format="pyarrow")
+        transformed = lr.read_lance(from_uri, storage_options=so).map_batches(
+            lambda table: _stamp_stage(table, stage, lineage, dataset_id), batch_format="pyarrow"
+        )
         _reset_if_legacy(to_uri, so)
         lance.write_dataset(
             out_schema.empty_table(),

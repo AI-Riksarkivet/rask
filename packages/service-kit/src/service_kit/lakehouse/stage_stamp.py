@@ -41,6 +41,12 @@ SOURCE_ROWID_COLUMN: Final = "source_rowid"
 #: readable without it.
 LINEAGE_COLUMN: Final = "lineage"
 
+#: The canonical catalog name of the dataset a row was written INTO — schema metadata rather than a
+#: column, because it describes the dataset and not the row. Read by
+#: `maintenance.core.lineage_emit.declared_table_id` to name the dataset a maintenance run is about,
+#: and asserted present by `attestation` O12.
+LINEAGE_DATASET_ID_KEY: Final = "lineage.dataset_id"
+
 #: Lance's reserved row-identity metacolumn. Read from, never written: the name is reserved and the
 #: value advances on the next overwrite, so persisting it records an id that will not be true.
 _ROWID: Final = "_rowid"
@@ -94,28 +100,56 @@ def _set_or_append(table: pa.Table, field: pa.Field, values: pa.Array) -> pa.Tab
     return table.append_column(field, values)
 
 
-def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "") -> pa.Table:
+def declare_dataset_id(table: pa.Table, dataset_id: str | None) -> pa.Table:
+    """Set the destination's canonical name on the schema, or DROP an inherited one when unwired.
+
+    Schema metadata survives every column operation `set_column`/`append_column`/`drop_columns`
+    performs, so without this a child tier publishes its PARENT's name — the same false claim the
+    `lineage` document rule below refuses, one level up. Merges the rest: Lance keeps other producers'
+    schema metadata (the #21 self-describing coordinates among them) and a replace would destroy it.
+    """
+    metadata = dict(table.schema.metadata or {})
+    key = LINEAGE_DATASET_ID_KEY.encode()
+    if dataset_id:
+        metadata[key] = dataset_id.encode()
+    elif key not in metadata:
+        return table
+    else:
+        del metadata[key]
+    return table.replace_schema_metadata(metadata)
+
+
+def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "", dataset_id: str = "") -> pa.Table:
     """Stamp this stage's provenance onto `table` and return the result.
 
-    Threads root provenance (`source_rowid`), (re)stamps `stage`, and re-stamps the consume-layer
-    `lineage` document. An EMPTY `lineage` drops any inherited one rather than carrying it forward:
-    the parent's document describes the parent's run, so leaving it on a child's row is a false claim.
+    Threads root provenance (`source_rowid`), (re)stamps `stage`, re-stamps the consume-layer
+    `lineage` document, and re-declares the destination's canonical name.
+
+    THE INHERITANCE RULE IS THE SAME FOR ALL THREE, and it is the reason they are one function: an
+    absent value DROPS what the upstream carried rather than passing it on. The parent's document
+    describes the parent's run and the parent's id names the parent's dataset, so leaving either on a
+    child is a claim about the wrong object — and the child's readers cannot tell an inherited value
+    from a declared one.
     """
     out = carry_source_rowid(table)
     out = _set_or_append(out, pa.field(STAGE_COLUMN, pa.string()), pa.array([stage] * out.num_rows, pa.string()))
-    if not lineage:
-        return out.drop_columns([LINEAGE_COLUMN]) if LINEAGE_COLUMN in out.column_names else out
-    document = pa.array([lineage] * out.num_rows, pa.string())
-    return _set_or_append(out, pa.field(LINEAGE_COLUMN, pa.json_()), document.cast(pa.json_()))
+    if lineage:
+        document = pa.array([lineage] * out.num_rows, pa.string())
+        out = _set_or_append(out, pa.field(LINEAGE_COLUMN, pa.json_()), document.cast(pa.json_()))
+    elif LINEAGE_COLUMN in out.column_names:
+        out = out.drop_columns([LINEAGE_COLUMN])
+    return declare_dataset_id(out, dataset_id)
 
 
 __all__ = [
     "CARDINALITIES",
     "LINEAGE_COLUMN",
+    "LINEAGE_DATASET_ID_KEY",
     "ONE_TO_MANY",
     "ONE_TO_ONE",
     "SOURCE_ROWID_COLUMN",
     "STAGE_COLUMN",
     "carry_source_rowid",
+    "declare_dataset_id",
     "stamp_stage",
 ]

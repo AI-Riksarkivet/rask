@@ -53,7 +53,7 @@ import pyarrow as pa
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse.quality import tier_contract_violations
-from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, stamp_stage
+from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, LINEAGE_DATASET_ID_KEY, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, stamp_stage
 
 
 log = logging.getLogger(__name__)
@@ -62,10 +62,6 @@ log = logging.getLogger(__name__)
 #: because the tier schema is a MEDALLION artefact and this package must not learn one.
 ID_COLUMN: Final = "id"
 
-#: The schema-metadata key a producer stamps with the table's canonical catalog name. The maintenance
-#: sweep reads it back to emit a dataset's provenance, so a tier written without it loses its
-#: per-dataset FAIL surface — silently, which is why it is an obligation rather than a nicety.
-LINEAGE_DATASET_ID_KEY: Final = "lineage.dataset_id"
 
 #: The storage version a governed tier must be written at. Below it, a blob column written by a newer
 #: writer cannot be read row-aligned at all.
