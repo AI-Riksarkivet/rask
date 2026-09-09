@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-09, from the rows below rather than asserted: 247 tracked, 132 open, 115 struck.**
+**Counted 2026-09-09, from the rows below rather than asserted: 247 tracked, 131 open, 116 struck.**
 That splits into 68 lettered rows (52 open) and 101 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1773,9 +1773,43 @@ word — the producer here is the notifications feed's own writer, not a lakehou
 **Where.** `feed.py:61-80`, `inbox_actor.py:299-343`. **Closes it.** Service-side `received_at`; cap
 inside `deliver`.
 
-### G4 · Control lane trusted end-to-end with no catch-up path
-**Where.** `control_events.py:125-139`, `dlq.py:9-16`. **Closes it.** Reconcile from the catalog's
-durable audit trail; verify `object_id` against `object_type` and the actor app-id.
+### ~~G4 · Control lane trusted end-to-end with no catch-up path~~
+
+**STRUCK 2026-09-09: the catch-up path is four stages long and every one of them is live.**
+
+The row proposed reconciling the control lane from the catalog's durable AUDIT trail — a third
+mechanism — and a Lakekeeper comparison agreed, calling it *"the highest-leverage abstraction change"*
+on the grounds that the cascade's silver→gold trigger rides a lane whose only feed is
+`GET /v1/events`' per-replica ring buffer. **Both are refuted by reading the deployed chain rather
+than the read API.** `GET /v1/events` is a UI refresh hint and says so in its own docstring; it was
+never the cascade's path. What actually carries `table_published` was measured end to end on the
+running estate:
+
+1. **Producer loss** — `LANCE_CONTROL_OUTBOX_URI` = `s3://lance-catalog/_control_outbox` in the
+   running catalog, drained by `catalog-control-relay-cron`, a Component live in the cluster. The
+   seam's own comment states the stake: *"`table_published` is the ONLY thing that wakes
+   silver->gold, so a NATS blip ends the cascade with every pod green."*
+2. **Consumer or broker downtime** — the subscription is a DURABLE JetStream consumer:
+   `catalog-control-pubsub-medallion-producer` carries `durableName:
+   medallion-producer-control-durable`, `deliverPolicy: new`, `ackWait: 720s`, `maxDeliver: 3`. An
+   event published while the producer is down is retained and delivered on recovery, which is
+   strictly stronger than a consumer polling a feed from a stored cursor.
+3. **Transient failure** — the component is named in the pub/sub Resiliency CR's
+   `targets.components`, so the sidecar retries before anything is parked.
+4. **Poison** — `dlq_topic` = `dlq.medallion-producer` in the running pod, `/dlq-event` parks and
+   ERROR-logs rather than requeueing, `record_dead_letter` counts it, and `chart/alerting/rules.yml:95`
+   pages on `medallion_dlq_parked_total` with the text *"a dataset has silently stopped updating"* and
+   a runbook link.
+
+**What the lane genuinely lacks is a cursor-addressable READ api, which the cascade does not use.**
+Lineage has one because a RECONCILER walks it to find events the bus provably never carried (ingest,
+Ray TRAIN and external OpenLineage producers emit over HTTP only) — a different problem, and the
+reason the two lanes differ is that difference rather than an oversight. Building the durable feed
+this row asked for would have duplicated JetStream's retention behind an HTTP door.
+
+The residue the row was right about is `object_id`/`object_type`/actor verification, which is
+untouched by any of the above and is where the effort belongs — tracked in § Q17-37's neighbourhood
+rather than here, since it is a grant-door validation question and not a delivery one.
 
 ### G5 · Bare 500s and a blocking sidecar wait per call
 **Where.** `proxies.py:98-119`. **Closes it.** Map transport errors to 503 problem bodies; one proxy
