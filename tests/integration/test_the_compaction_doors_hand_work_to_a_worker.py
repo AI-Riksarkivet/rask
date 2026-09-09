@@ -144,16 +144,33 @@ def test_neither_door_silently_compacts_MAIN_when_a_BRANCH_is_named(real_ns_clie
     assert lance.dataset(location).version == before
 
 
-def test_both_doors_land_on_the_writer_rung() -> None:
-    """The authorize gate reaches ``can_write_data`` for these suffixes by falling through the table
-    default, and that is the correct rung rather than an accident of naming.
+def test_both_doors_land_on_the_maintainer_rung() -> None:
+    """These two doors are gated on ``can_maintain``, explicitly rather than by falling through.
 
-    A compaction preserves every row — Lance commits it as a `Rewrite` — so it is strictly less
-    powerful than the `delete` a writer already holds, and gating it higher would mean maintenance
-    could only run as an owner. The dangerous direction is the other one: a suffix that happened to
-    match the reader vocabulary would publish a version-minting door at the reader rung.
+    A door only a maintainer calls asks for the maintainer rung outright. Unlike ``credentials`` — a
+    data read for every other caller, which is why that one keeps ``can_read_data`` as its primary —
+    ``compaction_plan``/``compaction_commit`` have no audience but maintenance, and the sweep reaches
+    them as ``maintainer from parent`` rather than as a data writer. Measured on the deployed estate
+    2026-09-09: with the fall-through the distributed lane was refused 1 818 times and every dataset
+    was compacted in-pod (4 274/4 274, the memory ceiling the feature exists to remove); with the
+    explicit mapping, 728 units ran ``distributed`` and denials fell to 0.
+
+    The dangerous direction is unchanged and still guarded below: a suffix that happened to match the
+    reader vocabulary would publish a version-minting door at the reader rung.
     """
     from catalog.api.fga_deps import _action_relation
 
-    assert _action_relation("table", "compaction_plan") == "can_write_data"
-    assert _action_relation("table", "compaction_commit") == "can_write_data"
+    assert _action_relation("table", "compaction_plan") == "can_maintain"
+    assert _action_relation("table", "compaction_commit") == "can_maintain"
+
+
+def test_an_unmapped_table_suffix_never_falls_below_the_writer_rung() -> None:
+    """The fall-through is the writer rung, so a door nobody mapped is over-gated, never under-gated.
+
+    This is the half of the rung question that a per-suffix assertion cannot cover: the mapping above
+    is explicit, but every suffix added later inherits this default, and only a reader-tier default
+    would be a disclosure.
+    """
+    from catalog.api.fga_deps import _action_relation
+
+    assert _action_relation("table", "a_suffix_nobody_has_written_yet") == "can_write_data"
