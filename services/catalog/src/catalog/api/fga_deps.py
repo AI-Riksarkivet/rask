@@ -558,11 +558,11 @@ def require_fga(settings: Settings, client: OpenFgaClient | None, *, feature: st
     """The estate gate every FGA-BACKED door opens with, and the client it needs, in one call.
 
     Two refusals, and the distinction is deliberate: with FGA OFF the deployment genuinely does not
-    implement the feature (501 ``UnsupportedOperation`` — there are no tuples to review, simulate or
+    implement the feature (406 ``UnsupportedOperation`` — there are no tuples to review, simulate or
     grant), while ENABLED-but-unwired is a fault the caller should retry against (503, fail-closed —
     never a silent allow, never an empty grant list that reads as "nobody has access").
 
-    ``feature`` names what is unavailable, so the 501 still says which door refused.
+    ``feature`` names what is unavailable, so the 406 still says which door refused.
 
     Doors that answer an FGA-off stack with DATA rather than a refusal (``_read_managed_access``
     reports ``managed_access=False``; ``list_members`` reports an empty list) do not use this — for

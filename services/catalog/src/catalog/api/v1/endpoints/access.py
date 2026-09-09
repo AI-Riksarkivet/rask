@@ -169,7 +169,7 @@ async def _access_check(
     mistake — rather than an OpenFGA 400 that fails closed to a 503 for the caller."""
     client = fga_deps.require_fga(settings, client, feature="access simulation")
     if body.relation not in _can_relations(fga_type):
-        # The CLIENT's error (400), never UnsupportedOperation (501): the deployment supports the check
+        # The CLIENT's error (400), never UnsupportedOperation (406): the deployment supports the check
         # fine, the body names a relation the model does not define — access_admin.py's parity.
         raise InvalidInputError(f"{body.relation!r} is not a can_* relation on {fga_type}")
     segments = parse_identifier(id, settings.delimiter)
@@ -338,7 +338,7 @@ async def _access_mutate(
     client = fga_deps.require_fga(settings, client, feature="access mutation")
     grantable = _grantable_relations(fga_type)
     if body.relation not in grantable:
-        # 400, not 501 — same rule as the check door above: a bad rung NAME is client input, and the
+        # 400, not 406 — same rule as the check door above: a bad rung NAME is client input, and the
         # sibling estate-admin surface already answers this class of mistake with InvalidInput.
         raise InvalidInputError(f"{body.relation!r} is not a grantable rung on {fga_type} (one of {', '.join(grantable)})")
     segments = parse_identifier(id, settings.delimiter)

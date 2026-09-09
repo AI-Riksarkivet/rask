@@ -88,7 +88,7 @@ yet stored as graph nodes/edges. Also tracked: the governed-union live evidence 
 and wants a re-run (`make e2e-governed-union`, subsumed once e2e is in CI).
 
 **Rationale.** These are known, bounded lifecycle-emit gaps recorded so they read as deliberate residuals
-rather than unproven claims. Rename on the `dir` backend is 501 (emits nothing) — moot, not a gap.
+rather than unproven claims. Rename on the `dir` backend is a hard refusal that emits nothing — moot, not a gap. (rask does not serve it that way: `dataplane.rename_table` moves the POINTER in-process and answers 200.)
 
 ## §9 — feature gaps (the open backlog)
 
@@ -287,7 +287,7 @@ decision rather than drift (originally the retired `FEATURE-GAP.md` §1 table; #
 | # | Deviation | Spec says | Status |
 |---|-----------|-----------|--------|
 | 1 | ~~Path/body `id` mismatch silently overrides~~ | 400 when both present **and differ** | ✅ fixed (#43) — every body-carrying `{id}` route reconciles via `core/identifiers.reconcile_body_id`; a differing body id is a 400 (the path id is what the authz gate checked, so silently picking either is wrong) |
-| 2 | Unsupported → HTTP **501** | `UnsupportedOperationErrorResponse` is **406** | body `code:0` is correct; only the HTTP status diverges (501 is arguably cleaner) — kept |
+| 2 | ~~Unsupported → HTTP **501**~~ | `UnsupportedOperationErrorResponse` is **406** | ✅ **REVERSED 2026-09-02 (Q3) and shipped**: the spec is explicit — 406 on every op that lists it, and Lance's own reference server maps `ErrorCode::Unsupported` to `NOT_ACCEPTABLE` (`rust/lance-namespace-impls/src/rest_adapter.rs:347`). "501 is arguably cleaner" lost to a spec-verbatim server. `ns_errors.py` answers 406; the prose that still said 501 in `fga_deps`, `access.py`, the catalog skill and the grants panel was corrected 2026-09-09, the panel being a live consumer that had stopped recognising an auth-off stack |
 | 3 | ~~`exists` → 204~~ | 200 no-content | ✅ fixed (spec 0.9) — both `exists` endpoints return 200 |
 | 4 | CreateTable ignores `x-lance-table-location` + `storage_options` | caller-chosen location/options | conscious: the catalog vends storage access (fine for single-root; a completeness gap) |
 | 5 | ~~MergeInsert param set~~ | full param set | ✅ conformant since the pylance-8/spec-0.9 upgrade; residue: the FastAPI signature keeps `on` optional so the backend's own 400 answers a missing `on` (tightening would trade a spec-true 400 for a 422 — consciously left) |
@@ -295,7 +295,7 @@ decision rather than drift (originally the retired `FEATURE-GAP.md` §1 table; #
 | 7 | ~~`insert` emits versionless lineage~~ | insert bumps a Lance version | ✅ fixed (GOAL 3) — `insert` reopens the dataset and stamps the real version on the WROTE edge |
 
 **Rationale.** Each open row (#2, #4, #6) trades spec-letter conformance for a safety or architecture
-property (clean 501 semantics, catalog-vended storage, authz-gate/parse coherence); recording them keeps
+property (clean 406 semantics, catalog-vended storage, authz-gate/parse coherence); recording them keeps
 a future "cleanup" from reintroducing the hazard the deviation avoids.
 
 ## Gateway checks — where auth lives (2026-07-23)
@@ -337,7 +337,7 @@ two lists. The following are **WONTFIX — no UI surface, by design**, each for 
   preview/run with tag-pin protection — a raw version-delete button would bypass that framing.
 - **`merge_insert` / create-with-data / register-external** — Arrow-IPC bulk paths and raw-URI registration
   (SSRF-adjacent) are pipeline/SDK/operator acts; the browser data surface is append-via-insert + declare.
-- **Materialized-view create/refresh** — the backend is dormant (501); prior decision
+- **Materialized-view create/refresh** — the backend is dormant (406); prior decision
   (feedback-no-speculative-features) forbids UI on unproven capability.
 - **Lineage ingest / media ingest** (`POST /lineage`, `/ingest-media`) — service-identity seams
   (OpenLineage fidelity: humans never author lineage; media ingest has no user-bearer path by design).

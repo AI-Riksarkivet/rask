@@ -18,7 +18,7 @@ Two contracts stack here, and confusing them is how bugs happen:
 - **Operations: 54/54 ROUTED, 48 backend-backed.** `tests/integration/test_spec_conformance.py`
   asserts both halves — every spec op has a served route, and the vendored
   `lance_docs/ns_catalog/spec.yaml` still carries 54 ops (a shrunken spec would silently weaken the
-  check). The other **6 answer a spec-correct 501** because the native `dir` backend stubs them:
+  check). The other **6 answer a spec-correct 406** because the native `dir` backend stubs them:
   `backfill_column`, `alter_transaction`, `batch_create_table_versions`, `batch_commit_tables`, and
   BOTH materialized-view ops (`docs/COVERAGE.md`). Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,

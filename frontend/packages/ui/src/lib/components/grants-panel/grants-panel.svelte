@@ -135,7 +135,7 @@
 			if (dataset !== current) return;
 			if (res.ok) {
 				review = { for: current, access: res.data, denied: null };
-			} else if (res.status === 401 || res.status === 403 || res.status === 501) {
+			} else if (res.status === 401 || res.status === 403 || res.status === 406) {
 				const denied =
 					res.status === 401
 						? 'Sign in to review access.'
