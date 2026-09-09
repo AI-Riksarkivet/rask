@@ -47,6 +47,13 @@ def _flat(text: str) -> str:
 #: repoint no section used them. The rule is therefore about the DESTINATION, not the shape.
 _ROW_ID = re.compile(r'DECISIONS\.md "[^"]+"[^\n]{0,40}?\(([A-Z]\d[a-z]?)\)')
 
+#: The OTHER pointer shape beside a citation, and the one `_ROW_ID` structurally cannot see: `(§2.4)`
+#: starts with `§`, not `[A-Z]`. Measured 2026-09-09 — `§2.1`–`§2.5` appear beside citations in nine
+#: files and NOWHERE in DECISIONS.md, so a reader following one arrives at a marker that does not exist.
+#: They are the numbering of a plan document that was deleted; the section citation beside them still
+#: resolves, which is exactly what made them survive review.
+_SECTION_MARKER = re.compile(r'DECISIONS\.md "[^"]+"[^\n]{0,40}?\((§[\d.]+)\)')
+
 
 def _sections() -> list[str]:
     return re.findall(r"^## (.+)$", (REPO / "docs" / "DECISIONS.md").read_text(), re.MULTILINE)
@@ -91,3 +98,28 @@ def test_no_citation_carries_a_deleted_plans_row_id() -> None:
             if row_id not in decisions:
                 offenders.append(f"{path.relative_to(REPO)}: ({row_id})")
     assert not offenders, "DECISIONS citations carrying a row id no section defines: " + "; ".join(sorted(set(offenders))[:6])
+
+
+def test_no_citation_carries_a_deleted_plans_SECTION_MARKER() -> None:
+    r"""The `§`-form twin of the row-id rule, and it needed its own test rather than a wider regex.
+
+    `_ROW_ID` matches `\([A-Z]\d[a-z]?\)` — a shape that cannot express `(§2.4)`, so the marker form
+    was unchecked across every file. Measured 2026-09-09: nine citations carried `§2.1`–`§2.5`, and
+    those markers appear NOWHERE in DECISIONS.md. The section citation beside them resolves, which is
+    precisely why they survived: the half a gate checked was true and the half it could not see was not.
+
+    Checked against the whole document rather than the cited section, matching the row-id rule's own
+    standard: a marker defined under a different heading is a mis-aimed pointer, not a dangling one, and
+    conflating the two would make this fire on prose that a reader can still follow.
+    """
+    decisions = (REPO / "docs" / "DECISIONS.md").read_text()
+    offenders: list[str] = []
+    for path in _files():
+        if path.name == Path(__file__).name:
+            continue
+        for marker in _SECTION_MARKER.findall(_flat(path.read_text(errors="ignore"))):
+            if marker.rstrip(".") not in decisions:
+                offenders.append(f"{path.relative_to(REPO)}: ({marker})")
+    assert not offenders, "DECISIONS citations carrying a section marker the document never defines — a reader following one lands on nothing: " + "; ".join(
+        sorted(set(offenders))[:8]
+    )

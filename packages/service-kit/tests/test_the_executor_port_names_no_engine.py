@@ -1,6 +1,6 @@
 """The `Executor` port: what the platform may ask of a compute engine, in no engine's vocabulary.
 
-docs/DECISIONS.md "The compute plane is decoupled" (§2.4), step 1 of the owner-ordered §7.4.
+docs/DECISIONS.md "The compute plane is decoupled", step 1 of the owner-ordered §7.4.
 
 `UNKNOWN` REPLACES AN OVERLOADED `None`, and that is the substantive change rather than a rename.
 `medallion.services.ray_jobs_api.job_status` returns `None` for a 404, and `medallion/workflow.py` disentangles THREE
