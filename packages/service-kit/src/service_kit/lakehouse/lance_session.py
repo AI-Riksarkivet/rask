@@ -35,15 +35,12 @@ if TYPE_CHECKING:
 def lance_session(metadata_cache_bytes: int, index_cache_bytes: int) -> lance.Session:
     """The process-wide session for the given caps — int-keyed, so equal caps share one session.
 
-    ``Session``'s kwargs are strict on pylance 9.0.0 (a typo raises ``TypeError`` rather than
-    silently no-opping), so a misconfigured cap fails at first use, loudly.
+    ``Session``'s kwargs are STRICT — a typo raises ``TypeError`` rather than silently no-opping — so a
+    misconfigured cap fails at first use, loudly, rather than running with a cache size nobody set.
     """
     import lance
 
-    # pylance 9.0.0 ships no __init__ stub for Session, so ty resolves these against object() —
-    # the kwargs are real and STRICT (verified live: Session(metadata_cache_size_bytes=..) works,
-    # a typo raises TypeError).
     return lance.Session(
-        metadata_cache_size_bytes=metadata_cache_bytes,  # ty: ignore[unknown-argument]
-        index_cache_size_bytes=index_cache_bytes,  # ty: ignore[unknown-argument]
+        metadata_cache_size_bytes=metadata_cache_bytes,
+        index_cache_size_bytes=index_cache_bytes,
     )

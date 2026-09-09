@@ -24,7 +24,7 @@ dependencies = [
     # lancekit extra's Lance-plane subtree (the OTel base instrumentation rides service-kit's core).
     "service-kit[lancekit]",
     # Lance/Arrow core — `import lance`, `lance.optimize`, `pyarrow`/`pyarrow.fs`.
-    "pylance>=10.0.0",
+    "pylance>=11.0.0",
     "pyarrow",
     # The distributed read/write bridge the tabular stage lane drives (`import lance_ray`).
     "lance-ray",

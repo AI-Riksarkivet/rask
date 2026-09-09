@@ -44,6 +44,27 @@ def test_a_work_item_round_trips_through_a_queue() -> None:
     assert restored.plan.older_than == timedelta(days=7)
 
 
+def test_a_default_plan_carries_NO_batch_size_rather_than_a_zero() -> None:
+    """`scan_batch_size` was `int = 0`, and 0 is not a batch size — it was a second spelling of
+    "unset" on the one model that CROSSES A BROKER, while the policy schema it carries spells the
+    same absence `None`.
+
+    The consequence is not cosmetic. `_compact_files` guards on `is not None`, so a default plan sent
+    `compact_files(batch_size=0)`: pylance 11 refuses it outright ("batch_size must be between 1 and
+    4294967295, got 0") and pylance 10 ACCEPTED it on a plain dataset while failing a stable-row-id
+    one — every governed tier — with "Got too many segments for the provided chunk lengths", a message
+    about neither the batch size nor the caller. `ge=1` is what makes the bad value unconstructible.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from maintenance.services.sweep import DatasetPlan
+
+    assert DatasetPlan().scan_batch_size is None, "0 is not an absent batch size, it is an invalid one"
+    with pytest.raises(ValidationError):
+        DatasetPlan(scan_batch_size=0)
+
+
 def test_the_worker_entry_point_takes_nothing_computed_across_the_estate() -> None:
     """The structural half of self-containment, checked on the signature rather than trusted.
 

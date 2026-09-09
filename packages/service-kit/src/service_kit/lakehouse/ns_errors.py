@@ -93,15 +93,16 @@ def as_unsupported_if_stub(exc: Exception) -> Exception:
 
 #: 5xx statuses whose message is a CAPABILITY STATEMENT, not a fault report, and so is not redacted.
 #:
-#: 501 is the whole set. "alter_table_backfill_columns not implemented" names an operation the caller asked
-#: for and nothing else — no path, no DSN, no driver internals — and it is the only thing that tells them to
-#: stop asking. Under the blanket ``>= 500`` rule it was replaced with "Internal Server Error", so a user who
-#: pressed a button the UI ships (backfill) read that the server had broken rather than that the backend does
-#: not implement the op (#101). Every other 5xx stays redacted: those ARE faults, and their text leaks.
-#: EMPTY since Q3 moved `Unsupported` from 501 to 406 (2026-09-02), and kept rather than deleted: the
-#: rule it encodes — a capability answer is not a fault and its detail must survive — is still the one
-#: any future 5xx-mapped capability error would need. `Unsupported` no longer needs it because 4xx
-#: details are never redacted.
+#: EMPTY, and kept rather than deleted. The rule it encodes is that a capability answer is not a fault,
+#: so its detail must survive the ``>= 500`` redaction: "alter_table_backfill_columns not implemented"
+#: names the operation the caller asked for and nothing else — no path, no DSN, no driver internals —
+#: and it is the only thing that tells them to stop asking. Redacted to "Internal Server Error", a user
+#: who pressed a button the UI ships (backfill) read that the server had broken (#101).
+#:
+#: Nothing needs it today: `Unsupported` is the only error that ever did, and it maps to 406 since
+#: 2026-09-02, where 4xx details are never redacted. The set stays because a future capability error
+#: mapped into the 5xx range would need exactly this rule and nothing else encodes it. Every other 5xx
+#: stays redacted: those ARE faults, and their text leaks.
 _UNREDACTED_5XX: frozenset[int] = frozenset()
 
 

@@ -18,7 +18,7 @@ import hashlib
 from datetime import timedelta
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DatasetPlan(BaseModel):
@@ -36,7 +36,17 @@ class DatasetPlan(BaseModel):
     older_than: timedelta | None = None
     retain_versions: int | None = None
     target_rows_per_fragment: int | None = None
-    scan_batch_size: int = 0
+    #: The compaction READ batch, or ``None`` for Lance's own default. Constrained to the SAME shape
+    #: the catalog's policy schema uses (`schemas.MaintenancePolicy.scan_batch_size`), because this
+    #: model is what CARRIES that policy field across the broker and two spellings of "unset" for one
+    #: value is how a work item comes out the other side meaning something its producer did not say.
+    #:
+    #: It was `int = 0`, and 0 is not a batch size: `compact_files(batch_size=0)` is refused by pylance
+    #: 11 ("batch_size must be between 1 and 4294967295, got 0") and, worse, was ACCEPTED by pylance 10
+    #: on a plain dataset while failing a stable-row-id one with "Got too many segments for the
+    #: provided chunk lengths" — a message about neither the batch size nor the caller. `ge=1` makes
+    #: the invalid value unconstructible rather than diagnosable.
+    scan_batch_size: int | None = Field(default=None, ge=1, le=8192)
     auto_cleanup_interval_commits: int | None = None
     index_columns: list[str] | None = None
     cleanup_enabled: bool = True

@@ -1223,17 +1223,19 @@ medallion:
   # settles. For the same reason `kubectl set env MEDALLION_RAY_ENABLED=true` alone can NEVER work —
   # it moves the flag without moving the scope.
   #
-  # `ray-cluster` is lance-capable since 2026-08-18 (pylance 10.0.0 + lance_ray from the root lock,
-  # the dummy lane verified running inside the built image). `ray-lance` carries pylance 9.0.0 +
-  # lance_ray and bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
+  # `ray-cluster` is lance-capable since 2026-08-18 (pylance + lance_ray from the ROOT LOCK — named by
+  # source rather than by version on purpose, because that is what keeps the image and the fleet on the
+  # same Lance by construction; a version written here drifts on every bump and a split between the two
+  # is a correctness bug, not a currency preference). The dummy lane was verified running inside the
+  # built image. `ray-lance` pins its own trio in the dockerfile and bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
   # bronze -> silver -> gold all COMPLETE, with S1's watcher doing exactly its job
   # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the stage runner).
   #
   # ON by default since 2026-08-24. It was `false` on the argument that the chart deploys no
   # Lance-capable cluster — a default aimed at a cluster the chart does not create. That argument is
   # now FALSE, and it was falsified by reading the running estate rather than the file: the chart's
-  # OWN KubeRay head (`rask-ray-*-head-svc`, image `ray-cluster`) answers `import lance` with pylance
-  # 10.0.0 and carries `lance_ray`. It never was the HTR image the old comment described.
+  # OWN KubeRay head (`rask-ray-*-head-svc`, image `ray-cluster`) answers `import lance` and carries
+  # `lance_ray`. It never was the HTR image the old comment described.
   #
   # The second blocker is closed too, and it is the one that mattered. `ray_submit.py` shipped a FIXED
   # env dict, so a stage runner could reach a working cluster and still not describe its own work; it now

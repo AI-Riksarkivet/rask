@@ -19,7 +19,7 @@ dependencies = [
     "openfga-sdk>=0.10.4",
     "pillow>=12.3.0",
     "pyarrow",
-    "pylance[otel]>=10.0.0",
+    "pylance[otel]>=11.0.0",
     "lance-namespace>=0.11.0,<0.12",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",

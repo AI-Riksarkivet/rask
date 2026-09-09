@@ -49,7 +49,7 @@ lakehouse = ["pyarrow", "lance-namespace>=0.11.0,<0.12"]
 media = ["pillow>=10"]
 lancekit = [
     "pyarrow",
-    "pylance[otel]>=10.0.0",
+    "pylance[otel]>=11.0.0",
     "lancedb>=0.34.0",
     "lance-namespace>=0.11.0,<0.12",
     "lance-namespace-urllib3-client>=0.11.0,<0.12",

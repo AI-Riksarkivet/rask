@@ -64,7 +64,7 @@ RUN --mount=type=bind,source=uv.lock,target=/tmp/w/uv.lock \
  && pip install --no-cache-dir -r /tmp/service-kit-requirements.txt \
  && rm -f /tmp/service-kit-requirements.txt
 
-RUN pip install --no-cache-dir "lance-ray==0.5.0" "pylance==10.0.0" "pyarrow==25.0.0" "pillow==11.3.0"
+RUN pip install --no-cache-dir "lance-ray==0.5.0" "pylance==11.0.0" "pyarrow==25.0.0" "pillow==11.3.0"
 
 # OTel SDK + OTLP/HTTP exporter so the train job (ray_train_job.py) can export its run metrics to
 # GreptimeDB (#18 experiment tracking → Perses). Pinned to the services' opentelemetry version for parity.

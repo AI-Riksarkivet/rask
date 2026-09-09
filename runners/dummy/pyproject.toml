@@ -12,7 +12,7 @@ dependencies = [
     "storage",
     # The write path this runner exercises for real: CDF delta read, merge_insert, fragment commit.
     # Pinned to the version §7.11 verified rather than a floor, since the mechanics are the claim.
-    "pylance>=9.0.0",
+    "pylance>=11.0.0",
     "pyarrow>=25.0",
     "python-dotenv>=1.0",
 ]
