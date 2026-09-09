@@ -10,7 +10,7 @@ image:
     flows: "fix-71d7b04f"
     gateway: "stagerunner-04d6fcda"
     ingest: "e1-44c2bb14"
-    lance-rest-catalog: "main-28ad3020"
+    lance-rest-catalog: "main-bd561396"
     nats: "2.14.2-alpine"
     nats-box: "0.19.7"
     nats-server-config-reloader: "0.23.0"
