@@ -253,7 +253,13 @@ def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: s
         create_json(control_root, storage_options, key, payload)
     except RecordExistsError:
         existing = read_json(control_root, storage_options, key)
-        if existing is not None and existing.get("warehouse_id") == warehouse_id and existing.get("root_uri") == root_uri:
+        # VALIDATED, like every other singular read of this registry. The comparison below decides
+        # whether this is our own earlier write retried, and on a record it cannot parse the comparison
+        # merely fails — which refused the bind (correct) while calling it a conflict with another
+        # warehouse (false). An operator sent to find that competing tenant is looking for something
+        # that does not exist. `validated_or_refuse` answers the true condition instead.
+        parsed = validated_or_refuse(existing, BindingRecord, event="binding_record_malformed", path=key) if existing is not None else None
+        if parsed is not None and parsed.get("warehouse_id") == warehouse_id and parsed.get("root_uri") == root_uri:
             return  # the retry converging on its own earlier write
         raise NamespaceAlreadyExistsError(f"namespace {top_ns!r} is already bound to another warehouse") from None
 

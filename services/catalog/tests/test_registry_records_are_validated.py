@@ -61,6 +61,24 @@ def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> No
     assert proj_svc.list_projects(_root(tmp_path), {}) == [good]
 
 
+def test_an_UNREADABLE_binding_refuses_as_unreadable_rather_than_as_already_bound(tmp_path: Path) -> None:
+    """`bind_namespace`'s convergence check is the fifth singular reader, and it read the record RAW.
+
+    It compares two fields to answer "is this my own earlier write, retried?". On a record it cannot
+    parse the comparison simply fails, so the door answered `NamespaceAlreadyExistsError` — *"already
+    bound to another warehouse"* — which is fail-CLOSED (the bind is refused, correctly) and
+    misdiagnosed: it names a conflict with another tenant when the truth is a record nobody can read.
+    An operator sent to find the competing warehouse is looking for something that does not exist.
+    """
+    import pytest
+    from lance_namespace import ServiceUnavailableError  # the catalog's own — service_kit ships a same-named, different class
+
+    _write(tmp_path, "_warehouses/bindings", "bronze", {"top_ns": "bronze", "warehouse_id": ["not", "a", "string"], "root_uri": "s3://bkt"})
+
+    with pytest.raises(ServiceUnavailableError):
+        wh_svc.bind_namespace(_root(tmp_path), {}, "bronze", "wh-a", "s3://bkt-a")
+
+
 def test_the_existing_tolerance_is_unchanged(tmp_path: Path) -> None:
     """A listing must still survive corrupt JSON, a non-object and a missing key — one bad object
     voiding the whole registry would turn one tenant's corruption into an estate-wide outage."""
