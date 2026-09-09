@@ -110,6 +110,31 @@ async def _require_relation(relation: str, name: str, request: Request, settings
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
+async def require_estate_observer(request: Request, settings: LineageSettings, token: Principal | None) -> None:
+    """Gate a WHOLE-ESTATE read on ``can_observe_events`` at the configured root object.
+
+    The sibling of :func:`_require_relation` and deliberately not a call into it: that helper composes
+    ``<fga_object_type>:<name>``, which on this service is always ``table:``, and an estate privilege is
+    not a relation of any one table. It is checked on `settings.fga_root_object` verbatim — the same
+    object `POST /v1/projects` and `POST /v1/stores` gate on, so "may observe the estate" means one
+    thing everywhere rather than one thing per service.
+
+    The same fail-closed ladder as every other gate here: FGA off → no-op; unwired client → 503;
+    unauthenticated → 401; deny → 403; an OpenFGA outage inside `check` → 503, never allow.
+    """
+    if not settings.fga_enabled:
+        return
+    client = getattr(request.app.state, "fga", None)
+    if client is None:
+        raise ServiceUnavailableError("authorization service is not available")
+    if token is None:
+        raise UnauthenticatedError("authentication required")
+    obj = settings.fga_root_object
+    if not await fga.check(client, user=token.sub, relation="can_observe_events", obj=obj):
+        log.info("access_denied", extra={"sub": token.sub, "relation": "can_observe_events", "object": obj})
+        raise PermissionDeniedError(f"can_observe_events required on {obj}")
+
+
 async def require_metadata_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken) -> None:
     """Gate a dataset read on OpenFGA ``can_get_metadata`` for ``<type>:<name>`` — the same metadata-read
     permission the catalog requires to describe that table."""

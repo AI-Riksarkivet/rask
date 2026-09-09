@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, governed, is_external_source
+from lineage.api.fga_deps import FilterDep, governed, is_external_source, require_estate_observer
+from lineage.api.security import CurrentToken
 from lineage.schemas import Events, RunInputs, Runs, RunStatus
 from lineage.services.repository import EventRecord
 
@@ -155,6 +156,47 @@ def _governed_datasets(record: EventRecord) -> set[str]:
         str(d.get("name")) for d in raw_inputs if isinstance(d, dict) and d.get("name") and not is_external_source(str(d.get("namespace") or ""))
     }
     return governed_inputs | outputs | _column_lineage_datasets(record.event)
+
+
+@router.get("/events/projection")
+async def get_events_projection(
+    request: Request,
+    repository: RepositoryDep,
+    settings: SettingsDep,
+    token: CurrentToken,
+    after: Annotated[int | None, Query(ge=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=_EVENTS_RETURN)] = _EVENTS_RETURN,
+    summary: bool = False,
+) -> Events:
+    """The feed WITHOUT the per-dataset filter, for a caller that observes the estate (§ G1).
+
+    WHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is
+    right for a person: an event naming a table you cannot see must not disclose it. It is wrong for a
+    SERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions —
+    measured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service
+    principal, and its inputs answered **200 with an empty list**. A walker sees "nothing here", and an
+    estate with no work looks identical to an estate it cannot see.
+
+    THE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.
+    A reconciler reads the feed to decide who to TELL; the telling is gated per subject at delivery
+    (`can_be_notified`), which is the check that actually protects a person's inbox. Filtering the
+    reconciler's own view protects nobody and only guarantees it cannot find the events it exists to
+    catch. `can_be_notified` stays the sole disclosure gate; this door moves the estate-read decision
+    to the rung that means "may observe the estate".
+
+    `can_observe_events` ON THE ROOT OBJECT — the same rung `POST /v1/projects` and `POST /v1/stores`
+    already gate on, so an estate privilege means one thing everywhere. It is `owner` on the root in
+    `model.fga`, so nobody holds it by accident and granting it is a deliberate act.
+
+    Identical shape to `/events` otherwise — same keyset cursor, same cap, same `summary` — so a caller
+    can move between the two without a second client. `oldest_seq` is reported here too: a walker whose
+    cursor falls below it lost a window to the prune, which is the one signal that distinguishes
+    "caught up" from "rows went past me".
+    """
+    await require_estate_observer(request, settings, token)
+    records = await repository.list_events(limit=limit, after=after, summary=summary)
+    next_cursor = records[-1].seq if len(records) == limit and records else None
+    return Events(events=records, next_cursor=next_cursor, oldest_seq=await repository.oldest_event_seq())
 
 
 @router.get("/events")
