@@ -30,6 +30,7 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps, lineage_deps
+from catalog.api import idempotency as idem
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
@@ -87,6 +88,7 @@ async def create_table(
     source_version: Annotated[int | None, Query(ge=1)] = None,
     run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
+    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
 
@@ -106,7 +108,14 @@ async def create_table(
     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
     could carry provenance.
     """
-    return await table_create.create_governed_table(
+    # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
+    # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
+    # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
+    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/create")
+    if converge.replay is not None:
+        return CreateTableResponse.model_validate(converge.replay.body)
+
+    response = await table_create.create_governed_table(
         id=id,
         ns=ns,
         settings=settings,
@@ -124,6 +133,10 @@ async def create_table(
         run_facets_json=run_facets_json,
         authorization=authorization,
     )
+    # AFTER the door succeeded, and only then: a failure raises past this line, leaving the claim
+    # in-flight until its lease expires rather than recording an outcome the caller never received.
+    await converge.remember(200, response.model_dump(mode="json", exclude_none=True))
+    return response
 
 
 @router.post("/{id}/commit", response_model_exclude_none=True)

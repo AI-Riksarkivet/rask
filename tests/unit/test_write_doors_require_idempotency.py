@@ -34,6 +34,16 @@ import pathlib
 import pytest
 
 
+#: Doors whose key is REQUIRED. Each is a cascade head with no spec above it, so the estate is free to
+#: demand the one value only the caller can hold stable across attempts.
+#:
+#: THE CATALOG IS DELIBERATELY ABSENT, and it is on `_WRITE_APP_IDS` below, which reads like a
+#: contradiction until you see which branch of the rule each list is. The Lance Namespace spec defines
+#: no `Idempotency-Key` and a stock client must work with no rask SDK, so requiring one on
+#: `POST /v1/table/{id}/create` would fail conformance on 54 routed operations — a worse defect than
+#: the replay it would close. The catalog therefore takes the rule's OTHER branch (off the bare-500
+#: matcher) and offers the key as OPTIONAL convergence for the replays that remain. Adding it here
+#: would be asserting the wrong thing about the wrong plane.
 DOORS = [
     ("medallion.api.produce", "/produce"),
     ("medallion.api.ingest_media", "/ingest-media"),
