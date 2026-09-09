@@ -117,7 +117,10 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 #   ANN401 — `Any` at the boundaries of pyarrow/lance/dapr, none of which ship precise stubs.
 #   RUF002/3 — typographically correct prose (MINUS SIGN, MULTIPLICATION SIGN, EN DASH) in docstrings
 #            and comments; "fixing" it degrades the writing.
-# NOT a permanent exemption — tracked in docs/OPEN-WORK.md so it is revisited, not forgotten.
+# NOT a permanent exemption — tracked as § Q3-37 in `open_lakehouse_diff_left.md`, the estate's one
+# lakehouse backlog. It said `docs/OPEN-WORK.md` until 2026-09-09, and that file does not exist: the
+# sentence promising the exemption would be revisited pointed at nothing, which is how a temporary
+# waiver becomes a permanent one without anyone deciding it should be.
 "services/catalog/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "services/lineage/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "services/medallion/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
