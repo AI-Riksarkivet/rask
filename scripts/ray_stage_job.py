@@ -66,7 +66,7 @@ from lance import blob_array, blob_field
 # `service-kit[media]` extra, which the ray-cluster image installs.
 from service_kit.lakehouse import media
 from service_kit.lakehouse.blobs import blob_field_names
-from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN
+from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, ensure_declared_dataset_id
 
 
 def _storage_options() -> dict[str, str]:
@@ -544,6 +544,9 @@ def _run_stage(
         produced = _stamp_stage(source, stage, lineage, dataset_id)
         rows_out = produced.num_rows
         _merge_into(to_uri, produced, so)
+        # A merge carries ROWS, not schema metadata, so the stamp above reaches the dataset only when
+        # this write CREATED it. See `service_kit.lakehouse.stage_stamp.ensure_declared_dataset_id`.
+        ensure_declared_dataset_id(to_uri, dataset_id, so)
     elif "source_rowid" not in upstream.schema.names:
         # CASCADE HEAD (tabular): mint root-provenance source_rowid from the upstream _rowid, as a native
         # pylance overwrite on the driver (the bronze root is small); deeper tabular stages, which already

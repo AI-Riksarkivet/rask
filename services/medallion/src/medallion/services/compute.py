@@ -35,7 +35,7 @@ from service_kit.lakehouse import blobs, schema
 # ONE implementation, shared with the Ray driver — the same reason the stage stamp itself lives
 # there. A second copy is how the two drivers came to disagree about `stage`'s column position,
 # and this key decides a more expensive question: which dataset a maintenance run is filed against.
-from service_kit.lakehouse.stage_stamp import declare_dataset_id
+from service_kit.lakehouse.stage_stamp import declare_dataset_id, ensure_declared_dataset_id
 
 
 _STAGE_COLUMN = "stage"
@@ -237,6 +237,9 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
         lance.dataset(uri, storage_options=storage_options).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(table, dataset_id))
+        # A merge carries ROWS, not schema metadata (see `ensure_declared_dataset_id`), so the stamp on
+        # the source table above reaches the dataset only on the create branch. This is the other half.
+        ensure_declared_dataset_id(uri, dataset_id or "", storage_options)
     else:
         lance.write_dataset(
             declare_dataset_id(table, dataset_id),
@@ -351,6 +354,9 @@ def transform_stage(
     if additive is not None:
         if additive:
             lance.dataset(to_uri, storage_options=storage_options).add_columns(out.select(additive))
+        # `add_columns` changes no schema metadata either, and this branch returns before every write
+        # below — so without this the fast path is the one that never declares its own name.
+        ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options)
         result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
         result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
         log.info("medallion_stage_added_columns", extra={"to_uri": to_uri, "columns": additive})
@@ -374,6 +380,7 @@ def transform_stage(
         lance.dataset(to_uri, storage_options=storage_options).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
+        ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options)
     else:
         lance.write_dataset(
             declare_dataset_id(out, dataset_id),

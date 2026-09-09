@@ -29,10 +29,12 @@ package.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pyarrow as pa
 import pytest
 
-from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, LINEAGE_DATASET_ID_KEY, SOURCE_ROWID_COLUMN, stamp_stage
+from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, LINEAGE_DATASET_ID_KEY, SOURCE_ROWID_COLUMN, ensure_declared_dataset_id, stamp_stage
 
 
 def _rows(**extra: object) -> pa.Table:
@@ -198,3 +200,69 @@ class TestBothDriversUseIt:
 
         source = (Path(__file__).resolve().parents[3] / path).read_text()
         assert "stage_stamp" in source, f"{path} still carries its own copy of the stamp"
+
+
+class TestTheRepairReachesADatasetAMergeWrote:
+    """The half a table-level stamp cannot deliver, and the reason it is a separate function.
+
+    Measured on pylance 10.0.0: `merge_insert` carries ROWS and not schema metadata, so a dataset
+    created declaring `acme$bronze` still declares `acme$bronze` after a full-sync merge of a table
+    declaring `acme$silver`. The cascade's steady-state write IS that merge — deliberately, because an
+    overwrite re-mints every `_rowid` and the tier above resolves `source_rowid` against them — so a
+    stamp alone would land only on tiers created after it, and every tier already on disk would keep
+    its parent's name forever, repaired by no re-run.
+    """
+
+    def test_a_merge_alone_does_NOT_move_the_declared_id(self, tmp_path: Path) -> None:
+        """The measurement the repair exists for. If this ever starts failing, pylance changed and the
+        repair became a no-op rather than a fix — check before deleting it."""
+        import lance
+
+        uri = str(tmp_path / "silver.lance")
+        rows = pa.table({"id": pa.array([1, 2], pa.int64()), "data": ["a", "b"]})
+        lance.write_dataset(rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"}), uri, mode="create")
+
+        lance.dataset(uri).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
+            rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$silver"})
+        )
+
+        assert (lance.dataset(uri).schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$bronze"
+
+    def test_the_repair_corrects_it_in_place(self, tmp_path: Path) -> None:
+        import lance
+
+        uri = str(tmp_path / "silver.lance")
+        rows = pa.table({"id": pa.array([1, 2], pa.int64()), "data": ["a", "b"]})
+        lance.write_dataset(rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze", "lance.coords": "kept"}), uri, mode="create")
+
+        assert ensure_declared_dataset_id(uri, "acme$silver") is True
+
+        after = lance.dataset(uri).schema.metadata or {}
+        assert after[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
+        assert after[b"lance.coords"] == b"kept", "a metadata-only correction must not drop another producer's keys"
+
+    def test_it_is_IDEMPOTENT_so_every_cascade_tick_may_call_it(self, tmp_path: Path) -> None:
+        """A cascade runs this on every write. A second call must commit nothing, or the estate mints a
+        version per tick for a value that did not change."""
+        import lance
+
+        uri = str(tmp_path / "silver.lance")
+        rows = pa.table({"id": pa.array([1], pa.int64()), "data": ["a"]})
+        lance.write_dataset(rows, uri, mode="create")
+
+        assert ensure_declared_dataset_id(uri, "acme$silver") is True
+        version = lance.dataset(uri).version
+        assert ensure_declared_dataset_id(uri, "acme$silver") is False
+        assert lance.dataset(uri).version == version, "an unchanged declared id must not mint a version"
+
+    def test_an_UNWIRED_caller_writes_nothing_rather_than_clearing_the_name(self, tmp_path: Path) -> None:
+        """Absent means "I was not told", which is not the same claim as "this dataset has no name".
+        Clearing here would let one unwired driver erase what a wired one correctly declared."""
+        import lance
+
+        uri = str(tmp_path / "silver.lance")
+        rows = pa.table({"id": pa.array([1], pa.int64()), "data": ["a"]})
+        lance.write_dataset(rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$silver"}), uri, mode="create")
+
+        assert ensure_declared_dataset_id(uri, "") is False
+        assert (lance.dataset(uri).schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"

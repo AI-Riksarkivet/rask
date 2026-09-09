@@ -12,10 +12,12 @@ in-process copy replaced the column in place, the Ray copy dropped it and append
 column order depended on which compute path wrote it — so two runs of one lane over one dataset left
 schemas that are not equal, for no data reason.
 
-PURE BY CONSTRUCTION: a table in, a table out. No storage options, no lance, no Ray. That is what lets
-one function serve a driver that holds a `LanceDataset` and one that holds a Ray batch, and it is the
-`writing-python` § "Mixed I/O and business logic" rule applied — the business logic is separable from
-the IO shells, so it is separated.
+PURE AT IMPORT, and pure per function but one. The stamp is a table in, a table out — no storage
+options, no lance, no Ray — which is what lets one function serve a driver that holds a
+`LanceDataset` and one that holds a Ray batch, and it is the `writing-python` § "Mixed I/O and
+business logic" rule applied. The single exception, `ensure_declared_dataset_id`, takes a dataset
+because the thing it repairs only exists on one; it imports lance LAZILY so this module stays
+importable wherever the stamp is wanted.
 
 IT LIVES IN service-kit rather than in the medallion because the Ray job CANNOT import the service: it
 is baked into `.docker/ray-cluster.dockerfile`, which builds `--package ray-cluster-env` (the deps-only
@@ -141,6 +143,34 @@ def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "", dataset_id: s
     return declare_dataset_id(out, dataset_id)
 
 
+def ensure_declared_dataset_id(uri: str, dataset_id: str, storage_options: dict[str, str] | None = None) -> bool:
+    """Correct an EXISTING dataset's declared name in place. Returns whether it wrote.
+
+    THE STAMP ALONE IS NOT ENOUGH, and measuring the destination rather than the call is what showed
+    it: `merge_insert` does not carry the source table's schema metadata onto the dataset (pylance
+    10.0.0 — a dataset created declaring `acme$bronze` still declared `acme$bronze` after a full-sync
+    merge of a table declaring `acme$silver`; only an `overwrite` moved it). The cascade's steady-state
+    write is deliberately that merge, because an overwrite re-mints every `_rowid` and the tier above
+    resolves `source_rowid` against them. So without this, a corrected stamp would land only on tiers
+    created after it and every tier already on disk would keep its parent's name forever, repaired by
+    no re-run.
+
+    `update_schema_metadata` is a metadata-only commit: it touches one key, preserves the rest, rewrites
+    no data and re-mints no row id. Idempotent by the read below, so it is safe on every cascade tick
+    and the estate self-heals rather than needing a backfill pass.
+    """
+    import lance
+
+    if not dataset_id:
+        return False
+    dataset = lance.dataset(uri, storage_options=storage_options)
+    current = (dataset.schema.metadata or {}).get(LINEAGE_DATASET_ID_KEY.encode())
+    if current == dataset_id.encode():
+        return False
+    dataset.update_schema_metadata({LINEAGE_DATASET_ID_KEY: dataset_id})
+    return True
+
+
 __all__ = [
     "CARDINALITIES",
     "LINEAGE_COLUMN",
@@ -151,5 +181,6 @@ __all__ = [
     "STAGE_COLUMN",
     "carry_source_rowid",
     "declare_dataset_id",
+    "ensure_declared_dataset_id",
     "stamp_stage",
 ]
