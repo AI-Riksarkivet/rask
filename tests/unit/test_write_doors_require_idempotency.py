@@ -87,7 +87,12 @@ def test_the_key_is_constrained_not_merely_present(module: str, path: str) -> No
 
 #: App-ids whose routes include a cascade head. A 500 from one of these is NOT safe to replay
 #: blindly: the run either started or did not, and only the caller's key can tell the difference.
-_WRITE_APP_IDS = ("medallion-producer", "ingest")
+#: App-ids taken OFF the 500-retry. The first two are the cascade heads, which pair the narrow policy
+#: with a required `Idempotency-Key`. `catalog` joined 2026-09-09 on the rule's OTHER branch — "pair
+#: retry with an idempotency key OR mark the operation non-retryable" — because it has 91 write routes
+#: and no key on any of them (§ Q17-32). When the key lands there, it keeps this policy AND gains the
+#: pairing; the two halves cover what the other misses, which is why the rule says do both.
+_WRITE_APP_IDS = ("medallion-producer", "ingest", "catalog")
 
 
 def test_a_cascade_head_is_not_replayed_on_a_bare_500() -> None:
@@ -105,6 +110,12 @@ def test_a_cascade_head_is_not_replayed_on_a_bare_500() -> None:
 
     Scoped to the write app-ids rather than applied estate-wide: retrying a read after a 500 is
     harmless, and widening this would cost every other caller a retry that was working correctly.
+
+    THE CATALOG IS A WRITE APP-ID, and reading it as a read plane is what kept it off this list until
+    2026-09-09. It serves 77 POST plus 14 DELETE/PUT/PATCH routes and carries no idempotency key on
+    any of them, so a 500 raised after the Lance write in `create_governed_table` was replayed with
+    nothing to converge it — `mode=Overwrite` re-executing the drop-and-rewrite, `mode=Create`
+    turning a successful create into a 409 nobody can tell from a name collision.
     """
     # RENDERED, not grepped. The app-ids are `{{ .Values... }}` in the template, so a source grep
     # cannot see which policy a head actually gets — the first version of this gate asserted on the
