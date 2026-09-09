@@ -249,35 +249,32 @@ class BasePathRef(BaseModel):
 
 
 def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
-    """Every ``BasePath`` this dataset's manifest declares, path AND kind.
+    """Every ``BasePath`` this dataset declares, path AND kind, from the LIBRARY rather than the bytes.
 
-    The parse is :func:`manifest_base_paths`' — see its docstring for why the referring side is the
-    only side that carries this evidence — reading one field more.
+    `ds._ds.base_paths()` returns `{id: DatasetBasePath(id, name, path, is_dataset_root)}` and is the
+    authoritative answer. This function used to walk the manifest protobuf for field 18 instead —
+    a second source of truth for something the library exposes, and the one that travels with any
+    schema copy. Verified equal on pylance 10.0.0 against a real `shallow_clone`: the accessor gives
+    `{0: DatasetBasePath(id=0, name=None, path=<source>, is_dataset_root=true)}` and the varint walk
+    gave `[BasePathRef(path=<source>, is_dataset_root=True)]` — the same two facts.
+
+    THE VARINT WALK STAYS FOR THE FLAGS AND ONLY FOR THEM (:func:`manifest_feature_flags`): pylance
+    exposes neither the reader nor the writer flag field, so there the bytes ARE the only source. The
+    distinction is the point of this change — parse what the library will not answer, ask it for what
+    it will.
+
+    A base carrying no path is dropped rather than recorded as an empty root: `""` compares equal to
+    nothing useful downstream and reads as a base that exists.
     """
-    blob: bytes = ds._ds.serialized_manifest()  # noqa: SLF001 — same access `manifest_feature_flags` documents
-    refs: list[BasePathRef] = []
-    i, n = 0, len(blob)
-    while i < n:
-        key, i = _varint(blob, i)
-        field, wire = key >> 3, key & 7
-        if wire == 2:
-            length, i = _varint(blob, i)
-            # A submessage carrying no ``path`` is dropped rather than recorded as an empty root:
-            # "" would compare equal to nothing useful downstream and reads as a base that exists.
-            if field == _MANIFEST_BASE_PATHS_FIELD and (ref := _base_path_ref(blob[i : i + length])).path:
-                refs.append(ref)
-            i += length
-        elif wire == 0:
-            _, i = _varint(blob, i)
-        elif wire == 5:
-            i += 4
-        elif wire == 1:
-            i += 8
-        else:
-            # Same rule as the flag walker: STOP rather than misread. A garbage path here would
-            # either refuse a healthy dataset forever or, worse, fail to name a real one.
-            break
-    return refs
+    accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
+    if accessor is None:
+        # A carrier that is not a real `LanceDataset` (a double, an older pylance) declares nothing
+        # rather than raising: every caller treats "no bases" as the ordinary case, and the refusal
+        # this feeds is fail-closed on the FLAG, which is read from the bytes and unaffected here.
+        return []
+    return [
+        BasePathRef(path=str(base.path), is_dataset_root=bool(base.is_dataset_root)) for base in accessor().values() if str(getattr(base, "path", "") or "")
+    ]
 
 
 def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
@@ -298,8 +295,8 @@ def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
     object store"). An empty list is the overwhelmingly common case and means exactly what it says:
     this dataset resolves everything under its own root.
 
-    The PATHS view of :func:`manifest_base_path_refs`, and derived from it rather than parsed a second
-    time — one walker, so a manifest reshuffle cannot fix one reader and leave the other misreading.
+    The PATHS view of :func:`manifest_base_path_refs`, and derived from it rather than read a second
+    time — one source, so a pylance change cannot fix one reader and leave the other misreading.
     """
     return [ref.path for ref in manifest_base_path_refs(ds)]
 
