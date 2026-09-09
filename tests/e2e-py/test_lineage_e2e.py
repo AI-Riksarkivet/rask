@@ -20,6 +20,8 @@ import pytest
 
 
 if TYPE_CHECKING:
+    from psycopg_pool import AsyncConnectionPool
+
     from lineage.schemas import Readers
 
 DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
@@ -299,12 +301,32 @@ def test_discovery_lists_against_age(dsn: str, sample: _Sample) -> None:
     assert failed.error_message and "OOM" in failed.error_message  # error slot, not swapped with a timestamp
 
 
+async def _forget_recon(pool: AsyncConnectionPool, backfill_rid: str) -> None:
+    """Remove `recon$t` and the two runs that touch it from the graph.
+
+    Shared by this test's setup and its teardown so the two can never drift into cleaning different
+    sets — the shape that leaves a node behind while reading as though it does not.
+    """
+    from lineage.core.age import run_cypher
+
+    async with pool.connection() as conn:
+        await run_cypher(conn, "lineage", "MATCH (d:Dataset {name:'recon$t'}) DETACH DELETE d")
+        await run_cypher(
+            conn,
+            "lineage",
+            "MATCH (r:Run) WHERE r.run_id IN ['recon-w1', $rid] DETACH DELETE r",
+            {"rid": backfill_rid},
+        )
+
+
 def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
     """B4: a write whose lineage event was LOST (storage ahead of the graph) is back-filled by reconcile.
 
     Simulates the outbox gap end-to-end against real AGE + real Lance: record a write at v1, land a second
     version on disk WITHOUT its lineage event, then reconcile — the graph must catch up to the on-disk v2.
     """
+    from contextlib import suppress
+
     import lance
     import pyarrow as pa
 
@@ -350,14 +372,7 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
             await repo.ensure_events_table()  # the back-fill now writes a feed row too
             # The AGE graph persists across runs — clear this test's dataset + runs so it starts clean
             # (else a prior back-fill leaves recon$t at v2 and the "graph behind storage" premise breaks).
-            async with pool.connection() as conn:
-                await run_cypher(conn, "lineage", "MATCH (d:Dataset {name:'recon$t'}) DETACH DELETE d")
-                await run_cypher(
-                    conn,
-                    "lineage",
-                    "MATCH (r:Run) WHERE r.run_id IN ['recon-w1', $rid] DETACH DELETE r",
-                    {"rid": backfill_rid},
-                )
+            await _forget_recon(pool, backfill_rid)
             await repo.ingest_event(event)
             before = await repo.latest_write_version("recon$t")
             statuses = await reconcile_all(repo, read_only_recon, backfill=True)
@@ -377,6 +392,15 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
                 feed_rows = await feed.fetchall()
             return before, recon.status, after, rows, feed_rows
         finally:
+            # CLEAN AFTER, not only before. `recon$t` is a BARE literal — it carries none of the
+            # per-run prefixing `_Sample` gives its datasets — and its `dataSource` is a `tmp_path`
+            # that pytest deletes, so a node left behind points at storage that can never exist
+            # again. The lineage sweep then reports it `storage_loss` on EVERY tick, forever: it was
+            # one of the 32 findings measured on the live estate 2026-09-09, and the only one of them
+            # this repository still regenerates. Cleaning before made the test correct and left the
+            # ESTATE dirty, which is the half that shows up in an operator's report.
+            with suppress(Exception):
+                await _forget_recon(pool, backfill_rid)
             await pool.close()
 
     before, status, after, run_rows, feed_rows = asyncio.run(run())
