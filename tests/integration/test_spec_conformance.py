@@ -43,5 +43,50 @@ def test_every_spec_operation_is_served(client: TestClient) -> None:
 
 def test_spec_has_54_operations() -> None:
     # Guards against a stale/shrunken vendored spec silently weakening the conformance check above.
-    op_ids = [op.get("operationId") for item in _spec().get("paths", {}).values() for op in item.values() if isinstance(op, dict) and op.get("operationId")]
-    assert len(op_ids) == 54
+    assert len(_op_ids(_spec())) == 54
+
+
+#: Where the spec is published. Named once so the freshness check below and any future fetch agree.
+_UPSTREAM = "https://raw.githubusercontent.com/lance-format/lance-namespace/main/docs/src/spec.yaml"
+
+
+def _op_ids(doc: dict[str, Any]) -> set[str]:
+    return {op["operationId"] for item in doc.get("paths", {}).values() for op in item.values() if isinstance(op, dict) and op.get("operationId")}
+
+
+def test_the_vendored_spec_still_matches_UPSTREAM() -> None:
+    """The half the count above structurally cannot see: whether the SPEC GREW.
+
+    `== 54` catches our vendored copy shrinking and nothing else. If upstream adds a 55th operation, our
+    copy stays at 54, this suite stays green, and the estate is silently non-conformant against a spec
+    nobody re-read — the conformance gate reporting on a document rather than on the contract.
+
+    NETWORK-GATED and SKIPS without one, the same shape `_helm_template` uses for a missing binary: a
+    gate that fails on an offline laptop teaches people to ignore it, and this one is about drift over
+    weeks rather than about the commit in front of you.
+
+    Compared by operation ID rather than by count, so "they added one and removed one" cannot pass.
+    Measured 2026-09-09: upstream 1.0.0 / 54 ops, vendored 1.0.0 / 54 ops, zero difference either way.
+    """
+    import urllib.error
+    import urllib.request
+
+    import pytest
+
+    try:
+        with urllib.request.urlopen(_UPSTREAM, timeout=20) as response:  # noqa: S310 — a pinned https URL, not caller input
+            upstream = yaml.safe_load(response.read())
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        pytest.skip(f"upstream spec unreachable ({exc}) — freshness is a drift check, not a commit gate")
+
+    ours, theirs = _op_ids(_spec()), _op_ids(upstream)
+    assert theirs, "upstream spec parsed to zero operations — the URL moved; re-point _UPSTREAM"
+    assert not theirs - ours, (
+        f"upstream defines operations the vendored spec does not: {sorted(theirs - ours)}. The catalog is "
+        "non-conformant against the CURRENT spec, and the count guard above cannot see it — re-vendor "
+        f"{_UPSTREAM} and wire the new routes"
+    )
+    assert not ours - theirs, (
+        f"the vendored spec carries operations upstream has RETIRED: {sorted(ours - theirs)} — the "
+        "conformance check is asserting against a contract that no longer exists"
+    )
