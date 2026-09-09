@@ -98,6 +98,11 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "warehouse_activated",
         "warehouse_bound",
         "warehouse_created",
+        # The exact inverse of `warehouse_bound` above, and classified with it: detaching a namespace
+        # from its warehouse changes an OBJECT's routing, not a person's standing. Nobody's access
+        # moved — every grant on the namespace and its tables survives the unbind — so there is nobody
+        # the lane could target.
+        "warehouse_unbound",
         "warehouse_deactivated",
         "warehouse_deleted",
     }

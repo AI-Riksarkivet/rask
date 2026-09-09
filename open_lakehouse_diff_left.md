@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-08, from the rows below rather than asserted: 232 tracked, 139 open, 93 struck.**
+**Counted 2026-09-09, from the rows below rather than asserted: 232 tracked, 138 open, 94 struck.**
 That splits into 68 lettered rows (52 open) and 98 rows in the Q sections — § Q2 carried from
 `open_estate-verification.md`, § Q3 from `open_python-audit.md`, § Q4 recorded from the first e2e run
 against the deployed estate. Re-derive the counts when
@@ -1039,7 +1039,7 @@ lineage; a lost write on a known table is back-filled version-only. **Where.** `
 `catalog/core/lineage_emit.py:598-604`, `lineage_kit/emitter.py:193-197`. **Closes it.** Enumerate the
 catalog registry / warehouse roots; create the Dataset vertex from on-disk `lineage.dataset_id`; R10.
 
-### ~~E2~~ · Bus door trusts a producer-stamped author behind one shared token — **CLOSED 2026-09-09, OBSERVED LIVE**
+### ~~E2 · Bus door trusts a producer-stamped author behind one shared token — **CLOSED 2026-09-09, OBSERVED LIVE**~~
 
 **OBSERVED ON A REAL ROLL at `main-a007b224`.** Restarting lineage re-presents the whole retained
 stream, which is the hardest case this gate meets: **772 deliveries in 90 seconds — 658 authorized
