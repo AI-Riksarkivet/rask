@@ -44,7 +44,23 @@ serviceAccount:
 #     - { name: images-batch, bucket: images-batch, role: raw, endpoint: "https://<tenant>.<hcp-domain>",
 #         insecure: true, secret: hcp-s3, description: "Source page images, as harvested." }
 storage:
-  stores: []
+  # DECLARED rather than left to the built-in defaults, and the reason is the `secret` field: a store
+  # that declares one takes its credentials from the Dapr secret store (`objects.py::_creds`, cached
+  # and fail-closed); one that declares none falls back to the deployment's process env. That fallback
+  # is what put the RustFS ROOT credential in the viewer's environment.
+  # These two ARE the built-in defaults (`service_kit.schemas.storage.DEFAULT_STORES`) — same names,
+  # buckets and roles — carrying the secret that makes the Dapr path the only path.
+  stores:
+    - name: lance-catalog
+      bucket: lance-catalog
+      role: bronze
+      secret: viewer-s3
+      description: The lakehouse warehouse — the governed medallion datasets.
+    - name: rask-observability
+      bucket: rask-observability
+      role: observability
+      secret: viewer-s3
+      description: Telemetry retained by GreptimeDB. Operational, not archival.
 
 singleTenant:
   enabled: false
@@ -2024,6 +2040,16 @@ rustfs:
   # policy in the estate.
   lineageAccessKey: rask-lineage
   lineageSecretKey: ""
+  # THE OBJECT BROWSER, and the LOOSEST-privileged plane holding the TIGHTEST policy: the viewer only
+  # LISTS and GETS. It has no write path at all — `objects.py` calls `list_objects_v2`, `head_object`
+  # and `get_object` and nothing else — so its identity needs no PutObject and no DeleteObject, which
+  # not even lineage's can say.
+  # Named here rather than left empty because the alternative is what was measured on the running
+  # estate 2026-09-09: `AWS_ACCESS_KEY_ID=rustfsadmin` in the viewer's own env — the RustFS ROOT
+  # credential, on a pod that HAS a Dapr sidecar and could have asked the secret store for a scoped
+  # one. The widest credential in the estate, reached by the one path the goal forbids.
+  viewerAccessKey: rask-viewer
+  viewerSecretKey: ""
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog

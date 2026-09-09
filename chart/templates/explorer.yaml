@@ -169,18 +169,14 @@ spec:
             {{- with include "lance.governedFgaPins" $root }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if eq $name "viewer" }}
-            # The S3 object browser (ported from the retired volumes-api, R6/R20): the viewer's
-            # objects endpoints read s3://images-batch* via storage.s3_client, which resolves
-            # endpoint + creds from env. Same ONE credential pair as the fleet (P4 RustFS
-            # unification). The viewer also joins the rustfs netpol ingress allowlist.
+            # The S3 object browser (ported from the retired volumes-api, R6/R20). NO CREDENTIAL ENV:
+            # every store in the registry declares `secret: viewer-s3`, so `objects.py::_creds` fetches
+            # the pair from the Dapr secret store — cached, fail-closed, and the only path. The ENDPOINT
+            # is config because it is not a secret.
+            # It used to carry the fleet's `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair, which
+            # measured `rustfsadmin` on the running pod 2026-09-09: the RustFS ROOT credential, through
+            # env, on a pod that HAS a Dapr sidecar. The viewer also joins the rustfs netpol allowlist.
             - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
-            {{- $appSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef: { name: {{ $appSecret }}, key: AWS_ACCESS_KEY_ID }
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef: { name: {{ $appSecret }}, key: AWS_SECRET_ACCESS_KEY }
             {{- end }}
             {{- if $root.Values.explorer.corpusS3Root }}
             # #142: ALL THREE readers serve the corpus from the governed bucket. NO secret env — the

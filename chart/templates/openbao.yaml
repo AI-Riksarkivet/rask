@@ -242,6 +242,20 @@ spec:
                 {{- end }}
 
               echo "seeded secret/lance into OpenBao"
+              {{- if $.Values.rustfs.viewerAccessKey }}
+
+              {{- /* THE OBJECT BROWSER'S CREDENTIALS, as their OWN secret rather than two more keys on
+                     the `lance` bundle. `objects.py::_creds` fetches a per-STORE secret by name and
+                     reads `access_key`/`secret_key` from it, so the store registry can point a store at
+                     a credential without every reader of the shared bundle gaining it. That is the
+                     mechanism the viewer already had and did not use: with no `secret` on a store it
+                     fell back to process env, which is how `AWS_ACCESS_KEY_ID=rustfsadmin` came to sit
+                     in its environment on a pod that HAS a Dapr sidecar. */}}
+              bao kv put secret/viewer-s3 \
+                access_key={{ $.Values.rustfs.viewerAccessKey }} \
+                secret_key={{ include "lance.scopedStorageSecret" (list $ $.Values.rustfs.viewerAccessKey $.Values.rustfs.viewerSecretKey) }}
+              echo "seeded secret/viewer-s3 into OpenBao"
+              {{- end }}
 
               {{- if $.Values.externalSecrets.enabled }}
               {{- /* THE AUTH HALF ESO NEEDS, and without it the KV half above is unreachable.

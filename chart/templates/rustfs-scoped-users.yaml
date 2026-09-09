@@ -2,7 +2,8 @@
 {{- $maint := .Values.rustfs.maintenanceAccessKey }}
 {{- $medallion := .Values.rustfs.medallionAccessKey }}
 {{- $lineage := .Values.rustfs.lineageAccessKey }}
-{{- if and .Values.rustfs.enabled (or $ray $maint $medallion $lineage) }}
+{{- $viewer := .Values.rustfs.viewerAccessKey }}
+{{- if and .Values.rustfs.enabled (or $ray $maint $medallion $lineage $viewer) }}
 # RustFS SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
 #
 # `rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
@@ -98,6 +99,10 @@ spec:
             {{- if $lineage }}
             - name: LINEAGE_SECRET_KEY
               value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.lineageAccessKey .Values.rustfs.lineageSecretKey) | quote }}
+            {{- end }}
+            {{- if $viewer }}
+            - name: VIEWER_SECRET_KEY
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.viewerAccessKey .Values.rustfs.viewerSecretKey) | quote }}
             {{- end }}
           command:
             - sh
@@ -425,5 +430,41 @@ spec:
               mc admin user add rfs {{ .Values.rustfs.lineageAccessKey }} "$LINEAGE_SECRET_KEY" || true
               mc admin policy attach rfs rask-lineage --user {{ .Values.rustfs.lineageAccessKey }} || true
               echo "provisioned scoped user {{ .Values.rustfs.lineageAccessKey }} (rask-lineage)"
+              {{- end }}
+
+              {{- if $viewer }}
+              cat >/tmp/viewer.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "BrowseAnythingItCanShow",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject"],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  }
+                ]
+              }
+              POLICY
+              {{- /*
+                THE TIGHTEST POLICY IN THE ESTATE, and it can be: the object browser has no write path
+                at all. `viewer/api/v1/endpoints/objects.py` calls `list_objects_v2`, `head_object` and
+                `get_object`, and nothing else — so this identity needs no `PutObject` and no
+                `DeleteObject`, which not even lineage's (one scoped delete on its own outbox) can say.
+
+                THE READ STAYS WIDE ON PURPOSE. A browser that cannot list a bucket does not report a
+                permission error to the operator — it renders the bucket as EMPTY, which is the same
+                failure the store-registry fix already paid for once (`_client_for`: a bucket holding
+                millions of objects rendered as empty, and nothing errored). Narrowing the read here
+                would buy little and reintroduce the least debuggable failure this plane has.
+
+                NO observability DENY, unlike the other three: this identity cannot write anywhere, so
+                the worst it can do to that bucket is read telemetry the same operator is already
+                looking at in Perses.
+              */}}
+              mc admin policy create rfs rask-viewer /tmp/viewer.json
+              mc admin user add rfs {{ $viewer }} "$VIEWER_SECRET_KEY" || true
+              mc admin policy attach rfs rask-viewer --user {{ $viewer }} || true
+              echo "provisioned scoped user {{ $viewer }} (rask-viewer)"
               {{- end }}
 {{- end }}

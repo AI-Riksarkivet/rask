@@ -59,6 +59,16 @@ def _fleet_secret_holders(*set_values: str) -> set[str]:
                 ref = (source.get("secretRef") or {}).get("name", "")
                 if ref.endswith("-app"):
                     holders.add(name.rsplit("-", 1)[-1])
+            # BOTH MECHANISMS, because scanning one of them is how this gate missed a holder.
+            # It was written about `envFrom` — the mount an `env:` survey cannot see — and the viewer
+            # took the same credential the OTHER way, as an explicit `secretKeyRef` on
+            # `AWS_SECRET_ACCESS_KEY`. Measured on the running pod 2026-09-09:
+            # `AWS_ACCESS_KEY_ID=rustfsadmin` in a service this gate reported as clean. A gate that
+            # knows one spelling of a mount certifies the other.
+            for entry in container.get("env", []):
+                ref = ((entry.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name", "")
+                if ref.endswith("-app") and "SECRET" in entry.get("name", "").upper():
+                    holders.add(name.rsplit("-", 1)[-1])
     return holders
 
 
@@ -76,8 +86,16 @@ def test_the_gate_can_see_the_mount_at_all() -> None:
 
 
 def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
-    """The headline: a service with no S3 client must not be handed the estate's widest storage key."""
-    unexpected = sorted(_fleet_secret_holders() - _MAY_HOLD_THE_ROOT_CREDENTIAL)
+    """The headline: a service with no S3 client must not be handed the estate's widest storage key.
+
+    RENDERED WITH THE OPTIONAL PLANES ON, and that is the half this gate was missing. It rendered
+    DEFAULT values, where `explorer.enabled` is off and the viewer's Deployment does not exist — so a
+    service could hold the root credential and be certified clean by a gate that never rendered it.
+    Measured 2026-09-09 on the running estate, which does enable it: `AWS_ACCESS_KEY_ID=rustfsadmin`
+    in the viewer's own environment, on a pod that HAS a Dapr sidecar. A gate that only renders the
+    default deployment is a gate about a deployment nobody runs.
+    """
+    unexpected = sorted(_fleet_secret_holders("explorer.enabled=true", "search.enabled=true") - _MAY_HOLD_THE_ROOT_CREDENTIAL)
 
     assert not unexpected, (
         f"these services receive the fleet secret carrying AWS_ACCESS_KEY_ID=<root>: {unexpected}. It is "
