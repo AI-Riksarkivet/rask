@@ -57,6 +57,13 @@ spec:
      and fixed this session. `IngressSettings.dlq_topic` therefore ships empty, and enabling it is an act
      that presupposes this line. */}}
 {{- $subscribers = append $subscribers (dict "appId" "notifications") }}
+{{- /* MAINTENANCE's write-event subscription — the primary maintenance trigger. Added here under the
+     SAME condition dapr-component.yaml uses to create it, so the two lists cannot disagree about
+     whether the lane exists. It also puts the app-id into `scopes:` below, which is the half a
+     component-only entry would silently miss. */}}
+{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId) }}
+{{- end }}
 {{- range $subscribers }}
       {{ include "lance.subPubsub" (list $ .appId) }}:
         inbound:
@@ -95,6 +102,31 @@ spec:
      caught this one before it shipped. */}}
 {{- if .Values.services.notifications }}
       {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-notifications:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
+{{- /* THE MAINTENANCE WORK QUEUE AND INDEX LANE, which `$subscribers` does not reach for the same
+     reason the two control components above do not: `lance.subPubsub` renders the LINEAGE-topic name,
+     and these are dedicated components with names of their own.
+
+     What the omission would cost, and it is the most expensive unit in the estate to lose: a work
+     unit is one dataset's compaction, and `api/work.py` returns RETRY on a transient S3 or commit
+     failure. With no policy targeting the component, Dapr sends to the dead-letter topic after the
+     FIRST failure — the component's own `maxDeliver` and `backOff` never engage, because the sidecar
+     acks the original. The register's § Q17-35 records the measurement.
+
+     The GATE was blind to this in a way worth naming: `test_every_DURABLE_pubsub_component_has_a_
+     sidecar_retry_target` states the rule as a property over every rendered durable component, but it
+     rendered without `maintenance.workTopic`/`indexTopic` — which ship empty — so these components did
+     not exist in its render and it passed over them vacuously. A property test is only as wide as the
+     values it is rendered with. */}}
+{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
+      {{ .Values.maintenance.workPubsub }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
+{{- if and .Values.maintenance.enabled .Values.maintenance.indexTopic }}
+      {{ .Values.maintenance.indexPubsub }}:
         inbound:
           retry: pubsubDeliveryRetry
 {{- end }}

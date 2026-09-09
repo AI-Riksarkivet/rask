@@ -2275,7 +2275,18 @@ def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
     The rule is stated as a PROPERTY rather than a list of names on purpose: a future subscriber
     added to one template and not the other fails here, which is exactly how this one was missed.
     """
-    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=true")
+    # THE RENDER HAS TO PRODUCE THE COMPONENTS THIS GATE CLAIMS TO CHECK. Stated as a property, the
+    # rule is only as wide as the values it is rendered with: `maintenance.workTopic` and
+    # `indexTopic` ship EMPTY, so the maintenance work-queue and index-build components did not
+    # render at all and the gate passed over them vacuously — a property test blind to exactly the
+    # lane whose units are the most expensive to lose. Set here rather than in values, because the
+    # lane is a deployment choice and the gate must hold whether or not an estate makes it.
+    rendered = _helm_template(
+        "dapr.enabled=true",
+        "dapr.resiliency.enabled=true",
+        "maintenance.workTopic=maintenance.work.v1",
+        "maintenance.indexTopic=maintenance.index.v1",
+    )
     docs = [d for d in yaml.safe_load_all(rendered) if d]
 
     durable = {
