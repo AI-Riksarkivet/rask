@@ -1235,6 +1235,30 @@ class LineageRepository:
             row = await cur.fetchone()
         return int(row[0]) if row and row[0] is not None else None
 
+    async def recorded_event(self, run_id: str, event_type: str | None) -> dict[str, Any] | None:
+        """The payload already stored for this ``(run_id, event_type)``, or ``None``.
+
+        Exists to tell a REPLAY from a new assertion (§ E2). The bus consumer is an ephemeral
+        ``deliverPolicy: all`` subscriber, so every lineage restart re-presents the entire retained
+        stream — that is the estate's stated recovery story, not a fault — and an authorization gate
+        meets those old events again each time. They are already in the graph, so refusing them loses
+        nothing, but it turns a restart into a burst of refusals that reads exactly like a producer
+        under attack.
+
+        THE COMPARISON IS THE WHOLE POINT, and a key match alone would be a hole: the graph SETs
+        ``author``, ``operation`` and ``event_type`` last-wins on a ``MERGE`` by run id, so accepting
+        any event whose ``(run_id, event_type)`` already exists would let a forger rewrite an existing
+        run's author or turn it into a ``drop_table`` — the exact mutation `enforce_output_authz`'s run
+        check was added to stop. Only a BYTE-IDENTICAL payload is a replay.
+        """
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(pg.RECORDED_EVENT, (run_id, event_type))
+            row = await cursor.fetchone()
+        if not row or row[0] is None:
+            return None
+        stored = row[0]
+        return cast("dict[str, Any]", stored) if isinstance(stored, dict) else None
+
     async def run_output_names(self, run_id: str) -> list[str]:
         """The datasets this run has ALREADY recorded writing — empty when the run does not exist.
 

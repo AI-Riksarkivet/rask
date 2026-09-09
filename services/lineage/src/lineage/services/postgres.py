@@ -77,6 +77,11 @@ INSERT_EVENT: Final = (
     "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb) "
     "ON CONFLICT DO NOTHING"
 )
+# The stored payload for one feed row, used ONLY to tell a REPLAY from a new assertion (§ E2). Reads
+# the same `(run_id, event_type)` the terminal unique index covers, so it is an index lookup rather than
+# a scan. `ORDER BY seq` + LIMIT 1 because non-terminal types carry no unique constraint and may hold
+# several rows; the FIRST is the one the feed's own "keeps the first terminal row" contract preserves.
+RECORDED_EVENT: Final = "SELECT event FROM public.lineage_events WHERE run_id = %s AND event_type = %s ORDER BY seq LIMIT 1"
 LIST_EVENTS: Final = "SELECT seq, event_type, event_time, job, author, inputs, outputs, event FROM public.lineage_events ORDER BY seq DESC LIMIT %s"
 # Keyset variant (§2 perf, 2026-07-11): `seq < %s` walks older pages off the PK index — NEVER OFFSET
 # (OFFSET re-scans and re-drops every skipped row, so page N costs O(N·page)). The summary variants

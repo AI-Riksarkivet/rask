@@ -229,10 +229,42 @@ async def enforce_bus_authz(event: RunEvent, request: Request, settings: Lineage
     """
     if not settings.fga_enabled:
         return
-    subject = author_sub_from_payload(event.model_dump(by_alias=True))
-    if not subject:
-        raise PermissionDeniedError("a bus-delivered run must carry a verified author sub to be authorized")
-    await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
+    payload = event.model_dump(by_alias=True)
+    subject = author_sub_from_payload(payload)
+    try:
+        if not subject:
+            raise PermissionDeniedError("a bus-delivered run must carry a verified author sub to be authorized")
+        await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
+    except PermissionDeniedError:
+        if not await _is_replay(event, payload, request):
+            raise
+        log.info("lineage_replay_not_reauthorized", extra={"run": event.run.run_id, "event_type": event.event_type})
+
+
+async def _is_replay(event: RunEvent, payload: dict[str, object], request: Request) -> bool:
+    """Is this the SAME event the feed already holds — a redelivery rather than a new assertion?
+
+    THE BUS RE-PRESENTS EVERY RETAINED EVENT ON EVERY RESTART. The consumer is ephemeral with
+    `deliverPolicy: all`, which is the estate's recovery story ("the stream retains it and this
+    consumer re-sees it on restart"), so an authorization gate meets the whole history again each time
+    lineage rolls. Those runs are already in the graph — measured 2026-09-09, a full 2 161-message
+    replay left the durable feed flat at 3 248 rows — so refusing them loses nothing and merely turns
+    an ordinary restart into a burst of refusals indistinguishable from a producer under attack.
+
+    CHECKED ONLY AFTER A DENIAL, so the authorized path pays no extra read: a replay of an event that
+    still authorizes cleanly never reaches here.
+
+    BYTE-IDENTICAL, never a key match. The graph MERGEs on run id and SETs `author`, `operation` and
+    `event_type` last-wins, so exempting anything whose `(run_id, event_type)` merely EXISTS would let a
+    forger rewrite an existing run's author, or restamp it as a `drop_table` the reconcile sweep then
+    honours — precisely the mutation the run check above exists to refuse. An event that differs in any
+    field is a new assertion and stays refused.
+    """
+    repository = getattr(request.app.state, "repository", None)
+    if repository is None or not event.run.run_id:
+        return False
+    stored = await repository.recorded_event(event.run.run_id, event.event_type)
+    return stored is not None and stored == payload
 
 
 async def enforce_output_authz(
