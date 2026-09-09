@@ -20,7 +20,10 @@ every deployment must remember to turn ON is the same defect facing the other wa
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, cast
+
+import pytest
 
 from maintenance.services import credentials
 
@@ -48,6 +51,23 @@ def _settings() -> MaintenanceSettings:
 _FALLBACK = {"aws_access_key_id": "root", "aws_secret_access_key": "root"}
 
 
+@pytest.fixture(autouse=True)
+def _fresh_notice() -> Iterator[None]:
+    """The notice is once per PROCESS, so every test here needs it un-fired to observe it.
+
+    Without this the module only passes when nothing earlier in the process fired the notice, and
+    something does: `tests/unit/test_base_refs_guard.py` drives a REAL SWEEP TICK, which goes through
+    `write_options_for` against the same unconfigured vending. Bisected 2026-09-09 — running that one
+    file ahead of this one is enough to red it. The declared `testpaths` order puts this service before
+    `tests/unit`, which is the only reason it held; a suite that passes on the order it happens to be
+    invoked in is not pinned. Autouse rather than a call in each test, so a test added later cannot
+    forget it.
+    """
+    credentials._reset_vending_notice()
+    yield
+    credentials._reset_vending_notice()
+
+
 def test_vending_switched_OFF_is_announced_not_assumed(caplog) -> None:
     """The operator must be able to learn, from the log, that this rewrite was root-signed."""
     with caplog.at_level(logging.INFO, logger="maintenance.services.credentials"):
@@ -66,7 +86,6 @@ def test_it_says_so_ONCE_per_process_not_once_per_dataset(caplog) -> None:
     The condition is a whole-service one and does not change between datasets, so it is reported at the
     volume of the CONFIGURATION rather than the volume of the sweep.
     """
-    credentials._reset_vending_notice()
     with caplog.at_level(logging.INFO, logger="maintenance.services.credentials"):
         for table in ("a$one", "b$two", "c$three"):
             credentials.write_options_for(f"s3://b/{table}", _settings(), fallback=_FALLBACK, declared_table_id=table)
