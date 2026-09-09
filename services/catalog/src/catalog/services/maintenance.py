@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from lance_namespace import UnsupportedOperationError
 
@@ -223,7 +223,45 @@ def _tag_versions(ds: VersionedDataset) -> dict[str, int]:
     return out
 
 
-def preview_gc(ds: VersionedDataset, *, retention_days: int | None, retain_versions: int | None) -> dict[str, Any]:
+class GcPreviewData(TypedDict):
+    """What `preview_gc` returns — the SERVICE's shape, declared where the service is.
+
+    A `TypedDict` and not the wire model, deliberately: no service module in this package imports
+    `catalog.schemas`, because services return plain data and the endpoints own the wire shape. Naming
+    the shape here keeps that layering and still lets `ty` see it.
+
+    THE SPLAT WAS NEVER UNSAFE, which is why this is a type fix and not a runtime one. Pydantic
+    validates types and required fields on `__init__`, so `GcPreview(**result)` already refuses a
+    drifted key — and refuses an EXTRA one, which `model_validate` would silently ignore. What was
+    missing is the failure arriving at the type checker rather than at the door. Verified: renaming one
+    key here produces `ty` errors where it previously produced none.
+    """
+
+    current_version: int
+    total_versions: int
+    eligible_versions: list[int]
+    protected_tags: dict[str, int]
+    retention_days: int | None
+    retain_versions: int | None
+
+
+class GcRunData(TypedDict):
+    """What `run_gc` returns — see :class:`GcPreviewData` for why these are TypedDicts."""
+
+    ok: bool
+    old_versions_removed: int
+    bytes_removed: int
+
+
+class CompactData(TypedDict):
+    """What `compact_now` returns — see :class:`GcPreviewData` for why these are TypedDicts."""
+
+    ok: bool
+    fragments_removed: int
+    fragments_added: int
+
+
+def preview_gc(ds: VersionedDataset, *, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
     """Dry-run the old-version cleanup — the versions GC would reclaim, and the tags protecting others."""
     current = int(ds.version)
     tags = _tag_versions(ds)
@@ -250,7 +288,7 @@ def preview_gc(ds: VersionedDataset, *, retention_days: int | None, retain_versi
     }
 
 
-def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None) -> dict[str, Any]:
+def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None) -> GcRunData:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, exactly like the compaction sweep.
 
     THE STEP THAT ACTUALLY DELETES, which is why ``protected`` matters most here: measured, compaction
@@ -271,7 +309,7 @@ def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_version
 
 def compact_now(
     ds: CompactableDataset, *, target_rows_per_fragment: int | None, storage_options: StorageOptions, protected: BaseRefs | None = None
-) -> dict[str, Any]:
+) -> CompactData:
     """#76 on-demand compaction — merge small fragments now (the operator's manual 'compact now', the analog
     of the sweep's per-table pass). Plain (non-deferred) compaction: a single on-demand pass isn't racing a
     concurrent index build, so it needs no defer_index_remap. Then keep the indices covering the new
