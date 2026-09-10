@@ -257,6 +257,15 @@ spec:
             {{- end }}
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.rustfs.bucket | quote }} }
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
+            {{- /* THE SAME IDENTITY, AT LINEAGE'S DOOR. `catalog_service_identity` is who this app is to the
+                 CATALOG; `fga_service_identity` is who it is when it AUTHORS a run, and lineage authorizes the
+                 author `sub` against FGA. Rendered here for the same reason the stage-runner block above
+                 renders it and states: absent, the app claims a code default (`service-stage-runner`) that
+                 holds no tuple, and lineage refuses the run while the request answers 202.
+                 Measured 2026-09-10: every `/produce` emitted `sub='ray'`, every one was refused, and the
+                 provenance of every cascade head was discarded with nothing red. The stage runners were
+                 given this on 2026-09-08; the producer was not, and the gap outlived the fix. */}}
+            - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- if .Values.medallion.qualityReview }}
             # S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
             # stage runners hold promotions; only this app-id can raise the decision event into the instance,
