@@ -30,6 +30,24 @@ def _client() -> CatalogServiceClient:
     return CatalogServiceClient(BRONZE, base_url=BASE)
 
 
+@pytest.fixture(autouse=True)
+def _contract_check_is_covered_elsewhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This file is about the catalog PROTOCOL — which call, which body, which status means what.
+
+    `ensure` also asserts the A14 creation contract on every return, and against the `s3://` locations
+    these tests hand back that means vending a credential and OPENING the dataset. Neither exists here:
+    the URIs are fixtures, so the open fails with `Failed to parse the region for bucket 'wh'` and every
+    protocol test turns red for a reason that has nothing to do with the protocol.
+
+    Stubbed rather than mocked into each test, so a test added tomorrow inherits it, and so this file
+    keeps asserting one thing. The contract itself — all three returns, both clauses, and the negative
+    control — is driven against REAL datasets in
+    `test_the_creation_contract_gates_the_service_path.py`. The same stubbing choice is already made for
+    the local path in `test_diagnostics_do_not_leak_and_do_not_guess.py`.
+    """
+    monkeypatch.setattr(CatalogServiceClient, "_contracted", lambda _self, _ns, _ds, uri: uri)
+
+
 def test_the_table_id_joins_project_and_dataset_with_the_catalog_delimiter() -> None:
     """`bronze$pages`, not `bronze/pages`. A wrong separator addresses a DIFFERENT table rather than
     failing, which is the kind of mistake that only shows up as missing data."""

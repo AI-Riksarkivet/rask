@@ -214,7 +214,7 @@ class CreationContractError(ValueError):
     """A governed dataset was created without a guarantee every tier above it depends on."""
 
 
-def assert_creation_contract(uri: str) -> None:
+def assert_creation_contract(uri: str, storage_options: dict[str, str] | None = None) -> None:
     """A14 — REFUSE a governed dataset that is missing its creation-time guarantees.
 
     Two things must hold from version 1, and neither can be repaired afterwards:
@@ -243,7 +243,11 @@ def assert_creation_contract(uri: str) -> None:
     """
     import lance
 
-    dataset = lance.dataset(uri)
+    # THE CREDENTIAL THE CALLER ALREADY HOLDS, when it holds one. Opening with no options falls to the
+    # ambient chain, which is correct for the LOCAL path (a filesystem dataset, no credential involved)
+    # and wrong for the catalog-service path: that caller vends a table-scoped credential and should
+    # not read the table it just vended for under the deployment's own key.
+    dataset = lance.dataset(uri, storage_options=storage_options) if storage_options else lance.dataset(uri)
 
     if "id" not in dataset.schema.names:
         raise CreationContractError(

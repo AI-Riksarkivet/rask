@@ -36,6 +36,7 @@ import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from ingest.catalog import assert_creation_contract
 from ingest.config import settings
 from ingest.naming import delimiter
 from ingest.service_identity import service_headers
@@ -297,14 +298,14 @@ class CatalogServiceClient:
             # `cast(NULL as string)` extends the schema and NULL-fills existing rows without a
             # rewrite (guide.md, Data Evolution) — and it runs at ensure, BEFORE any fan-out.
             self._ensure_etag_column(namespace, dataset)
-            return located
+            return self._contracted(namespace, dataset, located)
 
         self._ensure_namespace(namespace)
         # The create's OWN response carries the location, so the happy path costs one call, not two —
         # and more importantly it does not re-ask a read door the question the read door cannot answer.
         created = self._create_empty(namespace, dataset, external_base)
         if created is not None:
-            return created
+            return self._contracted(namespace, dataset, created)
 
         # Only a 409 reaches here: the table already existed. Re-describe, because the tuples that make
         # it describable were seeded by whoever created it.
@@ -317,7 +318,37 @@ class CatalogServiceClient:
                 f"{self.table_id(namespace, dataset)} already exists but this identity cannot describe it — "
                 f"it needs can_get_metadata on table:{self.table_id(namespace, dataset)} (or writer on its namespace)"
             )
-        return located
+        return self._contracted(namespace, dataset, located)
+
+    def _contracted(self, namespace: str, dataset: str, uri: str) -> str:
+        """A14 on the path that SHIPS — every return of :meth:`ensure` goes through here.
+
+        `LocalCatalog.ensure` has always asserted this and states the reason at the site: stable row
+        ids and an `id` column cannot be added afterwards, so the head of a run is the last moment an
+        operator can still fix it cheaply. Measured 2026-09-10: none of this class's three returns
+        checked anything, so every unit test passed through `LocalCatalog` while the cluster used a
+        seam that gated nothing — a control that cannot fire.
+
+        ALL THREE RETURNS, and the short-circuit is the one that matters most: a table created before
+        the contract, or by another writer, reaches production through that branch and never through
+        the create. Checking only what this call created would gate the case that is already correct.
+
+        Read with the TABLE-SCOPED credential where the door vends one, falling back to the ambient
+        chain where it does not — the same fallback the rest of this client takes and for the same
+        reason: a hardening that can fail the run turns a correctness gate into a way of not ingesting.
+
+        Blast radius measured before it was turned on: six live tables across bronze, silver, gold and
+        two tenants satisfy both clauses, so this refuses nothing that exists today. It guards the next
+        writer, not a migration.
+        """
+        # ASK ONLY WHERE A CREDENTIAL IS NEEDED. A filesystem location needs none, and vending for one
+        # costs a round trip against a door that will decline anyway — the first cut asked
+        # unconditionally and made ten suites that drive `ensure` against a local path fail on an
+        # unmocked credentials call, which is the shape of a check that reaches further than the
+        # question it is answering.
+        vended = self.vend_storage_options(namespace, dataset, tier="read") if "://" in uri else None
+        assert_creation_contract(uri, vended.options if vended is not None else None)
+        return uri
 
     def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
         """Fold client-written fragments into ONE new version. Returns (version, row_count)."""

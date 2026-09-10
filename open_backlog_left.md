@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**264 open items**, deduped from 325 raw rows mined out of the seven files above.
+**263 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 23 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 22 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 5 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -174,12 +174,6 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 
 - *Why open:* The unbind door landed and deployed (`DELETE /v1/warehouses/{id}/namespaces/{ns}`, 0280adfb) and `gold` unbound 200, but `bronze-media` answered 409 NamespaceNotEmptyError ('still holds 1 table(s): objects') and `silver-media` holds `features` at `s3://lakehouse-wh/a76d1ca5_silver-media$features`. The plan claimed both prefixes were empty (a pyarrow FileSelector returning 0 entries); the catalog disagreed.
 - *Closes when:* Owner decides drop-or-relocate for `bronze-media$objects` and `silver-media$features`, then calls the unbind door for both namespaces with a human bearer holding `project:lakehouse#can_administer`.
-
-**LH-017 · `CatalogServiceClient.ensure` never calls `assert_creation_contract` — not on its short-circuit return, not after `_create_empty`**
-`catalog, ingest, medallion` · **HIGH**
-
-- *Why open:* The creation gate runs on the local-catalog path the tests take and not on the catalog-service path production takes, so a table created in-cluster is never checked against the creation contract. Surfaced by the (refuted) primary-key investigation and left unfixed.
-- *Closes when:* Call `assert_creation_contract` on both branches of `CatalogServiceClient.ensure`, with a RED test driving the service-client path rather than `LocalCatalog`.
 
 **LH-018 · The governed commit door is the non-spec `/commit`; `CreateTableVersion`/`BatchCommitTables` carry no lineage, gate, protection or replay marker**
 `catalog` · **HIGH** · **blocked:** owner acknowledgement of R1
