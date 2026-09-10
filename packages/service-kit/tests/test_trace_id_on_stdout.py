@@ -32,6 +32,7 @@ from __future__ import annotations
 import io
 import logging
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -198,11 +199,29 @@ def test_a_LIBRARYS_ambient_record_field_is_not_a_diagnostic(stdout_lines: io.St
     `uvicorn` tree `propagate: False` (`uvicorn/config.py:108`), so any test in the run that applies it
     detaches that name from the root handler and this assertion stops measuring the formatter at all.
     """
-    logging.getLogger(f"{__name__}.ambient").info(
-        "Started server process [%d]",
-        4242,
-        extra={"color_message": "Started server process [\x1b[36m%d\x1b[0m]", "_ray_timestamp_ns": 1789033301968524218},
-    )
+    # RAY'S OWN MECHANISM, not `extra=`. Ray installs a log record FACTORY that stamps the field on
+    # every record (`ray/_private/log.py:71-88`), and passing the same key through `extra=` is both
+    # unfaithful and order-dependent: once anything in the run has actually imported Ray, the factory
+    # has already set the attribute and `logging` refuses the overwrite with
+    # `KeyError: Attempt to overwrite '_ray_timestamp_ns' in LogRecord`. Measured — this test passed
+    # alone and failed in the full suite for exactly that reason. Installing the factory reproduces
+    # production and is immune to whether Ray is imported.
+    previous_factory = logging.getLogRecordFactory()
+
+    def _ray_shaped_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = previous_factory(*args, **kwargs)
+        record.__dict__["_ray_timestamp_ns"] = 1789033301968524218
+        return record
+
+    logging.setLogRecordFactory(_ray_shaped_factory)
+    try:
+        logging.getLogger(f"{__name__}.ambient").info(
+            "Started server process [%d]",
+            4242,
+            extra={"color_message": "Started server process [\x1b[36m%d\x1b[0m]"},
+        )
+    finally:
+        logging.setLogRecordFactory(previous_factory)
 
     line = stdout_lines.getvalue()
     assert "Started server process [4242]" in line, f"the record never reached stdout: {line!r}"

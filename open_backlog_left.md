@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**265 open items**, deduped from 325 raw rows mined out of the seven files above.
+**264 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 118 | 25 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 24 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 5 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -86,12 +86,6 @@ from, kept so an old citation still resolves.
 ### Provenance & lineage is correct
 
 _Every governance promise the lakehouse makes rests on the run record being emitted, stored and reproducible; where it is wrong the estate cannot say which run wrote which bytes._
-
-**LH-001 · 20+ governed silver/gold tables still declare their PARENT's `lance.dataset_id`**
-`medallion, maintenance, lineage, catalog` · **HIGH** · **blocked:** owner decision: backfill pass vs narrowed docstring
-
-- *Why open:* `stage_stamp.ensure_declared_dataset_id` only re-stamps on a cascade WRITE, so quiet tiers keep the stale name: `acme-silver$features` still carried `lineage.dataset_id = acme-bronze$events` at version 288, 20h after the fix. Maintenance lineage names the wrong dataset, `write_options_for(declared_table_id=...)` can vend for bronze and rewrite silver, and `plan_via_catalog` was observed planning bronze's read_version against silver's bytes.
-- *Closes when:* Owner picks (a) a metadata-only idempotent backfill rewriting `lance.dataset_id`/`lineage.*` schema metadata on every governed silver/gold table, or (b) accept stale names on dormant tiers and narrow `ensure_declared_dataset_id`'s docstring.
 
 **LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
 `lineage, maintenance` · **HIGH**
