@@ -1992,7 +1992,14 @@ rustfs:
   # EMPTY = the root credential, i.e. today's behaviour, so this stays inert until an identity is
   # named. `rustfs-scoped-users` then creates the policy and the user with the same `mc` image the
   # bucket-init Job uses.
-  rayComputeAccessKey: ""
+  # NAMED 2026-09-10, the third identity `medallionAccessKey`/`maintenanceAccessKey` already are.
+  # While it was empty, `infra-credentials.yaml`'s `| default .Values.rustfs.accessKey` made the
+  # ESO-delivered `ray-compute-secret-key` the tenant ROOT — measured on the live estate, both
+  # `ray-compute-access-key` and `ray-compute-secret-key` decoded to `rustfsadmin`. So the SANCTIONED
+  # delivery path was handing out root while a hand-applied Secret carried the scoped credential the
+  # head actually used: pointing the head at ESO to "fix the path" would have silently downgraded the
+  # Ray lane from scoped to root, which is the opposite of what that change looks like.
+  rayComputeAccessKey: rask-ray-compute
   rayComputeSecretKey: ""
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #

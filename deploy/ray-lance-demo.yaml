@@ -70,11 +70,17 @@ spec:
             # off) the job omits the header, which is the auth-off ingest's correct behaviour.
             - name: S3_SECRET
               valueFrom:
-                # Paired with S3_KEY above: the scoped compute credential's own secret, in its own
-                # Secret object. Pointing at `rask-infra-credentials/rustfs-secret-key` here would
-                # hand the ROOT secret to a pod whose key is the scoped one — a mismatch that fails
-                # closed with an unhelpful SignatureDoesNotMatch rather than saying which half is wrong.
-                secretKeyRef: { name: rask-ray-compute-s3, key: secretkey }
+                # Paired with S3_KEY above, and read from the ESO-MANAGED object. `rustfs-secret-key`
+                # in this same Secret is the ROOT secret and would fail closed against a scoped key
+                # with an unhelpful SignatureDoesNotMatch — `ray-compute-secret-key` is the scoped
+                # half, derived by `lance.scopedStorageSecret` and written by the same values that
+                # create the RustFS user, so the two cannot drift apart.
+                #
+                # It used to read a hand-applied `rask-ray-compute-s3`, which put a storage SECRET on
+                # the one delivery path the goal forbids: not Dapr (this pod runs no daprd), not ESO,
+                # not STS. ESO is the sanctioned path for a sidecar-less pod, and this Secret is the
+                # only ExternalSecret target the estate materialises for it.
+                secretKeyRef: { name: rask-infra-credentials, key: ray-compute-secret-key }
             - { name: S3_REGION, value: "us-east-1" }
             - { name: RAY_DEDUP_LOGS, value: "0" }
             # THE TRAINER'S DEDICATED CREDENTIAL, not the shared app token. With
