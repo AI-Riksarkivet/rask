@@ -186,9 +186,24 @@ spec:
             - { name: MEDIA_S3_ENDPOINT, value: {{ include "lance.s3Endpoint" $root | quote }} }
             - { name: MEDIA_S3_DB_ROOT, value: {{ $root.Values.explorer.corpusS3Root | quote }} }
             {{- $mediaSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
+            {{- if and (eq $name "viewer") $root.Values.rustfs.viewerAccessKey }}
+            # THE FALLBACK IDENTITY, and it must not be the tenant root. A store in `RASK_STORES` that
+            # names a `secret` resolves its own scoped pair from the Dapr store (`viewer-s3`, seeded by
+            # `openbao.yaml`) and never reads this; a store that names NONE deliberately falls back to
+            # process env, which is an operator's choice the registry documents. What that fallback
+            # must not be is `rustfsadmin`.
+            #
+            # It also stopped the env from LYING. Measured 2026-09-10: the viewer resolved
+            # `access_key=rask-viewer` from Dapr for both its registered stores — correctly scoped —
+            # while `MEDIA_S3_ACCESS_KEY_ID=rustfsadmin` sat in its environment, so an audit of pod env
+            # read "the object browser runs as root" and was wrong. It misread that way twice on the
+            # same day, which is the cost of a vestigial value that looks operative.
+            - { name: MEDIA_S3_ACCESS_KEY_ID, value: {{ $root.Values.rustfs.viewerAccessKey | quote }} }
+            {{- else }}
             - name: MEDIA_S3_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef: { name: {{ $mediaSecret }}, key: AWS_ACCESS_KEY_ID }
+            {{- end }}
             {{- end }}
             {{- if or (eq $name "search") (eq $name "viewer") }}
             # Query encoders (values.encoders). search CALLS them (vector/hybrid/rerank legs); viewer

@@ -1485,6 +1485,26 @@ twelve with a verdict as of 2026-09-07. The estate has not REACHED zero trust; w
 nothing in this section is unknown any more. The sweep scored 19 controls (HAVE 6, STRONGER 3,
 PARTIAL 8, MISSING 1) and said items 1-4 "decide whether the claim is honest":
 
+    F2-1  **RE-MEASURED ON THE RUNNING PODS 2026-09-10, and the count is ONE, not the two an env
+          survey suggests.** `rask-catalog` alone presents `LANCE_S3_ACCESS_KEY_ID=rustfsadmin`, and it
+          stays a DESIGN question rather than another copy of the pattern: it vends for every warehouse
+          a tenant mints at runtime, so a role narrowed to today's buckets cannot vend tomorrow's.
+          The other two candidates were REFUTED by measuring one step further than the env:
+            * `rask-ingest` carries no `S3_ACCESS_KEY_ID` at all — `RASK_INGEST_SECRETS_FROM_DAPR=true`,
+              so its identity comes from the store, not from env.
+            * `rask-viewer` shows `MEDIA_S3_ACCESS_KEY_ID=rustfsadmin` and is NOT running as root:
+              every store in its `RASK_STORES` declares `secret: viewer-s3`, and fetching that through
+              the pod's own sidecar returns `access_key=rask-viewer` with a 40-char derived secret. The
+              env value is a FALLBACK no registered store takes.
+          **That vestigial value was still worth removing, because it lied to two readers on one day** —
+          an audit of pod env reads "the object browser runs as root", which is what a parallel triage
+          agent concluded and what this file nearly recorded. The chart now renders the viewer's
+          fallback as `rask-viewer` (`explorer.yaml`), so the widest credential is not what a store
+          without a declared secret would fall back to. search and annotator keep the shared fallback.
+          **DELIVERY, verified live on all four lakehouse services**: `secret_from_dapr_store` logged
+          exactly once per pod at boot, and `apply_boot_secrets` fails CLOSED on a store miss rather
+          than reading a plaintext env value. No pod spec in the fleet carries a literal secret — the
+          16 secret-shaped literals are all flags or field NAMES.
     F2-1  per-workload storage identities — DONE for the medallion plane, and as of release 102/103
           they are RELEASE INTENT rather than drift: `helm get values` carries
           rustfs.medallionAccessKey + maintenanceAccessKey, the post-upgrade hook rotated both RustFS
