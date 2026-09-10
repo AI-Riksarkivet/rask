@@ -54,15 +54,52 @@ def _blocks(text: str) -> list[tuple[str, int, int]]:
     return out
 
 
+def _retotal(text: str) -> str:
+    """Re-derive the phase table and the grand total from the rows that are actually present."""
+    bounds = [(m.start(), m.group(1)) for m in _SECTION.finditer(text)] + [(len(text), None)]
+    per_section: dict[str, tuple[int, int]] = {}
+    for i, (start, name) in enumerate(bounds[:-1]):
+        body = text[start : bounds[i + 1][0]]
+        if name:
+            per_section[name] = (len(_ITEM_START.findall(body)), len(re.findall(r"· \*\*HIGH\*\*", body)))
+
+    def _row(m: re.Match[str]) -> str:
+        prefix = _LABEL_TO_SECTION.get(m.group(2).strip())
+        match = [k for k in per_section if prefix and k.startswith(prefix)]
+        if len(match) != 1:
+            return m.group(0)
+        n, h = per_section[match[0]]
+        return f"{m.group(1)}{n}{m.group(4)}{h}{m.group(6)}"
+
+    text = _TABLE_ROW.sub(_row, text)
+    return _TOTAL.sub(f"**{len(_ITEM_START.findall(text))} open items**", text, count=1)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Close backlog items by number.")
-    ap.add_argument("ids", nargs="+", help="item ids to close, e.g. LH-005")
+    ap.add_argument("ids", nargs="*", help="item ids to close, e.g. LH-005")
+    ap.add_argument("--recount", action="store_true", help="re-derive the phase table without closing anything (after adding a row by hand)")
     ap.add_argument("-m", "--reason", default="", help="printed back, so the commit message can quote it")
     args = ap.parse_args()
 
     text = REGISTER.read_text(encoding="utf-8")
     blocks = _blocks(text)
     by_num = {n: (s, e) for n, s, e in blocks}
+
+    if args.recount:
+        # ADDING a row is the other half of draining, and it drifts the phase table exactly as closing
+        # one does. Without this the only way to re-derive was to close something, so a hand-added row
+        # left the counts gate red and invited a hand-edited total — the drift this file exists to end.
+        if args.ids:
+            print("!! --recount closes nothing; pass it alone")
+            return 1
+        REGISTER.write_text(_retotal(text), encoding="utf-8")
+        print(f"phase table re-derived; {len(_ITEM_START.findall(text))} open items")
+        return 0
+
+    if not args.ids:
+        print("!! name at least one item id to close, or pass --recount")
+        return 1
 
     wanted = [i.upper() for i in args.ids]
     missing = [n for n in wanted if n not in by_num]
@@ -82,28 +119,8 @@ def main() -> int:
         s, e = by_num[n]
         text = text[:s] + text[e:]
 
-    # Re-derive the phase table from what is left.
-    bounds = [(m.start(), m.group(1)) for m in _SECTION.finditer(text)] + [(len(text), None)]
-    per_section: dict[str, tuple[int, int]] = {}
-    for i, (start, name) in enumerate(bounds[:-1]):
-        body = text[start : bounds[i + 1][0]]
-        items = _ITEM_START.findall(body)
-        highs = len(re.findall(r"· \*\*HIGH\*\*", body))
-        if name:
-            per_section[name] = (len(items), highs)
-
-    def _row(m: re.Match[str]) -> str:
-        prefix = _LABEL_TO_SECTION.get(m.group(2).strip())
-        match = [k for k in per_section if prefix and k.startswith(prefix)]
-        if len(match) != 1:
-            return m.group(0)
-        n, h = per_section[match[0]]
-        return f"{m.group(1)}{n}{m.group(4)}{h}{m.group(6)}"
-
-    text = _TABLE_ROW.sub(_row, text)
+    text = _retotal(text)
     total = len(_ITEM_START.findall(text))
-    text = _TOTAL.sub(f"**{total} open items**", text, count=1)
-
     REGISTER.write_text(text, encoding="utf-8")
     print(f"\n{total} open items remain")
     return 0

@@ -65,7 +65,7 @@ claim it works first. **Push every commit.**
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 24 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 23 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 5 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -92,6 +92,12 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
 - *Why open:* MEASURED ON THE LIVE ESTATE 2026-09-10 by driving two `/produce` calls into `bronze$events` and reading what the graph kept. Both cascades RAN — `medallion_cascade_triggered` fired for each — and lineage refused the provenance of every hop: `ingest_denied sub='ray' relation='can_write_data' outputs=['bronze$events']` twice at 12:56:01, then `ingest_denied sub='data_eng' ... outputs=['silver$features']` twice. Neither token appears anywhere in 400 scanned durable-feed events. `workflow.py:1077` stamps `custom_facet(_PRODUCER, name=settings.author, sub=settings.author)`, and those authors are ROLE NAMES — `producer_author` defaults to `"ray"` (`core/config.py:528`), `author` to `"data_eng"` (`:143`), and `values.yaml:1429,1437` ship `author: data_eng` on every stage runner. `user:ray` and `user:data_eng` hold no FGA tuple because they are not identities, so the ingest gate denies correctly and the write's provenance is dropped. This is the exact anti-pattern `.claude/skills/rask-notifications` names — a role literal in `author.sub` targets nobody and the event is still acked — with the whole provenance chain as the blast radius rather than a notification. NOTHING IS RED: the reconciler files a `RECONCILE` run minutes later (`reconcile.bronze$events` at 13:00 in the same window), so the graph looks populated while every cascade run's real author, token and derivation are gone. That is the goal's first condition — a write's provenance survives it — failing on every cascade write in the estate.
 - *Closes when:* An owner ruling on WHICH identity owns a cascade write, then stamp it instead of the role literal. The service identity already sits on the same values line the role does (`serviceIdentity: "service-bronze-to-silver"`), and `service-medallion-producer` already holds tuples the catalog honours, so the shape is available rather than new; it needs the FGA grants for `can_write_data` on the tiers each runner writes, and a test driving a REAL cascade that asserts the run reaches `/events` rather than asserting the emit was called. Note the role name is still wanted for ATTRIBUTION — the fix is to stop it being the authz SUBJECT, not to delete it.
+
+**LH-122 · A namespace listing filtered to empty is indistinguishable from a namespace with no tables**
+`catalog, lakehouse` · low
+
+- *Why open:* `GET /v1/namespace/{id}/table/list` returns `{"context": {"authorization_truncated": "true"}, "tables": []}` when the reader holds no grant on the tables under it — while `POST /v1/table/{id}/describe` on a table in that same namespace answers REGISTERED. Measured 2026-09-10: `acme-silver` and `lakehouse-silver` both listed `[]` for an estate admin while `acme-silver$features` and `lakehouse-silver$features` were registered with bytes on disk. The truncation flag is present and correct — the catalog is not lying — but it rides `context`, which a reader scanning `tables` never looks at. This cost a false diagnosis in the same session: an empty list read as "the cascade registers nothing" and LH-015 was nearly re-opened on it.
+- *Closes when:* Decide whether a filtered listing should say so where it is READ rather than only in `context` — a count of withheld entries beside the visible ones, the way the estate's own "show disabled, never hide" ruling treats actions — and if so, surface it on the lakehouse zone's namespace view in the same change.
 
 **LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
 `lineage, maintenance` · **HIGH**
@@ -162,12 +168,6 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 ### Catalog is correct for lance-ns
 
 _The catalog is the estate's only door to Lance, so a spec deviation, an unregistered table or a silently-dropped parameter is a lie told to every client that trusts the spec._
-
-**LH-015 · medallion `transform.py` composes `{project_root}/medallion/{namespace}` for its write TARGET and registers nothing, so silver/gold tables are invisible to the catalog**
-`medallion, catalog` · **HIGH**
-
-- *Why open:* Only the READ half is fixed (the trigger carries a catalog-vended `from_uri`). Measured while real silver/gold Lance rows existed: `catalog namespace silver : []` and `catalog namespace gold : []` while `acme` held `['events']`. Consequence: no governance, no grants, no `published` tag and no vended location for the next tier down.
-- *Closes when:* Apply I2 on the WRITE side: make `transform.py` obtain/register its target namespace+table through the catalog instead of composing `{project_root}/medallion/{namespace}`, then re-measure that `catalog namespace silver|gold` list the produced tables.
 
 **LH-016 · `bronze-media` and `silver-media` still hijack medallion namespaces inside `lakehouse-wh`, and unbind is refused because they hold real tables**
 `catalog` · **HIGH** · **blocked:** owner decision (destructive on real tables) plus a human bearer — no service identity holds `can_administer` on `project:lakehouse`
