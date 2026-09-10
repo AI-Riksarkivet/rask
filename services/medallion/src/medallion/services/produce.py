@@ -199,6 +199,7 @@ async def produce(
         bronze_event = build_run_event(
             operation=settings.producer_operation,
             author=settings.producer_author,
+            author_subject=settings.fga_service_identity,
             # The verified human from `authorize_produce`, carried so a failure LATER in the cascade can still
             # name them. `author` stays the producer role: it is the truthful answer to "what ran this".
             originator=originator or None,

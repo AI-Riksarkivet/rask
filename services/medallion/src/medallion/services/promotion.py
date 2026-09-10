@@ -49,6 +49,7 @@ def promotion_lineage(
     identity_event = build_run_event(
         operation=settings.operation,
         author=settings.author,
+        author_subject=settings.fga_service_identity,
         job_namespace=settings.job_namespace,
         inputs=[(from_namespace, from_dataset)],
         output_namespace=to_namespace,

@@ -204,6 +204,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         event = build_run_event(
             operation="ingest_media",
             author=settings.producer_author,
+            author_subject=settings.fga_service_identity,
             job_namespace=settings.job_namespace,
             # One input per source object: the graph records source-URI -> bronze provenance in the data path.
             #

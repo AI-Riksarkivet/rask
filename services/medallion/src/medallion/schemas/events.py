@@ -159,6 +159,13 @@ def build_run_event(
     *,
     operation: str,
     author: str | None,
+    #: The IDENTITY this run is authorized as, when the caller has one. `author` is a ROLE NAME
+    #: (`data_eng`, `ray`) and is what a person reads on a board; lineage's ingest gate asks FGA
+    #: whether the author `sub` may write the run's outputs, and a role holds no tuple because it is
+    #: not an identity — so every cascade run was refused and its provenance discarded (measured on
+    #: the live estate 2026-09-10: `ingest_denied sub='ray'`, `sub='data_eng'`, nothing stored).
+    #: Absent leaves the facet exactly as it was, for a producer that configures no identity.
+    author_subject: str | None = None,
     job_namespace: str,
     inputs: list[tuple[str, str]],
     output_namespace: str,
@@ -286,7 +293,11 @@ def build_run_event(
             model_fields["commit"] = commit_sha
         run_facets["model"] = custom_facet(_PRODUCER, **model_fields)
     if author:
-        run_facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
+        # TWO FIELDS, TWO JOBS. `name` is for a reader, `sub` is what lineage authorizes on, and they
+        # were the same string only because the facet carried one value for both. Keeping the role in
+        # `name` is the owner's ruling (2026-09-10): a board reading "data_eng" is more use to a person
+        # than one reading `service-bronze-to-silver`.
+        run_facets["author"] = custom_facet(_PRODUCER, name=author, sub=author_subject or author)
     if error_message:
         # Standard errorMessage run facet — records WHY a FAIL run failed (its own published schema).
         run_facets["errorMessage"] = {

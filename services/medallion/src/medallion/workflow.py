@@ -745,6 +745,7 @@ def _build_stage_fail_event(spec: StageJobSpec, outcome: StageJobOutcome, reason
     return build_run_event(
         operation=settings.operation,
         author=settings.author,
+        author_subject=settings.fga_service_identity,
         job_namespace=settings.job_namespace,
         inputs=[(from_namespace, from_dataset)],
         output_namespace=to_namespace,
@@ -1485,6 +1486,7 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
         # fallback keeps a hold taken before `operation`/`author` existed emitting exactly as it did.
         operation=spec.operation or settings.operation,
         author=spec.author or settings.author,
+        author_subject=settings.fga_service_identity,
         job_namespace=settings.job_namespace,
         inputs=[(spec.from_namespace, _qualified(spec.project, spec.from_dataset))],
         output_namespace=spec.to_namespace,
