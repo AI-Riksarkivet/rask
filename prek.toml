@@ -54,6 +54,13 @@ name = "ty type check"
 entry = "env -u VIRTUAL_ENV uvx ty check"
 language = "system"
 pass_filenames = false
+# WHOLE-PROJECT check, but only when PYTHON is staged. `pass_filenames = false` is required — ty
+# resolves the workspace, not a file list — and without a `files` filter that made every commit pay a
+# full-project typecheck, including one-line edits to a markdown file. Measured 2026-09-10: of 109
+# commits in 24 hours, 80 touched only `open_lakehouse_diff_left.md`, and each ran the full check for
+# nothing. The filter decides whether the hook RUNS; when it does, it still checks everything, which
+# is the property that catches a Python change breaking a module it does not name.
+files = "\\.py$"
 
 [[repos.hooks]]
 id = "no-co-authored-by-claude"

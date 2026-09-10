@@ -21,6 +21,13 @@ help:
 install:
 	bun --cwd=frontend install
 	uv sync --all-packages
+	@# BOTH hook types, and the second one is the reason this line exists. `prek install` with no
+	@# --hook-type writes only `.git/hooks/pre-commit`, so every hook declared `stages = ["commit-msg"]`
+	@# is configured and never runs. Measured 2026-09-10: `conventional-pre-commit` and
+	@# `no-co-authored-by-claude` had both been dead the whole time, and 108 commits in 24 hours carried
+	@# the trailer the second one exists to refuse. A gate that cannot fire is worse than no gate — it
+	@# reads as enforcement in the config while the rule goes unheld.
+	@command -v prek >/dev/null 2>&1 && prek install --hook-type pre-commit --hook-type commit-msg || echo "  (prek not on PATH — git hooks NOT installed)"
 
 build:
 	uv sync --all-packages
