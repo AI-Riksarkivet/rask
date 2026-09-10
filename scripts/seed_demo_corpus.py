@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Seed a REAL, SEARCHABLE dev corpus, so every media surface shows something.
 
-`OPEN-WORK.md` A1 records that the media corpus lives on a node-local `hostPath`, which means a
+the OPEN-WORK register, row A1 (drained 2026-09-10; in git history) records that the media corpus lives on a node-local `hostPath`, which means a
 dev machine has no datasets: the annotator canvas has no page to draw on and search has nothing to
 find. Everything the registry needs is env-configurable (`MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR`),
 so the corpus can be synthesized locally instead.

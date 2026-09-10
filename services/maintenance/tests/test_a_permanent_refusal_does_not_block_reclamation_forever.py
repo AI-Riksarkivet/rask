@@ -1,6 +1,6 @@
 """A dataset the orphan method does not APPLY to is not a half-finished scan.
 
-`open_lakehouse_diff_left.md` § H10.
+the lakehouse register, row H10 (drained 2026-09-10; in git history).
 
 MEASURED LIVE 2026-09-08, and the constancy is what gives it away — § H2 recorded the middle number a
 day earlier:

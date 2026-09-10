@@ -1,6 +1,6 @@
 """The purge deletes a whole directory tree, and never checked it was a Lance dataset.
 
-`open_lakehouse_diff_left.md` § H6, whose close condition is exactly this: *"Verify the location is a
+the lakehouse register, row H6 (drained 2026-09-10; in git history), whose close condition is exactly this: *"Verify the location is a
 Lance root before `delete_dir`."*
 
 `delete_location` performs a RECURSIVE `delete_dir` on whatever a trash record's `location` names. Its

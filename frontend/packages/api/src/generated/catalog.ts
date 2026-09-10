@@ -2829,7 +2829,7 @@ export interface paths {
          *     Refused rather than served because the response cannot be assembled honestly from a branch handle:
          *     ``FragmentStats.lengths`` and the per-index ``status``/``size_bytes`` are not what
          *     ``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in
-         *     miniature. Serving it properly is named in `open_lakehouse_diff_left.md` §O1.
+         *     miniature. Serving it properly is named in the lakehouse register, row O1 (drained 2026-09-10; in git history).
          */
         post: operations["get_table_stats_v1_table__id__stats_post"];
         delete?: never;

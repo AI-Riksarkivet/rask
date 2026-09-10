@@ -1,6 +1,6 @@
 """A branch is a whole dataset under `tree/<name>/`, and the sweep never found one.
 
-`open_lakehouse_diff_left.md` § C8. `discover_datasets` treats a directory holding `_versions/` as a
+the lakehouse register, row C8 (drained 2026-09-10; in git history). `discover_datasets` treats a directory holding `_versions/` as a
 dataset and stops there — it does not recurse into what a dataset CONTAINS. A Lance branch lives at
 `<dataset>/tree/<branch>/` with its own `_versions/` and `_transactions/`, so every branch in the
 estate was invisible to the sweep: never version-cleaned, never index-optimized, growing without bound.

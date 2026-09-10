@@ -1,6 +1,6 @@
 """A maintainer may obtain the credential its own rewrite needs, and nobody else gains anything.
 
-`open_lakehouse_diff_left.md` § H13. MEASURED LIVE 2026-09-08: of 285 rewrite attempts in one sweep
+the lakehouse register, row H13 (drained 2026-09-10; in git history). MEASURED LIVE 2026-09-08: of 285 rewrite attempts in one sweep
 tick, 207 were refused a vended credential and fell back to the deployment's ROOT key —
 `credentials.write_options_for` treats a refused vend as a reason to reach for the ambient credential,
 and the pod says so itself ("this rewrite is signed by the root key"). Checking the live store

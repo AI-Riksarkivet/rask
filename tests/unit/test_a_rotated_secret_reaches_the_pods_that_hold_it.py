@@ -1,6 +1,6 @@
 """A pod that consumes a Secret through `secretKeyRef` must be rolled when that Secret changes.
 
-`open_lakehouse_diff_left.md` § E7. MEASURED LIVE 2026-09-08 and fixed the same day: an env value from
+the lakehouse register, row E7 (drained 2026-09-10; in git history). MEASURED LIVE 2026-09-08 and fixed the same day: an env value from
 a `secretKeyRef` is injected at pod CREATION and never refreshed, so a rotated Secret leaves its
 consumers holding a dead credential while the render stays correct, the reference stays correct, and
 nothing anywhere reports a problem.

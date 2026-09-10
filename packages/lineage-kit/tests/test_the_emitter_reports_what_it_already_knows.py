@@ -1,6 +1,6 @@
 """`Emitter.emit()` knows the event was dropped and the caller cannot ask.
 
-`open_lakehouse_diff_left.md` § E1 ("lost origination events are unrecoverable and invisible"), whose
+the lakehouse register, row E1 (drained 2026-09-10; in git history) ("lost origination events are unrecoverable and invisible"), whose
 measurement narrowed the clause to ONE service: four of the five lakehouse producers stage durably
 through `service_kit.lakehouse.outbox`, and `ingest` has zero outbox usage and emits bare.
 

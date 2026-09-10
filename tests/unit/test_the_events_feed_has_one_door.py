@@ -1,6 +1,6 @@
 """The durable `/events` feed is written by the ingest transaction, and by nothing beside it.
 
-`open_lakehouse_diff_left.md` § E4.
+the lakehouse register, row E4 (drained 2026-09-10; in git history).
 
 The BEHAVIOUR — a failed feed write takes the graph write with it — is proven against real AGE by
 `tests/e2e-py/test_lineage_e2e.py::test_a_failed_feed_write_takes_the_graph_write_with_it`, which needs

@@ -190,7 +190,7 @@ async def test_facet_payloads_ride_bare_of_spec_stamps() -> None:
 @pytest.mark.asyncio
 async def test_the_pin_params_reach_the_create_call() -> None:
     """§7.2 over the wire: the S4 `source`/`source_version` query params ride the direct-HTTP
-    create (the spec-generated SDK cannot send them — OPEN-WORK §B3)."""
+    create (the spec-generated SDK cannot send them — the OPEN-WORK register, row B3 (drained 2026-09-10; in git history))."""
     create = _Create()
     publisher = _publisher(create)
 

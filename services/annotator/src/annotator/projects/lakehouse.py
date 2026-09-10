@@ -254,7 +254,7 @@ class CatalogPublisher:
         if originator:
             client.set_default_header("x-lance-originator", originator)
         # Create goes over DIRECT HTTP, not the SDK: the spec-generated `create_table` cannot send
-        # our S4 `source`/`source_version` query params (OPEN-WORK §B3), and the pin must travel.
+        # our S4 `source`/`source_version` query params (the OPEN-WORK register, row B3 (drained 2026-09-10; in git history)), and the pin must travel.
         self._data = _HttpCreateApi(base_url)
         self._tags = TagApi(client)
 

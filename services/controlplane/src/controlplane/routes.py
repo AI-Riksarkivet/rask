@@ -47,7 +47,7 @@ def _is_unregistered_resource_type(exc: BaseException) -> bool:
     connection are not, and this predicate is what keeps the three answers apart. Reporting all
     three as "cannot reach kubernetes api" sent one session after the ServiceAccount
     (`HANDOFF-lakehouse.md:101-106`) and another after shipping the CRD without its controller
-    (`OPEN-WORK.md` §G1) — the one fix that ruling forbids.
+    (the OPEN-WORK register, row G1 (drained 2026-09-10; in git history)) — the one fix that ruling forbids.
     """
     return isinstance(exc, ApiException) and exc.status == 404
 

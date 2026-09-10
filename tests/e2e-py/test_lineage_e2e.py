@@ -744,7 +744,7 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
 def test_a_run_state_is_decided_by_event_time_not_by_delivery_order(dsn: str) -> None:
     """A run's state must not be whichever event happened to be delivered last.
 
-    `open_lakehouse_diff_left.md` § E3 ("run state regresses on out-of-order ingest"), whose close
+    the lakehouse register, row E3 (drained 2026-09-10; in git history) ("run state regresses on out-of-order ingest"), whose close
     condition is *"Sticky terminal state; a START-after-COMPLETE test."*
 
     MEASURED ON THE DEPLOYED GRAPH 2026-09-07, and it is not the hypothetical the row describes — the
@@ -841,7 +841,7 @@ def test_a_run_state_is_decided_by_event_time_not_by_delivery_order(dsn: str) ->
 def test_a_failed_feed_write_takes_the_graph_write_with_it(dsn: str) -> None:
     """`GET /events` must not be able to become a subset of the graph.
 
-    `open_lakehouse_diff_left.md` § E4. The feed row used to be written by `record_event_best_effort` —
+    the lakehouse register, row E4 (drained 2026-09-10; in git history). The feed row used to be written by `record_event_best_effort` —
     a SECOND connection, opened after `ingest_event`'s transaction had already committed, catching every
     exception into a WARNING on the stated ground that *"a feed-write failure must never break ingest
     (the authoritative AGE graph write already succeeded)"*. Under that contract a connection error, an

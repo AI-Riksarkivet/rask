@@ -1,6 +1,6 @@
 """A service pinned to ONE replica for correctness must not run two during a deploy.
 
-`open_lakehouse_diff_left.md` § H4, third clause ("`strategy: Recreate`").
+the lakehouse register, row H4 (drained 2026-09-10; in git history), third clause ("`strategy: Recreate`").
 
 `rask-maintenance` is `replicas: 1` and that is a CORRECTNESS constraint, not a capacity choice.
 `bindings.cron` is stateless and uncoordinated — Diagrid, verbatim: *"No coordination – each replica

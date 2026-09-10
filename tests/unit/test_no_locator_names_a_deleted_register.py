@@ -25,10 +25,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: `open_<name>` optionally with its extension, followed by something that points INTO it: a line
-#: number (`:3061`), a row id (`X3`, `DUP-16`, `P0`), or a section mark (`§ Q3`).
+#: A root register, followed by something that points INTO it: a line number (`:3061`), a row id
+#: (`X3`, `DUP-16`, `P0`), or a section mark (`§ Q3`).
+#:
+#: BOTH SPELLINGS, and the second one is why this comment exists: the pattern matched `open_<name>`
+#: only, so the twelve `OPEN-WORK §B3` / `OPEN-WORK D2d` locators left behind when that register was
+#: drained on 2026-09-10 were invisible to this gate — it reported clean while a dozen citations
+#: pointed at a deleted file. A register's NAME is not always lowercase-with-underscores, and a gate
+#: keyed on one spelling of a name is the estate's own recurring shape.
 _LOCATOR = re.compile(
-    r"(open_[a-z0-9_.-]*?)(?:\.(?:md|json))?"  # the register, extension optional
+    r"((?:open_[a-z0-9_.-]*?|OPEN-WORK))(?:\.(?:md|json))?"  # the register, extension optional
     r"(?:"
     r":(\d+)"  # :3061
     r"|[ `]+(?:§ ?)?([A-Z][A-Z0-9]*-?\d+[a-z]?)\b"  # X3 / DUP-16 / P0 / Q3

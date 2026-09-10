@@ -1,6 +1,6 @@
 """A write that fails must answer the same spec code whether or not it named a branch.
 
-`open_lakehouse_diff_left.md` § A5, the "column/data ops never mint 20" half.
+the lakehouse register, row A5 (drained 2026-09-10; in git history), the "column/data ops never mint 20" half.
 
 THE DEFECT IS AN ASYMMETRY, not a missing feature, and that is what makes it worth a test of this
 shape. `insert_into_table` and `merge_insert_into_table` split on `branch`: without one they delegate

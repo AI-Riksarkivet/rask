@@ -397,7 +397,7 @@ check('bob was still told too — he authored it', afterWatch.bob > beforeWatch.
 await alice.page.screenshot({ path: `${SHOT}/alice-after-watch.png` }).catch(() => {});
 
 // ── B2: read state is DURABLE, not per-tab ───────────────────────────────────────────────────────
-// The acceptance `OPEN-WORK.md` B2 named. Opening and closing the panel marks the rendered rows read;
+// The acceptance the OPEN-WORK register, row B2 (drained 2026-09-10; in git history) named. Opening and closing the panel marks the rendered rows read;
 // a FRESH BROWSER CONTEXT is what separates "persisted per subject" from "remembered in this tab".
 const bell = alice.page.getByRole('button', { name: /notification/i }).first();
 await bell.click().catch(() => {});

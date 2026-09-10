@@ -1252,7 +1252,7 @@ lived in `open_python-audit.md` until it was drained, and its full text is in gi
 **Final counts, re-derived from the ledger's own rows rather than its header:** 498 row entries across
 a detail table and an index (so 249 distinct), of which 384 FIXED, 74 PARTIAL, 32 DISSOLVED, 4 WRONG,
 4 OPEN. Thirty-nine distinct findings were still live at the drain; they moved to
-`open_lakehouse_diff_left.md` § Q3, one row each, with their surviving remainder named.
+the lakehouse register, row Q3 (drained 2026-09-10; in git history), one row each, with their surviving remainder named.
 
 **Why the ledger could be deleted while the ids stay meaningful.** A FIXED finding's reasoning belongs
 to the commit that fixed it — the estate's own rule, that history lives in the commit message or here
@@ -1378,7 +1378,7 @@ the one in front: the destinations env absent (stale deployment); `/api/v1/runs`
 `service-token-<identity>`; `can_get_metadata` missing because the root-warehouse `reader` grant does
 not reach the medallion tiers' warehouse; lineage's subject ALLOWLIST, a different mechanism from the
 grant; and finally the dedicated token that does not exist because `dedicatedServiceCredentials` is
-false — which is `open_lakehouse_diff_left.md` Q2-6, not this work.
+false — which is the lakehouse register, row Q2-6 (drained 2026-09-10; in git history), not this work.
 
 **Why six of those survived is the durable lesson.** A reader that cannot read reports `known=False`,
 which publishes NOTHING and reports nothing wrong — so an empty series reads as a healthy cascade.

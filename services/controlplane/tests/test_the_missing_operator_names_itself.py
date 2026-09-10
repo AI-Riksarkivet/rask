@@ -11,7 +11,7 @@ the deployment, not a reachability problem.
 
   * `HANDOFF-lakehouse.md:101-106` recorded the 503 live and attributed it to
     **ServiceAccount/RBAC**. The RBAC is correct; the resource type does not exist.
-  * `OPEN-WORK.md` §G1 concluded from the same 503 that the chart must **ship the CRD** — the one
+  * the OPEN-WORK register, row G1 (drained 2026-09-10; in git history) concluded from the same 503 that the chart must **ship the CRD** — the one
     fix `docs/DECISIONS.md` rules out, because a CRD without its out-of-repo controller yields
     unreconciled CRs that render as projects stuck mid-provision.
 

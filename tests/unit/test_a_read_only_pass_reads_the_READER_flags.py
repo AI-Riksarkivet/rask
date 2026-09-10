@@ -1,6 +1,6 @@
 """A read-only pass must consult `reader_feature_flags`, not the OR of both fields.
 
-`open_lakehouse_diff_left.md` § C9. The Lance format spec is explicit that the two fields are asked
+the lakehouse register, row C9 (drained 2026-09-10; in git history). The Lance format spec is explicit that the two fields are asked
 separately, and that they do not carry the same bits (`lance_docs/file_format.md`, "Format
 Versioning" -> "Current Feature Flags"):
 

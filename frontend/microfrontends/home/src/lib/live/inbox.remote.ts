@@ -36,7 +36,7 @@ import * as v from 'valibot';
  *    first, not about which zone could hold a bearer.
  *  - It is the only zone with a signed-in Playwright fixture (`e2e/session.ts`), and the acceptance
  *    this slice closes is exactly a browser-level one: seen-state surviving a fresh browser CONTEXT
- *    (`OPEN-WORK.md` B2). `compute` and `studio` ship no `e2e/` at all.
+ *    (the OPEN-WORK register, row B2 (drained 2026-09-10; in git history)). `compute` and `studio` ship no `e2e/` at all.
  *  - The watch/prefs settings surface lands here in S4, so the plane has one owner zone from S1
  *    rather than moving between slices.
  *

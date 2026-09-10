@@ -1259,7 +1259,7 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str) ->
     the operation: it builds one fixed shape — a BTREE on the merge key, no user options — so it can be
     served through the handle with nothing left to get wrong.
 
-    Both implementations are real work with their own tests; they are named in `open_lakehouse_diff_left.md` §O1, not
+    Both implementations are real work with their own tests; they are named in the lakehouse register, row O1 (drained 2026-09-10; in git history), not
     smuggled in behind a door that currently lies.
     """
     if branch is not None:

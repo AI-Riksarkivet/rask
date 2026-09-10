@@ -1,6 +1,6 @@
 """The bucket walk must not invent a coverage gap, and must not lose a bucket to a vanished prefix.
 
-`open_lakehouse_diff_left.md` § H11.
+the lakehouse register, row H11 (drained 2026-09-10; in git history).
 
 A subtree the walk STOPS INSIDE becomes an `IncompleteScan`, and `purge.report_is_clean` blocks on
 that — so a prefix that will never hold a dataset blocks reclamation exactly as hard as a manifest

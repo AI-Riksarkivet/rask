@@ -96,7 +96,7 @@ app = make_service_app(
   duplication — enrolled 2026-08-09). `tests/unit/test_invariants.py::test_every_workspace_test_directory_is_in_the_root_testpaths`
   now gates it in both directions, but ONLY over `packages/*/tests` and `services/*/tests`: a new
   **top-level** `tests/<x>/` is still ungated, which is exactly how `tests/e2e-py` was lost once.
-  Measured 2026-08-22: `services/search` and `services/viewer` shipped **no tests at all** (`packages/ratch` was the third — dissolved 2026-08-28); both have since gained suites (`test_search_is_governed`, `test_the_search_door_is_wired`, the viewer's gating suites), and the residue is tracked in `open_lakehouse_diff_left.md` Q3-37/Q3-38 (the blanket ruff exemption, and `ray_kit.submit` untested), not here.
+  Measured 2026-08-22: `services/search` and `services/viewer` shipped **no tests at all** (`packages/ratch` was the third — dissolved 2026-08-28); both have since gained suites (`test_search_is_governed`, `test_the_search_door_is_wired`, the viewer's gating suites), and the residue is tracked in the lakehouse register, row Q3-37 (drained 2026-09-10; in git history)/Q3-38 (the blanket ruff exemption, and `ray_kit.submit` untested), not here.
 - **A sealed runner's tests are invisible to the root pytest, and to CI.** `runners/*` is matched by no
   glob by design, so `make test` names `runners/htr` and `make test-slow` names `htr` + `dummy` — by hand.
   `dagger call test` runs the root testpaths only and says so in its own doc comment, so the 75 test

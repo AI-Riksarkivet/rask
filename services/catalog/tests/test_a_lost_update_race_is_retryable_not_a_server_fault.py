@@ -1,6 +1,6 @@
 """UPDATE and DELETE do not lose commit races — Lance rebases them, so there is nothing to classify.
 
-`open_lakehouse_diff_left.md` § B3 reads "update/delete/column ops let a Lance conflict escape as 5xx".
+the lakehouse register, row B3 (drained 2026-09-10; in git history) reads "update/delete/column ops let a Lance conflict escape as 5xx".
 The COLUMN half was real and landed (`test_a_lost_commit_race_is_retryable_not_a_server_fault.py`:
 six concurrent `add_columns`, five losers, all answering 500 until `_column_op` learned the markers).
 The update/delete half is REFUTED, measured 2026-09-08 rather than reasoned about.

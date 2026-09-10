@@ -1,6 +1,6 @@
 """`base_id = 0` is a REAL external base, and a truthy test reads it as none at all.
 
-`open_lakehouse_diff_left.md` § C1. `vending.has_external_bases` decides whether a table may be
+the lakehouse register, row C1 (drained 2026-09-10; in git history). `vending.has_external_bases` decides whether a table may be
 DIRECT-vended, and its own docstring states the stake: *"Such a table cannot be safely direct-vended:
 the STS session policy is scoped to the primary root bucket only, so a data-base fragment would be
 denied at the object store."*

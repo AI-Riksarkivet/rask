@@ -19,7 +19,7 @@
     The frontend table likewise lists `{overview,compute,discover,storage,train,studio}` at
     `/default/<domain>`. The real zones are `{home,lakehouse,media,annotator,compute,train,studio}`
     at a bare `/<zone>`; correcting that table belongs to the frontend doc sweep
-    (`OPEN-WORK.md` §F2), which waits on the in-flight information-architecture work.
+    (the OPEN-WORK register, row F2 (drained 2026-09-10; in git history)), which waits on the in-flight information-architecture work.
 
     **P8 ruling (2026-07-28):** the full re-draw this page promised is **deferred, not done** — it
     would collide with §F2. Current truth: `ARCHITECTURE.md`, `architecture/deployment.md`, and the

@@ -1,6 +1,6 @@
 """No property of a run may be written last-delivery-wins.
 
-`open_lakehouse_diff_left.md` § E3 ("run state regresses on out-of-order ingest").
+the lakehouse register, row E3 (drained 2026-09-10; in git history) ("run state regresses on out-of-order ingest").
 
 The BEHAVIOUR is proven against real AGE by
 `tests/e2e-py/test_lineage_e2e.py::test_a_run_state_is_decided_by_event_time_not_by_delivery_order`,

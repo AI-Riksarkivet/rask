@@ -1,6 +1,6 @@
 """The fleet secret carries the ROOT storage credential, so it goes only where it is used.
 
-`open_lakehouse_diff_left.md` § H8.
+the lakehouse register, row H8 (drained 2026-09-10; in git history).
 
 MEASURED INSIDE THE RUNNING PODS 2026-09-08, because the Deployment's `env:` list does not answer this
 and reading only that list produces the opposite conclusion — the credential arrives through

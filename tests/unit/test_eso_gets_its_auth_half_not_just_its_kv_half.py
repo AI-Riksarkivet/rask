@@ -1,6 +1,6 @@
 """Turning ESO on must provision the auth backend it authenticates with, not only the KV it reads.
 
-`open_lakehouse_diff_left.md` § H9, under the owner's 2026-09-08 ruling that zero trust is the goal and
+the lakehouse register, row H9 (drained 2026-09-10; in git history), under the owner's 2026-09-08 ruling that zero trust is the goal and
 that a secret reaches a workload by ESO, the Dapr secret store, or STS — never through env. ESO is the
 destination for the largest class in that survey: the ten `APP_API_TOKEN` refs (whose bootstrap
 ordering rules out the Dapr store, since the token is what would authenticate the fetch) plus the

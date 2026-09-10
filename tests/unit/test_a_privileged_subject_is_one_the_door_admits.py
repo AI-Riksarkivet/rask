@@ -1,6 +1,6 @@
 """A subject named PRIVILEGED must also be one the service door ADMITS.
 
-`open_lakehouse_diff_left.md` § H14. `dapr_auth.service_principal` asks two questions in order, and the
+the lakehouse register, row H14 (drained 2026-09-10; in git history). `dapr_auth.service_principal` asks two questions in order, and the
 allowlist is the first: *"may this SUBJECT use the door at all?"*, then *"may THIS CALLER be that
 subject?"*. So a name that appears only in the privileged list is refused before its credential is ever
 examined — a grant that cannot be exercised, and one that reports the wrong reason while it lasts.

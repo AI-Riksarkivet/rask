@@ -1,6 +1,6 @@
 """The catalog answers the STOCK Lance client, not only rask's own transport.
 
-`open_lakehouse_diff_left.md` § A11, and the estate's headline claim: *the lakehouse is idiomatic
+the lakehouse register, row A11 (drained 2026-09-10; in git history), and the estate's headline claim: *the lakehouse is idiomatic
 Lance*. That claim is about a client nobody here wrote. Until this suite it was asserted only against
 doubles — `RestNamespace` and `namespace_client_impl` appear in `tests/integration/`, both driving a
 `TestClient` over a `MagicMock` namespace, and `tests/e2e-py` (the only suite touching a running

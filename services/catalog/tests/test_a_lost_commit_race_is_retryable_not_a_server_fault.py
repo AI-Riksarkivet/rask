@@ -1,6 +1,6 @@
 """A column op that loses a commit race must say so — code 14, not Internal 18.
 
-`open_lakehouse_diff_left.md` § A5, the "column ops never mint 14" half.
+the lakehouse register, row A5 (drained 2026-09-10; in git history), the "column ops never mint 14" half.
 
 Lance calls this failure RETRYABLE in its own message, and the spec has a code that says exactly that:
 14 `ConcurrentModification` (409). Reported as 18 instead, the two things a caller should do become

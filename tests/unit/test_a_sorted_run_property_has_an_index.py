@@ -1,6 +1,6 @@
 """Every `Run` property the queries SORT BY must carry a lookup index.
 
-`open_lakehouse_diff_left.md` § E5 ("no index on `Run.event_time`", O(history) hot paths).
+the lakehouse register, row E5 (drained 2026-09-10; in git history) ("no index on `Run.event_time`", O(history) hot paths).
 
 MEASURED ON THE DEPLOYED GRAPH 2026-09-07. `lineage.Run` carried exactly one index —
 `lineage_run_uniq`, the MERGE key — while **six** queries in `cypher.py` order by `r.event_time`,

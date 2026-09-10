@@ -1,6 +1,6 @@
 """A tag or branch op that fails must mint its SPEC code, not collapse to Internal 18.
 
-`open_lakehouse_diff_left.md` § A5. The Lance Namespace spec defines a code per failure and a
+the lakehouse register, row A5 (drained 2026-09-10; in git history). The Lance Namespace spec defines a code per failure and a
 generated client dispatches on that code, never on the HTTP status. Six of the catalog's tag and
 branch failures answered **500 / code 18** instead, which tells a client "the server broke" for what
 is really "your tag already exists" — unretryable, unactionable, and indistinguishable from a genuine

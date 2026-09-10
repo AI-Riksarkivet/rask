@@ -1,6 +1,6 @@
 """The maintenance sweep records provenance without saying who it was.
 
-`open_lakehouse_diff_left.md` § E2 ("bus door trusts a producer-stamped author behind one shared
+the lakehouse register, row E2 (drained 2026-09-10; in git history) ("bus door trusts a producer-stamped author behind one shared
 token"), whose close condition is Q6: *"the bus door applies `enforce_output_authz` as the stamped
 subject."*
 
