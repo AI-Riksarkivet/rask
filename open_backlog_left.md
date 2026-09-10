@@ -768,6 +768,32 @@ _Nothing has ever been reclaimed on the live estate, the sweep is unleased and u
 - *Pinned by:* `maintenance/tests/test_the_bucket_walk_does_not_invent_coverage_gaps.py` — a directory
   of files at the bound is not a coverage gap; a directory of directories still is.
 
+**LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
+`medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
+
+- *Measured 2026-09-11 on the running estate.* `scripts/ray_stage_job.py:86-88` reads
+  `os.environ["S3_KEY"]` / `os.environ["S3_SECRET"]`, and the Ray head takes them via `secretKeyRef`
+  env — a k8s Secret arriving as process env, the delivery the owner's rule forbids outright ("not
+  process env, not a k8s Secret via `envFrom`"). Five more arrive the same way
+  (`LINEAGE_SERVICE_TOKEN` + four `RASK_LINEAGE_TOKEN_SERVICE_*`).
+- *The STS seam already exists and is dead.* `work_order.to_env` emits `RASK_CREDENTIAL_REF`
+  (`packages/service-kit/src/service_kit/lakehouse/work_order.py:136`) precisely so no credential
+  VALUE rides the submission — and **no consumer reads it**. Measured across `scripts/`, `services/`,
+  `packages/`, `runners/`: `RASK_CREDENTIAL_REF` 0 consumers.
+- *And it is a class, not one field.* Six work-order env vars have zero consumers —
+  `RASK_TASK`, `RASK_MERGE_KEY`, `RASK_WRITE_MODE`, `RASK_IDEMPOTENCY_KEY`, `RASK_CODE_VERSION`,
+  `RASK_CREDENTIAL_REF`. `RASK_WRITE_MODE` is the sharpest: every live submission ships
+  `RASK_WRITE_MODE=merge_insert` (read off the Ray job list 2026-09-10) and the job never consults
+  it, so the submitter's declared write semantics have no effect on what the job does. The chart has
+  `test_no_dead_chart_env_vars` for exactly this failure; the work order has no equivalent.
+- *Closes when:* the Ray job vends its storage credential (the catalog's STS door, the same one
+  `POST /v1/outbox/credentials` was added to) keyed on `RASK_CREDENTIAL_REF`, and `S3_KEY`/`S3_SECRET`
+  leave the pod env; plus a gate over `work_order.to_env` asserting every emitted name has a consumer,
+  so a dead field fails a test rather than shipping a contract nobody honours.
+- *Not closed by* `cc75585d`, which fixed a DIFFERENT half — the published credential was the RustFS
+  ROOT secret; it is now scoped and proven bounded. That made the env-borne credential correct in
+  SCOPE while leaving it wrong in DELIVERY.
+
 **LH-101 · The sweep has no per-tick budget and no rotated bucket order, so at estate scale the tail is maintained only if the tick has time left**
 `maintenance` · med
 
