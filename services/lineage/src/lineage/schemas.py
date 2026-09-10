@@ -412,6 +412,11 @@ class RunStatus(BaseModel):
     #: rescan, a promotion) and for every run that predates the medallion stamping it.
     consumed_to_version: int | None = None
     consumed_from_version: int | None = None
+    #: The BATCH this run belongs to — one ``/produce`` is one bronze write is one cascade, and every
+    #: tier below carries the id the head minted. It is what makes the hops of one cascade joinable
+    #: instead of unrelated nodes sharing a dataset name. ``None`` for a run that is not part of one:
+    #: an external OpenLineage producer, a catalog marker, a reconcile pass.
+    cascade_id: str | None = None
 
 
 class Runs(BaseModel):

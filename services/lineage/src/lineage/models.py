@@ -426,6 +426,24 @@ class RunEvent(BaseModel):
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
+    def cascade_id(self) -> str | None:
+        """The BATCH this run belongs to, from the ``lance`` run facet (``cascade_id``).
+
+        One ``/produce`` is one bronze write is one cascade, and `ingest_trigger` mints this id where
+        that cascade begins so every tier below carries the same value. Without it in the graph the
+        hops of one batch are unrelated `Run` nodes sharing only a dataset name, and the question the
+        id exists for — which runs belong to this batch — has no query.
+
+        STRING ONLY, and non-empty. The value is compared for EQUALITY when joining, so a number that
+        merely parses would join to nothing while looking like a batch, and ``""`` would join every
+        batch-less run to every other. ``isinstance(value, str)`` also rejects ``True``, which a bare
+        truthiness test would not: `bool` is a subclass of `int`, not of `str`.
+        """
+        lance = (self.run.facets or {}).get("lance")
+        value = lance.get("cascade_id") if isinstance(lance, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    @property
     def promotion_status(self) -> str | None:
         """WHY a promotion did not advance, from the ``lance`` run facet — HELD / BLOCKED / REFUSED.
 

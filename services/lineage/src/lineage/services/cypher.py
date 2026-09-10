@@ -93,6 +93,10 @@ MERGE_RUN: Final = (
     # on every event it emits, but a reconcile/backfill event for the same graph run carries none
     # and must not erase it. Empty string means the event did not say; only a non-empty value writes.
     "r.source_run_id=(CASE WHEN $srid = '' THEN r.source_run_id ELSE $srid END), "
+    # cascade_id is STICKY for the reason the two above are, and the cost of getting it wrong is
+    # sharper: a bare reconcile event clobbering it DETACHES that hop from its batch, and it does so
+    # to precisely the runs someone is reconciling — i.e. the ones being investigated.
+    "r.cascade_id=(CASE WHEN $cid = '' THEN r.cascade_id ELSE $cid END), "
     # promotion_status is STICKY for the same reason as the two above: a reconcile or backfill event
     # for the same graph run carries no lance facet, and clobbering the verdict to null would turn a
     # recorded hold back into an ordinary failure on the next tick.
@@ -126,7 +130,7 @@ RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
 _LIST_RUNS_BODY: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
-    "r.promotion_status, r.consumed_to_version, r.consumed_from_version"
+    "r.promotion_status, r.consumed_to_version, r.consumed_from_version, r.cascade_id"
 )
 LIST_RUNS: Final = _LIST_RUNS_BODY
 #: ONE run's state, projected identically to the board so both answer the same shape. Built from the

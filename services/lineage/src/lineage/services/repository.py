@@ -211,6 +211,9 @@ class LineageRepository:
                     # WROTE); "" for events that carry no lance-facet operation (external producers).
                     "op": event.operation or "",
                     "srid": event.source_run_id or "",
+                    # The batch this run belongs to; "" for every run that is not part of a cascade,
+                    # which the sticky SET reads as "this event did not say".
+                    "cid": event.cascade_id or "",
                     # The promotion verdict (HELD/BLOCKED/REFUSED); "" for every run that refused no
                     # promotion, which is almost all of them.
                     "ps": event.promotion_status or "",
@@ -712,7 +715,7 @@ class LineageRepository:
         unbounded shape for callers that genuinely need the whole board.
         """
         query = cy.list_runs_page(limit) if limit is not None else cy.LIST_RUNS
-        rows = await fetch(self._pool, self._graph, query, columns=16)
+        rows = await fetch(self._pool, self._graph, query, columns=17)
         runs = [self._run_status_from(r) for r in rows]
         runs.sort(key=lambda run: run.updated_at or "", reverse=True)
         return Runs(runs=runs)
@@ -742,6 +745,7 @@ class LineageRepository:
             promotion_status=(r[13] or None),
             consumed_to_version=(r[14] if len(r) > 14 and isinstance(r[14], int) and r[14] >= 0 else None),
             consumed_from_version=(r[15] if len(r) > 15 and isinstance(r[15], int) and r[15] >= 0 else None),
+            cascade_id=((r[16] or None) if len(r) > 16 else None),
         )
 
     async def list_all_columns(self) -> list[tuple[str, str]]:
