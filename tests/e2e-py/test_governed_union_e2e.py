@@ -324,7 +324,16 @@ def _run_id_for(operation: str, token: str, *, project: str | None = None) -> st
 
 
 def _run_states(lineage: str, headers: dict[str, str]) -> dict[str, str]:
-    resp = requests.get(f"{lineage}/runs?limit=1000", headers=headers, timeout=8)
+    # NO `limit` PARAMETER, deliberately. These call sites asked `?limit=1000` and answered 422 from
+    # 2026-09-07, when `65fd0e24` bounded the board to 200 ("the runs board returned 5,122 rows to a
+    # two-second poll") and no suite followed. The door's DEFAULT is that same cap, so asking for
+    # nothing asks for the maximum and cannot drift from it again — a literal here would be the same
+    # bug with a newer number.
+    #
+    # Caveat kept honest: a bounded board is a PAGE, so a run that has aged off it is not found. That
+    # is § E5's territory and the reason `cascade_lag_readers.consumed_reader` was moved to ask about
+    # the DATASET instead; these legs still scan, and their subject is a run they created seconds ago.
+    resp = requests.get(f"{lineage}/runs", headers=headers, timeout=8)
     resp.raise_for_status()
     return {r["run_id"]: r.get("state") or "" for r in resp.json().get("runs", [])}
 
@@ -885,7 +894,7 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     # THE load-bearing assertion: the run is attributed to the bare FGA service subject, NOT a Dex sub
     # and NOT an unauthenticated blank. This is what proves the credential authenticated as the service
     # (and, by the ingest's output-authz, that service-trainer's rung permitted the models write).
-    runs = requests.get(f"{lineage}/runs?limit=1000", headers=alice, timeout=8)
+    runs = requests.get(f"{lineage}/runs", headers=alice, timeout=8)
     runs.raise_for_status()
     train_run = next((r for r in runs.json().get("runs", []) if r["run_id"] == train_rid), None)
     assert train_run is not None, f"train run {train_rid} not visible to alice"

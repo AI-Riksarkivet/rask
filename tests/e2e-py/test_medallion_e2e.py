@@ -88,7 +88,7 @@ def urls() -> tuple[str, str]:
 
 def _run_count(lineage: str) -> int:
     """How many runs the lineage graph has recorded — the freshness baseline for the cascade."""
-    resp = requests.get(f"{lineage}/runs?limit=1000", headers=_LINEAGE_HEADERS, timeout=8)
+    resp = requests.get(f"{lineage}/runs", headers=_LINEAGE_HEADERS, timeout=8)
     resp.raise_for_status()
     return len(resp.json().get("runs", []))
 

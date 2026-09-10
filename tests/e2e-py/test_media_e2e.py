@@ -69,7 +69,7 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
     # Snapshot the run count FIRST (like the medallion e2e): silver-media may already exist from an
     # earlier run, so schema assertions alone could false-pass — a strictly rising run count proves THIS
     # trigger flowed (ingest run + derive run = at least +2).
-    before = requests.get(f"{lineage}/runs?limit=1000", headers=_LINEAGE_HEADERS, timeout=8)
+    before = requests.get(f"{lineage}/runs", headers=_LINEAGE_HEADERS, timeout=8)
     before.raise_for_status()
     runs_before = len(before.json().get("runs", []))
 
@@ -101,7 +101,7 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
         schema = requests.get(f"{lineage}/datasets/{SILVER}/schema", headers=_LINEAGE_HEADERS, timeout=8)
         if schema.status_code == 200:
             fields = {f["name"]: f["type"] for f in schema.json().get("fields", [])}
-        runs = requests.get(f"{lineage}/runs?limit=1000", headers=_LINEAGE_HEADERS, timeout=8)
+        runs = requests.get(f"{lineage}/runs", headers=_LINEAGE_HEADERS, timeout=8)
         if runs.status_code == 200:
             runs_after = len(runs.json().get("runs", []))
         if "thumbnail" in fields and "embedding" in fields and runs_after >= runs_before + 2:
