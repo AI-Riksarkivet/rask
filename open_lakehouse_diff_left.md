@@ -1780,7 +1780,10 @@ turned out to be are § Q16.
 - Secrets fail-closed: tests/unit/test_medallion_secrets.py:25-57; `test_secrets.py`, `test_media_s3_secret.py`.
 - Body limit / idempotency: `test_body_limit.py`; services/catalog/tests/test_commit_idempotency.py:49-97.
 - Ray auth in prod: tests/unit/test_ray_auth.py:78-191.
-- **No rask test** covers: per-service storage identity (there is none), TLS on store hops, Dapr access-control policy, `register_table` location containment, or the BFF anonymous-read service-door path.
+- Per-service storage identity: `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py`, `test_the_medallion_runs_as_its_own_storage_identity.py`, `test_a_scoped_identity_needs_only_its_name.py`, `test_the_root_storage_secret_reaches_only_its_users.py`. Moved out of the no-coverage list 2026-09-10, and the parenthetical it carried — *"(there is none)"* — was the stale half: five planes hold their own identity on the running estate.
+- BFF anonymous-read service-door path: `tests/unit/test_the_anonymous_principal_is_granted_nothing.py`.
+- Absence classification, added 2026-09-10 because a wrong answer here is destructive: `packages/service-kit/tests/test_one_absence_vocabulary_for_every_plane.py` (the 403/404/500 trio and the status-line trap), `services/maintenance/tests/test_a_denied_rewrite_is_refused_not_root_signed.py` (a catalog DENIAL must not be answered with a wider credential), `services/catalog/tests/test_a_branch_write_is_measured_on_its_branch.py` (a branch write measured on main).
+- **No rask test** covers: TLS on store hops, Dapr access-control policy, or `register_table` location containment. Those three re-measured TRUE 2026-09-10 — nothing dials https anywhere (`chart` renders `http://` for RustFS, OpenFGA, lineage and the collector; Postgres is `sslmode=disable`), and `grep -rn 'accessControl' chart/` returns zero hits.
 
 **Scope notes (things I did not verify):** Lakekeeper's Helm chart (separate repo) for pod security/NetworkPolicy; the Rust `DirectoryNamespace.register_table` location check behind pylance; rask's `bootstrap-admin.yaml` Job internals; where `LINEAGE_API` in the zones resolves (direct service vs gateway) for the BFF service-door reads.
 
