@@ -58,3 +58,67 @@ class CorrelationFilter(logging.Filter):
         trace_id = str(getattr(record, "otelTraceID", "") or "")
         record.trace_id = "-" if trace_id in _ABSENT_TRACE_IDS else trace_id
         return True
+
+
+# WHAT A RECORD CARRIES THAT NOBODY DELIBERATELY RECORDED. Derived from a real `LogRecord` rather than
+# typed out, so a stdlib that grows a field does not start printing it as a diagnostic; `asctime` and
+# `message` join it because the FORMATTER sets those, not `__init__`.
+#
+# The rest are attributes that ride every record from somewhere other than the caller:
+# `LoggingInstrumentor` stamps the four `otel*` fields on all of them (`trace_id` above is already
+# derived from one, and the format string prints it), the filter's own two have their own slots, and
+# uvicorn's `color_message` is an ANSI copy of the message meant for uvicorn's formatter to substitute
+# (`uvicorn/logging.py:61`) — rendering it prints every startup line in the fleet twice.
+#
+# PRIVATE NAMES GO WITH THEM, and a library in this estate is why rather than a principle: importing Ray
+# installs a log record factory that stamps `_ray_timestamp_ns` — a nanosecond integer — on EVERY record
+# in the process (`ray/_private/log.py:71-88`), so the compute service and the whole Ray lane would have
+# grown that field on every line. Naming it would fix this release and miss the next field it adds;
+# leading-underscore is the convention a library reaches for when it means "mine, not the caller's", and
+# no diagnostic in `services/` or `packages/` is named that way.
+_AMBIENT_RECORD_FIELDS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
+    "asctime",
+    "message",
+    "request_id",
+    "trace_id",
+    "otelTraceID",
+    "otelSpanID",
+    "otelServiceName",
+    "otelTraceSampled",
+    "color_message",
+}
+
+
+class DiagnosticFormatter(logging.Formatter):
+    """Render the fields a caller passed in ``extra=`` after the message.
+
+    THE ESTATE RECORDS CAUSES IN ``extra=`` — 626 call sites, measured 2026-09-10 — and this tier
+    printed the event name alone. `lineage_outbox_event_stranded` names the strand and puts the reason
+    in `extra`; on stdout it read as a bare event with no cause, and the cause had to be recovered by
+    reading the handler's source. The OTLP copy in GreptimeDB carried it the whole time, which is what
+    made the gap easy to miss: the diagnostic was not lost, only absent from the copy an operator
+    reaches for first.
+
+    ``repr`` rather than ``str`` for the values: the commonest diagnostic in the estate is
+    ``error=str(exc)``, and an unquoted exception string runs straight into the next field — or, when
+    it spans lines, into what looks like a separate log record.
+
+    NOTHING IS TRUNCATED, and that is a decision rather than an oversight. `lineage_reconcile_storage_loss`
+    records `datasets=[...]` — a list that can hold every dataset in the estate — so this tail can emit a
+    multi-kilobyte line. A cap would silently drop entries, which is the exact defect this class of fix
+    exists to end, and the formatter cannot know which of 626 call sites can afford it. A call site whose
+    diagnostic is genuinely unbounded should bound it there, where the meaning is known; the OTLP copy
+    already carries the whole value either way, so a cap here would only make the two tiers disagree.
+
+    Secrets are the standing hazard of a tail like this, and the rule that keeps them out is the same
+    one that governs `extra=` itself: a secret's NAME may be recorded, never its value. Audited at the
+    time of writing across every `extra=` in `services/` and `packages/` — the only credential-shaped
+    keys are `{"secret": secret}` in the viewer and ingest object-store paths, both of which hold the
+    Dapr secret's name. `services/maintenance/tests/test_the_rewrite_is_signed_by_a_scoped_credential.py`
+    asserts on the whole record for exactly this reason.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = super().format(record)
+        diagnostics = " ".join(f"{name}={value!r}" for name, value in vars(record).items() if not name.startswith("_") and name not in _AMBIENT_RECORD_FIELDS)
+        return f"{line} {diagnostics}" if diagnostics else line

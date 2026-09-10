@@ -152,5 +152,23 @@ def test_the_credential_is_reported_but_never_logged(door: list[dict[str, Any]],
 
     messages = " ".join(record.getMessage() for record in caplog.records)
     assert "SCOPED" in messages and "acme-bronze$events" in messages
-    assert _SCOPED["aws_secret_access_key"] not in messages
-    assert _SCOPED["aws_session_token"] not in messages
+
+    # THE WHOLE RECORD, not just the rendered message — and that gap was real rather than theoretical.
+    # This asserted on `getMessage()` alone, which is what the deployed formatter happens to print
+    # today (`%(message)s`, no extras). A secret placed in `extra=` would have satisfied every
+    # assertion here and still reached any handler that renders extras — a JSON formatter, an OTel log
+    # exporter, or the plain formatter the moment somebody widens it to stop dropping the diagnostics
+    # this estate carefully records there. A guarantee that holds only for one handler's format string
+    # is not a guarantee about the secret.
+    rendered = (
+        messages
+        + " "
+        + " ".join(
+            f"{key}={value!r}"
+            for record in caplog.records
+            for key, value in vars(record).items()
+            if key not in logging.LogRecord("", 0, "", 0, "", None, None).__dict__
+        )
+    )
+    assert _SCOPED["aws_secret_access_key"] not in rendered
+    assert _SCOPED["aws_session_token"] not in rendered

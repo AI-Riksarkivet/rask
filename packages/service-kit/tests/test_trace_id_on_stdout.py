@@ -142,3 +142,69 @@ def test_setup_otel_BINDS_the_logger_provider_it_built(monkeypatch: pytest.Monke
         f"the global logger provider is {type(provider).__name__}, not the SDK one — `LoggingInstrumentor` "
         "would bind its handler to a proxy whose logger drops every record silently"
     )
+
+
+def test_a_record_PRINTS_the_diagnostics_it_carries_in_extra(stdout_lines: io.StringIO) -> None:
+    """The estate records causes in `extra=` — 626 call sites — and the stdout line printed none of them.
+
+    Measured 2026-09-10 while chasing `lineage_outbox_event_stranded`: the handler that strands an
+    outbox event logs the cause in `extra`, the OTLP copy carries it to GreptimeDB, and `kubectl logs`
+    showed the event NAME and nothing else. Three warnings that night (`cascade_lag_edge_unreadable`,
+    `ingest_run_mutation_denied`, `lineage_outbox_event_stranded`) each had their cause recorded and
+    each had to be reverse-engineered from source instead of read.
+
+    This is the same class as the trace id above and worse: a trace id can be recovered from the OTLP
+    copy, while an operator reading a crash loop has only this tier and the diagnostic was written
+    FOR them.
+    """
+    logging.getLogger("lineage.api.reconcile_cron").warning(
+        "lineage_outbox_event_stranded",
+        extra={"reason": "graph write refused", "checked": 350},
+    )
+
+    line = stdout_lines.getvalue()
+    assert "graph write refused" in line, f"the cause was recorded on the record and dropped by the formatter: {line!r}"
+    assert "350" in line, f"a non-string diagnostic never reached the line: {line!r}"
+
+
+def test_a_record_carrying_NOTHING_extra_gains_no_trailing_noise(stdout_lines: io.StringIO, instrumented: None) -> None:
+    """The `instrumented` fixture is the point: `LoggingInstrumentor` stamps `otelTraceID`,
+    `otelSpanID`, `otelServiceName` and `otelTraceSampled` on EVERY record in a live service.
+
+    Those are record attributes exactly like an `extra` is, so a formatter that renders "whatever is
+    not standard" appends four fields to every line in the fleet — one of them a second copy of the
+    trace id the format string already prints. The correlation fields have their own slots; the
+    diagnostics tail is for what a caller deliberately recorded.
+    """
+    logging.getLogger(f"{__name__}.bare").info("plain line")
+
+    line = stdout_lines.getvalue().rstrip("\n")
+    assert line.endswith("plain line"), f"a bare record grew a diagnostics tail: {line!r}"
+
+
+def test_a_LIBRARYS_ambient_record_field_is_not_a_diagnostic(stdout_lines: io.StringIO) -> None:
+    """Two libraries in this estate stamp their own fields on records, and neither is a diagnostic.
+
+    `_ray_timestamp_ns` is not hypothetical: importing Ray installs a log record factory that puts it
+    on EVERY record in the process (`ray/_private/log.py:71-88`), which covers the compute service and
+    the whole Ray lane. It was caught here by this test failing in the full suite while passing alone —
+    the first version of the formatter appended a nanosecond integer to every line.
+
+    uvicorn's `color_message` is the second: an ANSI-escaped copy of the same message, for uvicorn's own
+    formatter to substitute (`uvicorn/logging.py:61`). Rendering it prints every startup line in the
+    fleet twice, the second time full of escape codes.
+
+    Logged to a logger this test owns rather than to `uvicorn.error`: uvicorn's shipped config gives the
+    `uvicorn` tree `propagate: False` (`uvicorn/config.py:108`), so any test in the run that applies it
+    detaches that name from the root handler and this assertion stops measuring the formatter at all.
+    """
+    logging.getLogger(f"{__name__}.ambient").info(
+        "Started server process [%d]",
+        4242,
+        extra={"color_message": "Started server process [\x1b[36m%d\x1b[0m]", "_ray_timestamp_ns": 1789033301968524218},
+    )
+
+    line = stdout_lines.getvalue()
+    assert "Started server process [4242]" in line, f"the record never reached stdout: {line!r}"
+    assert "\x1b[36m" not in line, f"uvicorn's colour duplicate was rendered as a diagnostic: {line!r}"
+    assert "1789033301968524218" not in line, f"Ray's ambient timestamp was rendered as a diagnostic: {line!r}"

@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
 
 from service_kit.config import Settings
-from service_kit.context import CorrelationFilter
+from service_kit.context import CorrelationFilter, DiagnosticFormatter
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import configure_audit
 from service_kit.lifecycle import mark_draining, mark_started
@@ -91,7 +91,10 @@ def setup_logging() -> None:
         # OTLP copy in GreptimeDB could be joined to a trace and `kubectl logs` — the copy an
         # operator reads first — could not. Both fields come from the filter, so this format string
         # is safe on a record that never met OpenTelemetry.
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] [%(trace_id)s] — %(message)s"))
+        # `DiagnosticFormatter`, not `Formatter`: the correlation fields have slots in this string, and
+        # everything the caller recorded in `extra=` follows the message. A format string cannot do the
+        # second half — it names fixed fields, and the diagnostics differ at every call site.
+        handler.setFormatter(DiagnosticFormatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] [%(trace_id)s] — %(message)s"))
         root.addHandler(handler)
 
 
