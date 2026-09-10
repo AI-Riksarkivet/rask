@@ -47,6 +47,11 @@ class DatasetPlan(BaseModel):
     #: provided chunk lengths" — a message about neither the batch size nor the caller. `ge=1` makes
     #: the invalid value unconstructible rather than diagnosable.
     scan_batch_size: int | None = Field(default=None, ge=1, le=8192)
+    #: The PASS bound, in bytes, beside the READ bound above — `None` means "the sweep's own default".
+    #: Carried on the work item for the same reason `scan_batch_size` is: the plan is what crosses the
+    #: broker, so a bound the planner resolved has to travel with the unit or the worker applies a
+    #: different one.
+    max_source_bytes: int | None = Field(default=None, ge=1024 * 1024)
     auto_cleanup_interval_commits: int | None = None
     index_columns: list[str] | None = None
     cleanup_enabled: bool = True

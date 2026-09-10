@@ -220,6 +220,7 @@ def _compact_files(
     refusal: str | None,
     target_rows_per_fragment: int | None,
     scan_batch_size: int | None,
+    max_source_bytes: int | None,
     compact_threads: int | None,
     rewrite: Rewriter | None = None,
     table_id: str | None = None,
@@ -242,6 +243,12 @@ def _compact_files(
     # because the fallback path reads exactly the same bytes as the deferred one.
     if scan_batch_size is not None:
         size_kw["batch_size"] = scan_batch_size
+    # THE BOUND IN THE UNIT THAT MATTERS. `batch_size` caps a read chunk in ROWS; this caps what one
+    # compaction pass may pull in at all, in BYTES — the thing the row-count knob was standing in for.
+    # Passed to BOTH attempts below for the same reason the batch size is: the fallback path reads
+    # exactly the same bytes as the deferred one.
+    if max_source_bytes is not None:
+        size_kw["max_source_bytes"] = max_source_bytes
     if compact_threads is not None:
         size_kw["num_threads"] = compact_threads
     # THE REWRITE OFF THIS POD, when a rewriter was supplied and this dataset is one the catalog can
@@ -484,6 +491,7 @@ def compact_one(
     cleanup_enabled: bool = True,
     optimize_indices_enabled: bool = True,
     scan_batch_size: int | None = None,
+    max_source_bytes: int | None = None,
     compact_threads: int | None = None,
     auto_cleanup_interval_commits: int | None = None,
     protected: BaseRefs | None = None,
@@ -625,6 +633,7 @@ def compact_one(
             refusal=compact_refusal,
             target_rows_per_fragment=target_rows_per_fragment,
             scan_batch_size=scan_batch_size,
+            max_source_bytes=max_source_bytes,
             compact_threads=compact_threads,
             rewrite=rewrite,
             # The id the PRODUCER stamped on the dataset, already resolved above. Deriving a second

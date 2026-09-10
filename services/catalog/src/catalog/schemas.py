@@ -472,6 +472,11 @@ class PolicyRequest(BaseModel):
     # tier. Per-tier is the whole point, exactly as with `target_rows_per_fragment`. None → Lance's
     # default, which is correct wherever rows are small.
     scan_batch_size: int | None = Field(default=None, ge=1, le=8192)
+    # The same ceiling expressed in BYTES rather than rows — pylance 11's `max_source_bytes`, a bound
+    # on the compaction PASS instead of on a read chunk. Per-tier for the reason above: a tier whose
+    # rows turn out larger than whoever set the row count assumed is precisely how the read bound gets
+    # away from you, and this one does not depend on knowing the row size. None → the sweep's default.
+    max_source_bytes: int | None = Field(default=None, ge=1024 * 1024)
     # #58 — WHO reclaims old versions. Lance ships its own auto-cleanup ON THE COMMIT PATH
     # (`lance.auto_cleanup.interval` / `.older_than`), so a tier that writes often may need no cron of
     # ours at all: the writer reclaims as it goes, and our sweep's cleanup step is redundant work
@@ -533,6 +538,7 @@ class PolicyResponse(BaseModel):
     cleanup_enabled: bool = True
     optimize_indices_enabled: bool = True
     scan_batch_size: int | None = None
+    max_source_bytes: int | None = None
     auto_cleanup_interval_commits: int | None = None
 
 

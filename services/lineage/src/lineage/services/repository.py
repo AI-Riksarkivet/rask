@@ -617,9 +617,14 @@ class LineageRepository:
             frontier = next_frontier
         return ColumnGraph(root=name, columns=nodes, edges=edges)
 
-    async def producers(self, name: str) -> Producers:
-        """The runs that wrote (or failed to write) ``name`` — who / when / how / version / error."""
-        rows = await fetch(self._pool, self._graph, cy.PRODUCERS, {"name": name}, columns=14)
+    async def producers(self, name: str, limit: int = 200) -> Producers:
+        """The runs that wrote (or failed to write) ``name`` — who / when / how / version / error.
+
+        BOUNDED, because a dataset the cascade rewrites every 120s accumulates WROTE edges for as long
+        as run retention keeps them: the graph is bounded, one dataset's history is not. The order is
+        newest-first, so a bound drops the tail and never the current answer.
+        """
+        rows = await fetch(self._pool, self._graph, cy.producers_page(limit), {"name": name}, columns=14)
         return Producers(
             dataset=name,
             producers=[

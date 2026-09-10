@@ -346,6 +346,31 @@ PRODUCERS: Final = (
     # current `blocked`. Sort here so every consumer sees the current run first. (audit 2026-07-20)
     "ORDER BY r.event_time DESC"
 )
+
+#: The ceiling on one producers page. A dataset the cascade rewrites every 120s accumulates WROTE
+#: edges forever — run retention (30 days) bounds the graph, not any single dataset's history — so an
+#: unbounded read here is O(history) on a gated endpoint.
+MAX_PRODUCERS_FETCH: Final = 2000
+
+
+def producers_page(limit: int) -> LiteralString:
+    """`PRODUCERS` bounded — the newest ``limit`` runs that wrote a dataset.
+
+    The ordering is already newest-first and load-bearing for a different reason (a consumer taking
+    "the latest run" must not read a stale earlier verdict), so the bound composes with it: what a
+    caller loses is the tail, never the current answer.
+
+    THE BOUND IS AN INT LITERAL for the reason `list_runs_page` records — AGE does not bind `$param`
+    reliably outside a MATCH — so it is VALIDATED BEFORE INTERPOLATION. A range-checked int carries
+    nothing a caller chose, which is what makes the `LiteralString` cast honest.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise TypeError(f"producers limit must be an int, got {type(limit).__name__}")
+    if limit < 1 or limit > MAX_PRODUCERS_FETCH:
+        raise ValueError(f"producers limit must be between 1 and {MAX_PRODUCERS_FETCH}, got {limit}")
+    return cast("LiteralString", f"{PRODUCERS} LIMIT {limit}")
+
+
 # Reconcile (#23): the version the graph believes is current = the version on the most-recent
 # *successful* WROTE edge (failed runs carry a WROTE edge with no version, so the IS NOT NULL guard
 # skips them). Most-recent by run event_time, since Lance versions are monotonic per dataset.

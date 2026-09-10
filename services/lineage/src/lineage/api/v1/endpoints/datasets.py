@@ -49,9 +49,17 @@ async def get_downstream(name: str, repository: RepositoryDep, datasets: FilterD
 
 
 @router.get("/{name}/producers")
-async def get_producers(name: str, repository: RepositoryDep) -> Producers:
-    """The runs that wrote ``name`` — who / when / how. Gated on ``can_get_metadata``."""
-    return await repository.producers(name)
+async def get_producers(
+    name: str,
+    repository: RepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> Producers:
+    """The runs that wrote ``name`` — who / when / how. Gated on ``can_get_metadata``.
+
+    Bounded like ``/readers`` beside it: newest-first, so the page a caller gets is the part that
+    answers "what wrote this", and the tail it loses is history the run board serves instead.
+    """
+    return await repository.producers(name, limit)
 
 
 @router.get("/{name}/readers", dependencies=[Depends(require_write_access)])

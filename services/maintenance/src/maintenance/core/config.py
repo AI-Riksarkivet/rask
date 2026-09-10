@@ -89,6 +89,18 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # multiplied by 64 while the cgroup still allowed one core's worth of work. Pinning it makes the
     # ceiling a number someone can actually compute.
     compact_threads: int = Field(default=2, ge=1, le=64, alias="MAINTENANCE_COMPACT_THREADS")
+    # THE BOUND THE TWO ABOVE WERE REACHING FOR. `scan_batch_size` bounds the READ, in rows, and the
+    # note above says plainly why that is a proxy rather than the thing itself: "Rows are not a unit of
+    # memory". pylance 11 exposes a bound on the PASS in the unit that actually matters — how many
+    # source bytes one compaction may pull in — so the ceiling stops depending on knowing every tier's
+    # row size in advance.
+    #
+    # 256 MiB against the pod's inherited 512Mi limit: it composes with the read bound rather than
+    # replacing it (the read batch still caps a single chunk), and it is the half that survives a tier
+    # whose rows turn out larger than whoever set the row count assumed — the exact way incident #93
+    # happened. `max_source_rows` and `max_source_fragments` are deliberately not mirrored: they are
+    # more row-count proxies, and one honest bound beats three that need reconciling.
+    max_source_bytes: int = Field(default=256 * 1024 * 1024, ge=1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
 
     # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the cron route would
     # otherwise be an open forged-sweep path). Symmetric with the lineage service. Off in dev (no sidecar).

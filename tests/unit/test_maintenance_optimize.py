@@ -749,3 +749,44 @@ def test_compact_one_does_not_call_a_DEPRECATED_pylance_api(tmp_path: Path, recw
     assert result.indices_optimized == 1, "the migration must not change what the metric counts"
     deprecated = [w for w in recwarn.list if issubclass(w.category, DeprecationWarning) and "list_indices" in str(w.message)]
     assert not deprecated, f"compact_one still calls a deprecated pylance API: {[str(w.message) for w in deprecated]}"
+
+
+def test_a_max_source_bytes_reaches_compaction_and_still_compacts(tmp_path: Path) -> None:
+    """The bound in the unit that actually matters, beside the row-count one.
+
+    `scan_batch_size` caps a READ CHUNK in rows, and the settings comment that introduced it says why
+    that is a proxy: "Rows are not a unit of memory". pylance 11 bounds the PASS in bytes, so the
+    ceiling stops depending on knowing every tier's row size in advance — which is exactly how
+    incident #93 happened, a tier whose rows were larger than whoever set the count assumed.
+
+    Asserts the value REACHES `compact_files`: a silently-dropped kwarg is the failure that matters,
+    because the pass looks identical while reading whatever it likes.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+    seen: dict[str, object] = {}
+    real = lance.dataset(uri).optimize.__class__.compact_files
+
+    def _spy(self: object, *args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
+
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
+    try:
+        result = compact_one(uri, {}, timedelta(0), max_source_bytes=64 * 1024 * 1024)
+    finally:
+        lance.dataset(uri).optimize.__class__.compact_files = real
+
+    assert result.error is None, result.error
+    assert seen.get("max_source_bytes") == 64 * 1024 * 1024, f"max_source_bytes never reached compact_files: {seen}"
+    assert result.fragments_removed > 0, "compaction did not run under a byte bound"
+
+
+def test_an_unpolicied_estate_is_bounded_by_bytes_out_of_the_box() -> None:
+    """The default must not be None. `scan_batch_size` shipped without one and the unpolicied estate
+    OOM-killed itself on the first blob tier; the byte bound exists so that cannot recur through a
+    tier whose row size nobody measured."""
+    from maintenance.core.config import MaintenanceSettings
+
+    settings = MaintenanceSettings()
+    assert settings.max_source_bytes is not None
+    assert settings.max_source_bytes <= 512 * 1024 * 1024, "a bound above the pod's own limit bounds nothing"
