@@ -57,7 +57,7 @@ def vertex_name_for(namespace: str, name: str) -> str:
     """
     from lineage.api.fga_deps import is_external_source
 
-    return f"{namespace}/{name}" if is_external_source(namespace) else name
+    return f"{namespace}/{name}" if is_external_source(namespace, name) else name
 
 
 class Dataset(BaseModel):

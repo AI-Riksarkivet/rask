@@ -123,7 +123,7 @@ def test_each_source_input_is_namespaced_so_it_reads_as_external(monkeypatch: py
 
     event = _emit_and_capture(monkeypatch)
 
-    namespaces = [i["namespace"] for i in event["inputs"]]
+    namespaces = [(i["namespace"], i.get("name", "")) for i in event["inputs"]]
     assert namespaces, "the head emitted no inputs at all"
-    unrecognised = [n for n in namespaces if not is_external_source(n)]
+    unrecognised = [ns for ns, name in namespaces if not is_external_source(ns, name)]
     assert not unrecognised, f"these source namespaces do not read as external, so the event is hidden from every caller under FGA: {unrecognised}"

@@ -153,7 +153,9 @@ def _governed_datasets(record: EventRecord) -> set[str]:
     if not isinstance(raw_inputs, list) or not raw_inputs:
         return set(record.inputs) | outputs | _column_lineage_datasets(record.event)
     governed_inputs = {
-        str(d.get("name")) for d in raw_inputs if isinstance(d, dict) and d.get("name") and not is_external_source(str(d.get("namespace") or ""))
+        str(d.get("name"))
+        for d in raw_inputs
+        if isinstance(d, dict) and d.get("name") and not is_external_source(str(d.get("namespace") or ""), str(d.get("name")))
     }
     return governed_inputs | outputs | _column_lineage_datasets(record.event)
 

@@ -193,21 +193,33 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
 
 
 @pytest.mark.parametrize(
-    ("namespace", "external"),
+    ("namespace", "name", "external"),
     [
-        ("s3://images-batch", True),
-        ("iiif://lbiiif.riksarkivet.se", True),
-        ("file:///data/drop", True),
-        ("bronze", False),
-        ("bind86-bronze", False),
-        ("gold", False),
+        ("s3://images-batch", "run1/", True),
+        ("iiif://lbiiif.riksarkivet.se", "coll", True),
+        ("file:///data/drop", "x", True),
+        # The BARE external namespaces, which no scheme test can catch: `local-dir` mints `file` and
+        # `lance-append` mints `lance`, and both were authorized as governed until they were declared.
+        ("file", "/tmp/ingest-fixtures", True),
+        ("lance", "s3://lane-src/tbl.lance", True),
+        ("bronze", "bronze$pages", False),
+        ("bind86-bronze", "bind86-bronze$pages", False),
+        ("gold", "gold$catalog", False),
+        # A declared namespace does NOT exempt a governed table id. Both holes would have to be open at
+        # once — a namespace literally named `file` AND a table id with no delimiter.
+        ("file", "file$gold", False),
+        ("lance", "lance$secrets", False),
     ],
 )
-def test_the_discriminator_is_the_URI_SCHEME_not_a_name_list(namespace: str, external: bool) -> None:
-    """OpenLineage's own naming convention does the work: an external data source is namespaced by its
-    store URI, a governed table by its catalog namespace — a bare identifier. Pinned as a table so a
-    future source kind (a new `xyz://`) is covered without an edit, which a hardcoded list would not be."""
-    assert is_external_source(namespace) is external
+def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: str, name: str, external: bool) -> None:
+    """TWO forms, because the estate's producers mint both, and the scheme alone missed two of three.
+
+    A store URI carrying a scheme is external by shape. A bare identifier is exactly what a catalog
+    namespace looks like, so the bare external namespaces are DECLARED in
+    `service_kit.lakehouse.naming` — the one place both this service and every producer read them
+    from. For the bare form the NAME is part of the answer: a governed table id always carries the
+    catalog delimiter, so it is never exempted even under a declared namespace."""
+    assert is_external_source(namespace, name) is external
 
 
 # --- THE READ-PATH TWIN --------------------------------------------------------------------------
@@ -313,14 +325,17 @@ def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() ->
 
 
 def test_the_exemption_is_only_reached_by_a_dataset_that_cannot_be_governed() -> None:
-    """`is_external_source` is the discriminator, and it must stay keyed on the URI-scheme convention
-    the naming spec already uses — a bare catalog namespace is never exempt."""
+    """`is_external_source` is the discriminator, and a bare CATALOG namespace is never exempt.
+
+    An undeclared bare namespace stays governed whatever its name, which is what keeps the declared
+    set a decision rather than a shape."""
     from lineage.api.fga_deps import is_external_source
 
-    assert is_external_source("s3://bucket") is True
-    assert is_external_source("iiif://host") is True
-    assert is_external_source("gold") is False
-    assert is_external_source("bind86-bronze") is False
+    assert is_external_source("s3://bucket", "prefix/") is True
+    assert is_external_source("iiif://host", "coll") is True
+    assert is_external_source("gold", "gold$catalog") is False
+    assert is_external_source("bind86-bronze", "bind86-bronze$pages") is False
+    assert is_external_source("bronze", "not-a-table-id") is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

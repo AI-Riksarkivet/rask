@@ -175,7 +175,7 @@ def enforce_author(event: RunEvent, token: Principal | None) -> None:
         event.run.facets["author"] = {"name": token.sub, "sub": token.sub}
 
 
-def is_external_source(namespace: str) -> bool:
+def is_external_source(namespace: str, name: str) -> bool:
     """Is this dataset OUTSIDE the governed estate — a raw source rather than a table we authorize?
 
     R23 draws the line the whole medallion rests on: the governed tiers are exactly bronze -> silver ->
@@ -190,11 +190,20 @@ def is_external_source(namespace: str) -> bool:
     data, the terminal event was authorized fine, and the graph stayed empty because the run was never
     opened. Ten configuration causes were investigated before the service's own message was read.
 
-    The discriminator is the NAMESPACE carrying a URI scheme, which is OpenLineage's own naming
-    convention: an external data source is namespaced by its store URI (``s3://bucket``,
-    ``iiif://host``), while a governed table is namespaced by its catalog namespace (``bronze``,
-    ``bind86-bronze``) — a bare identifier, delimiter-joined to the table id. That is a property of the
-    naming spec both sides already follow, not a heuristic invented here.
+    The discriminator has TWO forms and lives in `service_kit.lakehouse.naming`, because it is a
+    convention this service and every producer must agree on — the `project_namespace` precedent. A
+    store URI carrying a scheme (``s3://bucket``) is external by shape. A BARE identifier cannot be
+    decided by shape at all, since that is exactly what a catalog namespace looks like (``bronze``,
+    ``bind86-bronze``), so the bare external namespaces are DECLARED: ``file`` and ``lance``.
+
+    Testing the scheme ALONE was a one-sided failure that looked like nothing. Of ingest's three source
+    kinds only `s3-prefix` mints a scheme; `local-dir` mints ``file`` and `lance-append` mints
+    ``lance``, so both were authorized as governed and both had their START event refused — while the
+    terminal event, which carries no inputs, was accepted. The run reached the graph with half its
+    provenance and every check that asks "does a run exist" passed (measured on the deployed estate
+    2026-09-10: ``ingest_input_denied ... inputs=['/tmp/ingest-fixtures']``, 403). Pinned by
+    `tests/unit/test_an_external_source_is_one_the_graph_does_not_authorize.py`, which reads the source
+    registry itself so a fourth kind is covered without anyone remembering to add it.
 
     **This does not reopen the forgery hole it sits next to.** The guard exists so an authenticated
     reader cannot record "I read ``gold$catalog``" into the audit graph. A namespace is PART OF A
@@ -209,7 +218,9 @@ def is_external_source(namespace: str) -> bool:
     and this plane never writes outside it — an output naming an external namespace is a producer
     claiming to have written the outside world, which is not a case to make permissive.
     """
-    return "://" in namespace
+    from service_kit.lakehouse.naming import is_external_source_namespace
+
+    return is_external_source_namespace(namespace, name)
 
 
 class _StampedAuthor:
@@ -364,8 +375,8 @@ async def enforce_output_authz(
     # "my column came from yours" is a claim to have READ your column, which is exactly what
     # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
     # has no `table:` object, and (since `vertex_name`) cannot collide with a governed vertex either.
-    column_upstreams = {edge.name for out in event.outputs for edge in out.column_edges if edge.name and not is_external_source(edge.namespace)}
-    inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace)} | column_upstreams)
+    column_upstreams = {edge.name for out in event.outputs for edge in out.column_edges if edge.name and not is_external_source(edge.namespace, edge.name)}
+    inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace, d.name)} | column_upstreams)
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]
         seen = await fga.batch_check(client, user=token.sub, relation="can_get_metadata", objects=objs)
