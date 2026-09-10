@@ -1153,7 +1153,28 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     the spec's own value through unchanged.
     """
     if req.branch is None:
-        return cast(InsertIntoTableResponse, native.call(ns, "insert_into_table", req, data))
+        response = cast(InsertIntoTableResponse, native.call(ns, "insert_into_table", req, data))
+        # THE NATIVE BACKEND ANSWERS `{}`, so both declared fields came back None on the ORDINARY path
+        # while the branch path below filled them — a caller had to stage on a branch to learn what
+        # their insert did. Measured against the installed backend on pylance 11.0.0.
+        #
+        # Filled from ONE reopen, and only when something is missing: the row count is read off the
+        # payload the caller already sent (no I/O), and the version off a single open — which is the
+        # cost the row deferred this on, and it is already paid one line later by the caller's lineage
+        # trailer. Best-effort by construction: the write is COMMITTED, so a readback failure must
+        # leave the response as the backend gave it rather than fail a successful insert.
+        if response.version is None or response.num_inserted_rows is None:
+            with suppress(Exception):
+                inserted = pa.ipc.open_stream(pa.BufferReader(data)).read_all().num_rows
+                response.num_inserted_rows = response.num_inserted_rows if response.num_inserted_rows is not None else inserted
+                # `branch=req.branch` even though this arm is the branchless one: it is None here, so
+                # the call is identical — and it says "open the ref the request NAMES" at the seam
+                # where opening the wrong one is the whole defect this family keeps having.
+                # `test_siblings_agree::test_a_branch_carrying_request_reaches_open_dataset` reads it
+                # the same way a reviewer does, and it flagged the bare form on sight.
+                current = open_dataset(ns, so, _table_id(req), branch=req.branch)
+                response.version = response.version if response.version is not None else current.version
+        return response
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
     reader = pa.ipc.open_stream(pa.BufferReader(data))
     before = dataset.count_rows()

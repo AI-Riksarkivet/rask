@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-10, from the rows below rather than asserted: 267 tracked, 87 open, 180 struck.**
+**Counted 2026-09-10, from the rows below rather than asserted: 267 tracked, 86 open, 181 struck.**
 That is WORK ONLY — 69 lettered `###` rows (28 struck) and 188 Q-section table rows (111 struck) —
 and `tests/unit/test_the_lakehouse_backlog_counts_itself.py` re-derives all three from the rows, and
 `make backlog` prints the same derivation on demand — open by severity, and what waits on the owner.
@@ -456,7 +456,11 @@ automation — so nothing says which spec version they describe, and a reader ci
 standing CONSTRAINTS require) cannot tell whether they are current. Re-vendoring should land a
 provenance line with them, or the next reader is in exactly this position.
 
-### A12 · `insert_into_table` answers null counts on MAIN and real ones on a BRANCH
+### ~~A12 · `insert_into_table` answers null counts on MAIN and real ones on a BRANCH~~
+
+**FIXED 2026-09-10, and the row's own cost objection was falsified before doing it.** The row deferred this to A10 because filling the fields "costs an extra open_dataset plus two count_rows on EVERY main-path insert". Neither cost is real at HEAD: the row count comes off the payload the caller already sent (no I/O — it is decoded a line earlier to align it to the schema), and the version costs ONE open that the endpoint's lineage trailer already performs unconditionally. The fill happens in `dataplane.insert_into_table`, not the endpoint, so every caller gets it, and only when a field is actually missing — best-effort under `suppress`, because the write is COMMITTED and a readback failure must not fail a successful insert. Pinned by a PARITY test, the idiom the sibling gate on this same door already uses: what a caller is owed was decided by the path that answers, so the two are pinned together rather than to a literal Lance could revise.
+
+**AND THE SAME HANDLER CARRIED A PROVENANCE BUG THE ROW DID NOT NAME — now § Q17-58.** Three doors accept `branch` and NONE forwarded it to `emit_measured_write`, whose docstring and `read_version_and_schema`'s both state the rule: "a branch has its own version sequence and its own schema", so reading a branch write back off main "pins the WROTE edge to a version that never carried the change". Two of the three are worse than versionless — they pass `pin_version=response.version`, a BRANCH version number, into a read that opens MAIN, so the edge carries a different commit's schema rather than a missing one. `commit_table_compaction`, `insert_into_table` and `merge_insert_into_table` now all forward it, RED-verified by two AST gates that cast different nets: one pins the three known doors (a rename or deletion fails it), the other scans EVERY handler for `pin_version` without `branch` (a NEW door fails it).
 **FOUND 2026-09-07 by driving the stock client** (§A11's write leg), which is the only reason it was
 seen: our own transport never reads those fields. The third main/branch asymmetry in this file and the
 only one where the BRANCH path is the better half —

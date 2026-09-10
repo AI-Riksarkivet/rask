@@ -256,6 +256,11 @@ async def commit_table_compaction(
         token=token,
         operation=COMPACT_TABLE,
         pin_version=outcome.version,
+        # THE REF THE WRITE COMMITTED TO. Without it the trailer reads the commit back off MAIN, and
+        # with `pin_version` set that is worse than versionless: a branch's version NUMBER opened on
+        # main is a DIFFERENT snapshot, so the WROTE edge carries some other commit's schema. Both
+        # `read_version_and_schema` and `emit_measured_write` state the rule; no caller held it.
+        branch=branch,
         authorization=authorization,
     )
     return CompactionCommitResponse(
@@ -300,6 +305,9 @@ async def insert_into_table(
         token=token,
         operation=INSERT,
         authorization=authorization,
+        # A branch has its own version sequence; reading this write back off main pins the edge to a
+        # version that never carried it.
+        branch=branch,
     )
     return response
 
@@ -388,6 +396,9 @@ async def merge_insert_into_table(
         operation=MERGE_INSERT,
         authorization=authorization,
         pin_version=response.version,
+        # Pinned AND branched, together: the dataplane call above already takes `branch=branch`, so a
+        # trailer that does not is measuring a different dataset than the one just written.
+        branch=branch,
         inputs=inputs,
         extra_run_facets=extra_run_facets,
     )
