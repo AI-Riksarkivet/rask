@@ -351,7 +351,15 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     # unit — and the work stream is `workqueue` retention, so a unit can sit for up to the stream's
     # max-age before a worker takes it. That is the same staleness argument the protection re-check
     # above this makes, applied to the thing that expires by design.
-    write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=item.table_id)
+    try:
+        write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=item.table_id)
+    except compaction_executor.MaintenanceDenied as exc:
+        # The catalog refused this identity a write credential for this table. Maintaining it anyway
+        # means maintaining it under `options` — the ambient key, which reaches every bucket in the
+        # estate — so the refusal has to stop the dataset, not just the vend. Refused rather than
+        # errored: nothing is broken, a grant is missing, and the two must not read alike.
+        log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": item.table_id, "reason": str(exc)})
+        return DatasetResult(uri=item.uri, refused=str(exc))
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected)
 
 

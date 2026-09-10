@@ -28,6 +28,7 @@ import pytest
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
+from maintenance.services.compaction_executor import MaintenanceDenied
 
 
 #: Distinctive values on purpose. A one-character secret is a substring of ordinary prose, so the
@@ -103,13 +104,34 @@ def test_an_unvendable_dataset_is_still_maintained(door: list[dict[str, Any]], u
     [
         _Response(200, {"mode": "server_mediated"}),
         _Response(503, {}),
-        _Response(403, {}),
         _Response(200, {"mode": "direct", "credentials": {}}),
     ],
 )
-def test_every_non_answer_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response) -> None:
+def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response) -> None:
+    """Three shapes of "no credential is on offer", and none of them is a refusal.
+
+    `server_mediated` is a supported posture, a 503 is an outage, and a `direct` answer carrying no
+    options offered nothing. Reclaiming disk through any of these is why the ambient fallback exists.
+    """
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
     assert credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT) == _AMBIENT
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_door_that_said_NO_refuses_instead_of_reaching_for_the_ambient_key(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    """A DENIAL sat in the degrading list above, and it is a different question from the three there.
+
+    "We could not ask" permits a fallback; "you may not" cannot, because the fallback is the ambient
+    credential and it reaches every bucket in the estate — so the answer to being refused one table
+    was to rewrite it with a key that can rewrite all of them. Measured on the live estate 2026-09-10:
+    eight tables refused 403 and rewritten under the root key, visible only as an INFO line.
+
+    It refuses the DATASET, not the run: the sweep records a refusal and maintains everything else.
+    """
+    monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: _Response(status, {}))
+    with pytest.raises(MaintenanceDenied) as caught:
+        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
+    assert "can_maintain" in str(caught.value), "the refusal must name the grant that would allow it"
 
 
 def test_an_unreachable_catalog_degrades(monkeypatch: pytest.MonkeyPatch) -> None:

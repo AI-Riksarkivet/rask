@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from maintenance.services.compaction_executor import CommittedWork, CompactionPlaneUnavailable, DistributedCompactionError, PlannedWork
+from maintenance.services.compaction_executor import CommittedWork, CompactionPlaneUnavailable, DistributedCompactionError, MaintenanceDenied, PlannedWork
 
 
 if TYPE_CHECKING:
@@ -52,8 +52,16 @@ def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: Mainten
         response = httpx.post(url, json=policy or {}, headers=service_headers(settings), timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
         raise CompactionPlaneUnavailable(f"compaction plan unreachable for {table_id}: {exc}") from exc
+    if response.status_code in (401, 403):
+        # The word this line already used was REFUSED and the class was Unavailable, which the caller
+        # answers by compacting in-pod — so an authorization denial authorized the very rewrite it
+        # denied. `MaintenanceDenied` cannot be answered that way.
+        raise MaintenanceDenied(
+            f"the catalog REFUSED a compaction plan for {table_id} ({response.status_code}) — this rewrite is not "
+            f"authorized for {settings.catalog_service_identity!r}. Grant can_maintain on table:{table_id} if it should be."
+        )
     if response.status_code >= 400:
-        raise CompactionPlaneUnavailable(f"compaction plan refused for {table_id} ({response.status_code}): {response.text[:200]}")
+        raise CompactionPlaneUnavailable(f"compaction plan unavailable for {table_id} ({response.status_code}): {response.text[:200]}")
     try:
         payload = response.json()
     except ValueError as exc:

@@ -102,6 +102,30 @@ class DistributedCompactionError(RuntimeError):
     """
 
 
+class MaintenanceDenied(RuntimeError):
+    """The catalog answered NO — this identity may not maintain this table.
+
+    A SIBLING OF NOTHING ELSE HERE, deliberately. `CompactionPlaneUnavailable` means "we could not
+    ask", and every caller answers it by doing the work in-pod instead; if a denial inherited from it,
+    each of those `except` clauses would keep falling back and the refusal would be invisible.
+
+    THE TWO CONDITIONS ARE DIFFERENT QUESTIONS AND ONLY ONE PERMITS A FALLBACK:
+
+        503 / timeout / unparseable   we could not ASK   -> degrade. Reclaiming disk through a brief
+                                                            catalog outage is why the fallback exists.
+        401 / 403                     the answer is NO   -> refuse. Doing the work anyway with the
+                                                            deployment's ambient key is an
+                                                            authorization bypass, not a degradation.
+
+    MEASURED ON THE LIVE ESTATE 2026-09-10, which is why this class exists: both maintenance->catalog
+    clients classified on `status_code >= 400`, so a 403 took the outage branch. In one 60-minute
+    window the sweep logged 20 fallbacks against 352 successes, and the vending log named eight tables
+    it had been refused — `lakehouse$gold`, `m2proof_silver$...`, `blobtab_vaud1ns$vblob2` and five
+    more — each of which was then rewritten under the root credential. Nothing was red: the fallback
+    logs at INFO, because it was written for the outage it could not tell apart from this.
+    """
+
+
 class CompactionPlaneUnavailable(DistributedCompactionError):
     """The distributed path could not be STARTED — nothing was planned, nothing was written.
 

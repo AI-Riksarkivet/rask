@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
-from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome
+from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome, MaintenanceDenied
 from maintenance.services.index_health import inspect_indices
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
@@ -252,6 +252,16 @@ def _compact_files(
     if refusal is None and rewrite is not None and table_id:
         try:
             outcome = rewrite(uri, table_id=table_id, options=size_kw)
+        except MaintenanceDenied as exc:
+            # REFUSE, and specifically do not fall through to the in-pod rewrite below. The catalog
+            # declined to authorize this rewrite; compacting locally would perform it under whatever
+            # credential opened `ds`, which on a denied table is the deployment's ambient key. That is
+            # the bypass this class exists to stop. Recorded as a refusal so it lands on the WARNING
+            # log, the `lance.maintenance.refused` span attribute and the refused counter — a denial
+            # an operator can grant away, not an error that looks like a fault in the sweep.
+            log.warning("maintenance_rewrite_denied", extra={"uri": uri, "table_id": table_id, "reason": str(exc)})
+            result.refused = str(exc)
+            return
         except CompactionPlaneUnavailable as exc:
             # Nothing was planned, so nothing was written: falling back is safe and is the only
             # answer that keeps reclaiming disk when the catalog is briefly unreachable. INFO rather

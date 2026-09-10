@@ -38,6 +38,7 @@ from service_kit.lakehouse.table_locations import table_id_from_location
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
 from maintenance.services.catalog_identity import service_headers
+from maintenance.services.compaction_executor import MaintenanceDenied
 
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,17 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None
     except httpx.HTTPError as exc:
         logger.info("credential vending unreachable for %s (%s)", table_id, exc)
         return None
+    if response.status_code in (401, 403):
+        # A DENIAL, NOT AN OUTAGE — and the difference decides whether a rewrite may proceed. Falling
+        # back here hands the caller the deployment's ambient key, which reaches every bucket in the
+        # estate, in answer to the catalog saying this identity may not write this one table. Measured
+        # live 2026-09-10: eight tables were refused and rewritten under the root credential anyway,
+        # visible only as an INFO line nobody reads.
+        raise MaintenanceDenied(
+            f"the catalog REFUSED a write credential for {table_id} ({response.status_code}) — this rewrite is not "
+            f"authorized for {settings.catalog_service_identity!r}, and signing it with the ambient key would be a bypass. "
+            f"Grant can_maintain on table:{table_id} if this identity should maintain it."
+        )
     if response.status_code >= 400:
         logger.info("credential vending unavailable for %s (%s)", table_id, response.status_code)
         return None

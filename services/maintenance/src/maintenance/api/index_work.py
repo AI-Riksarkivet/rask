@@ -29,6 +29,7 @@ from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import CREATE_INDEX, MaintenanceEmitter
 from maintenance.services import credentials
+from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.index_build import UnknownIndexKindError, build_index
 from maintenance.services.work_queue import SUCCESS
 from service_kit.draining import retry_when_draining
@@ -63,7 +64,16 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
     # vending door offers one — falling back to the ambient credential otherwise, which is what this
     # service always used.
     options = settings.storage_options()
-    write_options = await run_in_threadpool(credentials.write_options_for, item.uri, settings, fallback=options, declared_table_id=item.table_id or None)
+    try:
+        write_options = await run_in_threadpool(credentials.write_options_for, item.uri, settings, fallback=options, declared_table_id=item.table_id or None)
+    except MaintenanceDenied as exc:
+        # SUCCESS, not RETRY: the catalog refused this identity a write credential for this table, and
+        # that answer does not change on the next delivery — retrying would redeliver forever while the
+        # index is never built. Building it anyway under `options`, the ambient key, is the bypass the
+        # rewrite path refuses for the same reason: an index build writes files under the table's own
+        # prefix, so it is a write. The unit is dropped loudly, naming the grant that would allow it.
+        log.warning("index_unit_denied", extra={"uri": item.uri, "table_id": item.table_id, "reason": str(exc)})
+        return {"status": SUCCESS}
     try:
         outcome = await run_in_threadpool(build_index, item, write_options=write_options)
     except UnknownIndexKindError:
