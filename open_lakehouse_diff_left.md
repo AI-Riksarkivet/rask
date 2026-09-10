@@ -2328,6 +2328,35 @@ ingestion. Measure which paths use ambient credentials, then scope to those plus
 **NOT a reason to delay the outbox identity**: an additional narrow credential used only for staging is
 safe now and independent of the data-path question.
 
+**THE DATA HALF IS MEASURED — 2026-09-10, by reading every S3 caller in `services/ingest`.** The ambient
+root pair is used by exactly THREE paths, and governed table bytes are not among them:
+
+  1. **The lineage outbox staging write.** `ingest/lineage.py:227 _outbox_storage_options` returns
+     `{"endpoint": ...}` and NO keys, so the write signs with the pod's `AWS_*` chain. This is the § E1
+     half, and it is the one path whose prefix is known ahead of time.
+  2. **Source reads of the estate-default store.** `objectstore._s3_prefix`, the `is_estate_default`
+     branch, builds `pafs.S3FileSystem()` against `configured_endpoint()` and takes credentials from
+     pyarrow's own `AWS_*` chain.
+  3. **Source reads of a registered store that DECLARES NO SECRET.** The same function calls
+     `without_credentials(options)` for that case — deliberately removing both spellings rather than
+     blanking them — and `source_s3_client` is the boto3 twin, built with `access_key=None`.
+
+  **NOT ambient: the governed writes and the staging LEDGER.** Both go through
+  `runtime.write_options_for` -> `VendedCredentialCache` -> `catalog.vend_storage_options`, per
+  namespace+dataset, and the ledger lives under the dataset (`<dataset>.lance/_ingest_staging/...`) so
+  one vend covers both. § H8's "already vended" claim holds on re-reading rather than on its own record.
+
+**SO THE SCOPING IS TRACTABLE FOR ONE PATH AND NOT FOR THE OTHER TWO, and that is the finding.** The
+outbox prefix is a constant, so a narrow identity for (1) can be written today. Paths (2) and (3) read
+buckets an OPERATOR registers at runtime — the estate default plus any source store added without a
+secret — so no policy written at deploy time can enumerate them. Scoping those means either resolving
+the source registry into the policy (a policy that changes when a store is registered) or giving a
+registered store a declared secret so it stops falling back at all. **The second is the idiomatic
+answer** and it is already the shape the code prefers: `without_credentials` exists precisely because a
+declared secret is the normal case and the fallback is the exception. Narrowing the ambient pair without
+closing (3) first would break ingestion from every secretless registered store, which is the outcome the
+original "measure first" warning was protecting against.
+
 ### H9 · Secrets reaching workloads through env — **RE-MEASURED 2026-09-08: the lakehouse plane holds TWO classes, not 43**
 
 **THE 43 IS INFLATED, AND THE INFLATION IS THE INTERESTING PART.** Re-measured inside the RUNNING pods
