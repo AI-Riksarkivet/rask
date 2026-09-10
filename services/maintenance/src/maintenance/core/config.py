@@ -395,10 +395,19 @@ def shared_lance_session() -> lance.Session:
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
     the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
     so a compaction bumping a version writes new keys and freshness needs no design."""
-    from service_kit.lakehouse.lance_session import lance_session
+    from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
 
     settings = get_settings()
-    return lance_session(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
+    # CLAMPED TO WHAT THIS CONTAINER HOLDS, because the configured pair did not fit it. 128 + 256 MB
+    # inside a 512Mi pod with a ~153Mi process baseline is 537 MB, and the caps are LRU SOFT bounds —
+    # the size the cache grows toward, not a ceiling it stops at. `rask-maintenance` was OOMKilled
+    # (exit 137) on 2026-09-10 after reconcile passes warmed the session, which is exactly the workload
+    # that fills it: the scan opens every dataset across 93 buckets.
+    #
+    # Derived from the cgroup rather than by lowering these defaults, because a literal cannot track
+    # `resources.limits.memory` — raise the pod and the caps should follow, lower it and they must.
+    metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
+    return lance_session(metadata, index)
 
 
 @lru_cache
