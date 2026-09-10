@@ -1091,6 +1091,57 @@ def _refuse_oversized_dispatch(chunks: list[dict[str, Any]], *, units: int, max_
     return None
 
 
+def _existing_ids_for_anti_join(uri: str, *, namespace: str, dataset: str, ceiling: int) -> set[int]:
+    """Every `id` bronze already holds, read with a TABLE-SCOPED credential.
+
+    ITS OWN FUNCTION so the credential can be asserted. Inline, the only way to prove this read was
+    signed at all was to drive the whole activity against object storage — and the defect it carried,
+    opening the dataset with no storage options, is invisible to every test that does not.
+
+    MEASURED ON THE DEPLOYED ESTATE 2026-09-10. The ingest pod carries `AWS_REGION`,
+    `AWS_ENDPOINT_URL` and `AWS_ALLOW_HTTP` and NO key pair — the long-lived credential was taken out
+    of it, which is what zero trust asks for. This read was never moved with it, so a real run created
+    and registered its table and then died with `Failed to get AWS credentials: CredentialsNotLoaded`.
+    Not a 403: no credential was found at all, so every incremental run that must dedupe was dead on
+    the estate as shipped.
+
+    Falls back to the ambient chain where the catalog offers nothing, the same shape the write half
+    takes (`runtime.write_options_for`) and for the same reason: a hardening that can fail the run
+    turns a correctness fix into a new way of not ingesting.
+
+    `AntiJoinUnavailable` is re-raised rather than re-wrapped — the ceiling refusal is a deliberate
+    verdict with its own message, and folding it into the read's error would report a policy decision
+    as an I/O failure.
+    """
+    from ingest import runtime
+
+    try:
+        import lance
+
+        options = runtime.read_options_for(runtime._catalog(), namespace=namespace, dataset=dataset)
+        handle = lance.dataset(uri, storage_options=options)
+        rows = handle.count_rows()
+        # BEFORE the read, not after: the point of the ceiling is to avoid materialising the set, so
+        # checking once it is already in memory would enforce nothing. Refusing — never sampling —
+        # because a truncated anti-join INVERTS: a partial "already have" set makes the run treat rows
+        # bronze holds as new and re-land every one of them.
+        if not anti_join_within_ceiling(rows, ceiling):
+            raise AntiJoinUnavailable(
+                f"{uri} holds {rows} rows, above the {ceiling}-row "
+                f"RASK_INGEST_INCREMENTAL_MAX_ROWS ceiling. The anti-join reads every id to learn what "
+                f"bronze already has, and it cannot be truncated — a partial answer re-lands rows that "
+                f"are already there. Raise the ceiling, or narrow the source so the run does not need it."
+            )
+        return set(handle.to_table(columns=["id"]).column("id").to_pylist()) if rows else set()
+    except AntiJoinUnavailable:
+        raise
+    except Exception as exc:
+        raise AntiJoinUnavailable(
+            f"could not read the `id` column of {uri}, so this run cannot tell which objects bronze already holds. "
+            f"Ingesting anyway would re-land every one of them: {exc}"
+        ) from exc
+
+
 def enumerate_chunks(ctx: WorkflowActivityContext, payload: EnumerateChunksInput) -> list[dict[str, Any]] | dict[str, Any]:
     """Walk the source adapter and slice it into chunk descriptors.
 
@@ -1155,28 +1206,14 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: EnumerateChunksInput
     #
     # BEFORE the source walk, so a doomed attempt costs one listing instead of four: raising puts this
     # under ACTIVITY_RETRY, and every attempt re-executes the whole activity body.
-    try:
-        import lance
+    from ingest.naming import bronze_namespace_for
 
-        dataset = lance.dataset(uri)
-        rows = dataset.count_rows()
-        # BEFORE the read, not after: the point of the ceiling is to avoid materialising the set, so
-        # checking once it is already in memory would enforce nothing. Refusing — never sampling —
-        # because a truncated anti-join INVERTS: a partial "already have" set makes the run treat
-        # rows bronze holds as new and re-land every one of them.
-        if not anti_join_within_ceiling(rows, payload.incremental_max_rows):
-            raise AntiJoinUnavailable(
-                f"{uri} holds {rows} rows, above the {payload.incremental_max_rows}-row "
-                f"RASK_INGEST_INCREMENTAL_MAX_ROWS ceiling. The anti-join reads every id to learn what "
-                f"bronze already has, and it cannot be truncated — a partial answer re-lands rows that "
-                f"are already there. Raise the ceiling, or narrow the source so the run does not need it."
-            )
-        existing: set[int] = set(dataset.to_table(columns=["id"]).column("id").to_pylist()) if rows else set()
-    except Exception as exc:
-        raise AntiJoinUnavailable(
-            f"could not read the `id` column of {uri}, so this run cannot tell which objects bronze already holds. "
-            f"Ingesting anyway would re-land every one of them: {exc}"
-        ) from exc
+    existing = _existing_ids_for_anti_join(
+        uri,
+        namespace=bronze_namespace_for(spec.project),
+        dataset=spec.dataset,
+        ceiling=payload.incremental_max_rows,
+    )
 
     source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
     # KEYS, not objects. `iter_units` reads every object's bytes to hand back its uri — so

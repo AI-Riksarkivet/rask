@@ -79,25 +79,41 @@ class TestTheDecisionItself:
 
 
 class TestRefusalIsNotSampling:
-    def test_the_read_site_does_not_LIMIT_the_scan(self) -> None:
-        """The tempting "fix" — `to_table(columns=['id'], limit=N)` — inverts the anti-join: a
-        partial `existing` set makes the run treat rows bronze already holds as new and re-land them.
-        Bounded memory bought with silent duplication is a worse trade than the unbounded read."""
+    """Both gates read the source of the function that PERFORMS the anti-join read.
+
+    That function was the body of `enumerate_chunks` and is now `_existing_ids_for_anti_join`, extracted
+    so the credential it opens the dataset with can be asserted at all — inline, the only way to prove
+    the read was signed was to drive the activity against object storage. Named here rather than
+    scanning the module, because scanning the module would keep passing if the read moved somewhere the
+    ceiling does not apply, which is the drift these gates exist to catch.
+    """
+
+    @staticmethod
+    def _read_source() -> str:
         import inspect
 
         from ingest import workflow
 
-        source = inspect.getsource(workflow.enumerate_chunks)
-        assert "limit=" not in source, "an anti-join read must never be truncated — it must refuse"
+        return inspect.getsource(workflow._existing_ids_for_anti_join)
+
+    def test_the_read_site_does_not_LIMIT_the_scan(self) -> None:
+        """The tempting "fix" — `to_table(columns=['id'], limit=N)` — inverts the anti-join: a
+        partial `existing` set makes the run treat rows bronze already holds as new and re-land them.
+        Bounded memory bought with silent duplication is a worse trade than the unbounded read."""
+        assert "limit=" not in self._read_source(), "an anti-join read must never be truncated — it must refuse"
 
     def test_the_refusal_is_the_existing_unavailable_error(self) -> None:
         """Same failure class as an unreadable id column, and for the same reason: in both cases the
         run cannot tell what bronze already holds, and ingesting anyway re-lands everything. A new
         exception type would split one meaning across two handlers."""
-        import inspect
-
-        from ingest import workflow
-
-        source = inspect.getsource(workflow.enumerate_chunks)
+        source = self._read_source()
         assert "anti_join_within_ceiling" in source, "the ceiling is defined and never consulted"
         assert "AntiJoinUnavailable" in source
+
+    def test_the_read_is_SIGNED(self) -> None:
+        """The gate this file was missing. A read that opens the table with no storage options rests on
+        the process's ambient chain — which on the deployed estate holds no key pair at all, so the
+        activity died with `CredentialsNotLoaded` after its table had been created and registered."""
+        source = self._read_source()
+        assert "read_options_for" in source, "the anti-join must ask the catalog to vend, not read as the deployment"
+        assert "storage_options=" in source, "the vended credential is resolved and never passed to the open"

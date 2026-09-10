@@ -852,6 +852,31 @@ def write_options_for(catalog: CatalogSeam, *, namespace: str, dataset: str) -> 
     return lambda: cache.storage_options(namespace, dataset)
 
 
+def read_options_for(catalog: object, *, namespace: str, dataset: str) -> dict[str, str] | None:
+    """The SCOPED credential a governed READ of this table is signed with, or ``None`` for ambient.
+
+    The anti-join reads every `id` already in bronze to learn which source objects are new, and it
+    opened the dataset with no options at all — so the read rested entirely on the process's ambient
+    chain. MEASURED on the deployed estate 2026-09-10: the ingest pod carries `AWS_REGION`,
+    `AWS_ENDPOINT_URL` and `AWS_ALLOW_HTTP` and NO key pair, because the long-lived credential was
+    taken out of it. The read was never moved with it, so a real run created and registered its table
+    and then died at `Failed to get AWS credentials: CredentialsNotLoaded` — every incremental run
+    that must dedupe, dead on the estate as shipped.
+
+    THE READ TIER, not write. The anti-join only reads, and asking for more than the operation needs is
+    how a scoped credential stops being a bound — the vending door offers both and the caller picks.
+
+    ``None`` in the two shapes `write_options_for` already documents and for the same reasons: a seam
+    with no vending door (`LocalCatalog`, checked by CAPABILITY rather than assumed), and a payload
+    carrying no namespace (a pre-upgrade replay, where composing an object id would ask about a table
+    that does not exist and 403 a run that was mid-flight at deploy).
+    """
+    if not isinstance(catalog, VendingCatalog) or not namespace:
+        return None
+    vended = catalog.vend_storage_options(namespace, dataset, tier="read")
+    return dict(vended.options) if vended is not None else None
+
+
 def ledger_options(namespace: str, dataset: str) -> dict[str, str] | None:
     """The credential the staging LEDGER is signed with — the same table-scoped vend the fragments use.
 
