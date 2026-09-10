@@ -311,9 +311,15 @@ def test_the_originator_survives_into_what_notifications_actually_reads() -> Non
 # as the authoritative history, cannot tell the two apart.
 
 
-def _refused() -> dict[str, Any]:
-    """The verdict `_publish` really returns for a refused gate — taken from the function, not typed
-    out here, so a change to its keys fails these tests instead of silently bypassing them."""
+def _publication_verdict() -> dict[str, Any]:
+    """The verdict `_publish` really returns — taken from the function, not typed out here, so a change
+    to its keys fails these tests instead of silently bypassing them.
+
+    It was `_refused` while this plane still asked the catalog to publish its bronze. It no longer does
+    — bronze is the cascade's root tier and is announced by its write event rather than promoted — so
+    the verdict is now "the gate did not run". Renamed with the behaviour: a fixture called `_refused`
+    that returns a non-refusal is the stale naming this estate keeps paying for.
+    """
     from ingest.runtime import _publish
 
     class _Spec:
@@ -334,18 +340,25 @@ def _refused() -> dict[str, Any]:
     return _publish(_Catalog(), _Spec(), 4)
 
 
-def test_a_refused_publication_survives_the_RunOutcome_boundary() -> None:
+def test_the_publication_verdict_survives_the_RunOutcome_boundary() -> None:
     """The drop happens HERE, and it is silent: `RunOutcome` is a plain `BaseModel`, so pydantic's
     default `extra="ignore"` discards every publication key at `workflow.py`'s `model_validate`.
 
     Asserted on the object the emit path actually builds rather than on the dict `finalize_run`
-    returns — the dict has always been right, which is exactly why nobody noticed."""
+    returns — the dict has always been right, which is exactly why nobody noticed.
+
+    THE VERDICT IS NOW "the gate did not run", not "the gate refused", and the boundary is what this
+    test is about either way. Bronze is the cascade's root tier and is no longer offered for promotion,
+    so `_publish` returns `published=None` with a reason; `None` is exactly the value pydantic's
+    `extra="ignore"` would leave behind if the key were dropped, so the REASON is asserted beside it —
+    without that, this test would pass against the bug it exists to catch.
+    """
     from ingest.workflow import RunOutcome
 
-    outcome = RunOutcome.model_validate({"committed_version": 4, "rows": 12, "errors": {}, "status": "COMPLETE", **_refused()})
+    outcome = RunOutcome.model_validate({"committed_version": 4, "rows": 12, "errors": {}, "status": "COMPLETE", **_publication_verdict()})
 
-    assert outcome.published is False, "the refusal was dropped crossing the activity boundary"
-    assert outcome.publish_reason and "not_null" in outcome.publish_reason
+    assert outcome.published is None, "a gate that never ran was reported as a refusal"
+    assert outcome.publish_reason and "bronze" in outcome.publish_reason.lower(), "the verdict was dropped crossing the activity boundary"
 
 
 def test_the_lance_facet_carries_a_refused_publication() -> None:

@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**264 open items**, deduped from 325 raw rows mined out of the seven files above.
+**263 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 21 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 5 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -92,12 +92,6 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
 - *Why open:* `GET /v1/namespace/{id}/table/list` returns `{"context": {"authorization_truncated": "true"}, "tables": []}` when the reader holds no grant on the tables under it — while `POST /v1/table/{id}/describe` on a table in that same namespace answers REGISTERED. Measured 2026-09-10: `acme-silver` and `lakehouse-silver` both listed `[]` for an estate admin while `acme-silver$features` and `lakehouse-silver$features` were registered with bytes on disk. The truncation flag is present and correct — the catalog is not lying — but it rides `context`, which a reader scanning `tables` never looks at. This cost a false diagnosis in the same session: an empty list read as "the cascade registers nothing" and LH-015 was nearly re-opened on it.
 - *Closes when:* Decide whether a filtered listing should say so where it is READ rather than only in `context` — a count of withheld entries beside the visible ones, the way the estate's own "show disabled, never hide" ruling treats actions — and if so, surface it on the lakehouse zone's namespace view in the same change.
-
-**LH-124 · The ingest lane's bronze output half-declares the governed-tier contract, so the catalog refuses to publish it**
-`ingest, catalog, medallion` · med
-
-- *Why open:* Surfaced 2026-09-10 by the first end-to-end lane run that reached COMPLETE. The run landed 4 rows at version 2 with no provenance defect, and the publish was refused 400: *"version 2 carries some governed-tier columns but is not a conforming tier: missing 'lineage'; missing 'source_rowid'. A tier that carries any of `stage`, `lineage` or `source_rowid` is claiming ..."*. The gate is behaving correctly — a half-declared tier is exactly what it exists to refuse, and the run records `published: false` honestly rather than claiming success. What is open is the WRITER: the lane's bronze schema carries one of the three governed columns and not the other two, so it claims a contract it does not meet. Everything downstream that resolves `source_rowid` back to bronze depends on those columns existing from version 1.
-**MEASURED 2026-09-10 AND THE WRITER IS NOT THE PROBLEM.** Read off the live datasets: ingest's bronze carries `['stage']`, the CASCADE's own bronze (`s3://lance-catalog/medallion/bronze`, written by `/produce`) carries `['stage']` — the same shape — and silver carries all three. Bronze is the ROOT tier: it descends from nothing, so `source_rowid` and `lineage` are meaningless on it, while `stage` legitimately names which tier it is. Both writers agree; the gate refuses both. `quality.tier_contract_violations` triggers on `names & _TIER_PROVENANCE_COLUMNS`, so ANY of the three demands all three, and its own docstring shows the target it was designed against — *"refuses exactly the shape that ships today (`source_rowid` present, `stage` and `lineage` absent)"*. A root tier carrying `stage` alone was never a case it considered. - *Closes when:* an owner ruling, because the two readings differ in what PUBLICATION means and the evidence does not settle it. **(a) The gate is too strict:** the claim to be a DERIVED tier is `source_rowid` or `lineage`, not `stage`, so `stage` alone should pass. The cost is that a derived tier which DROPS `source_rowid` while keeping `stage` would then pass — the exact hole the docstring says the job-side check already has. **(b) Bronze is not published at all:** publication is the quality gate on a PROMOTION, and the cascade never publishes bronze — it announces it with an event. Then ingest should not attempt the publish, and the gate is right as written. (b) is the smaller change and fits the architecture; (a) is the one that makes the gate's own rule true for every tier. Either way, re-run `scripts/ingest-lane.sh run` and assert the outcome rather than the absence of an error.
 
 **LH-127 · `lance-ray-durable` has been dead for 26 days and is accumulating the whole stream**
 `lineage, compute, chart` · med

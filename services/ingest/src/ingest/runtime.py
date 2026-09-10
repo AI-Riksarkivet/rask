@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import pyarrow as pa
 from lance import blob_field
 
-from ingest.catalog import CatalogSeam, CommittingCatalog, PublishingCatalog, VendingCatalog, VersioningCatalog
+from ingest.catalog import CatalogSeam, CommittingCatalog, VendingCatalog, VersioningCatalog
 from ingest.config import settings
 
 
@@ -799,27 +799,37 @@ class PublishSpec(Protocol):
 
 
 def _publish(catalog: CatalogSeam, spec: PublishSpec, version: int) -> dict[str, Any]:
-    """Publish the committed version, and report the RANGE it covers (§ D2 D-R3).
+    """Record that the promotion gate does not apply to this write. Bronze is never published.
 
-    `from_version`/`to_version` are what a consumer needs to resolve an exact row delta
-    (`_row_created_at_version > from AND <= to`) without keeping a bookmark of its own.
+    PUBLICATION IS THE GATE ON A PROMOTION — a stage runner offering silver or gold to the tier above.
+    This plane writes the project-qualified BRONZE tier and nothing else (`api.py` states it: the
+    namespace is `bronze_namespace_for(project)`), and bronze is promoted from nothing. The cascade
+    ANNOUNCES it instead: `/bronze-arrival` reacts to the write and drives bronze -> silver, so no
+    consumer waits on a bronze publish.
 
-    A catalog that cannot publish must not turn a good ingest into a failed one: the rows are
-    committed and a later publish can still gate them, so the failure is REPORTED on the run rather
-    than raised. Silence here would be worse than either — a run that looks published and is not.
+    Asking anyway was not harmless. The catalog's tier contract refuses a table carrying SOME governed
+    columns and not all three, and bronze legitimately carries `stage` alone — it descends from nothing,
+    so `source_rowid` and `lineage` have nothing to name. Measured 2026-09-10: a lane run reached
+    COMPLETE with 4 rows at version 2 and recorded `publish_error: ... not a conforming tier: missing
+    'lineage'; missing 'source_rowid'`. Every successful ingest ended by asking for something that
+    cannot be granted and filing the refusal as a fault. The cascade's own bronze has the identical
+    shape, so this was never about how ingest writes.
+
+    `published=None`, and the model's own contract is why: the tri-state's third value means the gate
+    never ran, and collapsing it to `False` "would report a quality gate that never ran" as a refusal.
+    Nothing refused this — nothing was asked.
+
+    The version RANGE goes with it, and loses nothing: `from_version`/`to_version` came from the publish
+    RESPONSE, so they have been `null` on every run for as long as the refusal has been there.
+
+    ``catalog`` and ``version`` stay in the signature: this is the one seam a caller reaches the
+    promotion gate through, and a tier that IS promoted would need both. Removing them would make
+    restoring the call a change to every caller rather than to this function.
     """
-    if not isinstance(catalog, PublishingCatalog):
-        return {"published": False, "publish_error": "catalog has no publish operation"}
-    try:
-        body = catalog.publish(spec.namespace, spec.dataset, version)
-    except Exception as exc:
-        _log.warning("publish failed for run %s at version %s: %s", spec.run_id, version, exc)
-        return {"published": False, "publish_error": str(exc)}
+    del catalog, version  # a root tier is not offered for promotion; see above
     return {
-        "published": bool(body.get("published")),
-        "from_version": body.get("from_version"),
-        "to_version": body.get("to_version"),
-        "publish_reason": body.get("reason"),
+        "published": None,
+        "publish_reason": f"bronze is the cascade's root tier — {spec.namespace} is announced by its write event, not promoted",
     }
 
 
