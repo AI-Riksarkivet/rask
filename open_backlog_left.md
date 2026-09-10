@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**264 open items**, deduped from 325 raw rows mined out of the seven files above.
+**263 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 20 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -385,12 +385,6 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - *Why open:* Re-measured on the running pods 2026-09-10: maintenance, medallion, lineage, viewer and ingest each hold their own scoped identity (`rask-*`, secret half delivered via `LANCE_SECRETS_FROM_DAPR`), and only `LANCE_S3_ACCESS_KEY_ID=rustfsadmin` remains (chart/templates/services.yaml:92-94, values.yaml:1517-1518). It cannot be fixed by copying the other four: an STS session policy can only RESTRICT the role it is cut from, while the catalog vends for warehouses minted at RUNTIME — a role narrowed to today's buckets cannot vend tomorrow's, and a role covering every future bucket is root wearing another name.
 - *Closes when:* Owner picks the identity shape for a runtime-vending service (a role policy the warehouse registry maintains as warehouses are minted, an STS role assumed per vend, or accepting the widest role bounded by network/audit/rotation); then provision `rask-catalog` the way `rustfs.medallionAccessKey`/`maintenanceAccessKey` are — chart pre/post-upgrade provisioning hook, key defaulted to the provisioned user — and extend `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py`.
-
-**LH-052 · `LANCE_FGA_CASCADE_WRITERS` grants every stage runner `owner` on EVERY tenant warehouse, and the bounding control is off by default**
-`catalog, medallion, lineage, chart` · **HIGH** · **blocked:** owner decision on the narrowed grant and on the shipped default posture
-
-- *Why open:* The bounding control (`LANCE_PRIVILEGED_SUBJECTS`) now renders on catalog and lineage (79512bb0) and this estate sets `dedicatedServiceCredentials: true`, but the grant itself is still estate-wide — a stage runner holds `can_drop`/`can_deregister`/`can_restore`/`manage_grants` on every tenant's warehouse, not just the ones it writes — and `chart/values.yaml:807` still defaults the control OFF, so a fresh install ships the unbounded shape. Same over-grant Q5-2 solved for maintenance with a `can_maintain` rung.
-- *Closes when:* An owner ruling narrowing the cascade writer's grant to the warehouses it writes, then change how `LANCE_FGA_CASCADE_WRITERS` is rendered/seeded in the chart plus `.fga.yaml` cases for the narrowed shape, and flip `values.yaml:807` to `true` with `LANCE_PRIVILEGED_SUBJECTS` rendered by default.
 
 **LH-128 · A cascade identity is still `owner` of every TABLE it registers, because create-on-parent seeds self-ownership**
 `catalog, openfga` · med · **blocked:** owner decision — is "the identity that created it owns it" right for a MACHINE, and if not, who owns a table a stage runner registered?
