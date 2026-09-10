@@ -28,7 +28,7 @@ import pyarrow.fs as pafs
 
 from service_kit.lakehouse import outbox_metrics
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-from storage import s3_client, split_s3_uri
+from storage import S3Client, s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -59,12 +59,61 @@ def _object_key(run_id: str, event_json: str) -> str:
     return f"{run_id}@{event_type}" if event_type else run_id
 
 
+def _outbox_s3_client(storage_options: StorageOptions) -> S3Client:
+    """The storage seam's client for an outbox, reading the credential under BOTH spellings.
+
+    The estate spells one credential two ways and a reader that knows one signs as nobody.
+    ``lance_storage_options`` emits ``aws_``-prefixed keys deliberately — the bare ones do not displace
+    a pod's ambient ``AWS_*`` environment and object_store blends the two sources — while the catalog's
+    own ``storage_options()`` returns the BARE form (measured 2026-09-10 against the running pod), and
+    the vending door returns the prefixed one. All three reach this module.
+
+    The SESSION TOKEN is not optional to forward. A vended STS credential without it is not a weaker
+    credential, it is an invalid one, and dropping it falls back to whatever ambient chain boto3 finds —
+    broader rights than the vend scoped, not narrower. Shared by the stage and the drop so the pair
+    cannot drift: one of them reading a spelling the other does not is a silent half-fix.
+    """
+    return s3_client(
+        storage_options.get("endpoint"),
+        access_key=storage_options.get("aws_access_key_id") or storage_options.get("access_key_id"),
+        secret_key=storage_options.get("aws_secret_access_key") or storage_options.get("secret_access_key"),
+        session_token=storage_options.get("aws_session_token") or storage_options.get("session_token"),
+        region=storage_options.get("region"),
+    )
+
+
 def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, event_json: str) -> None:
     """Persist the event JSON at ``<outbox_uri>/<key>.json``, where the key is :func:`_object_key` —
     the run id AND the event type, so a run's COMPLETE cannot truncate its own FAIL. A redelivery of
-    the SAME event re-stages the same object. Blocking object-store IO; callers run it in a threadpool."""
+    the SAME event re-stages the same object. Blocking object-store IO; callers run it in a threadpool.
+
+    A STAGE MUST NEED ONLY PUT PERMISSION ON ITS OWN KEY, and through pyarrow it did not. This called
+    ``fs.create_dir(base, recursive=True)`` under a comment calling an S3 prefix marker "harmless" — but
+    ``create_dir`` first tests that the BUCKET exists, and a credential scoped to the prefix has nothing
+    on the bucket. Measured from the ingest pod 2026-09-10 with a freshly vended STS credential in hand:
+
+        OSError: When testing for existence of bucket 'lance-catalog':
+                 AWS Error ACCESS_DENIED during HeadBucket operation
+
+    So the vend was correct and observed working, and the write still could not happen. Widening the
+    session policy to cover the bucket is the wrong direction — it grants a capability the stager has no
+    need for, to keep a mechanism whose only product is a marker object nobody reads. The exact twin of
+    :func:`drop_event`, whose delete re-created that same marker.
+
+    S3 goes through the estate's CLIENT seam (``packages/storage``), a plain PutObject. Everything else
+    keeps the filesystem path: a local outbox is a real directory and genuinely needs its parent made.
+    """
+    if outbox_uri.startswith("s3://") and storage_options.get("endpoint"):
+        bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
+        key = f"{_object_key(run_id, event_json)}.json"
+        _outbox_s3_client(storage_options).put_object(
+            Bucket=bucket,
+            Key=f"{prefix.rstrip('/')}/{key}" if prefix else key,
+            Body=event_json.encode("utf-8"),
+        )
+        return
     fs, base = fs_and_base(outbox_uri, storage_options)
-    fs.create_dir(base, recursive=True)  # local FS needs the parent dir; an S3 prefix marker is harmless
+    fs.create_dir(base, recursive=True)
     with fs.open_output_stream(f"{base}/{_object_key(run_id, event_json)}.json") as stream:
         stream.write(event_json.encode("utf-8"))
 
@@ -94,27 +143,13 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     """
     if outbox_uri.startswith("s3://") and storage_options.get("endpoint"):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        # BOTH SPELLINGS, and reading one would have been a silent misfire in production. The canonical
-        # builder (`lance_storage_options`) emits `aws_`-prefixed keys precisely because the bare ones do
-        # not displace the pods' ambient AWS_* environment — while the catalog's own `storage_options()`
-        # returns the BARE form (measured 2026-09-10 against the running pod). Both genuinely reach here:
-        # `reconcile_cron` passes the first, `catalog/api/control_relay.py` the second.
-        #
-        # A reader that knows one spelling gets `None` from the other and boto3 falls back to its default
-        # chain. The lineage pod carries NO ambient `AWS_*` (measured, same day), so that is not a delete
-        # signed as the wrong identity — it is a delete with no credential at all, which leaves the object
-        # staged and the drain exactly as broken as before. A deployed fix that changes nothing is harder
-        # to notice than one that crashes. No test process has an ambient AWS_* environment either, so the
-        # spelling that fails in a pod passes every unit test; the pair is pinned in
-        # `test_the_outbox_drain_needs_no_write_permission.py` rather than left to whichever caller arrives
-        # first.
-        client = s3_client(
-            storage_options.get("endpoint"),
-            access_key=storage_options.get("aws_access_key_id") or storage_options.get("access_key_id"),
-            secret_key=storage_options.get("aws_secret_access_key") or storage_options.get("secret_access_key"),
-            session_token=storage_options.get("aws_session_token") or storage_options.get("session_token"),
-            region=storage_options.get("region"),
-        )
+        # BOTH SPELLINGS, through the shared reader — see :func:`_outbox_s3_client`. Reading one leaves
+        # the other `None` and boto3 falls back to its default chain; the lineage pod carries no ambient
+        # `AWS_*` (measured 2026-09-10), so that is not a delete signed as the wrong identity but a
+        # delete with no credential at all, leaving the drain exactly as broken while looking fixed. No
+        # test process has an ambient `AWS_*` either, so the spelling that fails in a pod passes every
+        # unit test; the pair is pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
+        client = _outbox_s3_client(storage_options)
         # An absent object already satisfies the post-condition, and S3's DeleteObject is idempotent for
         # a missing key (204, no error) — so this suppression is for a NON-S3 double or backend that
         # raises instead, the same tolerance the filesystem path below spells the same way. Catching

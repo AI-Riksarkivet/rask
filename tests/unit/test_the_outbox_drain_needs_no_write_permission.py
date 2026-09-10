@@ -120,3 +120,64 @@ def test_the_delete_reads_BOTH_credential_spellings(monkeypatch: pytest.MonkeyPa
 
     assert seen.get("access_key") == "K", f"the {spelling} access key never reached the client: {seen}"
     assert seen.get("secret_key") == "S", f"the {spelling} secret key never reached the client: {seen}"
+
+
+def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The twin of the delete contract: one PutObject, addressed at the event, and no bucket probe.
+
+    `stage_event` went through pyarrow — `fs.create_dir(base, recursive=True)` under a comment calling
+    an S3 prefix marker "harmless". It is not harmless to a credential that was scoped to the prefix:
+    `create_dir` first tests that the BUCKET exists, and a session policy naming
+    `arn:aws:s3:::lance-catalog/_lineage_outbox/*` grants nothing on the bucket itself.
+
+    MEASURED on the deployed estate 2026-09-10, from the ingest pod, with a freshly vended STS
+    credential in hand:
+
+        OSError: When testing for existence of bucket 'lance-catalog':
+                 AWS Error ACCESS_DENIED during HeadBucket operation
+
+    So the credential half of CP-007 was correct and observed working — the door vended
+    `aws_session_token` and an expiry — and the write still could not happen. Widening the session
+    policy to cover the bucket is the wrong direction: it would grant a capability the stager has no
+    need for, to keep a mechanism that writes an object nobody reads.
+    """
+    client = _RecordingS3()
+    monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: client)
+
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", {"endpoint": "http://rustfs:9000"}, "run-9", '{"eventType": "COMPLETE"}')
+
+    assert [name for name, _ in client.calls] == ["put_object"], f"the stage path made {client.calls}"
+    _, kw = client.calls[0]
+    assert kw["Bucket"] == "lance-catalog"
+    assert kw["Key"] == "_lineage_outbox/run-9@COMPLETE.json"
+    assert kw["Body"] == b'{"eventType": "COMPLETE"}'
+
+
+@pytest.mark.parametrize(
+    ("options", "spelling"),
+    [
+        ({"endpoint": "http://rustfs:9000", "aws_access_key_id": "K", "aws_secret_access_key": "S", "aws_session_token": "T"}, "aws_-prefixed"),
+        ({"endpoint": "http://rustfs:9000", "access_key_id": "K", "secret_access_key": "S", "session_token": "T"}, "bare"),
+    ],
+)
+def test_the_stage_reads_BOTH_credential_spellings(monkeypatch: pytest.MonkeyPatch, options: dict[str, str], spelling: str) -> None:
+    """The same two spellings the delete faces, and the stage faces them from MORE directions.
+
+    The catalog's vending door returns the `aws_`-prefixed form while a service staging with its own
+    configured store passes the bare one, so both genuinely arrive here. The SESSION TOKEN is asserted
+    too and is the half with the sharper failure: a vended STS credential without it is not a weaker
+    credential, it is an invalid one, and dropping it fails open onto whatever ambient chain boto3
+    finds.
+    """
+    seen: dict[str, object] = {}
+
+    def _factory(*_a: object, **kw: object) -> _RecordingS3:
+        seen.update(kw)
+        return _RecordingS3()
+
+    monkeypatch.setattr(outbox, "s3_client", _factory)
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", options, "run-8", '{"eventType": "FAIL"}')
+
+    assert seen.get("access_key") == "K", f"the {spelling} access key never reached the client: {seen}"
+    assert seen.get("secret_key") == "S", f"the {spelling} secret key never reached the client: {seen}"
+    assert seen.get("session_token") == "T", f"the {spelling} session token never reached the client: {seen}"
