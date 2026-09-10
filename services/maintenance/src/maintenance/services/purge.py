@@ -67,7 +67,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
-from maintenance.services.reconcile import MANIFEST_DIR, ReconcileReport
+from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
@@ -244,7 +244,15 @@ def report_is_clean(report: ReconcileReport) -> str | None:
     unmentioned is being told the less useful of two true things.
     """
     if report.total:
-        drifting = sorted(name for name, count in report.counts.items() if count)
+        # THE GATING CATEGORIES ONLY, matching what `report.total` counts. `NON_GATING_CATEGORIES`
+        # (`unbound_namespaces`, `orphaned_annotation_tasks`) are excluded from the total because
+        # neither is a storage fact and NEITHER HAS A DOOR — no endpoint clears an orphaned annotation
+        # task or binds a legacy namespace. Naming them here pointed an operator at work that cannot be
+        # done and would not have unblocked the purge if it could, which is the same failure the total's
+        # own exclusion exists to prevent: the categories that DO matter hidden behind ones that never
+        # fall. Measured live 2026-09-10, where 13 findings were reported "across" four categories and
+        # two of them contributed zero.
+        drifting = sorted(name for name, count in report.counts.items() if count and name not in NON_GATING_CATEGORIES)
         return f"the drift report is NOT clean: {report.total} finding(s) across {drifting}"
     if report.unavailable:
         return f"the drift report could not check {sorted(u.category for u in report.unavailable)} — a category nobody looked at is not a clean one"

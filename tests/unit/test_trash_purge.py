@@ -931,3 +931,36 @@ def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypat
     assert all("lance.maintenance.dry_run" in attrs for _v, attrs in seen), f"a point carries no dry-run dimension: {seen}"
     assert all(attrs["lance.maintenance.dry_run"] is True for _v, attrs in seen), seen
     assert any(v == 3 for v, _a in seen), f"the planned count never reached a counter: {seen}"
+
+
+def test_the_purge_blocker_names_only_the_categories_that_actually_BLOCK() -> None:
+    """CONTRACT: the reason names the categories inside `report.total`, never the non-gating ones.
+
+    `report.total` deliberately excludes `NON_GATING_CATEGORIES` — `unbound_namespaces` and
+    `orphaned_annotation_tasks` — because neither is a storage fact, neither can change which bytes the
+    purge touches, and crucially NEITHER HAS A DOOR: no endpoint in the product clears an orphaned
+    annotation task or binds a legacy namespace. That exclusion exists because gating on them made the
+    gate permanently unsatisfiable.
+
+    The message did not inherit it. It listed every non-zero category, so an operator was pointed at
+    work that cannot be done and that would not have unblocked the purge if it could. Measured on the
+    live estate 2026-09-10:
+
+        "NOT clean: 13 finding(s) across ['ghost_projects', 'orphan_buckets',
+                                          'orphaned_annotation_tasks', 'unbound_namespaces']"
+
+    13 = ghost_projects 1 + orphan_buckets 12. The other two contributed ZERO to the number they are
+    listed beside — which is precisely the failure `NON_GATING_CATEGORIES`' own docstring names: "it
+    hides the categories that DO matter behind a total that never falls." The total was fixed and the
+    sentence an operator actually reads was not.
+    """
+    report = _clean_report()
+    report.counts.update({"ghost_projects": 1, "orphan_buckets": 12, "unbound_namespaces": 4, "orphaned_annotation_tasks": 3})
+    report.total = 13  # what `reconcile` computes: the gating categories only
+
+    reason = mod.report_is_clean(report)
+
+    assert reason is not None
+    assert "ghost_projects" in reason and "orphan_buckets" in reason, reason
+    assert "unbound_namespaces" not in reason, f"the blocker names a non-gating category: {reason}"
+    assert "orphaned_annotation_tasks" not in reason, f"the blocker names a non-gating category: {reason}"
