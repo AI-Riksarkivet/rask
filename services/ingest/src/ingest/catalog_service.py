@@ -481,6 +481,22 @@ class CatalogServiceClient:
         if found.status_code < 400:
             return
 
+        # A 403 IS NOT A 404, and collapsing them sends the operator to fix the wrong thing. The catalog
+        # answers 403 rather than 404 on this door deliberately — no existence oracle on something a
+        # stranger can poll — so "it may exist and I cannot see it" and "it is not there" arrive as
+        # different statuses and only the caller can tell them apart. Falling through to `create` for
+        # both meant a namespace an admin had just provisioned was reported as unprovisioned: measured
+        # 2026-09-10, the lane's `lane-bronze` described 200 to an admin while the run told the operator
+        # to create it. Following that advice cannot help — the namespace is already there — so the
+        # message has to name the identity and the relation instead.
+        if found.status_code == 403:
+            raise CatalogError(
+                f"namespace {namespace!r} exists or may exist and this identity cannot see it — the catalog "
+                f"answered 403 to the existence probe. This is a missing GRANT, not missing tenancy: give this "
+                f"writer can_get_metadata on namespace:{namespace} (or a writer rung on it). Creating the "
+                f"namespace again will not help."
+            )
+
         url = f"{self._base}/v1/namespace/{namespace}/create"
         try:
             response = shared_client().post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
