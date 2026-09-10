@@ -303,15 +303,13 @@ def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: 
         seen["fga_client"] = kw["fga_client"]
         seen["locked"] = routes._reconcile_lock.locked()
 
-        class _P:
-            def model_dump(self, **_k: Any) -> dict[str, Any]:
-                return {"ran": False}
+        # THE REAL REPORT, not a hand-rolled stand-in. A double that re-declares the model's fields
+        # drifts the moment the model grows one — this one did, and the route then failed on an
+        # attribute the production type has always had. The subject here is the route's LOCKING and
+        # report-identity, so the report itself may as well be genuine.
+        from maintenance.services.purge import TrashPurgeReport
 
-            purged: list[Any] = []
-            refused: list[Any] = []
-            capped = 0
-
-        return _P()
+        return TrashPurgeReport()
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
     monkeypatch.setattr(routes, "purge_expired_trash", fake_purge)
@@ -320,7 +318,9 @@ def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: 
     assert seen["report"] is produced["report"], "the purge read a report this tick did not produce"
     assert seen["fga_client"] == "FGA-SENTINEL", "the purge got no FGA client — it could not revoke"
     assert seen["locked"] is True, "the purge ran outside the single-flight lock"
-    assert out["trash_purge"] == {"ran": False}
+    # The purge key rides along on the tick's payload; its CONTENT is `test_trash_purge.py`'s subject,
+    # so this asserts only that the real report reached the response un-run.
+    assert out["trash_purge"]["ran"] is False
 
 
 def test_the_app_registers_both_bindings_together() -> None:

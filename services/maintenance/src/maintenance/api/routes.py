@@ -183,11 +183,18 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
         # Reclamation is irreversible, so a tick that destroyed something — or declined to — says so at
         # WARNING. A quiet INFO would put the one irreversible thing this service does at the same
         # volume as a no-op sweep.
-        if purged.purged or purged.refused or purged.capped:
+        #
+        # A DRY RUN'S PLAN IS REPORTED HERE TOO, because this line is the only place the records are
+        # NAMED: the report body goes into the cron response, which nothing stores. A preview whose
+        # whole output is `would_purge` would otherwise produce no line at all — invisible in exactly
+        # the deployment that turned it on in order to see it.
+        if purged.purged or purged.would_purge or purged.refused or purged.capped:
             log.warning(
                 "trash_purge_result",
                 extra={
+                    "dry_run": purged.dry_run,
                     "purged": [f"{p.kind}:{p.id}" for p in purged.purged],
+                    "would_purge": [{"id": f"{p.kind}:{p.id}", "location": p.location, "expires_at": p.expires_at} for p in purged.would_purge],
                     "refused": [{"id": f"{r.kind}:{r.id}", "reason": r.reason} for r in purged.refused],
                     "capped": purged.capped,
                     "bytes_reclaimed": sum(p.bytes_deleted for p in purged.purged),

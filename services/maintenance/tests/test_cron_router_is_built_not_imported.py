@@ -64,3 +64,31 @@ def test_every_triggering_POST_keeps_the_sidecar_token_gate() -> None:
 
 def test_the_tag_is_declared_on_the_router_not_repeated_per_route() -> None:
     assert build_router(_settings("a", "b")).tags == ["maintenance"]
+
+
+def test_a_dry_run_PLAN_is_reported_as_loudly_as_a_reclamation() -> None:
+    """CONTRACT: the cron route's reclamation summary fires on a PLAN too, not only on a deed.
+
+    `trash_purge_result` is the one line that NAMES the records a tick acted on — the report body goes
+    into the cron response, which nothing stores. Its condition covered `purged or refused or capped`,
+    and a dry run's entire output is `would_purge`: a plan with no refusals would produce no WARNING at
+    all, so the preview would be invisible in exactly the deployment that turned it on to be seen.
+
+    That is this estate's recurring defect shape — a control that exists, is documented, and cannot
+    fire on the path that needs it — so it is pinned here rather than trusted to the reader.
+
+    Asserted on the SOURCE of the route builder, because the line is inside a closure that a unit test
+    cannot reach without standing up the whole Dapr cron surface.
+    """
+    import inspect
+
+    from maintenance.api import routes
+
+    source = inspect.getsource(routes)
+    # Anchored on the `if purged.purged` stem rather than the full disjunction: the whole point of this
+    # gate is that new terms get ADDED to that condition, so matching the exact text would fail on the
+    # very change it is meant to protect.
+    condition = next((line for line in source.splitlines() if line.strip().startswith("if purged.purged")), None)
+    assert condition is not None, "the reclamation summary's condition has moved — re-point this gate"
+    assert "would_purge" in condition, f"a dry-run plan does not reach the reclamation summary: {condition.strip()}"
+    assert '"would_purge"' in source, "the summary does not carry the planned records, so the plan is unreadable"

@@ -92,6 +92,13 @@ _trash_bytes = _meter.create_counter(
     unit="By",
     description="Bytes reclaimed by the expired-trash purge.",
 )
+_trash_planned = _meter.create_counter(
+    "maintenance.trash.purge_planned",
+    unit="{record}",
+    description="Expired trash records a DRY RUN would have reclaimed — an upper bound, since the FGA revoke, "
+    "a non-dataset location and a failing delete can each still refuse one and none can be evaluated without "
+    "performing the act it guards. Non-zero here with `dry_run=false` nowhere is a preview nobody turned off.",
+)
 
 #: The record kinds a purge can see (#96 — a recoverable cascade trashes namespaces too). Both series are
 #: created on EVERY run so a dashboard has data from the first tick rather than reading "no data" until
@@ -129,14 +136,32 @@ def record_run() -> None:
     _runs.add(1)
 
 
-def record_trash_purge(*, purged_by_kind: dict[str, int], refused_by_kind: dict[str, int], bytes_reclaimed: int) -> None:
+def record_trash_purge(
+    *,
+    purged_by_kind: dict[str, int],
+    refused_by_kind: dict[str, int],
+    bytes_reclaimed: int,
+    planned_by_kind: dict[str, int] | None = None,
+    dry_run: bool = False,
+) -> None:
     """Record one tick's reclamation. Always emits — adding 0 is a valid no-op that still CREATES the
     series (the :func:`record_reclaimed` rule), and for a reclaimer the zero is the interesting number:
-    "nothing was purged this tick" and "the purge never ran" must not look identical on a dashboard."""
+    "nothing was purged this tick" and "the purge never ran" must not look identical on a dashboard.
+
+    EVERY POINT CARRIES ``dry_run``, and that dimension is load-bearing in two directions. A preview
+    still counts its refusals, so without it a preview's refusals read as a real pass's and the tick
+    appears to be reclaiming while it reclaims nothing. And a `trashPurge: true` deployment that left
+    `trashPurgeDryRun` on gets a PERMANENT preview — the dry run wins by design — which nothing else in
+    the estate would ever reveal.
+    """
+    attributes = {"lance.maintenance.dry_run": dry_run}
+    planned_by_kind = planned_by_kind or {}
     for kind in _KINDS:
-        _trash_purged.add(purged_by_kind.get(kind, 0), {"lance.maintenance.kind": kind})
-        _trash_refused.add(refused_by_kind.get(kind, 0), {"lance.maintenance.kind": kind})
-    _trash_bytes.add(bytes_reclaimed)
+        by_kind = {**attributes, "lance.maintenance.kind": kind}
+        _trash_purged.add(purged_by_kind.get(kind, 0), by_kind)
+        _trash_refused.add(refused_by_kind.get(kind, 0), by_kind)
+        _trash_planned.add(planned_by_kind.get(kind, 0), by_kind)
+    _trash_bytes.add(bytes_reclaimed, attributes)
 
 
 def record_reclaimed(*, fragments_removed: int, versions_removed: int, indices_optimized: int = 0) -> None:

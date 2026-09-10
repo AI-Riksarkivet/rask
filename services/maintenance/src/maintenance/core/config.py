@@ -296,9 +296,21 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: previewed. A separate preview routine would be a second mechanism that drifts from the one it
     #: previews, and the drift would surface as deleting the wrong thing.
     #:
-    #: It can only ever SUBTRACT capability: with both flags on the tick still previews, never
-    #: reclaims. The opposite wiring is the dangerous one — a deployment that means to reclaim and
-    #: quietly previews forever looks exactly like a healthy one.
+    #: It subtracts every MUTATION: with both flags on the tick previews and reclaims nothing. The
+    #: opposite wiring would be worse — a deployment that means to reclaim and quietly previews forever
+    #: looks exactly like a healthy one — which is why `maintenance.trash.purge_planned` and every
+    #: reclamation counter carry a `dry_run` dimension, so that state is visible rather than inferred.
+    #:
+    #: IT ADDS READ COST, and on this pod that is not free. With reclamation off the pass returns
+    #: before the trash prefix is read at all; with the preview on it performs the full listing, a
+    #: Lance `__manifest` open per maintained root, and the shallow-clone pre-pass that opens EVERY
+    #: dataset in EVERY maintained bucket — against a 512Mi limit this service has already been
+    #: OOMKilled against. Turning it on is a real workload, not an inspection.
+    #:
+    #: `would_purge` is an UPPER BOUND, never exact. Four of the seven refusal causes sit below the
+    #: preview cut: the FGA revoke, a location that is not a dataset, and a failing delete cannot be
+    #: evaluated without performing the act they guard. The fourth — the shallow-clone guard — IS
+    #: applied, because the pre-pass has already run and `is_protected` is an in-memory compare.
     trash_purge_dry_run: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_DRY_RUN")
 
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself

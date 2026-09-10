@@ -48,6 +48,7 @@ from maintenance.services.reconcile import CATEGORIES, CategorySkipped, Category
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
 _NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -840,3 +841,93 @@ def test_the_dry_run_NEVER_widens_a_real_purge(tmp_path: Path) -> None:
     assert out.purged == [], "the dry run performed a real purge"
     assert [r.id for r in out.would_purge] == [canonical]
     assert Path(location.removeprefix("file://")).is_dir(), "the dry run deleted the bytes"
+
+
+def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONTRACT: the shallow-clone pre-pass walks to the SAME depth the rest of maintenance walks.
+
+    `_estate_base_refs` called `discover_datasets(fs, bucket)` with the default bound while the sweep and
+    the drift report both pass `settings.discovery_max_depth`. `discoveryMaxDepth` is the documented
+    lever for reaching datasets nested deeper than three levels — so raising it widened what the purge
+    may DELETE while leaving what PROTECTS it at three.
+
+    A referring clone below the shorter bound is never discovered, `is_protected` answers None for its
+    source, and the purge deletes bytes a live dataset resolves through. The failure is silent and the
+    data is gone — and nothing tells an operator that the protection floor stayed put when they raised
+    the lever.
+    """
+    seen: dict[str, Any] = {}
+
+    def _fake_discover(_fs: Any, bucket: str, **kw: Any) -> Any:
+        seen["max_depth"] = kw.get("max_depth")
+        return SimpleNamespace(uris=[], truncated=[])
+
+    from maintenance.services import optimize as optimize_mod
+    from service_kit.lakehouse import base_refs as base_refs_mod
+
+    monkeypatch.setattr(optimize_mod, "discover_datasets", _fake_discover)
+    monkeypatch.setattr(base_refs_mod, "protected_roots", lambda *_a, **_kw: BaseRefs())
+
+    mod._estate_base_refs({"file:///nowhere"}, {}, max_depth=7)
+
+    assert seen["max_depth"] == 7, f"the protection pre-pass walked to {seen['max_depth']} while the purge reaches 7"
+
+
+def test_a_dry_run_APPLIES_the_shallow_clone_guard_it_already_paid_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONTRACT: a previewed record whose bytes back a live clone is REFUSED in the preview, not planned.
+
+    `_estate_base_refs` runs in full on a preview tick — it opens every dataset in every maintained
+    bucket — and `BaseRefs.is_protected` is then a pure in-memory prefix compare. Leaving that answer
+    unread meant the dry run paid the estate's most expensive read pass and discarded its result, while
+    the values file and this module both told the operator the shallow-clone pre-pass was part of what
+    the preview applies.
+
+    The omission fails in the dangerous direction: `would_purge` would name a record a real run
+    refuses, so the preview OVERSTATES reclamation on exactly the records where over-promising costs
+    most — the ones whose deletion breaks a live dataset.
+    """
+    estate = _Estate(tmp_path)
+    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    # Through the estate's OWN comparator: `BaseRefs.protected` holds normalised roots, and
+    # re-spelling one by hand here is precisely the mistake `normalise`'s docstring names — a guard
+    # that silently never matches looks exactly like having no guard at all.
+    guard = BaseRefs(protected={normalise(location)})
+    monkeypatch.setattr(mod, "_estate_base_refs", lambda *_a, **_kw: guard)
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True))
+
+    assert out.would_purge == [], f"the preview planned to reclaim a protected base: {out.would_purge}"
+    assert [r.id for r in out.refused] == [canonical]
+    assert "clone" in out.refused[0].reason.lower() or "base" in out.refused[0].reason.lower(), out.refused[0].reason
+
+
+def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONTRACT: every reclamation counter point says whether the tick that produced it was a preview.
+
+    Two failures ride on this, and both are silent. A dry run still counts its refusals, so without a
+    dimension a preview's refusals are indistinguishable from a real pass's on a dashboard — the tick
+    reports reclamation activity while reclaiming nothing. And an operator who sets `trashPurge: true`
+    while `trashPurgeDryRun` is still on gets a PERMANENT preview: the flag wins by design, and nothing
+    else in the estate — no metric dimension, no alert rule, no dashboard panel — would ever say so.
+    The backlog it silently never drains is exactly what nobody notices.
+
+    Asserted on the attributes reaching the counters, because the point of the dimension is that a
+    query can split on it.
+    """
+    from maintenance.core import metrics as metrics_mod
+
+    seen: list[tuple[int, dict[str, object]]] = []
+
+    class _Counter:
+        def add(self, value: int, attributes: dict[str, object] | None = None) -> None:
+            seen.append((value, dict(attributes or {})))
+
+    for name in ("_trash_purged", "_trash_refused", "_trash_bytes", "_trash_planned"):
+        monkeypatch.setattr(metrics_mod, name, _Counter(), raising=False)
+
+    metrics_mod.record_trash_purge(purged_by_kind={}, refused_by_kind={"table": 2}, bytes_reclaimed=0, planned_by_kind={"table": 3}, dry_run=True)
+
+    assert seen, "the counters recorded nothing at all"
+    assert all("lance.maintenance.dry_run" in attrs for _v, attrs in seen), f"a point carries no dry-run dimension: {seen}"
+    assert all(attrs["lance.maintenance.dry_run"] is True for _v, attrs in seen), seen
+    assert any(v == 3 for v, _a in seen), f"the planned count never reached a counter: {seen}"

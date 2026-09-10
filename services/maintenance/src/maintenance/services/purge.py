@@ -391,6 +391,19 @@ class NotADatasetRootError(RuntimeError):
     """
 
 
+def _protected_base_reason(location: str, *, referrer: str) -> str:
+    """The ONE wording for "a live dataset resolves through these bytes".
+
+    Shared by the delete that raises it and the preview that predicts it: a preview reporting a
+    different sentence than the run it previews is a preview an operator cannot match up to the real
+    outcome, and two copies of a sentence drift the moment either is edited.
+    """
+    return (
+        f"refusing to delete {location}: another dataset resolves its files through {referrer} "
+        f"(shallow clone / multi-base) — deleting these bytes would break a live dataset"
+    )
+
+
 class ProtectedBaseError(RuntimeError):
     """Refusal: another dataset's manifest resolves its files through this location (#128d).
 
@@ -419,10 +432,7 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     cross-estate pre-pass can.
     """
     if protected is not None and (root := protected.is_protected(location)) is not None:
-        raise ProtectedBaseError(
-            f"refusing to delete {location}: another dataset resolves its files through {root} "
-            f"(shallow clone / multi-base) — deleting these bytes would break a live dataset"
-        )
+        raise ProtectedBaseError(_protected_base_reason(location, referrer=root))
     fs, path = fs_and_base(location, storage_options)
     infos = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
     files = [info for info in infos if info.type == pafs.FileType.File]
@@ -589,8 +599,19 @@ async def _purge_one(
         return
 
     if dry_run:
-        # PAST THE CHECK AND NOT REFUSED — a real pass would reclaim this one. Nothing below this line
-        # runs, so no tuple is revoked, no byte is deleted and no record is cleared.
+        # THE SHALLOW-CLONE GUARD IS APPLIED HERE, not left to the delete it never reaches. The estate
+        # pre-pass has already run in full on this tick and `is_protected` is a pure in-memory prefix
+        # compare, so reading its answer is free — and NOT reading it made the preview overstate in the
+        # one direction that costs most: naming a record whose bytes a live dataset resolves through.
+        if protected is not None and (referrer := protected.is_protected(location)) is not None:
+            reason = _protected_base_reason(location, referrer=referrer)
+            await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+            log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
+            return
+        # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. Nothing below runs, so no tuple is
+        # revoked, no byte deleted, no record cleared. `would_purge` remains an UPPER BOUND: the FGA
+        # revoke, a non-dataset location and a failing delete can each still refuse a planned record,
+        # and none of the three can be evaluated without performing the act it guards.
         out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=str(record.get("expires_at") or "")))
         log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
         return
@@ -668,10 +689,11 @@ async def purge_expired_trash(
     an operator nothing about which records it got to first.
     """
     control = control or NoopControlEmitter()
-    # DRY RUN WINS WHENEVER IT IS SET, including over an enabled purge, and the asymmetry is the safe
-    # direction: this flag may only ever SUBTRACT capability. Wired the other way, a deployment that
-    # means to reclaim and silently previews forever is indistinguishable from a healthy one, and the
-    # backlog it never drains is exactly what nobody notices.
+    # DRY RUN WINS WHENEVER IT IS SET, including over an enabled purge: it subtracts every MUTATION.
+    # Wired the other way, a deployment that means to reclaim and silently previews forever would be
+    # indistinguishable from a healthy one — so the counters carry a `dry_run` dimension rather than
+    # leaving that state to be inferred. Note it does NOT subtract WORK: with reclamation off this
+    # turns a zero-I/O early return into the full listing plus the estate-wide pre-pass below.
     dry_run = settings.trash_purge_dry_run
     out = TrashPurgeReport(
         enabled=settings.trash_purge_enabled,
@@ -718,7 +740,7 @@ async def purge_expired_trash(
     # data files through it — the SOURCE carries no feature flag and no `base_paths` of its own
     # (measured), so only the referring side holds the evidence and only a whole-estate pass finds it.
     # Computed once per tick and shared by every record, exactly like `live_ids` above.
-    protected = await run_in_threadpool(_estate_base_refs, roots, storage_options) if due else BaseRefs()
+    protected = await run_in_threadpool(_estate_base_refs, roots, storage_options, max_depth=settings.discovery_max_depth) if due else BaseRefs()
     for record in due:
         await _purge_one(
             record,
@@ -755,14 +777,23 @@ def _record_metrics(out: TrashPurgeReport) -> None:
     """Emit the reclamation counters — always, including the zeroes, so the series exist from tick one."""
     purged: dict[str, int] = {}
     refused: dict[str, int] = {}
+    planned: dict[str, int] = {}
     for entry in out.purged:
         purged[entry.kind] = purged.get(entry.kind, 0) + 1
     for refusal in out.refused:
         refused[refusal.kind] = refused.get(refusal.kind, 0) + 1
-    record_trash_purge(purged_by_kind=purged, refused_by_kind=refused, bytes_reclaimed=sum(p.bytes_deleted for p in out.purged))
+    for plan in out.would_purge:
+        planned[plan.kind] = planned.get(plan.kind, 0) + 1
+    record_trash_purge(
+        purged_by_kind=purged,
+        refused_by_kind=refused,
+        bytes_reclaimed=sum(p.bytes_deleted for p in out.purged),
+        planned_by_kind=planned,
+        dry_run=out.dry_run,
+    )
 
 
-def _estate_base_refs(roots: set[str], storage_options: StorageOptions) -> BaseRefs:
+def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, max_depth: int) -> BaseRefs:
     """Foreign ``base_paths`` across every maintained root — the #128d pre-pass for the purge.
 
     Discovery is per-root and best-effort: a root that will not list contributes nothing rather than
@@ -778,7 +809,13 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions) -> BaseR
         bucket = root.split("://", 1)[-1].strip("/")
         try:
             fs, _ = fs_and_base(root, storage_options)
-            uris.extend(discover_datasets(fs, bucket).uris)
+            # THE SAME BOUND THE PURGE ITSELF REACHES. This walked to `discover_datasets`' default
+            # while the sweep and the drift report both pass `settings.discovery_max_depth`, so raising
+            # `discoveryMaxDepth` — the documented lever for datasets nested deeper than three levels —
+            # widened what may be DELETED and left what PROTECTS it where it was. A referring clone
+            # below the shorter bound is never discovered, `is_protected` answers None for its source,
+            # and the purge deletes bytes a live dataset resolves through, silently.
+            uris.extend(discover_datasets(fs, bucket, max_depth=max_depth).uris)
         except Exception as exc:  # noqa: BLE001 — an unlistable root must not abort the purge
             log.warning("trash_purge_base_ref_discovery_failed", extra={"root": root, "error": str(exc)})
     return protected_roots(uris, storage_options, session=shared_lance_session())

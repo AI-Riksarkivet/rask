@@ -1669,9 +1669,18 @@ maintenance:
   # off the pass otherwise returns before the trash prefix is even read, so without this the only way
   # to learn what a purge would do is to let it do it.
   #
-  # It can only SUBTRACT: with both on, the tick previews and reclaims nothing. That asymmetry is
-  # deliberate — a deployment that means to reclaim and quietly previews forever looks exactly like a
-  # healthy one, so the failure direction is the visible one.
+  # It subtracts every MUTATION: with both on, the tick previews and reclaims nothing. A deployment
+  # that means to reclaim and quietly previews forever would look exactly like a healthy one, so every
+  # reclamation counter carries a `dry_run` dimension and `maintenance.trash.purge_planned` exists to
+  # make that state queryable.
+  #
+  # IT ADDS READ COST. With `trashPurge` off the pass returns before reading anything; with this on it
+  # does the full trash listing, a Lance `__manifest` open per maintained root, and the shallow-clone
+  # pre-pass over EVERY dataset in EVERY maintained bucket — against a 512Mi pod that has been
+  # OOMKilled before. Turn it on to answer a question, not as a standing setting.
+  #
+  # `would_purge` is an UPPER BOUND: the FGA revoke, a non-dataset location and a failing delete each
+  # refuse records a preview cannot test without performing the act they guard.
   trashPurgeDryRun: false
   # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
   # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
