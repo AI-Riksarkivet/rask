@@ -61,6 +61,10 @@ pass_filenames = false
 # nothing. The filter decides whether the hook RUNS; when it does, it still checks everything, which
 # is the property that catches a Python change breaking a module it does not name.
 files = "\\.py$"
+# PRE-COMMIT ONLY. A hook that declares no stage runs at every stage, so this also fired at
+# `commit-msg`, where the only file is the message — reporting "no files to check ... Skipped" right
+# after it had really run, which reads exactly like the gate never running at all.
+stages = ["pre-commit"]
 
 [[repos.hooks]]
 id = "no-co-authored-by-claude"
@@ -81,3 +85,6 @@ name = "comments carry rationale, not a changelog of the prose"
 entry = "uv run python scripts/comment_history_gate.py --staged"
 language = "system"
 pass_filenames = false
+# Pre-commit only, for the reason the ty hook above records: it reads the STAGED diff, so a second
+# pass at commit-msg re-reads the same diff and reports on it twice.
+stages = ["pre-commit"]
