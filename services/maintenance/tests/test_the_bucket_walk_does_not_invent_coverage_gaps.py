@@ -215,3 +215,52 @@ def test_a_MISSING_BUCKET_still_raises(tmp_path: Path) -> None:
     "0 that means we did not look" this module's docstrings forbid."""
     with pytest.raises(FileNotFoundError):
         discover_datasets(pafs.LocalFileSystem(), str(tmp_path / "no-such-bucket"), max_depth=3)
+
+
+# --------------------------------------------------------------------------- #
+# a prefix PROVEN to hold no dataset is not a coverage gap
+# --------------------------------------------------------------------------- #
+
+
+def test_a_directory_of_FILES_at_the_bound_is_not_a_coverage_gap(tmp_path: Path) -> None:
+    """The walk can tell "no dataset here" from "did not look deep enough" — for the case it can prove.
+
+    A Lance dataset IS a directory with a `_versions/` child (`objectfs.is_lance_dataset_root`, the
+    estate's one definition of the marker). So a directory whose children are all FILES cannot hide
+    one, at any depth. Reporting it as an unscanned subtree is inventing a gap.
+
+    THE COST OF INVENTING IT IS NOT COSMETIC. `purge.report_is_clean` blocks on any `IncompleteScan`,
+    so a prefix that will never hold a dataset blocks reclamation exactly as hard as a manifest nobody
+    could read — and blocks it forever, because nothing about that prefix will ever change.
+
+    Measured on the deployed estate 2026-09-10: 64 of 64 `incomplete` units were `depth limit reached`,
+    the majority `s3://lance-catalog/models/<model>/<hash>` — model artefacts, which are files. This
+    file's own header records the other half of the proof: walking `models/` to depth 8 finds 0
+    datasets. The skip list handles the control prefixes it knows by NAME; this handles the general
+    case by evidence.
+    """
+    artefacts = tmp_path / "models" / "churn" / "060ab43a89c0"
+    artefacts.mkdir(parents=True)
+    (artefacts / "weights.bin").write_bytes(b"x")
+    (artefacts / "card.md").write_text("model card")
+
+    result = discover_datasets(pafs.LocalFileSystem(), str(tmp_path), max_depth=3)
+
+    assert not result.uris, "no dataset exists here"
+    assert not result.truncated, f"a directory of files was reported as an unscanned subtree: {result.truncated}"
+
+
+def test_a_directory_of_DIRECTORIES_at_the_bound_is_STILL_a_gap(tmp_path: Path) -> None:
+    """The other half, and the one that keeps the fix honest.
+
+    A subdirectory below the bound genuinely may hold a dataset — the walk did not look, and cannot
+    say. Suppressing that would trade a false gap for a false clean, which is strictly worse: the
+    first blocks a purge, the second lets one run over ground nobody scanned.
+    """
+    deep = tmp_path / "tenant" / "zone" / "unscanned" / "maybe_a_dataset"
+    deep.mkdir(parents=True)
+
+    result = discover_datasets(pafs.LocalFileSystem(), str(tmp_path), max_depth=3)
+
+    assert not result.uris
+    assert result.truncated, "a subtree the walk did not enter must still be recorded"

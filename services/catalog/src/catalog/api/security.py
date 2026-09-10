@@ -13,7 +13,7 @@ through. A configured-but-broken auth layer must never degrade to open access.
 from __future__ import annotations
 
 import time
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -36,6 +36,15 @@ from service_kit.governed.oidc import IDToken, OIDCVerifier
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
 _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
 _CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
+
+
+#: The issuer stamped on a principal minted by the SERVICE door, and the estate's one way to ask
+#: "is this token a machine". A synthetic principal must never look like a human login
+#: (`tests/.../test_service_door.py`), and that property is what makes this usable as a
+#: discriminator: `seed_ownership` declines to grant ownership to a machine on it. Matching a
+#: `sub` against `service_subjects` would work today and drift the moment a service is renamed or
+#: an allowlist is edited; the issuer says what the token IS rather than what it is called.
+SERVICE_DOOR_ISSUER: Final = "rask://service-door"
 
 
 def authenticate(
@@ -151,7 +160,7 @@ def authenticate(
             # a service is bounded by its own FGA rung exactly like a person.
             now = int(time.time())
             return IDToken(
-                iss="rask://service-door",
+                iss=SERVICE_DOOR_ISSUER,
                 sub=principal.sub,
                 aud=settings.oidc_audience or "rask",
                 iat=now,

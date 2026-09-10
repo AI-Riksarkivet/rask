@@ -47,7 +47,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import SERVICE_DOOR_ISSUER, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
 from catalog.services import native
@@ -1013,8 +1013,25 @@ async def seed_ownership(
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
+    # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). LH-052 withdrew
+    # the cascade's `owner` on every tenant warehouse; this is the second, quieter grant it did not
+    # reach — a stage runner registering its own output became that table's owner, so a cascade
+    # identity kept `can_drop`, `can_deregister`, `can_restore` and `manage_grants` on every governed
+    # tier of every tenant it had ever run in.
+    #
+    # THE TABLE IS NOT LEFT UNOWNED. `warehouse.owner: … or admin from project` →
+    # `namespace.owner: … or owner from parent` → `table.owner: … or owner from parent`, so the
+    # project's admin already owns it transitively — which is what makes this a withdrawal rather than
+    # an orphaning, and is why the parent edge below is still written unconditionally. Pinned against
+    # the real evaluator in `model.fga.yaml`, not argued from the model text.
+    #
+    # THE ISSUER IS THE DISCRIMINATOR, never a name pattern: the service door mints
+    # `SERVICE_DOOR_ISSUER`, and a synthetic principal is required never to look like a human login.
+    # Matching `sub` against `service_subjects` would work today and drift the moment a service is
+    # renamed or an allowlist is edited.
     await fga.grant_on_create(
         client,
+        grant_owner=token.iss != SERVICE_DOOR_ISSUER,
         user_sub=token.sub,
         resource=resource,
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),

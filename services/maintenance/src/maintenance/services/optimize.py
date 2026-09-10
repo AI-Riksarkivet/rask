@@ -140,6 +140,36 @@ _BRANCH_CONTAINER = "tree"
 _CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox")
 
 
+def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
+    """Could a Lance dataset exist somewhere below ``path``? One listing, and it answers by EVIDENCE.
+
+    A dataset IS a directory with a ``_versions/`` child (`objectfs.is_lance_dataset_root`, the
+    estate's one definition of the marker), so a directory whose children are all FILES cannot hide
+    one at any depth. Saying otherwise is inventing a coverage gap — and an invented gap is not
+    cosmetic: `purge.report_is_clean` blocks on any `IncompleteScan`, so a prefix that will never hold
+    a dataset blocks reclamation exactly as hard as a manifest nobody could read, and blocks it
+    forever because nothing about that prefix will ever change.
+
+    Measured on the deployed estate 2026-09-10: 64 of 64 `incomplete` units were `depth limit
+    reached`, the majority `s3://lance-catalog/models/<model>/<hash>` — model artefacts, which are
+    files. Walking `models/` to depth 8 finds 0 datasets (recorded in
+    `test_the_bucket_walk_does_not_invent_coverage_gaps.py`'s header), so raising the bound buys
+    nothing and this buys all of it.
+
+    ERRS TOWARD REPORTING. An unreadable or vanished prefix returns True — the walk genuinely does not
+    know, and trading a false gap for a false CLEAN is strictly worse: the first blocks a purge, the
+    second lets one run over ground nobody scanned. That is also why this asks the cheap question
+    (are there directories) rather than recursing to look for a marker: one listing per truncated
+    prefix, at the bound only, against a walk whose dominant cost is `_protected_roots` opening every
+    dataset it found.
+    """
+    try:
+        children = fs.get_file_info(pafs.FileSelector(path, recursive=False, allow_not_found=True))
+    except OSError:
+        return True
+    return any(child.type == pafs.FileType.Directory for child in children)
+
+
 def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> Discovery:
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
     (the Lance table-layout marker); any other directory is a namespace prefix and is recursed into
@@ -203,9 +233,9 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
                     _walk(branches.path, depth + 1)
             elif depth < max_depth:
                 _walk(info.path, depth + 1)
-            else:
-                # Not a dataset, and we are out of depth — anything under here is unmaintained and
-                # unscanned. Record the prefix rather than returning silently.
+            elif _may_hide_a_dataset(fs, info.path):
+                # Not a dataset, out of depth, and it CONTAINS DIRECTORIES — so something below may be
+                # one and the walk cannot say. Record the prefix rather than returning silently.
                 found.truncated.append(f"s3://{info.path}")
 
     _walk(bucket, 1)

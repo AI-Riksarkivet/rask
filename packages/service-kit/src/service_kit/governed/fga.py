@@ -1281,6 +1281,7 @@ async def grant_on_create(
     obj_id: str,
     actor: str,
     origin: TupleOrigin,
+    grant_owner: bool = True,
     parent_object: str | None = None,
     parent_relation: str = "parent",
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
@@ -1309,7 +1310,18 @@ async def grant_on_create(
     is swallowed. On OpenFGA outage it fails closed with ``ServiceUnavailableError``.
     """
     obj = f"{resource}:{obj_id}"
-    tuples = [ClientTuple(user=f"user:{user_sub}", relation="owner", object=obj)]
+    # `grant_owner=False` writes the hierarchy edge ALONE — for a creator who should not own what it
+    # made. The estate's case is a machine: a stage runner registering its own output became that
+    # table's owner, keeping drop/deregister/restore/manage_grants on every tier of every tenant it
+    # ran in (owner ruling 2026-09-10). The object is not left unowned — ownership still descends the
+    # parent chain from the project's admin — which is exactly why the edge must still be written, and
+    # why this is a flag on the SAME batch rather than a second call: dropping the owner tuple and
+    # dropping the edge look identical at the call site and are opposite in effect.
+    tuples = [ClientTuple(user=f"user:{user_sub}", relation="owner", object=obj)] if grant_owner else []
+    if not tuples and not parent_object:
+        # Nothing to write: no owner grant asked for and no parent to link. A root-level object created
+        # by a machine has no governance to seed, and an empty batch is a wasted round trip.
+        return
     if parent_object:
         # The edge's RELATION NAME is a property of the model, not a constant. Every governed type
         # spells it `parent`, but `annotation_project` spells it `tenant` — writing `parent` there
