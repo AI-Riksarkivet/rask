@@ -515,7 +515,7 @@ class LineageRepository:
         question — and became WRONG once the board was bounded, because a run outside the newest page
         is absent from the response while being present in the graph.
         """
-        rows = await fetch(self._pool, self._graph, cy.RUN_BY_ID, {"rid": run_id}, columns=16)
+        rows = await fetch(self._pool, self._graph, cy.RUN_BY_ID, {"rid": run_id}, columns=17)
         return self._run_status_from(rows[0]) if rows else None
 
     async def run_inputs(self, run_id: str) -> RunInputs:

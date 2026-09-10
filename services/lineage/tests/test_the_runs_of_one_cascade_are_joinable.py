@@ -75,6 +75,27 @@ def test_the_batch_id_is_STICKY_like_every_other_facet_field() -> None:
     assert "r.cascade_id=(CASE WHEN $cid = '' THEN r.cascade_id ELSE $cid END)" in MERGE_RUN
 
 
+def test_BOTH_readers_declare_the_same_column_count_as_the_projection() -> None:
+    """`RUN_BY_ID` is built from `LIST_RUNS`' body, so a column added to the board arrives here too —
+    and each caller declares its own count. A mismatch is a 500 on every read, not a short row.
+
+    MEASURED THE HARD WAY 2026-09-10: adding `cascade_id` widened both queries, only the board's caller
+    was updated, and `GET /runs/{id}` answered 500 for every run. The board test passed the whole time
+    because the board's own count was right — one projection, two counts, and only one of them checked.
+    """
+    import re
+    from pathlib import Path
+
+    from lineage.services import cypher as cy
+
+    source = Path(__file__).resolve().parents[1].joinpath("src/lineage/services/repository.py").read_text(encoding="utf-8")
+    declared = {int(n) for n in re.findall(r"cy\.(?:LIST_RUNS|RUN_BY_ID|list_runs_page\(limit\))[^)]*columns=(\d+)", source)}
+    projected = cy.LIST_RUNS.count(",") + 1
+
+    assert declared, "no caller of the run projection declares a column count — this gate is measuring nothing"
+    assert declared == {projected}, f"the projection returns {projected} columns; callers declare {sorted(declared)} — a mismatch is a 500 per read"
+
+
 def test_the_batch_id_comes_back_from_the_run_board() -> None:
     """Stored and unreadable is the state this file exists to end — `LIST_RUNS` is the projection both
     the board and the point read answer from."""
