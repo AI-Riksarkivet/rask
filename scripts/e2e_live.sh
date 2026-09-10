@@ -231,6 +231,45 @@ else
   printf '   note: no %s-age service or no postgres-password — the 10 direct-AGE legs will SKIP\n' "$RELEASE"
 fi
 
+# ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
+# Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is
+# REFUSED on tenant B's data — the sharpest statement of storage isolation this estate makes — and all
+# five skipped, because the runner that discovers every other address and credential from the cluster
+# set neither variable they gate on.
+#
+# A FIXED ID, deliberately, not one per run. This is estate FURNITURE like `acme`, created once and
+# reused: a per-run tenant would leave a project behind on every drive, and a project has no retention
+# to clean it up (§ Q8-15 is what accumulation does to a control). `POST /v1/projects` writes the
+# record and the creator's admin tuple in one operation. Measured against the deployed catalog: a
+# SECOND create answers 200 and echoes the current admin set rather than 409 — it converges. 409 is
+# accepted below anyway, because which of the two a door gives for "already there" is exactly the kind
+# of thing that changes under you, and both mean the same to this script.
+#
+# GUARDED like the warehouse block above: an estate that refuses the create prints a note and the legs
+# skip exactly as they do today. Provisioning a tenant must never be the reason a suite run dies.
+if [ -n "$CATALOG" ] && [ -n "$ALICE" ] && [ -n "$BOB" ]; then
+  TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
+  B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/v1/projects" \
+    -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
+    -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
+  BOB_SUB="$(TOK="$BOB" uv run python -c "
+import base64, json, os
+b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
+print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true)"
+  if [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; then
+    # Bob administers tenant B while alice administers acme, which is what makes the isolation legs a
+    # real cross-tenant test rather than one principal talking to two of its own projects.
+    [ -n "$BOB_SUB" ] && curl -s -o /dev/null -m 20 -X POST "http://$CATALOG/v1/access/tuples" \
+      -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
+      -d "{\"user\":\"user:$BOB_SUB\",\"relation\":\"admin\",\"object\":\"project:$TENANT_B\"}" 2>/dev/null || true
+    export LANCE_E2E_PROJECT_B="$TENANT_B"
+    export LANCE_E2E_TENANT_B_TOKEN="$BOB"
+    printf '   tenant B: %s (admin=bob) — the credential-isolation legs will RUN\n' "$TENANT_B"
+  else
+    printf '   note: could not provision tenant B (HTTP %s) — the 5 credential-isolation legs will SKIP\n' "${B_CODE:-?}"
+  fi
+fi
+
 # ---- settle gate -------------------------------------------------------------------------------
 # A SETTLING ESTATE AND A BROKEN ONE LOOKED IDENTICAL, and that is the whole reason this exists. The
 # suites drive the cascade, which runs on Dapr pub/sub — and after a rollout a stage runner's sidecar
