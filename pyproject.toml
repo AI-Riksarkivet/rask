@@ -160,7 +160,7 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "packages/service-kit/src/service_kit/media/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
-"packages/service-kit/src/service_kit/obs.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# `service_kit/obs.py` measured identically and went the same way 2026-09-10.
 "packages/service-kit/src/service_kit/dapr_publish.py" = ["ANN401"]
 "runners/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/ray_stage_job.py" = ["ANN401"]
@@ -172,7 +172,10 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "scripts/ray_lance_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/encoder_stub.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/gen_openapi.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"scripts/medallion_demo.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# NARROWED by measurement 2026-09-10: of the 21 rules this carried, exactly ONE fires (a copy
+# outside the glob, checked against the same config). The other 20 described a file that does not
+# need them.
+"scripts/medallion_demo.py" = ["PERF401"]
 "scripts/model_artifact_janitor.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "tests/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
 "services/viewer/src/viewer/services/clips.py" = ["S603"]

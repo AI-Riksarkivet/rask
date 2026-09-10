@@ -32,6 +32,8 @@ from maintenance.services.compaction_executor import CompactionPlaneUnavailable,
 class _Settings:
     catalog_url = "http://catalog:2333"
     catalog_service_identity = "service-maintenance"
+    #: Read by the AMBIENT-credential log line, which names the identity rather than ranking it.
+    s3_access_key_id = "rask-maintenance"
 
 
 def _settings() -> Any:

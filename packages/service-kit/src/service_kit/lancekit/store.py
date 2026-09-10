@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pyarrow.fs as pafs
 
-from service_kit.lakehouse.objectfs import credential_of
+from service_kit.lakehouse import objectfs
 
 
 def is_uri(root: str | Path) -> bool:
@@ -41,19 +41,22 @@ def _s3fs(storage_options: dict[str, str]) -> tuple[pafs.S3FileSystem, str]:
 
 @lru_cache(maxsize=8)
 def _s3fs_for(options: frozenset[tuple[str, str]]) -> tuple[pafs.S3FileSystem, str]:
+    """THE SHARED CONSTRUCTOR, not a third copy of it.
+
+    This built its own ``S3FileSystem`` and dropped the SESSION TOKEN — ``credential_of`` returns a
+    triple and the third field went into ``_``. That is the fail-open `objectfs.s3_filesystem`'s
+    docstring names: pyarrow falls back to the default credential chain for anything it was not given,
+    so a vended, table-scoped credential arriving here signed with the POD's own role instead —
+    BROADER rights than the catalog scoped, not narrower, and nothing refuses it.
+
+    Every dataset resolution goes through here (`list_lance_stems`, `exists`), so the seam is hot as
+    well as wrong. Pinned by
+    `tests/test_a_vended_credential_survives_the_storage_seam.py::test_the_lancekit_store_filesystem_carries_the_session_token`,
+    which asserts the token reaches the constructed filesystem.
+    """
     storage_options = dict(options)
-    _access_key, _secret_key, _ = credential_of(storage_options)
-    endpoint = storage_options.get("endpoint", "")
-    scheme = "http" if endpoint.startswith("http://") else "https"
-    host = endpoint.split("://", 1)[-1]
-    fs = pafs.S3FileSystem(
-        access_key=_access_key,
-        secret_key=_secret_key,
-        endpoint_override=host or None,
-        scheme=scheme,
-        region=storage_options.get("region", "us-east-1"),
-    )
-    return fs, host
+    host = storage_options.get("endpoint", "").split("://", 1)[-1]
+    return objectfs.s3_filesystem(storage_options), host
 
 
 def list_lance_stems(root: str | Path, storage_options: dict[str, str] | None) -> list[str]:

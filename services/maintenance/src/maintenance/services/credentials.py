@@ -73,7 +73,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     to derivation would hide the producer's bug behind a working sweep.
     """
     if not settings.catalog_url:
-        _announce_vending_is_off(declared_table_id or uri)
+        _announce_vending_is_off(declared_table_id or uri, key_id=settings.s3_access_key_id)
         return fallback
     table_id = declared_table_id or table_id_from_location(uri)
     if table_id is None:
@@ -82,7 +82,17 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
 
     vended = _vend(table_id, settings)
     if vended is None:
-        logger.info("write credential AMBIENT for %s — nothing vended; this rewrite is signed by the root key", table_id)
+        # NAME THE KEY, do not rank it. "the root key" is an assertion this function cannot make:
+        # `MAINTENANCE_S3_ACCESS_KEY_ID` is `rask-maintenance` on the deployed estate, a scoped
+        # identity, so the line reported a posture the estate had already left — and an operator
+        # reading it went looking for a hardening that was in place. Emptying the chart value is still
+        # a documented way back to the tenant root, which is exactly why the identity has to be read
+        # rather than guessed. Matches `vended_credentials.py`'s own wording.
+        logger.info(
+            "write credential AMBIENT for %s — nothing vended; this rewrite is signed by the process credential %s",
+            table_id,
+            settings.s3_access_key_id or "<ambient environment>",
+        )
         return fallback
     logger.info("write credential SCOPED for %s — this rewrite is signed by a table-scoped credential", table_id)
     return vended
@@ -101,7 +111,7 @@ def _reset_vending_notice() -> None:
     _vending_off_announced = False
 
 
-def _announce_vending_is_off(subject: str) -> None:
+def _announce_vending_is_off(subject: str, *, key_id: str) -> None:
     """Say, once, that every rewrite from here is signed by the root key.
 
     THIS BRANCH USED TO BE THE SILENT ONE, and it is the branch that covers a whole-service
@@ -117,8 +127,9 @@ def _announce_vending_is_off(subject: str) -> None:
     _vending_off_announced = True
     logger.warning(
         "write credential vending is NOT CONFIGURED (no catalog URL) — every rewrite from this process, "
-        "starting with %s, is signed by the root key. Set maintenance.vendWriteCredentials to scope it.",
+        "starting with %s, is signed by the process credential %s. Set maintenance.vendWriteCredentials to scope it.",
         subject,
+        key_id or "<ambient environment>",
     )
 
 

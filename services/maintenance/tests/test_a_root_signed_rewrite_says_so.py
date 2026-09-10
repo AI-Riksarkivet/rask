@@ -42,6 +42,10 @@ class _Settings:
 
     catalog_url = ""
     catalog_service_identity = "service-maintenance"
+    #: The identity this deployment actually runs as. `rask-maintenance` on the live estate — a SCOPED
+    #: user, not the tenant root — which is the whole reason the message must read it rather than
+    #: assert a rank.
+    s3_access_key_id = "rask-maintenance"
 
 
 def _settings() -> MaintenanceSettings:
@@ -76,7 +80,8 @@ def test_vending_switched_OFF_is_announced_not_assumed(caplog) -> None:
     assert options == _FALLBACK, "with no catalog URL the rewrite must still run, on the ambient credential"
     said = " ".join(record.getMessage() for record in caplog.records)
     assert said, "the root-signed rewrite was silent — an operator cannot tell a hardened estate from an unhardened one"
-    assert "root key" in said, f"the message must name what signed the rewrite; got {said!r}"
+    assert "rask-maintenance" in said, f"the message must NAME the credential that signed it, not rank it; got {said!r}"
+    assert "root key" not in said, f"the rank was asserted instead of read — the estate left that posture; got {said!r}"
     assert "bronze$events" in said, f"the message must name the table it applies to; got {said!r}"
 
 
@@ -90,5 +95,5 @@ def test_it_says_so_ONCE_per_process_not_once_per_dataset(caplog) -> None:
         for table in ("a$one", "b$two", "c$three"):
             credentials.write_options_for(f"s3://b/{table}", _settings(), fallback=_FALLBACK, declared_table_id=table)
 
-    notices = [r for r in caplog.records if "root key" in r.getMessage() and "NOT CONFIGURED" in r.getMessage()]
+    notices = [r for r in caplog.records if "process credential" in r.getMessage() and "NOT CONFIGURED" in r.getMessage()]
     assert len(notices) == 1, f"expected one configuration notice for three datasets, got {len(notices)}"

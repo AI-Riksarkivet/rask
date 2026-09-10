@@ -103,3 +103,22 @@ def test_the_arrow_filesystem_carries_the_session_token() -> None:
     # `S3FileSystem` does not expose its credentials, so assert on what it was built with: pickling is
     # pyarrow's own round-trip of the constructor options.
     assert "TOKEN" in str(filesystem.__reduce__())
+
+
+def test_the_lancekit_store_filesystem_carries_the_session_token() -> None:
+    """THE THIRD SINK, and it had its own copy of the constructor rather than calling the second.
+
+    `lancekit.store._s3fs` builds a pyarrow filesystem for every dataset resolution
+    (`list_lance_stems`, `exists`). It unpacked the credential triple and discarded the token into
+    `_`, which is exactly the fail-open `s3_filesystem`'s docstring warns about: pyarrow falls back to
+    the default chain for what it was not given, so a vended credential signs with the pod's own role —
+    broader than the catalog scoped, not narrower.
+
+    It also read the BARE `endpoint` spelling while a vended option set uses `aws_endpoint`, so a
+    vended credential could reach this seam with no endpoint override at all.
+    """
+    from service_kit.lancekit import store
+
+    options = lance_storage_options("http://127.0.0.1:1", "AKIA", "secret", "us-east-1", session_token="TOKEN")
+    filesystem, _host = store._s3fs(options)
+    assert "TOKEN" in str(filesystem.__reduce__()), "the session token was dropped at the store seam"
