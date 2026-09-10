@@ -194,3 +194,35 @@ def test_a_run_with_no_ceiling_is_skipped(monkeypatch: pytest.MonkeyPatch) -> No
     nothing here — and a `to_version` of 0 borrowed for it would claim coverage it never had."""
     _capture(monkeypatch, {"runs": [{"outputs": ["acme-silver$features"], "consumed_to_version": None}]})
     assert consumed_reader(_Settings())("bronze->silver", "acme") == []
+
+
+def test_a_dataset_LINEAGE_cannot_show_us_is_unmeasurable_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same rule as the published reader's, on the reader thirty lines below it that did not hold it.
+
+    MEASURED ON THE LIVE ESTATE 2026-09-10 by driving every declared edge: of 261, 245 were invisible
+    (silent, correct) and 15 read fine — and exactly ONE failed, every tick, forever:
+
+        ('silver->gold', 'advref31') -> 403 Forbidden
+        GET /datasets/advref31-gold$catalog/producers
+
+    `published_reader` translates that condition; this one called `raise_for_status()` bare, so the
+    identical refusal was `unmeasurable` on one side of the file and a WARNING plus a `failed` count on
+    the other. A repeating-condition warning is the noise this module's docstring already cites: the
+    `failed` counter is supposed to mean something is broken, and a permanent entry in it is how a real
+    failure arrives unnoticed.
+
+    Lineage collapses the two meanings exactly as the catalog does — probed live, an unknown dataset
+    and a forbidden one BOTH answer 403 — so "not visible to this subject" is the honest reading of
+    either, and neither `None` (a fabricated healthy 0) nor a raise is.
+    """
+    _capture(monkeypatch, {}, status=403)
+    with pytest.raises(EdgeNotMeasurable):
+        consumed_reader(_Settings())("bronze->silver", "acme")
+
+
+def test_a_lineage_error_still_RAISES_so_the_tick_counts_it_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The negative half, and it is why this is a translation rather than a blanket catch: a 500 IS a
+    fault, and swallowing it would turn a broken lineage service into a silently idle cascade."""
+    _capture(monkeypatch, {}, status=500)
+    with pytest.raises(httpx.HTTPStatusError):
+        consumed_reader(_Settings())("bronze->silver", "acme")

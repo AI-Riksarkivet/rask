@@ -194,6 +194,18 @@ def consumed_reader(settings: Any) -> Any:  # noqa: ANN401 — the settings seam
         # mounts the same way (`datasets.router`, no version prefix).
         url = f"{str(settings.train_lineage_url).rstrip('/')}/datasets/{quote(wanted, safe='')}/producers"
         response = httpx.get(url, timeout=_TIMEOUT_SECONDS, headers=_service_headers(settings))
+        if response.status_code in (403, 404):
+            # THE SAME ANSWER `published_reader` GIVES, thirty lines up, for the same condition. It
+            # translated a refusal and this one did not, so one identical 403 was `unmeasurable` on one
+            # side of this file and a WARNING plus a `failed` count on the other — every tick, forever.
+            #
+            # Measured 2026-09-10 by driving all 261 declared edges: 245 invisible, 15 read, and one
+            # (`silver->gold`, `advref31`) 403 on `/datasets/advref31-gold$catalog/producers`. Lineage
+            # collapses "not yours" and "does not exist" exactly as the catalog does — probed live, an
+            # unknown dataset answers 403 too — so "not visible to this subject" is the honest reading
+            # of either, and a permanent entry in a counter that means "something is broken" is how a
+            # real failure arrives unnoticed.
+            raise EdgeNotMeasurable(f"{wanted!r} is not visible to this subject")
         response.raise_for_status()
         ranges: list[ConsumedRange] = []
         for producer in response.json().get("producers", []):
