@@ -490,6 +490,13 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
 #: stranded-object class the estate has spent real effort closing. An expiring `manage_grants` or
 #: `pass_grants` is the same failure one axis over: the delegation lapses while the grants it issued
 #: stand, and nobody is left able to revoke them.
+#:
+#: `publisher` qualifies on the same rule, decided 2026-09-10 when the rung was added. An expired
+#: publisher leaves the `published` tag exactly where it was last moved: the version that was blessed
+#: stays blessed, consumers keep resolving it, and nothing is stranded, unlistable or unrevocable. The
+#: only loss is the ability to bless the NEXT version, which is the fail-safe direction and is
+#: repairable by an owner moving the tag or by re-granting. It wants an expiry for the same reason
+#: `maintainer` does — a promotion campaign scoped to one migration should lapse on its own.
 _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
     {
         ("warehouse", "reader"),
@@ -506,6 +513,9 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
         ("warehouse", "maintainer"),
         ("namespace", "maintainer"),
         ("table", "maintainer"),
+        ("warehouse", "publisher"),
+        ("namespace", "publisher"),
+        ("table", "publisher"),
     }
 )
 

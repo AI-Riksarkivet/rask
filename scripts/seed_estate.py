@@ -263,12 +263,21 @@ DEMO_ESTATE = Estate(
         # possible, not what currently exists". `can_update_tag: owner` was the possibility; nothing
         # made these identities owners, so ten 403s were the model working correctly on absent facts.
         #
-        # OWNER, and the rung is the finding rather than a preference. The first attempt granted
-        # `validator`, on the reasoning that promoting into a gated stage is a validator's act — and it
-        # failed identically, three more 403s. `publish` is guarded by `can_update_tag`, and the model
-        # says `define can_update_tag: owner`; `validator` buys `can_promote`, which is the OTHER door
-        # on that route (the accept-assertions override). One rung per tier is enough because both
-        # cascade: `owner from parent` on `table`, and `owner` already subsumes `validator` there.
+        # THREE RUNGS, each a measured finding rather than a preference, and granting any one alone
+        # fails in a way that looks like a different bug. `writer` buys `can_create_table` and
+        # `can_write_data` — the first attempt granted `validator` alone, on the reasoning that
+        # promoting into a gated stage is a validator's act, and it failed with three more 403s.
+        # `publisher` buys `can_update_tag` + `can_create_tag`, which is what `publish` is guarded by.
+        # `validator` buys `can_promote`, the SECOND door on that route, taken only when the body
+        # carries `accept_assertions` — the producer resuming a promotion a person approved.
+        #
+        # THE FIRST TWO WERE ONE RUNG UNTIL 2026-09-10: `can_update_tag` was `owner`, so buying the
+        # publish door meant buying `can_drop`, `can_deregister`, `can_restore` and `manage_grants` on
+        # every table beneath (LH-052). They cascade the same way `owner` did — `<rung> from parent` on
+        # both `namespace` and `table` — so one grant per tier still reaches every table in it.
+        #
+        # KEEP IN STEP WITH `catalog/api/fga_deps.py::_CASCADE_RUNGS` and `seed_medallion_fga.sh`.
+        # Three seeders disagreeing about one identity's rung is how a denial reads as a mystery.
         # NO READ GRANT FOR `service-web`, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # `bff.ts` and `runs-feed.ts` send that identity ONLY when there is no session, so it is the
         # ANONYMOUS principal — granting it reader on a tenant's tiers is granting the public those
@@ -283,10 +292,16 @@ DEMO_ESTATE = Estate(
         # the stage runner that raised it — and without this grant the whole review path ends in
         # `403 can_update_tag`, AFTER a person has already said yes. Measured 2026-08-23: the
         # orchestration reported FAILED with exactly that, and the approval was silently worthless.
-        Grant("user:service-bronze-to-silver", "owner", "namespace:acme-silver"),
-        Grant("user:service-silver-to-gold", "owner", "namespace:acme-gold"),
-        Grant("user:service-medallion-producer", "owner", "namespace:acme-silver"),
-        Grant("user:service-medallion-producer", "owner", "namespace:acme-gold"),
+        *(
+            Grant(subject, rung, obj)
+            for subject, obj in (
+                ("user:service-bronze-to-silver", "namespace:acme-silver"),
+                ("user:service-silver-to-gold", "namespace:acme-gold"),
+                ("user:service-medallion-producer", "namespace:acme-silver"),
+                ("user:service-medallion-producer", "namespace:acme-gold"),
+            )
+            for rung in ("writer", "publisher", "validator")
+        ),
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("user:carol", "assignee", "role:validators"),
         Grant("role:validators#assignee", "validator", "namespace:acme-gold"),

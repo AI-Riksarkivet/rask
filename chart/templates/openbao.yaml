@@ -186,8 +186,11 @@ spec:
                 {{- /* ONE DEDICATED CREDENTIAL PER PRIVILEGED IDENTITY. Without these the binding in
                        `dapr_auth.py` is unreachable: a subject not on *_PRIVILEGED_SUBJECTS
                        authenticates with the estate's SHARED APP_API_TOKEN, so any holder of that one
-                       token may claim ANY allowlisted service — including identities that hold `owner`
-                       on every warehouse. The control existed and was tested; nothing rendered it, and
+                       token may claim ANY allowlisted service — including identities that hold a WRITE
+                       and PUBLISH rung on every warehouse (`owner` until 2026-09-10, which also carried
+                       drop, deregister, restore and grant management across every tenant). The
+                       narrowing shrank the prize; it did not remove it. The control existed and was
+                       tested; nothing rendered it, and
                        nothing seeded the secret it needs, so it was inert in every deployment.
                        Derived from the same medallion declarations as LANCE_FGA_CASCADE_WRITERS, so a
                        new stage runner cannot be added with an identity that has no credential of its own. */}}

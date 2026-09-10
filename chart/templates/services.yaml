@@ -240,12 +240,20 @@ spec:
               {{- end }}
             {{- end }}
             - { name: LANCE_SERVICE_SUBJECTS, value: {{ compact $catalogSubjects | uniq | sortAlpha | join "," | quote }} }
-            {{- /* The cascade's WRITERS, granted `owner` on every warehouse this catalog creates.
+            {{- /* The cascade's WRITERS, granted `writer` + `publisher` + `validator` on every warehouse
+                   this catalog creates — never `owner` (owner ruling 2026-09-10, zero trust). The RUNGS
+                   live in `catalog/api/fga_deps.py::_CASCADE_RUNGS`; this list is only WHO.
                    Admission and authorization are different questions and this is deliberately NOT
                    $catalogSubjects: that list exists so a service may SPEAK to the catalog and includes
-                   read-only identities like the web BFF, which must never hold owner on a tenant's data.
-                   Only the identities that actually move data between tiers appear here — the producer
-                   (which resumes a human-approved promotion, so it publishes too) and the stage runners.
+                   read-only identities like the web BFF, which must never hold a write rung on a
+                   tenant's data. Only the identities that actually move data between tiers appear here —
+                   the producer (which resumes a human-approved promotion, so it publishes too) and the
+                   stage runners.
+
+                   A NAME ADDED HERE GETS ALL THREE RUNGS ON EVERY TENANT, which is why the list is
+                   narrow: `validator` carries the accept-assertions override, and only the producer's
+                   resume path actually needs it. Splitting the rungs per subject is the next step and
+                   needs this to render identities WITH their rungs rather than as a flat list.
 
                    Without this a tenant is created, its tiers are created, rows land in bronze, lineage
                    records the run — and the promotion is refused with `403 can_update_tag` in a stage runner log
@@ -268,10 +276,14 @@ spec:
                    everyone else authenticates with the estate's SHARED APP_API_TOKEN. That control was
                    written and tested, and rendered NOWHERE — `grep -rn PRIVILEGED chart/` matched one
                    comment — so any holder of the shared token could claim any name on
-                   LANCE_SERVICE_SUBJECTS, and those names hold `owner` on every warehouse
-                   (LANCE_FGA_CASCADE_WRITERS, directly above): can_drop, can_deregister, can_restore
-                   and manage_grants across every tenant. Reading one web pod's environment was the
-                   whole attack.
+                   LANCE_SERVICE_SUBJECTS. Reading one web pod's environment was the whole attack.
+
+                   WHAT THAT BOUGHT AN ATTACKER SHRANK on 2026-09-10 but did not vanish: those names
+                   held `owner` on every warehouse (can_drop, can_deregister, can_restore,
+                   manage_grants across every tenant) and now hold `writer` + `publisher` + `validator`,
+                   so the prize is corrupting and blessing a tenant's data rather than destroying it.
+                   Still the estate's widest claimable identity, which is why this control is on by
+                   default rather than something to turn on later.
 
                    The same set as the cascade writers plus the trainer — deliberately NOT
                    $catalogSubjects, which includes read-only identities like the web BFF that need no

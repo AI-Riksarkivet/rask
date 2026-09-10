@@ -101,6 +101,17 @@ type warehouse
     # A warehouse-level maintainer maintains EVERY stage below it — one tuple per warehouse is how the
     # sweep is granted, which keeps the grant enumerable rather than estate-wide.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # PUBLICATION is not ownership, and the model has to say so or the cascade needs `owner` on every
+    # tenant. Advancing the `published` ref says which version is BLESSED; it destroys nothing, forks
+    # nothing and grants nothing. `can_maintain`'s precedent, applied to the other unattended plane:
+    # a maintainer rewrites HOW a dataset is stored, a publisher moves the pointer that says which
+    # version consumers should read, and neither is a licence to drop, restore or re-grant.
+    #
+    # Measured 2026-09-10 before this existed: each of the four cascade identities held `owner` on 95
+    # warehouses, bought for the single `publish` door, since `can_update_tag` had no rung below owner.
+    # Granted at the WAREHOUSE for the same reason the maintainer is: one tuple per tenant reaches
+    # every tier and every table beneath it, so the cascade's reach stays enumerable.
+    define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
     # ---- the GRANT axis (separate from the USE rungs above) ----
     # Who may hand out access here, as its own privilege rather than a side-effect of `owner`. Until
     # this existed the two were welded together — the grant routes gate on the owner bar — so
@@ -269,6 +280,9 @@ type namespace
     # says. Granting the sweep `writer` estate-wide would have made one compromised maintenance pod
     # equivalent to compromising every table (owner ruling 2026-09-08: zero trust).
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
+    # Publication, inherited — see the `warehouse` rung. A publisher here may bless a version of any
+    # table in this stage without being able to destroy one.
+    define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or publisher from parent
     # ---- the GRANT axis ---- (see `warehouse` for why it is separate from the rungs above)
     # Managed access, inherited: setting the flag on the warehouse governs every stage beneath it, and
     # a stage may also set it for itself. The recursion is what makes "manage this collection centrally"
@@ -341,6 +355,10 @@ type table
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
     # See the namespace rung for why this is separate from `writer` in both directions.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
+    # See the `warehouse` rung. Separate from `writer` in both directions for the same reason
+    # `maintainer` is: writing a version and BLESSING one are different authorities, and the cascade
+    # needs the second without the destructive half of the first's container.
+    define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or publisher from parent
     # ---- the GRANT axis ---- (see `warehouse`)
     # A table takes no `managed_access` of its own — the flag is a CONTAINER policy, and a per-table
     # switch would let an owner exempt their own table from the collection's rule, which is the rule's
@@ -365,13 +383,22 @@ type table
     define can_promote: validator
     define can_drop: owner
     define can_deregister: owner
-    # Ref-plane / history ops (OWNER tier — admin-inclusive via the parent cascade). A plain data WRITER
-    # appends/overwrites within the current line; FORKING history (branch/tag) or REWINDING it (restore)
-    # is privileged. `can_restore` is DESTRUCTIVE (rewinds to an older version), so it sits strictly ABOVE
-    # writer — never grantable to a mere writer.
+    # Ref-plane / history ops. A plain data WRITER appends/overwrites within the current line; FORKING
+    # history (branch) or REWINDING it (restore) is privileged and stays at the OWNER tier —
+    # admin-inclusive via the parent cascade, never grantable to a mere writer, because `can_restore`
+    # is DESTRUCTIVE.
     define can_create_branch: owner
-    define can_create_tag: owner
-    define can_update_tag: owner
+    # THE TAG RUNGS ADMIT A PUBLISHER; `can_create_branch` and `can_restore` beside them do not, and
+    # that split is the whole reason the rung exists. A tag is a NAMED POINTER at a version that
+    # already exists — creating or moving one destroys nothing, forks nothing and grants nothing,
+    # which is categorically unlike the two it sits between.
+    #
+    # BOTH, not just the update: the catalog's `publish` door creates the `published` tag on first
+    # publication and moves it thereafter (`publication.py::_set_tag`), gating once on the path. A
+    # publisher that could only move an existing tag would be refused on every tenant's first
+    # promotion and work forever after — the worst shape a permission can have.
+    define can_create_tag: owner or publisher
+    define can_update_tag: owner or publisher
     define can_restore: owner
     # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
     define can_grant_owner: manage_grants

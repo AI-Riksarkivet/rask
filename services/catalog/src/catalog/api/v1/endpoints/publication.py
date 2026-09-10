@@ -249,11 +249,16 @@ async def publish_table(
     """
     segments = parse_identifier(id, settings.delimiter)
     if body.accept_assertions:
-        # A SECOND door, above the router's `can_update_tag`. Publishing is an owner-tier act;
-        # accepting a finding the gate raised is a VALIDATOR's — the rung the model defines for
-        # exactly this ("a plain writer can write within a stage but cannot promote INTO a gated
-        # one"). An override must therefore need more permission than an ordinary publish, not the
-        # same amount.
+        # A SECOND door, above the router's `can_update_tag`, and the two rungs are now genuinely
+        # different rather than nested. An ordinary publish needs `publisher` — move the ref that says
+        # which version is blessed. OVERRIDING a finding the gate raised needs `validator`, the rung
+        # the model defines for exactly this ("a plain writer can write within a stage but cannot
+        # promote INTO a gated one"). An override must need more permission than an ordinary publish,
+        # not the same amount.
+        #
+        # It used to be nested and therefore weaker: publishing required `owner`, and `validator` is
+        # `[...] or owner`, so anyone who could publish at all could already override. The `publisher`
+        # rung (owner ruling 2026-09-10) is what makes this second door cost something.
         await require_relation(
             fga_client,
             settings,

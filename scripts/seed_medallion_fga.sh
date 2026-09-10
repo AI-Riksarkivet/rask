@@ -93,20 +93,35 @@ w user:service-medallion-producer writer "$WAREHOUSE"
 w user:service-ingest writer "$WAREHOUSE"
 w user:service-bronze-to-silver writer "$WAREHOUSE"
 w user:service-media-to-silver writer "$WAREHOUSE"
-# THE RUNG IS `owner`, AND IT IS A FINDING RATHER THAN A PREFERENCE — this file granted `validator`
-# and contradicted `scripts/seed_estate.py`, which had already measured the answer and written it down:
-# "The first attempt granted `validator` ... and it failed identically, three more 403s. `publish` is
-# guarded by `can_update_tag`, and the model says `define can_update_tag: owner`; `validator` buys
-# `can_promote`, which is the OTHER door on that route." Measured again 2026-08-26 on the live estate:
-# the silver->gold stage runner was refused `describe` AND `create` on its own tier, because `can_create_table`
-# is `writer` and `validator` is neither. Two seeders disagreeing about one identity's rung is how that
-# denial read as a permissions mystery for an hour.
-w user:service-silver-to-gold owner namespace:gold
+# THREE RUNGS, AND EACH IS A MEASURED FINDING RATHER THAN A PREFERENCE. Granting any ONE of them
+# fails, and each failure looks like a different bug:
+#   `writer`    — `can_create_table` and `can_write_data`. Without it the silver->gold stage runner is
+#                 refused `describe` AND `create` on its own tier (measured 2026-08-26 on the live
+#                 estate, when this file granted `validator` alone).
+#   `publisher` — `can_update_tag` + `can_create_tag`, which is what `publish` is guarded by. This rung
+#                 did not exist until 2026-09-10; the grant was `owner`, and buying one capability at
+#                 the owner bar is what put `can_drop`/`can_deregister`/`can_restore`/`manage_grants`
+#                 on every tenant's data (LH-052).
+#   `validator` — `can_promote`, the SECOND door on `/publish`, taken only when the body carries
+#                 `accept_assertions`. That is the producer resuming a promotion a person approved.
+#
+# KEEP THIS IN STEP WITH `catalog/api/fga_deps.py::_CASCADE_RUNGS`. Two seeders disagreeing about one
+# identity's rung is how a denial read as a permissions mystery for an hour, and it is why the catalog's
+# create path and its backfill were collapsed onto one builder. This script seeds the DEMO namespaces
+# directly and cannot share that builder, so the rungs are restated here with the reason attached —
+# never `owner`.
+w user:service-silver-to-gold writer namespace:gold
+w user:service-silver-to-gold publisher namespace:gold
+w user:service-silver-to-gold validator namespace:gold
 # The PRODUCER publishes the promotion a person approved — `publish_promotion` runs in ITS process,
 # because the workflow instance and the approve door must share an app-id for `raise_workflow_event`
 # to resolve. Without these the review path ends in `403 can_update_tag` AFTER someone said yes.
-w user:service-medallion-producer owner namespace:silver
-w user:service-medallion-producer owner namespace:gold
+w user:service-medallion-producer writer namespace:silver
+w user:service-medallion-producer publisher namespace:silver
+w user:service-medallion-producer validator namespace:silver
+w user:service-medallion-producer writer namespace:gold
+w user:service-medallion-producer publisher namespace:gold
+w user:service-medallion-producer validator namespace:gold
 
 # --- Ray TRAIN (#115c, docs/RAY-TRAIN.md D5): the trainer's OWN identity + rung. Feature READER on the
 # stages it consumes + WRITER on namespace:models ONLY — never the medallion writer rung (a trainer must

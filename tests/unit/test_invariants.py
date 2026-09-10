@@ -6001,9 +6001,12 @@ def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
     credential; every other identity authenticates with the estate's SHARED `APP_API_TOKEN`. Until
     2026-08-26 nothing rendered `*_PRIVILEGED_SUBJECTS` — `grep -rn PRIVILEGED chart/` matched a single
     comment — so the control was inert in every deployment the chart produced, and any holder of the
-    shared token could authenticate as any name on `LANCE_SERVICE_SUBJECTS`. Those names hold `owner`
-    on every warehouse (`LANCE_FGA_CASCADE_WRITERS`), which carries `can_drop`, `can_deregister`,
-    `can_restore` and `manage_grants` across every tenant.
+    shared token could authenticate as any name on `LANCE_SERVICE_SUBJECTS`. Those names hold
+    `writer` + `publisher` + `validator` on every warehouse (`LANCE_FGA_CASCADE_WRITERS`), so claiming
+    one buys the ability to corrupt and then BLESS any tenant's data. It bought more until
+    2026-09-10 — the rung was `owner`, carrying `can_drop`, `can_deregister`, `can_restore` and
+    `manage_grants` across every tenant — and the narrowing is why this control shipping ON matters
+    rather than why it stopped mattering.
 
     The two halves must be rendered from ONE derivation, and this pins that they are. Rendering the
     subject list without seeding a token turns each privileged service into a hard refusal

@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**263 open items**, deduped from 325 raw rows mined out of the seven files above.
+**264 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 21 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -116,6 +116,8 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 `lineage, catalog, maintenance, medallion, service-kit` · **HIGH** · **blocked:** owner acknowledgement of R10
 
 - *Why open:* Measured at HEAD 2026-09-09: builders are `lineage_kit/runs.py`, `medallion/schemas/events.py`, `lineage/seed.py`; kernels are `lineage_kit/{emitter,runs}.py`, `service_kit/lancekit/lineage_emit.py`, `catalog/core/lineage_emit.py`, `maintenance/core/lineage_emit.py`. Only the producer-URI defect was fixed. The bronze-write emit is the cascade head, so a swallowed emit means the whole bronze→silver→gold run never happens and nothing reports it.
+  **WHAT SWALLOWING COSTS, measured 2026-09-10 rather than argued:** ingest is the estate's only HTTP lineage producer, and `POST /api/v1/lineage` had served TWO requests in lineage's retained log and refused both — a 100% failure rate — while 806 events reached the graph over the Dapr topic from producers that never take that path. Every ingest run landed its rows with no provenance and reported COMPLETE. Two distinct causes, both now fixed (`d5cd2af1`, `06302b7f`): the emitter could present only the shared bearer at a door that refuses it from a privileged name, and the run's external INPUT was authorized as a governed table. Neither was visible from the suite; both came from driving the lane.
+  The outbox clause below is BLOCKED ON CP-007 and the two rows did not say so: ingest's `_outbox_storage_options` carries no credential, so `stage_event` is refused the bucket (`ACCESS_DENIED` on `HeadBucket`) and the recovery path cannot fire. Staging before transport is worth nothing until that is closed.
 - *Closes when:* Delete `service_kit.lancekit.openlineage`/`lineage_emit` and the per-service `lineage_emit.py` copies, route every producer through `packages/lineage-kit`'s emitter and one `RunEvent` builder, and stage each event in an outbox before transport so a failed emit is retried rather than dropped.
 
 **LH-006 · `UPSTREAM`/`DOWNSTREAM`/column-lineage Cypher is unbounded `*1..`, and Dataset nodes carry no `latest_version`**
@@ -389,6 +391,12 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - *Why open:* The bounding control (`LANCE_PRIVILEGED_SUBJECTS`) now renders on catalog and lineage (79512bb0) and this estate sets `dedicatedServiceCredentials: true`, but the grant itself is still estate-wide — a stage runner holds `can_drop`/`can_deregister`/`can_restore`/`manage_grants` on every tenant's warehouse, not just the ones it writes — and `chart/values.yaml:807` still defaults the control OFF, so a fresh install ships the unbounded shape. Same over-grant Q5-2 solved for maintenance with a `can_maintain` rung.
 - *Closes when:* An owner ruling narrowing the cascade writer's grant to the warehouses it writes, then change how `LANCE_FGA_CASCADE_WRITERS` is rendered/seeded in the chart plus `.fga.yaml` cases for the narrowed shape, and flip `values.yaml:807` to `true` with `LANCE_PRIVILEGED_SUBJECTS` rendered by default.
+
+**LH-128 · A cascade identity is still `owner` of every TABLE it registers, because create-on-parent seeds self-ownership**
+`catalog, openfga` · med · **blocked:** owner decision — is "the identity that created it owns it" right for a MACHINE, and if not, who owns a table a stage runner registered?
+
+- *Why open:* Found while narrowing the warehouse grant (LH-052, 2026-09-10). That row removed `owner` on every tenant WAREHOUSE, but `seed_ownership_or_compensate(resource="table")` grants the registering identity `owner` on the table it just created — pinned as deliberate behaviour by `model.fga.yaml`'s "A STAGE RUNNER'S OWN OUTPUT" tuple. So a stage runner still holds `can_drop`, `can_deregister`, `can_restore` and `manage_grants` on every table it has ever registered, which for the cascade is every governed tier of every tenant it has run in. Far narrower than the warehouse grant it replaces — scoped to what the runner itself created, and it is how the catalog attributes creation — but it is NOT nothing, and LH-052 would read as closing more than it does if this were left unsaid.
+- *Closes when:* An owner ruling on machine-created ownership, then either (a) seed the PROJECT's admin rather than the creating identity when the creator is a service subject, leaving the runner the `writer`/`publisher` rungs it already inherits from the warehouse, or (b) confirm self-ownership is intended for machines and record why, with a `.fga.yaml` case naming the blast radius.
 
 **LH-053 · Bucket claims are keyed by warehouse ID, so two warehouse IDs can both claim the SAME bucket — and the four control-root JSON stores it must live in are not collapsed**
 `catalog` · **HIGH** · **blocked:** owner ruling: pull the bucket claim forward as its own store, or confirm it stays behind the #85 record primitive

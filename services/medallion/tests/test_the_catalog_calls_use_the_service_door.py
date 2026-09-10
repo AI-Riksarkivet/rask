@@ -182,7 +182,9 @@ class TestAPrivilegedIdentityPresentsItsOwnCredential:
 
     So the stage runner must PRESENT what the door will ask for. Until it does, the estate is stuck with the
     shared token, and any holder of it can authenticate as any allowlisted identity — including ones
-    that hold `owner` on every warehouse.
+    that hold `writer` + `publisher` + `validator` on every warehouse, i.e. the ability to corrupt and
+    then bless any tenant's data. That was `owner` until 2026-09-10, which also carried drop,
+    deregister, restore and grant management estate-wide.
 
     The resolver is injected rather than read from the store here, for the same reason the server side
     takes a `dedicated_token=` callback: the secret store is a Dapr sidecar call, and a unit test that

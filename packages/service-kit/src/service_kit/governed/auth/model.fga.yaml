@@ -33,6 +33,13 @@ tuples:
   # service-maintenance: MAINTAINER on one warehouse. One tuple per warehouse is the grant shape —
   # enumerable, revocable per tenant, and nothing like a `writer` on every table.
   - { user: user:service-maintenance, relation: maintainer, object: warehouse:acme_bucket }
+  # service-silver-to-gold: a CASCADE writer — the two rungs its work needs and nothing above them.
+  # Same grant shape as the sweep's: one tuple per warehouse per rung, enumerable and revocable per tenant.
+  - { user: user:service-silver-to-gold, relation: writer, object: warehouse:acme_bucket }
+  - { user: user:service-silver-to-gold, relation: publisher, object: warehouse:acme_bucket }
+  # `validator` is the third and last: `/publish` with `accept_assertions` needs `can_promote`, which
+  # is how the producer resumes a promotion a HUMAN approved. `owner` used to imply it.
+  - { user: user:service-silver-to-gold, relation: validator, object: warehouse:acme_bucket }
   # dave: a plain WRITER on the warehouse (writes any stage, but is NOT a validator)
   - { user: user:dave, relation: writer, object: warehouse:acme_bucket }
   # carol: a VALIDATOR on the gold stage via role:validators, + reader on the warehouse (to read silver)
@@ -461,12 +468,18 @@ tests:
     #   rita      — the same edge as gina. Added 2026-08-22 as the plain-member subject that pins
     #               `project.can_administer: admin` against a widening to `member`; her arrival here
     #               is not incidental, it re-proves that `member from project` reaches this far.
+    #   service-silver-to-gold — the cascade writer, and it belongs here for the same reason dave does:
+    #               it holds `writer` on the warehouse, and a stage runner READS the tier below the one
+    #               it writes, so reader is a rung it genuinely needs rather than a side effect to trim.
+    #               Note the contrast with `service-maintenance`, which is absent: `maintainer` neither
+    #               implies nor is implied by reader, so the sweep never enters an audience list. That
+    #               asymmetry is the two rungs behaving as designed, not an inconsistency.
     list_users:
       - object: namespace:acme_gold
         user_filter: [{ type: user }]
         assertions:
           can_be_notified:
-            users: [user:alice, user:bob, user:carol, user:dave, user:gina, user:rita]
+            users: [user:alice, user:bob, user:carol, user:dave, user:gina, user:rita, user:service-silver-to-gold]
 
   - name: create-on-parent — create perms are gated on the PARENT object (design-create-on-parent)
     check:
@@ -1195,3 +1208,58 @@ tests:
       - user: user:alice
         object: table:acme_silver_features
         assertions: { can_maintain: true }
+
+  - name: a cascade writer may PUBLISH what it may not DESTROY, and that separation runs both ways
+    # Owner ruling 2026-09-10 (zero trust). The cascade calls four table doors — describe, credentials,
+    # register, publish — and only `publish` sat above the writer tier, because `can_update_tag` had no
+    # rung beneath `owner`. So every stage runner was granted `owner` on every tenant warehouse to buy
+    # one capability, and got `can_drop`, `can_deregister`, `can_restore`, `can_create_branch` and
+    # `manage_grants` on every table in the estate with it. Measured on the live store 2026-09-10:
+    # 95 owner tuples EACH, across four identities.
+    check:
+      # Granted at the WAREHOUSE and cascading to every stage and table beneath it — the sweep's shape,
+      # one tuple per tenant per rung, so the cascade's reach stays enumerable.
+      - user: user:service-silver-to-gold
+        object: warehouse:acme_bucket
+        assertions: { publisher: true, writer: true, validator: true }
+      - user: user:service-silver-to-gold
+        object: namespace:acme_gold
+        assertions: { publisher: true }
+      - user: user:service-silver-to-gold
+        object: table:acme_gold_catalog
+        assertions:
+          # What it needs: write the tier, then bless the version it wrote. BOTH tag rungs, because the
+          # publish door creates the tag on first publication and moves it thereafter.
+          can_write_data: true
+          can_create_tag: true
+          can_update_tag: true
+          # The accept-assertions override, and it is a capability the cascade holds TODAY via `owner`
+          # rather than one this grant adds. Only the producer's resume path uses it.
+          can_promote: true
+          # THE HALF THAT MATTERS. A cascade writer may not destroy the table, rewind its history, fork
+          # it, or hand its access to anyone — so a compromised stage runner cannot take the estate with
+          # it. Each of these was TRUE for all four identities on every tenant before this rung existed.
+          can_drop: false
+          can_deregister: false
+          can_restore: false
+          can_create_branch: false
+          can_revoke_grant: false
+          can_grant_owner: false
+      # …and it does not leak to another tenant's warehouse, which is what "one tuple per warehouse"
+      # buys over an estate-wide grant.
+      - user: user:service-silver-to-gold
+        object: warehouse:beta_bucket
+        assertions: { publisher: false }
+      # The other direction: a plain data WRITER is not a publisher. dave writes any stage in acme and
+      # still may not bless a version — publication is an operational authority, not a side-effect of
+      # write. Without this the rung would be decorative: `publisher` has to be a rung you are GIVEN.
+      - user: user:dave
+        object: table:acme_gold_catalog
+        assertions:
+          can_write_data: true
+          can_update_tag: false
+          can_create_tag: false
+      # An OWNER keeps it, concentrically, exactly as `maintainer` and `validator` behave.
+      - user: user:alice
+        object: table:acme_gold_catalog
+        assertions: { can_update_tag: true, can_create_tag: true }

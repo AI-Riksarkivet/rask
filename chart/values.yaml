@@ -864,10 +864,23 @@ frontend:
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
   # Bind each privileged service identity to its OWN credential instead of the shared APP_API_TOKEN.
-  # OFF until the CLIENT half exists: the catalog would demand `service-token-<identity>` while the
-  # stage runners still present APP_API_TOKEN, which 401s every catalog call and stops the cascade (measured
-  # 2026-08-26). The tokens are seeded already; what is missing is each service sending its own.
-  dedicatedServiceCredentials: false
+  #
+  # ON BY DEFAULT since 2026-09-10, because the reason it was off is spent. It waited on the CLIENT
+  # half — a door demanding `service-token-<identity>` while the services still presented
+  # APP_API_TOKEN 401s every call and stops the cascade (measured 2026-08-26) — and every privileged
+  # subject now sends its own: the cascade writers and the trainer through
+  # `medallion.core.config.dedicated_token_for`, maintenance through
+  # `maintenance.services.catalog_identity`, ingest through `ingest.service_identity` at BOTH its
+  # doors (the lineage emitter was the last one, 2026-09-10).
+  #
+  # Three gates keep that true rather than a claim, and they are why this can default on:
+  # `test_a_privileged_subject_can_present_its_own_credential.py` refuses a privileged name whose
+  # service has no client half, refuses one whose construction site does not resolve a credential, and
+  # refuses one whose token `openbao.yaml` does not seed. All three already render with this ON.
+  #
+  # A security default must fail CLOSED — the same rule `auth.enabled` above records. Left off, a
+  # fresh install ships the shape where any holder of the shared token can claim any privileged name.
+  dedicatedServiceCredentials: true
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
   # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
