@@ -92,7 +92,8 @@ CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses"
 _STILL_REGISTERED = "still registered — recovered or re-registered since the drop, so these bytes are LIVE"
 _MANIFEST_UNREADABLE = "the object manifest could not be read, so liveness cannot be re-checked — refusing to delete blind"
 _PURGE_OFF = (
-    "MAINTENANCE_TRASH_PURGE_ENABLED is off — reclamation is opt-in and report-only is the shipped default (turning it on makes an expired drop unrecoverable)"
+    "MAINTENANCE_TRASH_PURGE_ENABLED is off — reclamation is opt-in and report-only is the shipped default "
+    "(turning it on makes an expired drop unrecoverable); set MAINTENANCE_TRASH_PURGE_DRY_RUN to see what it would reclaim first"
 )
 _FGA_UNWIRED = "FGA is enabled but no client is wired into this process — grants cannot die with the bytes, so nothing is purged"
 
@@ -134,6 +135,20 @@ class RefusedRecord(BaseModel):
     attempts: int | None = None
 
 
+class PlannedRecord(BaseModel):
+    """One record a DRY RUN would have reclaimed — the plan, not the deed.
+
+    Deliberately NOT a ``PurgedRecord`` with zeroed counters: ``bytes_deleted=0`` on a plan reads as
+    "there was nothing there", which is the one thing an operator inspecting a reclamation must not be
+    told by accident. The byte counts are genuinely unknown until the delete walks the prefix.
+    """
+
+    kind: str
+    id: str
+    location: str
+    expires_at: str
+
+
 class TrashPurgeReport(BaseModel):
     """One tick's reclamation, machine-readable and honest about what it did NOT do.
 
@@ -148,7 +163,13 @@ class TrashPurgeReport(BaseModel):
     #: Why the purge did not run, when it did not. ``None`` on a run.
     reason: str | None = None
     due: int = 0
+    #: True when this pass PREVIEWED rather than reclaimed. ``purged`` is then empty by construction and
+    #: ``would_purge`` carries the plan — the two are never both populated, so a reader cannot mistake a
+    #: preview for a reclamation.
+    dry_run: bool = False
     purged: list[PurgedRecord] = Field(default_factory=list)
+    #: What a real purge would have reclaimed on this tick. Populated only on a dry run.
+    would_purge: list[PlannedRecord] = Field(default_factory=list)
     refused: list[RefusedRecord] = Field(default_factory=list)
     #: Records past the per-tick cap. REPORTED, never silently dropped — the next tick takes them.
     capped: int = 0
@@ -469,6 +490,7 @@ async def _refuse(
     reason: str,
     control_root: str,
     storage_options: StorageOptions,
+    dry_run: bool = False,
 ) -> None:
     """Report a refusal AND remember it on the record — the one place both halves happen.
 
@@ -485,10 +507,55 @@ async def _refuse(
     """
     attempts: int | None = None
     try:
-        attempts = await run_in_threadpool(trash.note_refusal, control_root, storage_options, obj_id, kind=kind, reason=reason)
+        # THE REFUSAL IS REPORTED EITHER WAY; only its MEMORY is withheld on a preview. Persisting
+        # `attempts` is a write onto the very records an operator is inspecting, and it lands on the
+        # stuck ones — so a preview that annotated would inflate the evidence it exists to show.
+        if not dry_run:
+            attempts = await run_in_threadpool(trash.note_refusal, control_root, storage_options, obj_id, kind=kind, reason=reason)
     except Exception as exc:  # noqa: BLE001 — bookkeeping about a refusal must never outrank the refusal
         log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
     out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason, attempts=attempts))
+
+
+async def _delete_bytes_or_refuse(
+    out: TrashPurgeReport,
+    *,
+    kind: str,
+    obj_id: str,
+    location: str,
+    control_root: str,
+    storage_options: StorageOptions,
+    protected: BaseRefs | None,
+) -> tuple[int, int] | None:
+    """Delete the bytes this record names, or record a refusal and answer ``None``.
+
+    THREE ARMS RATHER THAN ONE, because they say different things to an operator and only one of them
+    means the record itself is wrong: ``NotADatasetRootError`` means this record points at something
+    that is not a dataset; ``ProtectedBaseError`` means a live clone resolves its files through these
+    bytes, so an operator who drops the clone first can let the next tick reclaim them legitimately;
+    an ``OSError`` is transient and the next tick simply retries.
+
+    A namespace record owns no bytes (it is a ``__manifest`` row), so it reclaims ``(0, 0)`` without
+    touching the store.
+
+    NEVER REACHED ON A DRY RUN — ``_purge_one`` returns above this — which is why it does not thread
+    ``dry_run`` into its refusals: below the preview cut, a refusal always persists.
+    """
+    if not location or kind == "namespace":
+        return (0, 0)
+    try:
+        return await run_in_threadpool(_delete_guarded, location, storage_options, protected)
+    except NotADatasetRootError as exc:
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
+        log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
+    except ProtectedBaseError as exc:
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
+        log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
+    except OSError as exc:
+        reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
+    return None
 
 
 async def _purge_one(
@@ -503,56 +570,51 @@ async def _purge_one(
     fga_client: Any,  # noqa: ANN401 — OpenFgaClient | None
     control: ControlEmitter,
     protected: BaseRefs | None = None,
+    dry_run: bool = False,
 ) -> None:
-    """Revoke → delete → clear → announce, for ONE record. Never raises; every failure is a refusal."""
+    """Revoke → delete → clear → announce, for ONE record. Never raises; every failure is a refusal.
+
+    ``dry_run`` stops after the REFUSAL CHECK and records the record as planned rather than reclaimed.
+    The cut is placed there deliberately: everything above it is a read, everything below it mutates,
+    and the check is precisely the part an operator needs previewed — a plan that omitted the refusals
+    would promise reclamation the real pass declines to perform.
+    """
     kind = str(record.get("kind") or "table")
     obj_id = str(record.get("id") or "")
     location = str(record.get("location") or "").rstrip("/")
 
     if (reason := check(record, roots=roots, live_ids=live_ids)) is not None:
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
+        return
+
+    if dry_run:
+        # PAST THE CHECK AND NOT REFUSED — a real pass would reclaim this one. Nothing below this line
+        # runs, so no tuple is revoked, no byte is deleted and no record is cleared.
+        out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=str(record.get("expires_at") or "")))
+        log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
         return
 
     try:
         revoked = await _revoke(fga_client, kind=kind, obj_id=obj_id, fga_enabled=settings.fga_enabled)
     except Exception as exc:  # noqa: BLE001 — a revoke we could not perform is a reason not to delete
         reason = f"the FGA revoke failed ({type(exc).__name__}: {exc}) — grants must never outlive the bytes, so nothing was deleted"
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.error("trash_purge_revoke_failed", extra={"kind": kind, "id": obj_id, "error": str(exc)})
         return
 
-    deleted_bytes = deleted_files = 0
-    if location and kind != "namespace":
-        try:
-            deleted_bytes, deleted_files = await run_in_threadpool(_delete_guarded, location, storage_options, protected)
-        except NotADatasetRootError as exc:
-            # A REFUSAL, like the protected-base one below and for the same reason: the bytes are
-            # deliberately untouched. Its own arm rather than a shared one, because the two say
-            # different things to an operator — that one means "a live clone needs these bytes", this
-            # one means "this record points at something that is not a dataset", and only the second
-            # is a sign the record itself is wrong.
-            await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
-            log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
-            return
-        except ProtectedBaseError as exc:
-            # A REFUSAL, not a failure: the bytes are deliberately untouched because a live dataset
-            # resolves through them. The record survives, so an operator who drops the clone first can
-            # let the next tick reclaim this legitimately.
-            await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
-            log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
-            return
-        except OSError as exc:
-            reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
-            await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
-            log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
-            return
+    reclaimed = await _delete_bytes_or_refuse(
+        out, kind=kind, obj_id=obj_id, location=location, control_root=control_root, storage_options=storage_options, protected=protected
+    )
+    if reclaimed is None:
+        return
+    deleted_bytes, deleted_files = reclaimed
 
     try:
         await run_in_threadpool(trash.clear, control_root, storage_options, obj_id, kind=kind)
     except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so rather than claiming a clean purge
         reason = f"the bytes were deleted and the grants revoked, but the trash record could not be cleared ({type(exc).__name__}: {exc}) — the next tick retries idempotently"
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.error("trash_purge_record_not_cleared", extra={"kind": kind, "id": obj_id, "error": str(exc)})
         return
 
@@ -606,9 +668,18 @@ async def purge_expired_trash(
     an operator nothing about which records it got to first.
     """
     control = control or NoopControlEmitter()
-    out = TrashPurgeReport(enabled=settings.trash_purge_enabled, skipped_categories=[s.category for s in report.skipped])
+    # DRY RUN WINS WHENEVER IT IS SET, including over an enabled purge, and the asymmetry is the safe
+    # direction: this flag may only ever SUBTRACT capability. Wired the other way, a deployment that
+    # means to reclaim and silently previews forever is indistinguishable from a healthy one, and the
+    # backlog it never drains is exactly what nobody notices.
+    dry_run = settings.trash_purge_dry_run
+    out = TrashPurgeReport(
+        enabled=settings.trash_purge_enabled,
+        dry_run=dry_run,
+        skipped_categories=[s.category for s in report.skipped],
+    )
 
-    if not settings.trash_purge_enabled:
+    if not (settings.trash_purge_enabled or dry_run):
         out.reason = _PURGE_OFF
         return out
     if (blocker := report_is_clean(report)) is not None:
@@ -660,6 +731,7 @@ async def purge_expired_trash(
             fga_client=fga_client,
             control=control,
             protected=protected,
+            dry_run=dry_run,
         )
 
     _record_metrics(out)
@@ -667,7 +739,9 @@ async def purge_expired_trash(
         "trash_purge",
         extra={
             "due": out.due,
+            "dry_run": out.dry_run,
             "purged": len(out.purged),
+            "would_purge": len(out.would_purge),
             "refused": len(out.refused),
             "capped": out.capped,
             "bytes_reclaimed": sum(p.bytes_deleted for p in out.purged),

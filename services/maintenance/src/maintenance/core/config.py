@@ -282,6 +282,24 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # silently dropped: a backlog is drained oldest-first over several ticks rather than turning one
     # cron fire into an unbounded delete storm against object storage.
     trash_purge_max_per_tick: int = Field(default=25, ge=1, le=1000, alias="MAINTENANCE_TRASH_PURGE_MAX_PER_TICK")
+    #: Run the reclamation pass but perform NONE of its mutations — report the plan instead.
+    #:
+    #: The estate's rule is that a reclaimer earns its delete permission by first proving its report
+    #: runs clean, and this is what lets an operator SEE the price of spending it. Without it,
+    #: `trash_purge_enabled=false` returns before the trash prefix is even read, so the only way to
+    #: learn what the purge would do was to let it do it — the wrong order for the one irreversible
+    #: operation this service performs.
+    #:
+    #: It runs the REAL pass: the same `due_records`, the same liveness and shallow-clone pre-passes,
+    #: the same `check`. Only the three mutations are skipped (the FGA revoke, the byte delete, the
+    #: record clear) plus the refusal annotation, which is a write onto the very records being
+    #: previewed. A separate preview routine would be a second mechanism that drifts from the one it
+    #: previews, and the drift would surface as deleting the wrong thing.
+    #:
+    #: It can only ever SUBTRACT capability: with both flags on the tick still previews, never
+    #: reclaims. The opposite wiring is the dangerous one — a deployment that means to reclaim and
+    #: quietly previews forever looks exactly like a healthy one.
+    trash_purge_dry_run: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_DRY_RUN")
 
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and

@@ -746,3 +746,97 @@ def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Pat
     out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True))
 
     assert [r.id for r in out.refused] == [canonical], "a failed annotation swallowed the refusal itself"
+
+
+# --------------------------------------------------------------------------- #
+# the dry run: see what reclamation WOULD do, before spending the permission
+# --------------------------------------------------------------------------- #
+
+
+def test_a_dry_run_names_what_it_WOULD_purge_and_deletes_nothing(tmp_path: Path) -> None:
+    """CONTRACT: with the dry run on and the purge OFF, the tick reports its plan and mutates nothing.
+
+    The estate's rule is that a reclaimer earns its delete permission by first proving its report runs
+    clean — but there was no way to SEE what spending that permission would cost. `enabled=false` lists
+    nothing at all (it returns before the trash prefix is even read), so the only way to learn what the
+    purge would do was to let it do it. That is the wrong order for the one irreversible operation this
+    service performs.
+
+    THE SAME CODE PATH, not a second implementation. The plan is produced by the real `_purge_one` with
+    its real `check`, so what it reports is what would actually happen; a separate "preview" routine is
+    a second mechanism that drifts from the one it is previewing, and the drift would be discovered by
+    deleting the wrong thing.
+    """
+    estate = _Estate(tmp_path)
+    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    before = _fingerprint(tmp_path)
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True))
+
+    assert out.ran is True, f"the dry run never got past the gates: {out.reason}"
+    assert out.dry_run is True
+    assert out.due == 1
+    assert [r.id for r in out.would_purge] == [canonical], f"the plan does not name the record: {out.would_purge}"
+    assert out.purged == [], "a DRY run reported an actual purge"
+    assert _fingerprint(tmp_path) == before, "the dry run mutated the estate"
+    assert Path(location.removeprefix("file://")).is_dir(), "the dry run deleted the bytes"
+    assert estate.record(canonical) is not None, "the dry run cleared the trash record"
+
+
+def test_a_dry_run_does_not_write_the_refusal_MEMORY_either(tmp_path: Path) -> None:
+    """The subtlest way a dry run stops being dry: the refusal annotation.
+
+    A refusal persists `attempts` and `last_refusal` onto the trash record, which is a WRITE. A preview
+    that inflates the attempt count changes the very evidence an operator is previewing — and does it on
+    the records that are stuck, i.e. exactly the ones being inspected. The refusal is still REPORTED;
+    only the memory of it is withheld.
+    """
+    estate = _Estate(tmp_path)
+    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.create_table("team", "orders")  # still registered: the refusal case
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True))
+
+    assert [r.id for r in out.refused] == [canonical], "the dry run hid the refusal it was meant to preview"
+    record = estate.record(canonical)
+    assert record is not None
+    assert "attempts" not in record, f"the dry run wrote the refusal memory: {record}"
+
+
+def test_the_dry_run_reports_the_SAME_gate_that_would_block_a_real_purge(tmp_path: Path) -> None:
+    """A preview that ignores the gates would promise reclamation the real purge refuses to perform.
+
+    `report_is_clean` is the permission: on a drifting estate the purge does nothing, and that is the
+    designed failure direction. The dry run must inherit it, so "it would purge nothing because the
+    drift report is not clean" is a visible answer rather than an empty list that reads as "nothing to
+    reclaim".
+    """
+    estate = _Estate(tmp_path)
+    estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    drifting = _clean_report()
+    drifting.counts["ghost_projects"] = 1
+    drifting.total = 1
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True), report=drifting)
+
+    assert out.ran is False
+    assert "NOT clean" in (out.reason or ""), out.reason
+    assert out.would_purge == []
+
+
+def test_the_dry_run_NEVER_widens_a_real_purge(tmp_path: Path) -> None:
+    """Both flags on must still be a real purge — the dry run may only ever SUBTRACT capability.
+
+    Stated as a gate because the opposite wiring is an easy mistake with a severe cost: a deployment
+    that means to reclaim and quietly previews forever looks identical to a healthy one, and the backlog
+    it is not draining is exactly what nobody notices.
+    """
+    estate = _Estate(tmp_path)
+    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True, trash_purge_dry_run=True))
+
+    assert out.dry_run is True, "the dry run flag was ignored when the purge was also enabled"
+    assert out.purged == [], "the dry run performed a real purge"
+    assert [r.id for r in out.would_purge] == [canonical]
+    assert Path(location.removeprefix("file://")).is_dir(), "the dry run deleted the bytes"

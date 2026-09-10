@@ -158,6 +158,14 @@ spec:
                    the reconcile tick's drift report running clean — so an estate that never reports
                    clean never reclaims, which is the designed direction, not a bug to route around. */}}
             - { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Values.maintenance.trashPurge false | quote }} }
+            {{- /* THE PREVIEW, and it is the step BEFORE spending the delete permission rather than an
+                 alternative to it. With reclamation off the pass returns before the trash prefix is even
+                 read, so the only way to learn what a purge would do was to let it do it — the wrong
+                 order for the one irreversible operation this service performs. It runs the REAL pass
+                 (same due-record selection, same liveness and shallow-clone pre-passes, same refusal
+                 check) and skips only the three mutations plus the refusal annotation. It can only
+                 SUBTRACT: with both flags on the tick previews and reclaims nothing. */}}
+            - { name: MAINTENANCE_TRASH_PURGE_DRY_RUN, value: {{ hasKey .Values.maintenance "trashPurgeDryRun" | ternary .Values.maintenance.trashPurgeDryRun false | quote }} }
             - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
             {{- /* #128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
                    because the whole defect was that the setting existed in config.py and had NO path

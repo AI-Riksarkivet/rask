@@ -1663,6 +1663,16 @@ maintenance:
   # is also the only irreversible thing this service does; compaction and version GC are bounded by
   # policy, this destroys a whole dataset.
   trashPurge: false
+  # SEE WHAT RECLAMATION WOULD COST, before spending the permission above. The pass runs for real —
+  # same due-record selection, same liveness and shallow-clone pre-passes, same refusal check — and
+  # performs none of the mutations, reporting `trash_purge.would_purge` instead. With `trashPurge`
+  # off the pass otherwise returns before the trash prefix is even read, so without this the only way
+  # to learn what a purge would do is to let it do it.
+  #
+  # It can only SUBTRACT: with both on, the tick previews and reclaims nothing. That asymmetry is
+  # deliberate — a deployment that means to reclaim and quietly previews forever looks exactly like a
+  # healthy one, so the failure direction is the visible one.
+  trashPurgeDryRun: false
   # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
   # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
   trashPurgeMaxPerTick: 25
