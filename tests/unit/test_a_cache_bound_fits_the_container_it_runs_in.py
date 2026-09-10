@@ -79,3 +79,25 @@ def test_a_cap_that_already_fits_is_left_alone(tmp_path, monkeypatch: pytest.Mon
     monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
 
     assert affordable_cache_bytes(128 << 20, 256 << 20, fraction=0.5) == (128 << 20, 256 << 20)
+
+
+def test_the_LIMIT_is_re_read_and_never_cached(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A container's limit can change under a running process, so the budget may not be memoised.
+
+    Kubernetes supports in-place pod resize: `resources.limits.memory` can move without a restart. A
+    cached read would leave the process budgeting against a number that is no longer true — the exact
+    drift that reading the cgroup exists to prevent, reintroduced one decorator later.
+
+    Caught by this file rather than reasoned about: an `@cache` on `cache_budget_bytes` was tried, and
+    `test_a_cap_that_already_fits_is_left_alone` failed because the first test's 512Mi was still being
+    returned after the limit had been rewritten to 2Gi. The cache now sits on the LOG line instead,
+    where repetition is the only thing at stake.
+    """
+    limit = tmp_path / "memory.max"
+    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
+
+    limit.write_text("536870912\n")  # 512Mi
+    assert cache_budget_bytes(fraction=0.5) == 536870912 // 2
+
+    limit.write_text("2147483648\n")  # resized to 2Gi, no restart
+    assert cache_budget_bytes(fraction=0.5) == 2147483648 // 2, "the budget was memoised across a resize"

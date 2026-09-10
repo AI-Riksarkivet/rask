@@ -23,6 +23,7 @@ was wrong was each reopen minting and discarding gigabyte-scale cache ceilings.
 
 from __future__ import annotations
 
+import logging
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -43,6 +44,9 @@ _CGROUP_V1 = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
 #: TOWARD, and it has to leave room for the working set that is doing the growing — the reconcile scan
 #: holds its own structures across 93 buckets while the session fills.
 _DEFAULT_CACHE_FRACTION = 0.4
+
+
+log = logging.getLogger(__name__)
 
 
 def cache_budget_bytes(*, fraction: float = _DEFAULT_CACHE_FRACTION) -> int | None:
@@ -91,7 +95,30 @@ def affordable_cache_bytes(metadata_cache_bytes: int, index_cache_bytes: int, *,
     if budget is None or requested <= budget:
         return metadata_cache_bytes, index_cache_bytes
     scale = budget / requested
-    return int(metadata_cache_bytes * scale), int(index_cache_bytes * scale)
+    metadata, index = int(metadata_cache_bytes * scale), int(index_cache_bytes * scale)
+    _log_clamp(requested, metadata + index, budget, fraction)
+    return metadata, index
+
+
+@cache
+def _log_clamp(requested: int, granted: int, budget: int, fraction: float) -> None:
+    """Say once, per distinct outcome, that a configured cache was reduced to fit its container.
+
+    A clamp nobody can see is indistinguishable from a setting nobody applied: an operator who
+    configures 256 MB and silently receives 137 MB cannot tell this ran from a typo in their values
+    file. So it is logged — but through a cached helper, because `affordable_cache_bytes` is called
+    per session construction and a line per call would bury it.
+
+    THE CACHE IS ON THE LOGGING, DELIBERATELY, AND NOT ON THE MEASUREMENT. `cache_budget_bytes` reads
+    the cgroup live every time: Kubernetes supports in-place pod resize, so a cached limit would leave
+    a resized container budgeting against a number that is no longer true — the exact drift reading
+    the cgroup exists to prevent. The read is one small file and the session it feeds is itself
+    `@cache`d, so live costs nothing.
+    """
+    log.info(
+        "lance_cache_clamped_to_container",
+        extra={"requested_bytes": requested, "granted_bytes": granted, "container_budget_bytes": budget, "fraction": fraction},
+    )
 
 
 @cache
