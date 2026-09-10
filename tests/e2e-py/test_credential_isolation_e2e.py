@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 import boto3
 import pytest
@@ -130,10 +131,29 @@ def _client(creds: dict[str, str]) -> Any:
     ``endpoint`` comes from the vended options when present, falling back to the env. The vendor
     includes it whenever the deployment configures one, and preferring it keeps the attack pointed at
     the store the catalog actually issued the credential for.
+
+    BUT THE VENDED ADDRESS IS REACHABLE ONLY FROM INSIDE THE CLUSTER, and these suites run from the
+    host. The catalog vends its own `LANCE_S3_ENDPOINT`, which on this estate is
+    `http://rask-rustfs-io:9000` — a Service DNS name — so every leg died on
+    `Temporary failure in name resolution` before it could assert anything (measured 2026-09-10: 8
+    failed in 59s, the first drive after these legs stopped skipping).
+
+    So the ADDRESS is remapped to the discovered ClusterIP and NOTHING ELSE IS. The key, the secret and
+    the session TOKEN are used exactly as vended, and the session policy that scopes them is evaluated
+    by the store against bucket and prefix — not against the address the request arrived on. Swapping
+    the route therefore takes nothing away from what the leg proves; swapping the credential would, and
+    this does not.
     """
+    endpoint = creds.get("endpoint") or S3
+    if S3 and endpoint:
+        # Host swap only: keep scheme, port and path from the vended value, take the reachable host.
+        vended = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
+        reachable = urlparse(S3 if "://" in S3 else f"http://{S3}")
+        if vended.hostname and reachable.netloc and vended.hostname != reachable.hostname:
+            endpoint = f"{vended.scheme}://{reachable.netloc}"
     return boto3.client(
         "s3",
-        endpoint_url=creds.get("endpoint") or S3,
+        endpoint_url=endpoint,
         aws_access_key_id=creds["aws_access_key_id"],
         aws_secret_access_key=creds["aws_secret_access_key"],
         aws_session_token=creds.get("aws_session_token"),
@@ -147,7 +167,24 @@ def estates(catalog: str) -> dict[str, str]:
     """Two tenants, two warehouses, two buckets — provisioned through the real doors."""
     a = _provision(catalog, TOKEN_A, PROJECT_A, "e2e-iso-a", "isoans", "isoatbl")
     b = _provision(catalog, TOKEN_B, PROJECT_B, "e2e-iso-b", "isobns", "isobtbl")
-    return {"a_ident": a, "b_ident": b, "a_bucket": "e2e-iso-a", "b_bucket": "e2e-iso-b"}
+    return {
+        "a_ident": a,
+        "b_ident": b,
+        "a_bucket": "e2e-iso-a",
+        "b_bucket": "e2e-iso-b",
+        # The REAL storage prefix, read off the catalog's own answer rather than composed from the
+        # namespace: `describe` returns `s3://<bucket>/<uuid8>_<ns>$<table>`, and only that path is
+        # inside the vended credential's session policy.
+        "b_prefix": _prefix_of(catalog, TOKEN_B, b, "e2e-iso-b"),
+    }
+
+
+def _prefix_of(catalog: str, token: str, ident: str, bucket: str) -> str:
+    """The table's key prefix inside its bucket, from `describe`. Never composed."""
+    r = requests.post(f"{catalog}/v1/table/{ident}/describe", json={}, headers=_auth(token), timeout=30)
+    assert r.status_code == 200, r.text
+    location = str((r.json() or {}).get("location") or "")
+    return location.removeprefix(f"s3://{bucket}/").rstrip("/")
 
 
 @pytest.mark.parametrize("tier", ["read", "write"])
@@ -198,8 +235,20 @@ def test_the_credential_still_works_on_its_OWN_table(catalog: str, estates: dict
     table must remain readable with B's own credential."""
     creds = _vend(catalog, TOKEN_B, estates["b_ident"], tier)
     s3 = _client(creds)
-    listing = s3.list_objects_v2(Bucket=estates["b_bucket"], Prefix="isobns", MaxKeys=5)
-    assert listing.get("KeyCount", 0) > 0, "B cannot read B's own table — the session policy is too tight"
+    # ASK THE CATALOG WHERE THE TABLE IS; do not compose the path. The `dir` backend lays tables out
+    # FLAT — `<uuid8>_<namespace>$<table>/` — so listing the NAMESPACE name matches nothing and the
+    # session policy correctly refuses it. Measured 2026-09-10: this leg asserted `Prefix="isobns"`
+    # and got AccessDenied, while the real prefix answered KeyCount=3 with `data/` and `_versions/`
+    # under it. The policy was right and the expectation was wrong — the same layout trap the register
+    # records for `tier_of`, where one URI encodes its tier five different ways.
+    #
+    # The TRAILING SLASH is load-bearing: the policy gates `s3:ListBucket` on `s3:prefix` matching
+    # `<prefix>/*`, so a bare prefix with no slash does not match its own table's condition.
+    prefix = estates["b_prefix"]
+    listing = s3.list_objects_v2(Bucket=estates["b_bucket"], Prefix=f"{prefix}/", MaxKeys=5)
+    assert listing.get("KeyCount", 0) > 0, (
+        f"B cannot read B's own table at {prefix!r} — the session policy is too tight, and every isolation assertion in this file passes vacuously while it is"
+    )
 
 
 def test_read_tier_credentials_cannot_write_to_their_OWN_table(catalog: str, estates: dict[str, str]) -> None:
