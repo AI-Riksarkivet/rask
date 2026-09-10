@@ -33,6 +33,7 @@ from typing import Any
 
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
+from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
 
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,58 @@ def get(control_root: str, storage_options: StorageOptions, canonical_id: str, *
 
 def clear(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> bool:
     return delete_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, canonical_id))
+
+
+def note_refusal(
+    control_root: str,
+    storage_options: StorageOptions,
+    canonical_id: str,
+    *,
+    kind: str = "table",
+    reason: str,
+    now: datetime | None = None,
+) -> int | None:
+    """Record that the purge declined to act on this record, and return the new attempt count.
+
+    WHY THE RECORD REMEMBERS. The purge reports refusals per TICK and carried nothing across them, so a
+    record refused every five minutes for thirty days read exactly like one refused once — and a
+    PERMANENT exclusion, the state an operator actually has to act on, was invisible as permanent.
+    ``attempts`` accumulates and ``last_refusal`` is replaced, so the record answers both "how long has
+    this been stuck" and "why is it stuck NOW"; the second matters because a record moves between causes
+    (a protected base is dropped and it becomes still-registered instead).
+
+    THE COST IS DELIBERATE AND IS THE REASON THIS IS CONDITIONAL. It makes the trash record MUTABLE —
+    everything else about it is stamped once at drop time — and gives the purge a WRITE per refused
+    record per tick where it previously only read. So it goes through :func:`records.mutate_json`
+    rather than a plain overwrite, for exactly the reason the warehouse registry does: a read-modify-
+    write with no precondition silently reverts whatever a concurrent writer put in the fields it
+    merely carried forward, and ``expires_at`` is the field that must never move.
+
+    NEVER RAISES, and returns ``None`` when it could not annotate. The annotation is bookkeeping ABOUT
+    a refusal and is strictly less important than the refusal: a record another replica already cleared
+    (``RecordMissingError``) or a lost CAS race (``RecordChangedError``) must not convert a correctly
+    reported refusal into an error on the reclamation path. ``_purge_one``'s contract — "never raises;
+    every failure is a refusal" — is what this must not break.
+    """
+    at = (now or datetime.now(UTC)).isoformat()
+
+    def _mutate(record: dict[str, Any]) -> dict[str, Any]:
+        # A pure function of what was READ, because `mutate_json` may call it more than once — carrying
+        # a count in from an earlier read is exactly the staleness the conditional write exists to stop.
+        attempts = record.get("attempts")
+        return {
+            **record,
+            "attempts": (attempts if isinstance(attempts, int) else 0) + 1,
+            "last_refusal": {"at": at, "reason": reason},
+        }
+
+    try:
+        updated = mutate_json(control_root, storage_options, record_key(_TRASH_PREFIX, kind, canonical_id), _mutate)
+    except (RecordMissingError, RecordChangedError) as exc:
+        log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": canonical_id, "reason": str(exc)})
+        return None
+    count = updated.get("attempts")
+    return count if isinstance(count, int) else None
 
 
 def list_all(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:

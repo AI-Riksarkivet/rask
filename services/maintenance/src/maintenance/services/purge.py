@@ -125,6 +125,13 @@ class RefusedRecord(BaseModel):
     kind: str
     id: str
     reason: str
+    #: How many ticks have now refused this record, INCLUDING this one — persisted on the trash record
+    #: itself, so the count survives a tick. Without it a record refused every five minutes for thirty
+    #: days is indistinguishable from one refused once, and a permanent exclusion — the state that
+    #: actually needs a human — reads as a transient one. ``None`` when the annotation could not be
+    #: written (the record was cleared concurrently, or the conditional write lost its race); the
+    #: refusal itself is still reported, because the bookkeeping is the less important half.
+    attempts: int | None = None
 
 
 class TrashPurgeReport(BaseModel):
@@ -454,6 +461,36 @@ async def _revoke(fga_client: Any, *, kind: str, obj_id: str, fga_enabled: bool)
 _PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
 
 
+async def _refuse(
+    out: TrashPurgeReport,
+    *,
+    kind: str,
+    obj_id: str,
+    reason: str,
+    control_root: str,
+    storage_options: StorageOptions,
+) -> None:
+    """Report a refusal AND remember it on the record — the one place both halves happen.
+
+    ONE HELPER RATHER THAN FIVE CALL SITES, because reporting the tick and remembering the history are
+    not separable concerns: a refusal arm that appends without persisting produces a record whose
+    ``attempts`` undercounts, which is worse than not counting at all — it reads as a transient
+    exclusion with authority. Routing every arm through here means a NEW refusal cause cannot opt out
+    of the memory by omission.
+
+    The persist is best-effort by construction (:func:`trash.note_refusal` never raises), and the
+    `except` here covers the store itself being unreachable. ``_purge_one`` promises "never raises;
+    every failure is a refusal", and an annotation that could break that promise would trade a correctly
+    reported refusal for an unhandled error on the reclamation path.
+    """
+    attempts: int | None = None
+    try:
+        attempts = await run_in_threadpool(trash.note_refusal, control_root, storage_options, obj_id, kind=kind, reason=reason)
+    except Exception as exc:  # noqa: BLE001 — bookkeeping about a refusal must never outrank the refusal
+        log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
+    out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason, attempts=attempts))
+
+
 async def _purge_one(
     record: dict[str, Any],
     out: TrashPurgeReport,
@@ -473,7 +510,7 @@ async def _purge_one(
     location = str(record.get("location") or "").rstrip("/")
 
     if (reason := check(record, roots=roots, live_ids=live_ids)) is not None:
-        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
         return
 
@@ -481,7 +518,7 @@ async def _purge_one(
         revoked = await _revoke(fga_client, kind=kind, obj_id=obj_id, fga_enabled=settings.fga_enabled)
     except Exception as exc:  # noqa: BLE001 — a revoke we could not perform is a reason not to delete
         reason = f"the FGA revoke failed ({type(exc).__name__}: {exc}) — grants must never outlive the bytes, so nothing was deleted"
-        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_revoke_failed", extra={"kind": kind, "id": obj_id, "error": str(exc)})
         return
 
@@ -495,19 +532,19 @@ async def _purge_one(
             # different things to an operator — that one means "a live clone needs these bytes", this
             # one means "this record points at something that is not a dataset", and only the second
             # is a sign the record itself is wrong.
-            out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=str(exc)))
+            await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
             log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
             return
         except ProtectedBaseError as exc:
             # A REFUSAL, not a failure: the bytes are deliberately untouched because a live dataset
             # resolves through them. The record survives, so an operator who drops the clone first can
             # let the next tick reclaim this legitimately.
-            out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=str(exc)))
+            await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
             log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
             return
         except OSError as exc:
             reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
-            out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
+            await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
             log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
             return
 
@@ -515,7 +552,7 @@ async def _purge_one(
         await run_in_threadpool(trash.clear, control_root, storage_options, obj_id, kind=kind)
     except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so rather than claiming a clean purge
         reason = f"the bytes were deleted and the grants revoked, but the trash record could not be cleared ({type(exc).__name__}: {exc}) — the next tick retries idempotently"
-        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
+        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_record_not_cleared", extra={"kind": kind, "id": obj_id, "error": str(exc)})
         return
 

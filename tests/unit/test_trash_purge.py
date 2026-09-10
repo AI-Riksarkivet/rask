@@ -673,3 +673,76 @@ def test_the_sweep_and_the_purge_select_expired_trash_through_one_rule(tmp_path:
     due = mod.due_records(estate.control_root, {})
 
     assert [r["id"] for r in due] == ["team$old"]
+
+
+# --------------------------------------------------------------------------- #
+# LH-095: a permanent exclusion must read as permanent
+# --------------------------------------------------------------------------- #
+
+
+def test_a_refused_record_REMEMBERS_that_it_was_refused(tmp_path: Path) -> None:
+    """CONTRACT: a refusal is written onto the trash record, so the NEXT tick can see it happened.
+
+    The purge reports refusals per tick through `RefusedRecord` and carried nothing across ticks, so a
+    record refused every five minutes for thirty days read exactly like one refused once — and a
+    PERMANENT exclusion, which is the state an operator actually has to act on, was invisible as
+    permanent. Nothing in the estate could distinguish "this retried and will succeed" from "this will
+    never succeed until a human intervenes".
+
+    The record is still registered here, which is the commonest refusal and the one that is genuinely
+    permanent until someone drops the live table again.
+    """
+    estate = _Estate(tmp_path)
+    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.create_table("team", "orders")  # re-registered since the drop: the bytes are LIVE
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True))
+
+    assert [r.id for r in out.refused] == [canonical], f"the record was not refused: {out.refused}"
+    record = estate.record(canonical)
+    assert record is not None, "the refusal destroyed the record it was refusing to act on"
+    assert record.get("attempts") == 1, f"the refusal was not persisted: {record}"
+    assert "still registered" in str((record.get("last_refusal") or {}).get("reason", "")), record
+
+
+def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path: Path) -> None:
+    """The whole point of the row: two refusals must be distinguishable from one.
+
+    `attempts` accumulates and `last_refusal` is replaced, so the record answers both "how long has
+    this been stuck" and "what is the current reason" — the second matters because a record can move
+    between refusal causes (a protected base is dropped, and it becomes still-registered instead).
+    """
+    estate = _Estate(tmp_path)
+    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.create_table("team", "orders")
+    settings = _settings(tmp_path, trash_purge_enabled=True)
+
+    _run(estate, settings=settings)
+    out = _run(estate, settings=settings)
+
+    record = estate.record(canonical)
+    assert record is not None
+    assert record.get("attempts") == 2, f"the second refusal did not count up: {record}"
+    assert [r.attempts for r in out.refused] == [2], "the report does not carry the accumulated count"
+
+
+def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_purge_one` is documented "never raises; every failure is a refusal", and this must not break it.
+
+    The annotation is bookkeeping ABOUT a refusal, strictly less important than the refusal itself. A
+    store that refuses the write, a record another replica cleared in between, a lost CAS race — none
+    of them may propagate, because doing so would convert a correctly-reported refusal into an
+    unhandled error on the reclamation path.
+    """
+
+    def _boom(*_a: object, **_kw: object) -> None:
+        raise OSError("the control root is unreachable")
+
+    monkeypatch.setattr(trash, "note_refusal", _boom)
+    estate = _Estate(tmp_path)
+    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.create_table("team", "orders")
+
+    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True))
+
+    assert [r.id for r in out.refused] == [canonical], "a failed annotation swallowed the refusal itself"
