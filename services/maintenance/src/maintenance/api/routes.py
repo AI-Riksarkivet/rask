@@ -25,12 +25,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 
 from maintenance.api.dependencies import ControlEmitterDep, DaprClientDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_run
 from maintenance.services.purge import purge_expired_trash
-from maintenance.services.reconcile import reconcile
+from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -165,6 +166,10 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             "unavailable": [u.category for u in report.unavailable],
             "skipped": [s.category for s in report.skipped],
             "incomplete": [i.source for i in report.incomplete],
+            # WHICH ones, not just how many — see `_drift_names`. Without this the WARNING is a number
+            # an operator cannot act on, and the only place the identities existed was a cron response
+            # body that nothing stores.
+            "findings": _drift_names(report),
         }
         # A category that could not be checked is NOT clean, so an unavailable/incomplete run is as
         # loud as a drifting one — otherwise a permanently-broken FGA connection reads as "no drift".
@@ -206,6 +211,53 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
 async def ack_reconcile_binding() -> dict[str, str]:
     """Dapr's OPTIONS pre-flight for the reconcile binding."""
     return {"status": "ok"}
+
+
+#: How many identities per drift category reach the log line. A drifting estate can carry thousands and
+#: one WARNING must not become the report; a truncated list SAYS it was truncated, so a reader can never
+#: mistake the sample for the set.
+_DRIFT_NAMES_PER_CATEGORY = 10
+
+
+def _drift_names(report: ReconcileReport) -> dict[str, list[str]]:
+    """The IDENTITIES behind each non-zero drift count, bounded per category.
+
+    The summary carried counts alone while the full report body went into the cron response — which the
+    Dapr sidecar posts and discards, so nothing stores it. Measured on the live estate 2026-09-10: an
+    operator reads "orphan_buckets: 12" and has nowhere to learn WHICH twelve, so a finding is
+    unactionable in exactly the deployment that reports it.
+
+    Every finding model spells its identity differently (`bucket`, `namespace`, `id`, `path`, a
+    `kind`/`id` pair), so this asks the MODEL rather than hard-coding a field per category: a new
+    category is named automatically instead of silently reporting an empty list.
+    """
+    named: dict[str, list[str]] = {}
+    for category in CATEGORIES:
+        findings = getattr(report, category, None)
+        if not findings:
+            continue
+        ids = [_finding_identity(f) for f in findings[:_DRIFT_NAMES_PER_CATEGORY]]
+        if len(findings) > _DRIFT_NAMES_PER_CATEGORY:
+            ids.append(f"… {len(findings) - _DRIFT_NAMES_PER_CATEGORY} more (truncated)")
+        named[category] = ids
+    return named
+
+
+def _finding_identity(finding: BaseModel) -> str:
+    """One finding's identity, whatever the model calls it — first present field wins.
+
+    Typed `BaseModel` rather than `object` because every category on `ReconcileReport` is a list of
+    pydantic models; a `hasattr` probe would be a runtime check standing in for a fact the type system
+    already has.
+
+    Falls back to the dumped mapping rather than an empty string: a finding this cannot name is still a
+    finding an operator needs to see, and a blank entry is the failure mode this function exists to end.
+    """
+    dumped = finding.model_dump()
+    for field in ("fga_object", "bucket", "namespace", "top_ns", "path", "task", "id"):
+        if value := dumped.get(field):
+            return str(value)
+    return str(dumped)
 
 
 def build_router(settings: MaintenanceSettings) -> APIRouter:

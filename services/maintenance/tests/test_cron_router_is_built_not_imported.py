@@ -92,3 +92,29 @@ def test_a_dry_run_PLAN_is_reported_as_loudly_as_a_reclamation() -> None:
     assert condition is not None, "the reclamation summary's condition has moved — re-point this gate"
     assert "would_purge" in condition, f"a dry-run plan does not reach the reclamation summary: {condition.strip()}"
     assert '"would_purge"' in source, "the summary does not carry the planned records, so the plan is unreadable"
+
+
+def test_the_drift_report_NAMES_its_findings_and_not_only_counts_them() -> None:
+    """CONTRACT: the drift WARNING carries the identities, bounded, not just a count per category.
+
+    `reconcile_drift` logged `counts` alone, and the full report body goes into the cron response —
+    which the Dapr sidecar posts and discards, so nothing stores it. Measured on the live estate
+    2026-09-10: an operator can read "orphan_buckets: 12" and has no way, anywhere, to learn WHICH
+    twelve. The finding is unactionable in exactly the deployment it is reported from, which is the
+    same shape as a control that cannot fire — a report that cannot be acted on.
+
+    BOUNDED, because a drifting estate can carry thousands and one log line must not become the
+    report. A truncated list says so, so a reader can never mistake the sample for the set.
+
+    Asserted on the route builder's source: the summary is assembled inside a closure a unit test
+    cannot reach without standing up the whole Dapr cron surface.
+    """
+    import inspect
+
+    from maintenance.api import routes
+
+    source = inspect.getsource(routes)
+    assert "_drift_names(" in source, "the drift summary does not name its findings"
+    assert '"findings"' in source, "the summary carries no findings key for the identities"
+    names = inspect.getsource(routes._drift_names)
+    assert "truncated" in names or "…" in names, "an over-long list is not marked as truncated"
