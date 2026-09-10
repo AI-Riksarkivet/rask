@@ -231,6 +231,46 @@ else
   printf '   note: no %s-age service or no postgres-password — the 10 direct-AGE legs will SKIP\n' "$RELEASE"
 fi
 
+# ---- settle gate -------------------------------------------------------------------------------
+# A SETTLING ESTATE AND A BROKEN ONE LOOKED IDENTICAL, and that is the whole reason this exists. The
+# suites drive the cascade, which runs on Dapr pub/sub — and after a rollout a stage runner's sidecar
+# takes time to re-register its subscriptions. A suite that starts inside that window publishes to a
+# topic nobody is listening on yet and reports a FAILED cascade, so a green run needed a second drive
+# and the first one taught nothing.
+#
+# THE PROBE IS THE SIDECAR'S OWN ANSWER, not a sleep: `/v1.0/metadata` reports the subscriptions the
+# runtime has actually registered plus `actorRuntime.hostReady`. Verified against the running estate —
+# `bronze-to-silver` answers `['dlq.bronze-to-silver', 'medallion.bronze']` with hostReady true. A
+# fixed sleep would be both slower on a settled estate and still wrong on a slow one.
+#
+# It FAILS rather than warns: proceeding into a suite that cannot pass produces a red run whose cause
+# is the clock, and this script's whole job is to make a red run mean something.
+settle_deadline=$(( $(date +%s) + ${LANCE_E2E_SETTLE_SECONDS:-120} ))
+step "3.5/4 waiting for the cascade's subscriptions to re-register"
+for dep in medallion-producer bronze-to-silver media-to-silver silver-to-gold; do
+  # ROLLOUT FIRST, THEN THE SIDECAR — and that order is the fix for a hole this gate had when it was
+  # first driven. Mid-rollout `kubectl exec deploy/<name>` may land on the OLD pod, which is still
+  # serving and still settled, so the probe answered "ready" 1 second after a restart while the NEW
+  # pod had not registered anything. Waiting for the deployment to converge first means the pod the
+  # probe reaches is the pod the suite will actually be talking to.
+  kubectl rollout status "deploy/$RELEASE-$dep" --timeout="${LANCE_E2E_SETTLE_SECONDS:-120}s" >/dev/null 2>&1 \
+    || fail "$dep did not finish rolling out within ${LANCE_E2E_SETTLE_SECONDS:-120}s"
+  while :; do
+    if kubectl exec "deploy/$RELEASE-$dep" -- python -c '
+import json, sys, urllib.request
+m = json.load(urllib.request.urlopen("http://127.0.0.1:3500/v1.0/metadata", timeout=5))
+topics = {s.get("topic") for s in (m.get("subscriptions") or [])}
+ready = (m.get("actorRuntime") or {}).get("hostReady")
+sys.exit(0 if topics and ready else 1)
+' >/dev/null 2>&1; then
+      printf '   ok   %s
+' "$dep"; break
+    fi
+    [ "$(date +%s)" -lt "$settle_deadline" ] || fail "$dep has not re-registered its subscriptions within ${LANCE_E2E_SETTLE_SECONDS:-120}s — the estate is not settled, and running now would report the clock as a cascade defect"
+    sleep 3
+  done
+done
+
 step "4/4 running the suites against the live estate"
 # `-m e2e` and NOT a file list: the marker is what the suites declare about themselves, so a new suite
 # is picked up without editing this script. Args override for a narrower run.
