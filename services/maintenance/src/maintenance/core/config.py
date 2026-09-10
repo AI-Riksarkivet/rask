@@ -8,7 +8,7 @@ human door — its routes are gated by the Dapr app token and it only ever READS
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -101,6 +101,20 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # happened. `max_source_rows` and `max_source_fragments` are deliberately not mirrored: they are
     # more row-count proxies, and one honest bound beats three that need reconciling.
     max_source_bytes: int = Field(default=256 * 1024 * 1024, ge=1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
+    # HOW a compaction moves the bytes, not how many. Read off pylance 11's own signature rather than a
+    # summary: `Literal["reencode", "try_binary_copy", "force_binary_copy"]`, and its docstring —
+    # reencode decodes and re-encodes (Lance's default), `try_binary_copy` copies the encoded pages
+    # when the fragments are compatible and falls back to reencode when they are not,
+    # `force_binary_copy` fails instead of falling back.
+    #
+    # OPT-IN, default None, and that is the whole point of shipping it as a knob: `try_binary_copy` is
+    # strictly cheaper where it applies, but it changes the byte path of every compaction in the estate,
+    # and this sweep rewrites governed data unattended every 120s. A default nobody measured is how
+    # incident #93 happened. Set it per estate once a tier's fragments have been looked at.
+    #
+    # NAMED `repack_mode` on this side deliberately: `DatasetResult.compaction_mode` already means
+    # in-pod vs distributed, and one word for two questions is how a reader learns the wrong thing.
+    repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = Field(default=None, alias="MAINTENANCE_REPACK_MODE")
 
     # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the cron route would
     # otherwise be an open forged-sweep path). Symmetric with the lineage service. Off in dev (no sidecar).

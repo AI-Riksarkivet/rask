@@ -477,6 +477,10 @@ class PolicyRequest(BaseModel):
     # rows turn out larger than whoever set the row count assumed is precisely how the read bound gets
     # away from you, and this one does not depend on knowing the row size. None → the sweep's default.
     max_source_bytes: int | None = Field(default=None, ge=1024 * 1024)
+    # HOW this tier's bytes move. Per-tier for the same reason the two bounds above are: a tier of
+    # uniformly-encoded fragments can binary-copy where a tier that has evolved its schema cannot, and
+    # `try_binary_copy` falls back rather than failing. None = Lance's re-encode, today's behaviour.
+    repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = None
     # #58 — WHO reclaims old versions. Lance ships its own auto-cleanup ON THE COMMIT PATH
     # (`lance.auto_cleanup.interval` / `.older_than`), so a tier that writes often may need no cron of
     # ours at all: the writer reclaims as it goes, and our sweep's cleanup step is redundant work
@@ -539,6 +543,7 @@ class PolicyResponse(BaseModel):
     optimize_indices_enabled: bool = True
     scan_batch_size: int | None = None
     max_source_bytes: int | None = None
+    repack_mode: str | None = None
     auto_cleanup_interval_commits: int | None = None
 
 

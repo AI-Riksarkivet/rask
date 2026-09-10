@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -52,6 +52,10 @@ class DatasetPlan(BaseModel):
     #: broker, so a bound the planner resolved has to travel with the unit or the worker applies a
     #: different one.
     max_source_bytes: int | None = Field(default=None, ge=1024 * 1024)
+    #: HOW the bytes move — pylance's `compaction_mode`, carried under a distinct name because
+    #: `DatasetResult.compaction_mode` already means in-pod vs distributed. `None` = Lance's default
+    #: (`reencode`), which is today's behaviour and stays it unless an estate opts in.
+    repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = None
     auto_cleanup_interval_commits: int | None = None
     index_columns: list[str] | None = None
     cleanup_enabled: bool = True

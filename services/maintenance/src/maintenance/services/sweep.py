@@ -396,6 +396,7 @@ def _resolve_plan(
         target_rows_per_fragment=target_rows_for(uri),
         scan_batch_size=settings.scan_batch_size,
         max_source_bytes=settings.max_source_bytes,
+        repack_mode=settings.repack_mode,
     )
     # ONE guard over the whole resolution, exactly as the inlined version had it: resolving the record,
     # asking the cadence and parsing the fields are all "reading the tuning", and any of them failing
@@ -422,6 +423,8 @@ def _resolve_plan(
             plan.scan_batch_size = int(str(policy["scan_batch_size"]))
         if policy.get("max_source_bytes"):
             plan.max_source_bytes = int(str(policy["max_source_bytes"]))
+        if policy.get("repack_mode"):
+            plan.repack_mode = str(policy["repack_mode"])  # ty: ignore[invalid-assignment] — the policy record is a str map; the Literal is validated at the catalog door
         if policy.get("auto_cleanup_interval_commits"):
             plan.auto_cleanup_interval_commits = int(str(policy["auto_cleanup_interval_commits"]))
         if policy.get("index_columns"):
@@ -436,7 +439,12 @@ def _resolve_plan(
         log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
         # Back to the SETTINGS batch size, not None: a malformed policy must not be the one path that
         # hands compaction Lance's unbounded 8192-row read (#93).
-        return DatasetPlan(older_than=older_than, scan_batch_size=settings.scan_batch_size, max_source_bytes=settings.max_source_bytes)
+        return DatasetPlan(
+            older_than=older_than,
+            scan_batch_size=settings.scan_batch_size,
+            max_source_bytes=settings.max_source_bytes,
+            repack_mode=settings.repack_mode,
+        )
     return plan
 
 
@@ -548,6 +556,7 @@ def _maintain_one(
             optimize_indices_enabled=plan.optimize_indices_enabled,
             scan_batch_size=plan.scan_batch_size,
             max_source_bytes=plan.max_source_bytes,
+            repack_mode=plan.repack_mode,
             compact_threads=settings.compact_threads,
             protected=protected,
             auto_cleanup_interval_commits=plan.auto_cleanup_interval_commits,

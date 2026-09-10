@@ -221,6 +221,7 @@ def _compact_files(
     target_rows_per_fragment: int | None,
     scan_batch_size: int | None,
     max_source_bytes: int | None,
+    repack_mode: str | None,
     compact_threads: int | None,
     rewrite: Rewriter | None = None,
     table_id: str | None = None,
@@ -249,6 +250,10 @@ def _compact_files(
     # exactly the same bytes as the deferred one.
     if max_source_bytes is not None:
         size_kw["max_source_bytes"] = max_source_bytes
+    # HOW the bytes move, when an estate has chosen. Absent, Lance re-encodes, which is what every
+    # compaction here has always done — so an unset knob changes no byte.
+    if repack_mode is not None:
+        size_kw["compaction_mode"] = repack_mode
     if compact_threads is not None:
         size_kw["num_threads"] = compact_threads
     # THE REWRITE OFF THIS POD, when a rewriter was supplied and this dataset is one the catalog can
@@ -492,6 +497,7 @@ def compact_one(
     optimize_indices_enabled: bool = True,
     scan_batch_size: int | None = None,
     max_source_bytes: int | None = None,
+    repack_mode: str | None = None,
     compact_threads: int | None = None,
     auto_cleanup_interval_commits: int | None = None,
     protected: BaseRefs | None = None,
@@ -634,6 +640,7 @@ def compact_one(
             target_rows_per_fragment=target_rows_per_fragment,
             scan_batch_size=scan_batch_size,
             max_source_bytes=max_source_bytes,
+            repack_mode=repack_mode,
             compact_threads=compact_threads,
             rewrite=rewrite,
             # The id the PRODUCER stamped on the dataset, already resolved above. Deriving a second

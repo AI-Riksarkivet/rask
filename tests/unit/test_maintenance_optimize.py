@@ -790,3 +790,35 @@ def test_an_unpolicied_estate_is_bounded_by_bytes_out_of_the_box() -> None:
     settings = MaintenanceSettings()
     assert settings.max_source_bytes is not None
     assert settings.max_source_bytes <= 512 * 1024 * 1024, "a bound above the pod's own limit bounds nothing"
+
+
+def test_a_repack_mode_reaches_compaction_only_when_an_estate_asks_for_it(tmp_path: Path) -> None:
+    """Two halves, and the NEGATIVE is the load-bearing one.
+
+    `compaction_mode` decides how a compaction moves bytes: Lance re-encodes by default, and
+    `try_binary_copy` copies encoded pages where fragments are compatible. It is strictly cheaper where
+    it applies — and it changes the byte path of every compaction in an estate whose sweep rewrites
+    governed data unattended every 120 s. So the default must stay Lance's, and this asserts that an
+    unset knob sends NOTHING, not that it sends "reencode": passing the default explicitly would still
+    be a behaviour change if Lance ever revised it.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+    seen: dict[str, object] = {}
+    real = lance.dataset(uri).optimize.__class__.compact_files
+
+    def _spy(self: object, *args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
+
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
+    try:
+        compact_one(uri, {}, timedelta(0))
+        assert "compaction_mode" not in seen, f"an unconfigured sweep pinned a repack mode anyway: {seen}"
+
+        seen.clear()
+        result = compact_one(uri, {}, timedelta(0), repack_mode="try_binary_copy")
+    finally:
+        lance.dataset(uri).optimize.__class__.compact_files = real
+
+    assert result.error is None, result.error
+    assert seen.get("compaction_mode") == "try_binary_copy", f"repack_mode never reached compact_files: {seen}"

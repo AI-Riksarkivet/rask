@@ -7,7 +7,7 @@
 > The line references are unchanged.
 
 
-**Counted 2026-09-10, from the rows below rather than asserted: 267 tracked, 86 open, 181 struck.**
+**Counted 2026-09-10, from the rows below rather than asserted: 267 tracked, 85 open, 182 struck.**
 That is WORK ONLY — 69 lettered `###` rows (28 struck) and 188 Q-section table rows (111 struck) —
 and `tests/unit/test_the_lakehouse_backlog_counts_itself.py` re-derives all three from the rows, and
 `make backlog` prints the same derivation on demand — open by severity, and what waits on the owner.
@@ -847,7 +847,9 @@ query door (today the descriptor is the only shape it serves), and documenting `
 the batched client path. The `/blobs` door already streams `take_blobs` with Range/ETag, so the
 byte-fetch path exists — what is missing is the BATCHED one and its documentation.
 
-### C8 · Repack and branch maintenance in the sweep — **BRANCH HALF DONE AND VERIFIED LIVE 2026-09-07** (`236379fb`)
+### ~~C8 · Repack and branch maintenance in the sweep — BOTH HALVES DONE (branch 2026-09-07 `236379fb`; repack 2026-09-10)~~
+
+**THE REPACK HALF LANDED 2026-09-10, OPT-IN.** Read off pylance 11's own signature rather than a summary: `compaction_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"]`, documented as re-encode (the default), copy the encoded pages when fragments are compatible and fall back otherwise, or fail instead of falling back. Threaded the way `scan_batch_size` and `max_source_bytes` are — settings, `DatasetPlan` so it crosses the broker with the unit, `MaintenancePolicy` for per-tier override, into `size_kw`. **NAMED `repack_mode` on this side deliberately**: `DatasetResult.compaction_mode` already means in-pod vs distributed, and one word for two questions teaches a reader the wrong thing. **DEFAULT None, and the test's NEGATIVE half is the load-bearing one**: an unset knob must send NOTHING rather than send `"reencode"` explicitly, because passing today's default would still be a behaviour change if Lance revised it. `try_binary_copy` is strictly cheaper where it applies and changes the byte path of a sweep that rewrites governed data unattended every 120s — a default nobody measured is how incident #93 happened, so an estate opts in once a tier's fragments have been looked at. The branch half was already done and verified.
 **The branches were invisible, and it was a live leak.** `discover_datasets` treats a directory holding
 `_versions/` as a dataset and stops there — it never recursed into what a dataset CONTAINS. A branch
 lives at `<dataset>/tree/<branch>/` with its own `_versions/` and `_transactions/`, so every branch in
