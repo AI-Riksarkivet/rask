@@ -130,7 +130,39 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 `medallion` · med · **blocked:** owner decision: accept an extra full write of the data to preserve tier row identity
 
 - *Why open:* Re-measured 2026-09-09: the branch writes an empty `out_schema` table with `overwrite` then fans fragments in with `lr.write_lance(mode="append")`. Q10-6's fix does not transpose — `lance_ray.write_lance` on 0.5.0 accepts only create/append/overwrite, there is no distributed merge, and appending into the previous run's dataset re-mints `_rowid` anyway. Tabular stages survive via the plain `source_rowid` column, but the tier's own `_rowid` — what the tier ABOVE resolves against — is destroyed each run.
-- *Closes when:* Stage the distributed output into a scratch dataset, then perform ONE `merge_insert` from staging into the target, accepting the extra full write.
+- *Closes when:* Stage the distributed output into a scratch dataset, then perform ONE `merge_insert`
+  from staging into the destination. **DESIGN PASS 2026-09-11 — the shape is confirmed and THREE
+  GUARDS are mandatory; none of them is optional and the first is catastrophic if omitted.**
+  1. **AN EMPTY SOURCE MUST NOT DELETE THE TIER.** `when_not_matched_by_source_delete()` against a
+     staging dataset that produced zero rows removes every row in the destination. The estate already
+     guards exactly this one lane over — `ray_stage_job.py`'s media retraction runs only
+     `if written and run`, because "absent provenance must fail SAFE, not destructively". The tabular
+     merge needs the same refusal, and the sibling in `compute.py` does NOT carry it, so copying that
+     call site verbatim ships the hazard.
+  2. **AN ABSENT STAGING DATASET IS NOT AN EMPTY ONE.** A `write_lance` that returns without
+     committing leaves nothing at the scratch path; reading that as an empty source is failure mode 1
+     by another route.
+  3. **SCHEMA DRIFT WEDGES THE MERGE.** `merge_insert` hard-refuses a source carrying a column the
+     destination lacks — which is the schema-evolution case `_mergeable` exists to detect, and its
+     False branch currently has no rebuild path that preserves identity.
+- *What the design pass MEASURED* (pylance 11.0.0, lance-ray 0.5.0, local FS — no Ray, so the numbers
+  are driver-side):
+  * `merge_insert(...).execute(<LanceDataset>)` accepts a Lance dataset as source and the
+    `{id: _rowid}` map survives a full-sync merge from a multi-fragment source. The shape works.
+  * **Append-then-retract is REFUTED** and cannot be the cheap alternative: an append MINTS
+    (`lance_docs/file_format.md:3998` — "Writer assigns row IDs sequentially starting from
+    `next_row_id` for new rows") while only an update remaps (`:4025` — "The new physical row is
+    assigned the same `_rowid = R`"). Measured over three runs of that exact shape, `id=2` moved
+    `_rowid` 1 -> 3 -> 6; the same three runs through `merge_insert` held it at 1.
+  * **Driver-side streaming merge is disqualified for this lane**: driver RSS scales with the SOURCE,
+    not the batch — 442 / 973 / 2161 MB for 104 / 416 / 1040 MB inputs. Doing the landing on the
+    driver defeats the reason the distributed branch exists.
+- *THE OWNER DECISION IS THE COST, and it is now quantified.* Staging costs one full extra copy of the
+  stage's output for the duration of the run, plus the destination's own transient double (a
+  `merge_insert` rewrites matched fragments, and the previous ones become old-version garbage until
+  `cleanup_old_versions` reclaims them on the sweep's schedule). The alternative is not "cheaper" — it
+  is continuing to destroy `_rowid` for the whole tier on every distributed run, which is what the
+  tier above resolves `source_rowid` against.
 
 **LH-008 · Publication deltas are insert-only: neither in-place updates nor deletions reach a consumer**
 `medallion, catalog, annotator` · med · **blocked:** owner decision: deleted-row set served on demand from the publication door vs stamped into the publish event
