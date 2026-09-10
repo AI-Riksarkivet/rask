@@ -1123,6 +1123,33 @@ def test_the_service_grants_do_not_depend_on_a_human_admin_being_named() -> None
     assert '"event_stager") for s in stagers' in rendered, "the stager list is not granted its rung"
 
 
+def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
+    """CONTRACT (security, standing rule): a scoped storage identity's secret is DERIVED, never the root.
+
+    The estate mints five scoped RustFS users and publishes each one's secret into OpenBao for ESO to
+    sync. Four derive it with `lance.scopedStorageSecret`. `ray-compute` alone read
+    `rayComputeSecretKey | default rustfs.secretKey` — and `rayComputeSecretKey` ships empty, so the
+    published value WAS the RustFS root credential.
+
+    MEASURED on the live estate 2026-09-11, by hash so nothing was disclosed: `ray-compute-secret-key`,
+    `ray-compute-access-key` and `rustfs-secret-key` in `rask-infra-credentials` were byte-identical,
+    all three 11 bytes. The chart CREATES `rask-ray-compute` with the derived secret
+    (`rustfs-scoped-users.yaml`) and PUBLISHED the root one under its name, so the pair can never
+    match: a consumer either signs as root — defeating the scoping entirely — or fails
+    `SignatureDoesNotMatch`. The Ray head's own manifest asserts the opposite in a comment, which is
+    how it survived.
+
+    ASSERTED ON THE RENDER, not on the template text: the defect is a value flowing through a
+    `| default` chain, and only rendering shows what a consumer would actually receive. Generic over
+    every identity, so the next one added is covered without remembering this.
+    """
+    root = "SENTINEL-ROOT-SECRET-DO-NOT-PUBLISH"
+    rendered = _helm_template(f"rustfs.secretKey={root}", "auth.bootstrapAdmin=user:gate-probe")
+
+    offenders = [line.strip() for line in rendered.splitlines() if root in line and re.search(r"[a-z-]*(?<!rustfs-)secret[-_]key\s*[=:]", line)]
+    assert offenders == [], "a SCOPED identity is published with the ROOT storage secret:\n  " + "\n  ".join(offenders)
+
+
 def test_every_first_party_deployment_is_hardened() -> None:
     """The docs claim "every Deployment has probes + preStop". The gateway had NEITHER (audit 2026-07-14).
 

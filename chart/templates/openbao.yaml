@@ -179,10 +179,17 @@ spec:
                        Job, the RustFS mkbucket Job, the OTel Collector and all seven web zones, each
                        stuck in CreateContainerConfigError. A reader without a writer is not a partial
                        control, it is an outage, because ESO syncs a Secret whole or not at all.
-                       Same expressions as the ESO-OFF path so the two agree by construction: empty
-                       falls back to the root credential, which is what every estate runs today. */}}
+                       Same expressions as the ESO-OFF path so the two agree by construction. */}}
                 ray-compute-access-key={{ .Values.rustfs.rayComputeAccessKey | default .Values.rustfs.accessKey }} \
-                ray-compute-secret-key={{ .Values.rustfs.rayComputeSecretKey | default .Values.rustfs.secretKey }} \
+                {{- /* DERIVED like its four siblings below, never `| default rustfs.secretKey`. That
+                     fallback published the RustFS ROOT credential under a scoped identity's name:
+                     `rayComputeSecretKey` ships empty, so the default always won. Measured live
+                     2026-09-11 by hash — `ray-compute-secret-key`, `ray-compute-access-key` and
+                     `rustfs-secret-key` were byte-identical in `rask-infra-credentials`.
+                     `rustfs-scoped-users.yaml` CREATES `rask-ray-compute` with the derived secret, so
+                     the published pair could never match: a consumer either signed as root, defeating
+                     the scoping entirely, or failed SignatureDoesNotMatch. */}}
+                ray-compute-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.rustfs.rayComputeAccessKey $.Values.rustfs.rayComputeSecretKey) }} \
                 {{- /* ONE DEDICATED CREDENTIAL PER PRIVILEGED IDENTITY. Without these the binding in
                        `dapr_auth.py` is unreachable: a subject not on *_PRIVILEGED_SUBJECTS
                        authenticates with the estate's SHARED APP_API_TOKEN, so any holder of that one
