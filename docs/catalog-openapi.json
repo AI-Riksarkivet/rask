@@ -8651,10 +8651,38 @@
             ],
             "title": "Index Columns"
           },
+          "max_source_bytes": {
+            "anyOf": [
+              {
+                "minimum": 1048576.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Source Bytes"
+          },
           "optimize_indices_enabled": {
             "default": true,
             "title": "Optimize Indices Enabled",
             "type": "boolean"
+          },
+          "repack_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reencode",
+                  "try_binary_copy",
+                  "force_binary_copy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repack Mode"
           },
           "retain_versions": {
             "anyOf": [
@@ -8768,6 +8796,17 @@
             "title": "Kind",
             "type": "string"
           },
+          "max_source_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Source Bytes"
+          },
           "optimize_indices_enabled": {
             "default": true,
             "title": "Optimize Indices Enabled",
@@ -8776,6 +8815,17 @@
           "path": {
             "title": "Path",
             "type": "string"
+          },
+          "repack_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repack Mode"
           },
           "retain_versions": {
             "anyOf": [
@@ -16850,6 +16900,111 @@
         "summary": "Undrop Namespace",
         "tags": [
           "namespace"
+        ]
+      }
+    },
+    "/v1/outbox/credentials": {
+      "post": {
+        "description": "Vend a write-tier credential scoped to the estate's lineage outbox prefix.\n\nAnswers `server_mediated` when no outbox is configured or the vendor declines \u2014 the same shape the\ntable door uses, so a caller has one response contract rather than two. A caller that receives it\nstages nothing and its events stay on the primary publish path, which is the honest degradation:\nthe backstop is absent, not silently broken.",
+        "operationId": "vend_outbox_credentials_v1_outbox_credentials_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Vend Outbox Credentials",
+        "tags": [
+          "credentials"
         ]
       }
     },
@@ -27780,7 +27935,7 @@
     },
     "/v1/table/{id}/stats": {
       "post": {
-        "description": "Return storage/row statistics for the table at ``id`` via ``get_table_stats``.\n\n``branch`` is DECLARED here only so it can be refused, and the numbers are why. Verified live\n2026-08-31 on a table whose branch held 1 row while main held 4: this door reported\n``num_rows: 4`` when asked for the branch, and again for a branch that had never been created \u2014\nthrough both the query string and the body. A row count is the most quoted number a catalog\nproduces; returning main's under a branch's name is the defect class at its most quotable.\n\nRefused rather than served because the response cannot be assembled honestly from a branch handle:\n``FragmentStats.lengths`` and the per-index ``status``/``size_bytes`` are not what\n``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in\nminiature. Serving it properly is named in `open_lakehouse_diff_left.md` \u00a7O1.",
+        "description": "Return storage/row statistics for the table at ``id`` via ``get_table_stats``.\n\n``branch`` is DECLARED here only so it can be refused, and the numbers are why. Verified live\n2026-08-31 on a table whose branch held 1 row while main held 4: this door reported\n``num_rows: 4`` when asked for the branch, and again for a branch that had never been created \u2014\nthrough both the query string and the body. A row count is the most quoted number a catalog\nproduces; returning main's under a branch's name is the defect class at its most quotable.\n\nRefused rather than served because the response cannot be assembled honestly from a branch handle:\n``FragmentStats.lengths`` and the per-index ``status``/``size_bytes`` are not what\n``dataset_stats()`` reports, and inventing them to fill a required field is the same failure in\nminiature. Serving it properly is named in the lakehouse register, row O1 (drained 2026-09-10; in git history).",
         "operationId": "get_table_stats_v1_table__id__stats_post",
         "parameters": [
           {

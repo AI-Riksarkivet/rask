@@ -250,12 +250,43 @@ def _stage_undelivered(event: RunEvent) -> None:
 
 
 def _outbox_storage_options() -> dict[str, str]:
-    """The object-store options the outbox write uses — the deployment's own store, resolved the way
-    every other S3 caller in this service resolves it."""
+    """The object-store options the outbox write uses — VENDED, because this service holds no key.
+
+    This returned `{"endpoint": ...}` and nothing else, under a docstring claiming the options were
+    "resolved the way every other S3 caller in this service resolves it". They were not: every other
+    caller vends from the catalog, and this one signed with nothing. Measured twice inside one real run
+    2026-09-10 — `stage_event` died `OSError: … AWS Error ACCESS_DENIED during HeadBucket` — so the
+    recovery path for a refused lineage emit could never fire, on the same run whose emit had just been
+    refused.
+
+    A STATIC KEY IS NOT THE FIX HERE and the estate's rule says so: STS for storage. Ingest holding no
+    S3 key is the stronger posture and worth keeping, so the credential comes from the catalog's
+    outbox door (`POST /v1/outbox/credentials`), scoped by an STS session policy to that one prefix at
+    write tier and gated on `can_stage_events`.
+
+    DEGRADES TO THE ENDPOINT ALONE rather than raising. Staging is the backstop, not the primary path:
+    a run whose emit succeeded needs nothing from here, and `_stage_undelivered` is documented never to
+    end a run whose data already landed (I8). A vend that is refused or unreachable therefore leaves
+    the write to fail as it did before — loudly, in a log line naming the cause — instead of turning a
+    landed commit into a failed run.
+    """
     from ingest.config import settings
 
-    endpoint = settings().s3_endpoint_url
-    return {"endpoint": endpoint} if endpoint else {}
+    config = settings()
+    endpoint = config.s3_endpoint_url
+    base: dict[str, str] = {"endpoint": endpoint} if endpoint else {}
+    from ingest.catalog_service import vend_outbox_options
+    from ingest.service_identity import service_headers
+
+    headers = service_headers(config, identity=config.catalog_service_identity, shared_token=config.catalog_app_token)
+    try:
+        vended = vend_outbox_options(headers=headers, allow_ambient_fallback=config.insecure_allow_ambient_storage)
+    except Exception as exc:
+        # Degrades, never raises — see the rule above. Staging is the backstop, and a vend that cannot
+        # be reached must not turn a run whose data already landed into a failed one (I8).
+        logger.warning("outbox credential vend failed (%s) — staging will use the ambient options", exc)
+        return base
+    return {**base, **vended.options} if vended is not None else base
 
 
 def _tenant_facet(

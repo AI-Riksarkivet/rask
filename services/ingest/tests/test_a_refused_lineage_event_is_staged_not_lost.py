@@ -78,3 +78,51 @@ def test_an_UNREACHABLE_outbox_never_fails_the_run(monkeypatch: pytest.MonkeyPat
     # same thing and costs the suite twenty seconds of connection timeouts to do it.
     monkeypatch.setenv("RASK_INGEST_LINEAGE_OUTBOX_URI", "/proc/self/mem/_lineage_outbox")
     ingest_lineage.LineageRecorder().start("run-e1c", "proj", "ds", "s3", {})  # must not raise
+
+
+def test_the_staging_options_carry_a_VENDED_credential(monkeypatch) -> None:
+    """The staged write is signed, and it was not — the backstop could not reach its own bucket.
+
+    `_outbox_storage_options` returned `{"endpoint": ...}` and nothing else, under a docstring claiming
+    the options were "resolved the way every other S3 caller in this service resolves it". They were
+    not: every other caller vends from the catalog, and this one signed with nothing. Measured twice
+    inside one real run 2026-09-10 — `stage_event` died `AWS Error ACCESS_DENIED during HeadBucket` —
+    so the recovery path for a refused emit could never fire, on the very run whose emit had just been
+    refused.
+
+    A STATIC KEY IS NOT THE FIX and the estate's rule says so ("STS for storage"). Ingest holding no S3
+    key is the stronger posture, so the credential comes from the catalog's outbox door, scoped by an
+    STS session policy to that one prefix and gated on `can_stage_events`.
+    """
+    from ingest import catalog_service
+    from ingest import lineage as lineage_mod
+    from service_kit.lakehouse.vended_credentials import VendedCredential
+
+    # The REAL dependency, patched where it lives — `_outbox_storage_options` imports it inside the
+    # function. Inventing an indirection in production code so a test can reach it would make the seam
+    # exist for the test's benefit rather than the caller's.
+    monkeypatch.setattr(
+        catalog_service,
+        "vend_outbox_options",
+        lambda **_kw: VendedCredential(options={"aws_access_key_id": "K", "aws_secret_access_key": "S", "aws_session_token": "T"}, expires_at_millis=None),
+    )
+    options = lineage_mod._outbox_storage_options()
+    assert options.get("aws_access_key_id") == "K", f"the staged write is unsigned: {sorted(options)}"
+    assert options.get("aws_session_token") == "T", "a vended STS credential is a triple; the token carries the scoping"
+
+
+def test_a_refused_vend_DEGRADES_and_never_ends_the_run(monkeypatch) -> None:
+    """Staging is the backstop, so a vend that fails must not turn a landed commit into a failed run.
+
+    I8's rule, applied one layer down: `_stage_undelivered` is documented never to raise, and the
+    credential it needs is fetched over the network. A vend that is refused or unreachable therefore
+    leaves the write to fail as it did before — loudly, naming the cause — rather than propagating.
+    """
+    from ingest import catalog_service
+    from ingest import lineage as lineage_mod
+
+    def _boom(**_kw: object) -> None:
+        raise RuntimeError("catalog unreachable")
+
+    monkeypatch.setattr(catalog_service, "vend_outbox_options", _boom)
+    assert lineage_mod._outbox_storage_options() is not None, "a refused vend must degrade, not raise"

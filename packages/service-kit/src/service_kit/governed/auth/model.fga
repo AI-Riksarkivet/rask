@@ -112,6 +112,17 @@ type warehouse
     # Granted at the WAREHOUSE for the same reason the maintainer is: one tuple per tenant reaches
     # every tier and every table beneath it, so the cascade's reach stays enumerable.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # STAGING AN EVENT is not a data rung at all, and that is why it is its own role. The lineage
+    # outbox is the estate's crash-recovery seam: a producer stages the full RunEvent JSON before it
+    # publishes, and the relay re-ingests whatever survives a crash. Writing there is neither reading
+    # nor writing a tenant's data — the object is a bookkeeping record under a CONTROL prefix — so no
+    # existing rung expresses it and reusing one would grant a tenant capability to buy a platform one.
+    #
+    # NOT time-boxable, unlike `writer`/`maintainer`/`publisher`: an expiry here lapses a service's
+    # ability to RECOVER its own events, and the lapse is invisible — the primary publish still works,
+    # so nothing fails until the crash this seam exists for. See `_CONDITIONAL_GRANT_RUNGS`'s rule:
+    # decide what the expiry leaves behind, and here it leaves a backstop that looks armed.
+    define event_stager: [user, role#assignee]
     # ---- the GRANT axis (separate from the USE rungs above) ----
     # Who may hand out access here, as its own privilege rather than a side-effect of `owner`. Until
     # this existed the two were welded together — the grant routes gate on the owner bar — so
@@ -209,6 +220,17 @@ type warehouse
     # a platform-admin privilege, checked ONLY on the root object (fga_root_object). Owner-tier, so a mere
     # per-project admin can NOT read the estate feed — authz scope == data scope (the feed is estate-wide).
     define can_observe_events: owner
+    # Vending a WRITE credential for the estate's lineage outbox (`_lineage_outbox`), checked ONLY on
+    # the root object like the two estate privileges around it. Owner-tier would be wrong here and the
+    # difference is the point: the holders are SERVICES — the medallion, maintenance and ingest — and a
+    # service must never be an estate owner. So this names its own role instead of widening `owner`,
+    # the same shape `can_maintain` and `can_update_tag`'s `publisher` were minted for.
+    #
+    # The STS session policy the door builds scopes the credential to that one prefix and write tier
+    # (`vending.build_session_policy(bucket, "_lineage_outbox", "write")`), so this rung buys exactly
+    # "may append to the recovery log" and nothing else — not the control root around it, and not any
+    # tenant's data.
+    define can_stage_events: event_stager or owner
     # Raw OBJECT-STORE browsing (#90) — the viewer's `/api/objects`, `/api/object`,
     # `/api/object/download`: an S3 list, a HEAD, and a full byte download over any bucket in the
     # store registry. Like can_observe_events this is an ESTATE-WIDE privilege checked only on the

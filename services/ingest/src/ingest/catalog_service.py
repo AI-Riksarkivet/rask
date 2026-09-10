@@ -131,6 +131,73 @@ class VendingUnavailableError(RuntimeError):
     """
 
 
+def vend_outbox_options(*, headers: dict[str, str], allow_ambient_fallback: bool) -> VendedCredential | None:
+    """Ask the catalog for a write credential scoped to the estate's LINEAGE OUTBOX prefix.
+
+    The outbox is the crash-recovery seam: `ingest.lineage` stages the full RunEvent there before the
+    emit, so a refused door or a dead process is recoverable. Ingest could not write it at all — it
+    holds no S3 key by design (STS-only, the stronger posture), so `stage_event` was handed an endpoint
+    and no credential and died `ACCESS_DENIED` on HeadBucket. Measured twice inside one real run
+    2026-09-10: the emit was refused AND its backstop could not write, so the run lost its event
+    outright and still reported COMPLETE.
+
+    MODULE-LEVEL, not a method on `CatalogServiceClient`, because that client is constructed with a
+    pyarrow SCHEMA and this door takes no table — threading a dummy `pa.schema([])` through just to
+    reach a credential would make the schema look load-bearing where it is not.
+
+    NO ARGUMENTS BEYOND THE CREDENTIAL, and that is the door's shape rather than a convenience: the
+    catalog vends for ITS OWN configured outbox, so there is no prefix a caller can name and none to
+    get wrong here. Contrast the table door, whose id is the caller's to compose and was the site of a
+    measured 403.
+    """
+    return _post_for_credential(
+        f"{catalog_base_url()}/v1/outbox/credentials",
+        params=None,
+        headers=headers,
+        allow_ambient_fallback=allow_ambient_fallback,
+    )
+
+
+def _post_for_credential(url: str, *, params: dict[str, str] | None, headers: dict[str, str], allow_ambient_fallback: bool) -> VendedCredential | None:
+    """POST one vending door and read its answer — the ONE error contract every vending door shares.
+
+    Extracted when the outbox door landed (CP-007) rather than copied, because every branch here is a
+    measured defect rather than defensive habit: the narrow `httpx.HTTPError` catch (a blanket one once
+    reported a `NameError` in the caller as "vending unavailable", hiding a programming error as a
+    configuration one), the `allow_ambient_fallback` posture (whose whole point is refusing to sign
+    with the storage ROOT), and the unparseable-body case (something in front of the catalog answering
+    HTML). A second copy inherits none of that and drifts by construction.
+    """
+    import httpx
+
+    from ingest.http import shared_client
+
+    try:
+        response = shared_client().post(url, params=params, headers=headers, timeout=TIMEOUT_SECONDS)
+    except httpx.HTTPError as exc:
+        if not allow_ambient_fallback:
+            raise VendingUnavailableError(f"credential vending unreachable ({exc}) and the ambient credential is the storage root") from exc
+        logger.warning("credential vending unreachable (%s) — falling back to the ambient credential by explicit configuration", exc)
+        return None
+    if response.status_code >= 400:
+        if not allow_ambient_fallback:
+            raise VendingUnavailableError(f"credential vending refused ({response.status_code}) and the ambient credential is the storage root")
+        logger.warning("credential vending refused (%s) — falling back to the ambient credential by explicit configuration", response.status_code)
+        return None
+    try:
+        payload = response.json().get("credentials") or {}
+    except ValueError as exc:  # a non-JSON body from something in front of the catalog
+        if not allow_ambient_fallback:
+            raise VendingUnavailableError(f"credential vending answered unparseable content ({exc}) and the ambient credential is the storage root") from exc
+        logger.warning("credential vending answered unparseable content (%s) — falling back to the ambient credential by explicit configuration", exc)
+        return None
+    options = payload.get("storage_options")
+    if not isinstance(options, dict) or not options:
+        return None
+    expires = payload.get("expires_at_millis")
+    return VendedCredential(options=options, expires_at_millis=expires if isinstance(expires, int) else None)
+
+
 class CatalogServiceClient:
     """Talks to the catalog service — the `ServiceCatalogSeam` half of the seam (`ingest.catalog`).
 

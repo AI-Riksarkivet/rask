@@ -696,6 +696,14 @@ _UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
     # reaches `/api` same-origin through the gateway — a rendered origin list would only widen what a
     # browser is told to trust, for no caller that exists.
     "RASK_CORS_ORIGINS": "no cross-origin caller exists; the fleet is reached same-origin through the gateway",
+    # SAFE OFF, and it is the one entry here whose absence is the SECURITY posture rather than a
+    # convenience. The flag names what it costs (`INSECURE`, the same convention as
+    # `LANCE_INSECURE_ALLOW_UNAUTHENTICATED`): ON, a refused or unreachable credential vend may sign
+    # the run's bytes with the pod's AMBIENT credential — which on this estate is the RustFS ROOT pair
+    # (measured inside the running pod 2026-09-08: `AWS_ACCESS_KEY_ID=rustfsadmin`). Rendering it from
+    # the chart would ship the fallback the owner's standing rule forbids, so the branch that never
+    # fires in this deployment is the branch working.
+    "RASK_INGEST_INSECURE_ALLOW_AMBIENT_STORAGE": "on, a failed vend signs with the storage ROOT; the absent state is the fail-closed one",
     # SAFE OFF, and setting it would REINTRODUCE a known silent loss. A bearer api key does not
     # authenticate a service at rask's ingest — `lineage.api.security` opens the service door on
     # `dapr-api-token` + `x-lance-service-identity`, so a key 401s and `ClientEmitter` swallows it.
@@ -1063,6 +1071,31 @@ def test_the_sweep_is_bootstrapped_as_a_MAINTAINER_never_a_WRITER() -> None:
     assert "maintainers = [" in rendered, "the bootstrap hook no longer builds a maintainer list"
     assert '"maintainer") for m in maintainers' in rendered, "the maintainer list is not granted the maintainer rung"
     assert '"writer") for w in writers' not in rendered, "the sweep is being bootstrapped as a WRITER — the rung the owner ruling refused"
+
+
+def test_the_lineage_stager_holds_can_stage_events_on_the_estate_root() -> None:
+    """CONTRACT (CP-007): a service that STAGES lineage events holds `event_stager` on the FGA root.
+
+    The rung and its door are worth nothing without a live tuple, and this is the half that is easy to
+    ship without: `can_stage_events` resolves false for every subject in a fresh estate, so
+    `POST /v1/outbox/credentials` would answer 403 to the one caller it was built for and ingest's
+    crash-recovery seam would stay exactly as broken as it was measured on 2026-09-10 — the primary
+    emit refused AND the backstop unable to write, inside one run that still reported COMPLETE.
+
+    INGEST IS THE ONLY HOLDER, and the shortness of that list is the grant working rather than a gap.
+    Five services stage to `_lineage_outbox`; four of them (the medallion producer, its stage runners,
+    maintenance, the catalog) sign with `settings.storage_options()` — a key they already hold — and
+    call no vending door, so a rung granted to them would be a standing tuple nothing exercises. Ingest
+    holds no S3 key by design (STS-only, the stronger posture), which is why it is the one that needs a
+    credential vended and the one that needs the rung.
+
+    Asserted on the RENDERED hook: the grant is built by a Helm loop over a values-derived list, and a
+    values-level assertion cannot see which relation the loop writes.
+    """
+    rendered = _helm_template("auth.bootstrapAdmin=user:gate-probe")
+    assert "stagers = [" in rendered, "the bootstrap hook no longer builds a stager list"
+    assert '"event_stager") for s in stagers' in rendered, "the stager list is not granted the event_stager rung"
+    assert "service-ingest" in rendered.split("stagers = [")[1].split("]")[0], "ingest — the one keyless stager — is not in the list"
 
 
 def test_every_first_party_deployment_is_hardened() -> None:

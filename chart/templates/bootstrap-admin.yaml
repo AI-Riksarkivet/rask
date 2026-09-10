@@ -181,10 +181,40 @@ spec:
               {{- $maintainers = append $maintainers .Values.maintenance.catalogServiceIdentity }}
               {{- end }}
               maintainers = {{ $maintainers | toJson }}
+              # STAGERS hold `can_stage_events`, a rung minted for this and held on the estate ROOT.
+              #
+              # The lineage outbox is the crash-recovery seam: a producer stages the whole RunEvent
+              # under `_lineage_outbox` BEFORE it publishes, so a process that dies between the commit
+              # and a durable delivery is recoverable by lineage's relay. Ingest could not write it at
+              # all — measured twice inside one real run 2026-09-10, where the primary emit was refused
+              # AND `stage_event` died `ACCESS_DENIED during HeadBucket`, so the run lost its lineage
+              # event outright and still reported COMPLETE.
+              #
+              # INGEST IS THE WHOLE LIST, and its shortness is the grant working. Five services stage to
+              # that prefix; four of them (the medallion producer, its stage runners, maintenance, the
+              # catalog) sign with a key they already hold and call no vending door, so the rung would
+              # be a standing tuple nothing exercises — the kind nobody remembers to revoke. Ingest
+              # holds no S3 key BY DESIGN (STS-only, the stronger posture), which is exactly why it is
+              # the one that needs a credential vended and the one that needs the rung.
+              #
+              # `event_stager`, never `writer` and never `owner`. A staged object is a bookkeeping
+              # record under a control prefix, not data: reusing `can_write_data` would hand every
+              # tenant writer a platform capability, and owner-tier is wrong in the other direction —
+              # the holder is a SERVICE, and a service must not be an estate owner. `model.fga.yaml`
+              # pins the refusals that make the rung worth having (the trainer, the web BFF).
+              #
+              # A RENDER-TIME LITERAL from the same values key the fleet template feeds ingest, so the
+              # subject the catalog admits cannot drift from the one granted here.
+              {{- $stagers := list }}
+              {{- if .Values.services.ingest }}
+              {{- $stagers = append $stagers ((get (.Values.services.ingest.env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") | default "service-ingest") }}
+              {{- end }}
+              stagers = {{ $stagers | toJson }}
               grants = (
                   [(user, "owner")]
                   + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
                   + [(m if ":" in m else f"user:{m}", "maintainer") for m in maintainers]
+                  + [(s if ":" in s else f"user:{s}", "event_stager") for s in stagers]
               )
 
               for subject_id, relation in grants:

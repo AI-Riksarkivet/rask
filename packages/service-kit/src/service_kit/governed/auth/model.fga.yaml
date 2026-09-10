@@ -118,6 +118,12 @@ tuples:
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
   # estate-wide control-plane event feed (can_observe_events, GET /v1/events) — a per-project admin cannot.
   - { user: user:root_admin, relation: owner, object: warehouse:lance_catalog }
+  # The services that STAGE lineage events to the estate's recovery outbox. On the ROOT object, like
+  # every other estate-wide privilege, and as their own role rather than as `owner` — a service must
+  # never be an estate owner.
+  - { user: user:service-medallion-producer, relation: event_stager, object: warehouse:lance_catalog }
+  - { user: user:service-maintenance, relation: event_stager, object: warehouse:lance_catalog }
+  - { user: user:service-ingest, relation: event_stager, object: warehouse:lance_catalog }
 
   # ---- annotation projects (B3/S2) -------------------------------------------------------------
   # gina is a PLAIN project member (not via team:eng, so not an admin) — the subject that proves
@@ -1263,3 +1269,75 @@ tests:
       - user: user:alice
         object: table:acme_gold_catalog
         assertions: { can_update_tag: true, can_create_tag: true }
+
+  - name: a table a MACHINE registered is owned by the project, never by the machine
+    # Owner ruling 2026-09-10 (zero trust). `seed_ownership` used to grant `owner` on a just-created
+    # object to whoever created it — and for a stage runner's output that creator is the stage runner,
+    # so a cascade identity kept can_drop / can_deregister / can_restore / manage_grants on every
+    # governed tier of every tenant it had ever run in. LH-052 withdrew the warehouse grant; this is
+    # the second, quieter one it did not reach.
+    #
+    # THIS BLOCK IS THE LOAD-BEARING HALF OF THAT FIX. Declining to seed the machine is only safe
+    # because the table is still owned — `warehouse.owner: … or admin from project` →
+    # `namespace.owner: … or owner from parent` → `table.owner: … or owner from parent`. Asserted
+    # against the real evaluator rather than read off the model text, because "a human still owns it"
+    # is the entire argument for the withdrawal being a withdrawal and not an orphaning.
+    check:
+      # alice is admin of project:acme via team:eng. She holds NO direct tuple on this table.
+      - user: user:alice
+        object: table:acme_gold_catalog
+        assertions:
+          can_drop: true
+          can_deregister: true
+          can_restore: true
+          manage_grants: true
+      # The stage runner that would have registered it: writer and publisher through the warehouse
+      # grant LH-052 left it, and none of the destructive rungs an owner tuple would have added.
+      - user: user:service-silver-to-gold
+        object: table:acme_gold_catalog
+        assertions:
+          can_write_data: true
+          can_update_tag: true
+          can_drop: false
+          can_deregister: false
+          can_restore: false
+          manage_grants: false
+
+  - name: staging a lineage event is its own estate privilege, held by services and never by owner alone
+    # Owner ruling 2026-09-10 (CP-007). The lineage outbox is the estate's crash-recovery seam: a
+    # producer stages the full RunEvent JSON before publishing, and the relay re-ingests whatever
+    # survives a crash. Ingest could not stage at all — it holds no S3 key by design (STS-only, the
+    # stronger posture) — so its recovery path was dead even after the drain was fixed (LH-086).
+    #
+    # The MECHANISM was decided by the standing rule ("STS for storage; a scoped static key is not a
+    # fix") and `build_session_policy` is already prefix-generic. What was open was WHO, and this is
+    # the answer: a narrow rung on the root object, granted to exactly the services that stage.
+    check:
+      # The three stagers reach it, and only through the role — none of them is an estate owner.
+      - user: user:service-medallion-producer
+        object: warehouse:lance_catalog
+        assertions: { can_stage_events: true, owner: false, can_observe_events: false }
+      - user: user:service-maintenance
+        object: warehouse:lance_catalog
+        assertions: { can_stage_events: true, owner: false }
+      - user: user:service-ingest
+        object: warehouse:lance_catalog
+        assertions: { can_stage_events: true, owner: false }
+      # The estate owner keeps it concentrically, as with every other rung here.
+      - user: user:root_admin
+        object: warehouse:lance_catalog
+        assertions: { can_stage_events: true }
+      # THE REFUSALS ARE THE POINT — this is why it is not `privileged_subjects`. The trainer presents
+      # a dedicated credential and is privileged at both doors, and it does not stage events; the web
+      # BFF is the ANONYMOUS read identity. Neither may append to the estate's recovery log.
+      - user: user:service-trainer
+        object: warehouse:lance_catalog
+        assertions: { can_stage_events: false }
+      - user: user:service-web
+        object: warehouse:lance_catalog
+        assertions: { can_stage_events: false }
+      # And it is ESTATE-scoped, not per tenant: holding it at the root grants nothing on a tenant's
+      # own warehouse, so a stager cannot use it to reach acme's data.
+      - user: user:service-ingest
+        object: warehouse:acme_bucket
+        assertions: { can_stage_events: false }
