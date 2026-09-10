@@ -21,6 +21,14 @@ set -euo pipefail
 
 NS="${NS:-default}"
 RELEASE="${RELEASE:-rask}"
+# THE CONTROL-PLANE DOORS NEED A PERSON, and the service token is not one. `/v1/projects` and
+# `/v1/warehouses` are estate-admin gated on an OIDC bearer — deliberately, since that is what stops a
+# warehouse-owner riding a create into project admin — while the ingest door itself is happy with the
+# Dapr service token the pod already holds. Sending only the service token made `provision` answer 401
+# on every door and `run` 403 after it, so this script proved the lane on an estate with auth OFF and
+# could not prove it on one with auth ON, which is the only estate whose answer matters (measured
+# 2026-09-10). Empty = the old behaviour, for a dev stack with auth off.
+LANE_ADMIN_TOKEN="${LANE_ADMIN_TOKEN:-}"
 TAG="${TAG:-dev}"
 REGISTRY="${REGISTRY:-localhost:5000}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -193,16 +201,31 @@ cmd_provision() {
 	local pod
 	pod="$(ingest_pod)" || die "no ingest pod"
 	log "provisioning $PROJECT (project > warehouse > namespace) via the catalog"
-	kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+	kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, os, sys, urllib.request, urllib.error
 import os as _os
 def _auth():
+    # The BEARER first where one is supplied: these are the admin doors. The service token stays as the
+    # fallback so a dev stack with auth off behaves exactly as before.
+    bearer = _os.environ.get('LANE_ADMIN_TOKEN')
+    if bearer:
+        return {'authorization': 'Bearer ' + bearer}
     tok = _os.environ.get('APP_API_TOKEN')
     return {'dapr-api-token': tok} if tok else {}
 base = os.getenv('RASK_CATALOG_URL', 'http://rask-catalog:2333').rstrip('/')
 def post(path, body):
-    req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
-                                 headers={'Content-Type': 'application/json'}, method='POST')
+    # THE CREDENTIAL IS APPLIED HERE, and it was not before: this builder named only the content type,
+    # so the header the auth helper returns was assembled and dropped, and every door answered 401
+    # whatever was supplied. A helper nobody calls reads as authentication being handled — the same
+    # cannot-fire shape this repo keeps finding — and it is why provisioning failed identically with
+    # the service token and with an admin bearer (measured 2026-09-10).
+    #
+    # NO BACKTICKS IN THIS BLOCK. The whole program is a double-quoted shell string, so a backtick
+    # opens a command substitution and bash reports 'unexpected end of file' from inside a Python
+    # comment — which is exactly what the first version of this comment did.
+    headers = {'Content-Type': 'application/json'}
+    headers.update(_auth())
+    req = urllib.request.Request(base + path, data=json.dumps(body).encode(), headers=headers, method='POST')
     try:
         with urllib.request.urlopen(req, timeout=90) as r:
             return r.status, ''
@@ -212,7 +235,15 @@ project = '$PROJECT'
 for path, body, fatal in (
     ('/v1/projects', {'id': project, 'name': project}, False),
     ('/v1/warehouses', {'id': project + '-wh', 'project': project}, False),
-    ('/v1/warehouses/' + project + '-wh/namespaces', {'namespace': project}, True),
+    # THE TIER NAMESPACE, not the project. A bronze write lands in project-dash-tier
+    # (ingest.naming.bronze_namespace_for -> project_namespace(tenant, bronze_namespace())), so
+    # provisioning the bare project name creates a namespace nothing writes to and the run dies at
+    # finalize saying the tier namespace is not provisioned — measured 2026-09-10, once the credential
+    # half of this step was fixed and the run got far enough to say so.
+    #
+    # NO BACKTICKS AND NO DOUBLE QUOTES IN THIS BLOCK: the whole program is a double-quoted shell
+    # string, so both terminate it and bash reports a syntax error from inside a Python comment.
+    ('/v1/warehouses/' + project + '-wh/namespaces', {'namespace': project + '-' + _os.environ.get('LANE_BRONZE_TIER', 'bronze')}, True),
 ):
     status, detail = post(path, body)
     print('   %-46s -> %s' % (path, status))
