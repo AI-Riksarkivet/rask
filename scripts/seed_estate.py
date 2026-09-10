@@ -200,7 +200,12 @@ DEMO_ESTATE = Estate(
                         # The medallion cascade the fixtures describe. bronze holds no table there, and
                         # holding none here too keeps the two readable as the same estate.
                         Namespace(name="acme-bronze"),
-                        Namespace(name="acme-silver", tables=("features",)),
+                        # TWO TABLES, one per LANE. A silver namespace holds a table per lane, and the
+                        # table layer POSTs `/declare` with `parent=namespace:<ns>` — which IS the link
+                        # a stage runner's warehouse rung needs to reach what it writes. Seeding only
+                        # `features` left the dummy lane's e2e unable to reach its terminal-event
+                        # assertion, failing with a message that named the missing link exactly.
+                        Namespace(name="acme-silver", tables=("features", "dummy")),
                         Namespace(name="acme-gold", tables=("catalog",)),
                     ),
                 ),

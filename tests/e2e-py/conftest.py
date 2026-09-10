@@ -11,6 +11,7 @@ make an offline run hit a live endpoint. Location decides, so enforce by locatio
 """
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -33,3 +34,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if _HERE in item.path.parents:
             item.add_marker(pytest.mark.e2e)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _unbind_what_this_run_bound() -> Iterator[None]:
+    """Remove the namespaces this run BOUND, and say plainly what it could not.
+
+    THE RESIDUE HAS A SOURCE, and it is here. These suites write into the estate's real catalog and
+    lineage graph, and nothing removed what they left: § Q8-15 measured 1,163 Dataset nodes and a
+    reconcile that fires `storage_loss` and `unreadable` on every 5-minute tick with dead rows in them,
+    so a REAL storage loss arrives invisible among them. Retention converges the graph eventually; the
+    BINDINGS have no retention at all, which is § Q15-1 — three stale ones hijacking medallion names.
+
+    Autouse and session-scoped so a suite cannot forget it, and `topology.create_top_level` is the one
+    door they all bind through.
+
+    WHAT IT WILL NOT DO is force. A namespace still holding tables answers 409 naming them, and that
+    refusal is correct — unbinding it would leave real tables unresolvable. Those are reported as a
+    warning rather than swallowed or escalated: a cleanup that deletes what a guard refused is worse
+    than the residue, and residue nobody is told about is how the graph got to 1,163.
+    """
+    yield
+    from topology import unbind_created
+
+    left = unbind_created()
+    if left:
+        import warnings
+
+        warnings.warn(
+            "e2e left bindings behind (each names why; a 409 means the namespace still holds tables): " + "; ".join(left),
+            stacklevel=1,
+        )

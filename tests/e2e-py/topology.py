@@ -53,16 +53,51 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 OUTSIDER = os.environ.get("LANCE_E2E_OUTSIDER", "publisher@rask.internal")
 
 
+#: What THIS process bound, so the session teardown can unbind it — `(server, namespace, headers)`.
+#:
+#: RECORDED HERE because this is the one door every suite goes through, and cleaning up at the seam
+#: that creates is the only way that does not need every suite retrofitted. Only a genuine CREATE is
+#: recorded: a 409 means `adopt_existing` matched a namespace that was already there, and removing
+#: something this run did not make is how a cleanup becomes the incident.
+CREATED: list[tuple[str, str, dict[str, str]]] = []
+
+
 def create_top_level(server: str, name: str, headers: dict[str, str], *, timeout: float = 15.0) -> requests.Response:
-    """POST the create, through the warehouse door when the estate has one."""
+    """POST the create, through the warehouse door when the estate has one, and REMEMBER it."""
     if WAREHOUSE:
-        return requests.post(
+        response = requests.post(
             f"{server.rstrip('/')}/v1/warehouses/{WAREHOUSE}/namespaces",
             headers=headers,
             json={"namespace": name, "adopt_existing": True},
             timeout=timeout,
         )
+        if response.status_code in (200, 201):
+            CREATED.append((server, name, dict(headers)))
+        return response
     return requests.post(f"{server.rstrip('/')}/v1/namespace/{name}/create", headers=headers, json={}, timeout=timeout)
+
+
+def unbind_created(*, timeout: float = 15.0) -> list[str]:
+    """Unbind what this run bound; return a line per namespace that could NOT be removed.
+
+    THE REFUSALS ARE THE POINT, not an error to swallow. A namespace still holding tables answers 409
+    `NamespaceNotEmptyError` naming them, and that is correct — unbinding it would leave real tables
+    unresolvable. Measured on the live estate 2026-09-10: `bronze-media` refused exactly that way while
+    a plan built on a storage-prefix listing had called it empty. So this reports what it leaves behind
+    instead of claiming a clean run, because residue nobody is told about is how § Q8-15 accumulated
+    1,163 dataset nodes.
+    """
+    left: list[str] = []
+    while CREATED:
+        server, name, headers = CREATED.pop()
+        try:
+            response = requests.delete(f"{server.rstrip('/')}/v1/warehouses/{WAREHOUSE}/namespaces/{name}", headers=headers, timeout=timeout)
+        except requests.RequestException as exc:  # noqa: PERF203 — one unreachable catalog must not hide the rest
+            left.append(f"{name}: unreachable ({type(exc).__name__})")
+            continue
+        if response.status_code not in (200, 204, 404):
+            left.append(f"{name}: {response.status_code} {response.text[:160]}")
+    return left
 
 
 def assert_parent_exists(response: requests.Response, name: str) -> None:

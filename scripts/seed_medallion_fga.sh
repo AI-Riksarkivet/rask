@@ -163,7 +163,18 @@ if [ -n "$PROJECT" ]; then
   # The ingest lane's table. `INGEST_TABLE` because the ETL form lets a user name it, unlike the
   # producer's fixed `events` lane — pass it when seeding a tenant whose first ingest is not `pages`.
   link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$${INGEST_TABLE:-pages}"
-  link "namespace:$PROJECT-silver" "table:$PROJECT-silver\$features"
+  # SILVER'S TABLES ARE A LIST, not the single `features` this seeded. A silver namespace holds one
+  # table per LANE, and the link is what makes the stage runner's warehouse-level writer rung reach the
+  # table it writes — without it the lane fails with a message naming exactly the missing link.
+  # Measured: the dummy lane's e2e could not reach its terminal-event assertion because
+  # `namespace:<p>-silver -> table:<p>-silver$dummy` was never written.
+  #
+  # A VARIABLE rather than another hard-coded row, for the reason `INGEST_TABLE` above is one, and a
+  # sharper one here: `dummy` is a WORKLOAD name, and the platform is not supposed to know any. A new
+  # lane is a value, not an edit to this script.
+  for silver_table in ${SILVER_TABLES:-features dummy}; do
+    link "namespace:$PROJECT-silver" "table:$PROJECT-silver\$$silver_table"
+  done
   link "namespace:$PROJECT-gold" "table:$PROJECT-gold\$catalog"
   echo "✓ enabled tenant '$PROJECT' medallion (zone warehouse:$ZONE_WH — stage parents, stage runner rungs, table links)"
 fi

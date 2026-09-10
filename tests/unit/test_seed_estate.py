@@ -88,7 +88,7 @@ _REGISTRY = [
 #: that ignored the namespace let a read-back "verify" a table the plan never declared there.
 #: `beta-locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
 #: object rather than a tuple about nothing.
-_TABLES = {"acme-bronze": [], "acme-silver": ["features"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
+_TABLES = {"acme-bronze": [], "acme-silver": ["features", "dummy"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
 
 
 def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) -> httpx.MockTransport:
@@ -183,10 +183,16 @@ def test_a_table_is_declared_under_its_namespace_path_not_as_a_flat_id() -> None
     declares = [request for request in recorded if _layer(request) == "table"]
     assert [request.url.path for request in declares] == [
         "/v1/table/acme-silver$features/declare",
+        # A silver namespace holds one table per LANE, so the seed declares both. The dummy lane's
+        # link — `namespace:acme-silver -> table:acme-silver$dummy` — is what a stage runner's
+        # warehouse-level rung needs to reach what it writes, and its absence is what stopped that
+        # lane's e2e reaching its terminal-event assertion.
+        "/v1/table/acme-silver$dummy/declare",
         "/v1/table/acme-gold$catalog/declare",
         "/v1/table/beta-locked$records/declare",
     ]
     assert _body(declares[0])["id"] == ["acme-silver", "features"]
+    assert _body(declares[1])["id"] == ["acme-silver", "dummy"], "the second lane must declare under the SAME namespace path, not as a flat id"
 
 
 def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
