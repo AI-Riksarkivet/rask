@@ -22,8 +22,11 @@ REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left.md"
 
 _SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^\n]*)$", re.MULTILINE)
 _GROUP = re.compile(r"^### (.+)$", re.MULTILINE)
-#: An item renders as `**<n>. <title>**` then a meta line `<services> · <severity>[ · **blocked:** …]`.
-_ITEM = re.compile(r"^\*\*(\d+)\. (.+?)\*\*\s*\n`([^`]*)` · ([^\n·]+?)(?: · \*\*blocked:\*\* (.+?))?\s*$", re.MULTILINE)
+#: An item renders as `**<ID> · <title>**` then a meta line `<services> · <severity>[ · **blocked:** …]`.
+#: The id is stable (`LH-005`), never positional — see `scripts/backlog_close.py`. Keyed on that shape
+#: rather than a line count, because this printed six zeroes the first time the id format changed and a
+#: report of zero open items reads exactly like a drained backlog.
+_ITEM = re.compile(r"^\*\*([A-Z]+-\d+) · (.+?)\*\*\s*\n`([^`]*)` · ([^\n·]+?)(?: · \*\*blocked:\*\* (.+?))?\s*$", re.MULTILINE)
 
 
 def main() -> int:
@@ -64,8 +67,8 @@ def main() -> int:
 
     print(f"\n\033[1mWAITING ON AN OWNER DECISION ({len(blocked)})\033[0m")
     for n, title, why in blocked:
-        print(f"  {n:>4}. {title[:110]}")
-        print(f"        -> {why[:150]}")
+        print(f"  {n}  {title[:110]}")
+        print(f"          -> {why[:150]}")
 
     return 0
 

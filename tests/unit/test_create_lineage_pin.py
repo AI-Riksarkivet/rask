@@ -1,4 +1,4 @@
-"""S4 — `create` carries the reproducibility pin and caller run facets (OPEN-WORK.md §8 S4).
+"""S4 — `create` carries the reproducibility pin and caller run facets (the OPEN-WORK register, row S4; drained 2026-09-10, in git history).
 
 The asymmetry this closes exists independent of the annotation plane: `merge_insert` accepts a
 version-pinned `source` and an `X-Lance-Run-Facets` header; `create` accepted neither — so EVERY
