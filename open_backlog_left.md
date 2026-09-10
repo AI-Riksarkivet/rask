@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**263 open items**, deduped from 325 raw rows mined out of the seven files above.
+**264 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 22 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 22 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 5 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -98,6 +98,12 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
 - *Why open:* `GET /v1/namespace/{id}/table/list` returns `{"context": {"authorization_truncated": "true"}, "tables": []}` when the reader holds no grant on the tables under it — while `POST /v1/table/{id}/describe` on a table in that same namespace answers REGISTERED. Measured 2026-09-10: `acme-silver` and `lakehouse-silver` both listed `[]` for an estate admin while `acme-silver$features` and `lakehouse-silver$features` were registered with bytes on disk. The truncation flag is present and correct — the catalog is not lying — but it rides `context`, which a reader scanning `tables` never looks at. This cost a false diagnosis in the same session: an empty list read as "the cascade registers nothing" and LH-015 was nearly re-opened on it.
 - *Closes when:* Decide whether a filtered listing should say so where it is READ rather than only in `context` — a count of withheld entries beside the visible ones, the way the estate's own "show disabled, never hide" ruling treats actions — and if so, surface it on the lakehouse zone's namespace view in the same change.
+
+**LH-123 · `scripts/ingest-lane.sh` cannot provision against an auth-on estate, so the ingest lane's own end-to-end proof does not run**
+`ingest, catalog` · med
+
+- *Why open:* The script is the ingest plane's answer to "the pod is Running is not evidence" — it asserts rows in bronze, a committed version, a lineage run and a status endpoint that agrees. Driven 2026-09-10 against the deployed estate: `fixtures` seeds four TIFFs fine, then `provision` answers `401 Missing bearer token` on `/v1/projects`, `/v1/warehouses` and `/v1/warehouses/lane-wh/namespaces`, and `run` answers 403 without it. Its `_auth()` sends only `dapr-api-token` from the pod's `APP_API_TOKEN`, which is the SERVICE door; the project and warehouse doors are estate-admin gated on an OIDC bearer, by design (a warehouse-owner must not ride a create into project admin). So the one script that proves this lane end to end is unrunnable exactly where it matters — against a real, authenticated estate.
+- *Closes when:* Teach the script to take an OIDC bearer (an env var beside the Dapr token, the way `scripts/verify_produce_door.sh` mints one from Dex) and use it for the control-plane doors while keeping the service token for the ingest door; then run `provision`, `fixtures`, `run` against the deployed estate and assert the outcome it already knows how to assert.
 
 **LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
 `lineage, maintenance` · **HIGH**
