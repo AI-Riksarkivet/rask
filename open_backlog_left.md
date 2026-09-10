@@ -87,6 +87,12 @@ from, kept so an old citation still resolves.
 
 _Every governance promise the lakehouse makes rests on the run record being emitted, stored and reproducible; where it is wrong the estate cannot say which run wrote which bytes._
 
+**LH-121 · The cascade stamps a ROLE LITERAL as the run author, so lineage REFUSES every hop's provenance and the reconciler back-fills a degraded record**
+`medallion, lineage, catalog, chart` · **HIGH**
+
+- *Why open:* MEASURED ON THE LIVE ESTATE 2026-09-10 by driving two `/produce` calls into `bronze$events` and reading what the graph kept. Both cascades RAN — `medallion_cascade_triggered` fired for each — and lineage refused the provenance of every hop: `ingest_denied sub='ray' relation='can_write_data' outputs=['bronze$events']` twice at 12:56:01, then `ingest_denied sub='data_eng' ... outputs=['silver$features']` twice. Neither token appears anywhere in 400 scanned durable-feed events. `workflow.py:1077` stamps `custom_facet(_PRODUCER, name=settings.author, sub=settings.author)`, and those authors are ROLE NAMES — `producer_author` defaults to `"ray"` (`core/config.py:528`), `author` to `"data_eng"` (`:143`), and `values.yaml:1429,1437` ship `author: data_eng` on every stage runner. `user:ray` and `user:data_eng` hold no FGA tuple because they are not identities, so the ingest gate denies correctly and the write's provenance is dropped. This is the exact anti-pattern `.claude/skills/rask-notifications` names — a role literal in `author.sub` targets nobody and the event is still acked — with the whole provenance chain as the blast radius rather than a notification. NOTHING IS RED: the reconciler files a `RECONCILE` run minutes later (`reconcile.bronze$events` at 13:00 in the same window), so the graph looks populated while every cascade run's real author, token and derivation are gone. That is the goal's first condition — a write's provenance survives it — failing on every cascade write in the estate.
+- *Closes when:* An owner ruling on WHICH identity owns a cascade write, then stamp it instead of the role literal. The service identity already sits on the same values line the role does (`serviceIdentity: "service-bronze-to-silver"`), and `service-medallion-producer` already holds tuples the catalog honours, so the shape is available rather than new; it needs the FGA grants for `can_write_data` on the tiers each runner writes, and a test driving a REAL cascade that asserts the run reaches `/events` rather than asserting the emit was called. Note the role name is still wanted for ATTRIBUTION — the fix is to stop it being the authz SUBJECT, not to delete it.
+
 **LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
 `lineage, maintenance` · **HIGH**
 
@@ -600,12 +606,6 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 - *Why open:* The strike was withdrawn 2026-09-10: the key-format half is fixed but the test fails on a second cause. The reconcile tick ran (`checked: 350`), the event stayed staged, and `lineage_outbox_event_stranded` fired 4x in 40 minutes; transport is ruled out (sidecar publish answered 204), so the strand is a graph write inside `reconcile_cron.py:338-375`. The outbox is empty right now, so it cannot be read off the running estate today.
 - *Closes when:* Deliberately STAGE an event into the outbox and follow that one through `reconcile_cron.py:338-375` (`repository.ingest_event` → re-publish → `outbox.drop_event`), reading the strand cause now that the log formatter emits `extra`.
-
-**LH-087 · The bronze-arrival cascade head fired on `create_table` but not on a second INSERT into the same bronze table**
-`medallion, catalog, lineage` · **HIGH**
-
-- *Why open:* Measured: the first ingest into `bronze$events` produced two `/bronze-arrival` hits (create_table + insert) and ONE `medallion.bronze`; a later ingest into the SAME table produced one hit and NO trigger — so a table's second and subsequent arrivals never cascade. The head has since been rewritten (`_bronze_write` filters COMPLETE, excludes `_BYTE_FREE_CATALOG_OPERATIONS`, matches namespace+name plus declared lanes), so the row needs re-measuring rather than assuming either state; nothing records it closed.
-- *Closes when:* Run two ingests into the same bronze table through `scripts/ingest-lane.sh` and assert a `medallion.bronze` publish on the SECOND; read `catalog/services/lineage_deps.emit_measured_write` against `medallion/services/ingest_trigger.py::_bronze_write` and align the insert event's output namespace/name with the head's filter.
 
 **LH-088 · Every lineage restart replays the retained stream and logs ~125 `dapr_dead_letter_parked` ERRORs claiming provenance was lost**
 `lineage, notifications` · med · **blocked:** owner decision (a)/(b)/(c) — both repairs touch security-relevant behaviour
