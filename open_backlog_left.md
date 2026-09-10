@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**262 open items**, deduped from 325 raw rows mined out of the seven files above.
+**263 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 115 | 18 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 18 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |

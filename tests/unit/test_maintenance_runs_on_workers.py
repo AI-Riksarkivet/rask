@@ -274,3 +274,79 @@ def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: P
     """
     with pytest.raises(TableNotFoundError, match="never written"):
         plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024)
+
+
+# --------------------------------------------------------------------------- #
+# the distributed doors answer the SAME refusal the button does
+# --------------------------------------------------------------------------- #
+
+
+def _clone_shaped(tmp_path: Path) -> str:
+    """A dataset whose data resolves through ANOTHER dataset's root — the shallow-clone shape.
+
+    This is the case `require_compactable` exists to refuse: compacting a clone materialises the shared
+    base into its own root, so the rewrite is not the cost-free identity-preserving operation the
+    fragment count suggests.
+    """
+    # FRAGMENTED at the source, so the clone has real compaction work to plan — a single-fragment
+    # clone plans nothing and the door would refuse it for having no results, which proves nothing
+    # about the gate.
+    source = _seed(tmp_path, fragments=3)
+    clone = str(tmp_path / "clone")
+    ds = lance.dataset(source)
+    ds.shallow_clone(clone, reference=ds.version)
+    return clone
+
+
+def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: Path) -> None:
+    """CONTRACT: `compaction_commit` applies the same gate `/maintenance/compact` applies.
+
+    The catalog exposes TWO ways to rewrite a table's fragments. `POST /v1/table/{id}/maintenance/compact`
+    goes through `catalog.services.maintenance.compact_now`, which calls `require_compactable` — the
+    feature-flag evidence gate plus the #114 shallow-clone base-refs guard, the same pair
+    `maintenance.services.optimize` asks before its own `compact_files`.
+
+    `POST /v1/table/{id}/compaction_plan` and `POST /v1/table/{id}/compaction_commit` go straight to
+    `dataplane` and ask NEITHER. They are writer-tier and published at the ingress under `/api/catalog`,
+    and the commit half removes fragments — so the estate shipped a gated door and an ungated one onto
+    the same operation, and a caller reaching the ungated pair gets a rewrite the button would have
+    refused with a reason.
+
+    The gate belongs on COMMIT rather than only on PLAN: planning is a manifest read that moves no byte,
+    while the commit is what mints the version and drops the old fragments. A plan that is never
+    committed costs nothing.
+    """
+    clone = _clone_shaped(tmp_path)
+    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000)
+    results = [_worker_executes(clone, task) for task in plan.tasks]
+
+    with pytest.raises(Exception) as caught:  # noqa: B017 — the TYPE is the subject of the sibling assertion below
+        commit_compaction(clone, {}, results)
+    message = str(caught.value).lower()
+    assert "clone" in message or "base" in message, f"the refusal does not name the shallow clone: {caught.value}"
+
+
+def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_path: Path) -> None:
+    """The two doors must not merely both refuse — they must say the same thing.
+
+    An operator who is told "no" at one door and given a different sentence at the other cannot tell
+    whether they hit one policy or two. `require_compactable` is the single source of that sentence,
+    which is why this asserts the doors share it rather than asserting a string.
+    """
+    from catalog.services.maintenance import require_compactable
+
+    clone = _clone_shaped(tmp_path)
+    button_reason = ""
+    try:
+        require_compactable(lance.dataset(clone), {}, None)
+    except Exception as exc:  # noqa: BLE001 — the message is the subject
+        button_reason = str(exc)
+    assert button_reason, "the button no longer refuses a shallow clone — re-point this gate"
+
+    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000)
+    results = [_worker_executes(clone, task) for task in plan.tasks]
+    try:
+        commit_compaction(clone, {}, results)
+        raise AssertionError("the distributed commit door accepted a rewrite the button refuses")
+    except Exception as exc:  # noqa: BLE001
+        assert str(exc) == button_reason, f"the two doors give different reasons:\n  button: {button_reason}\n  commit: {exc}"

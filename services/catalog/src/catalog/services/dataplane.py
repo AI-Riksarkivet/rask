@@ -880,6 +880,21 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str])
     except (ValueError, TypeError, AttributeError) as exc:
         raise InvalidInputError(f"malformed compaction result: {exc}") from exc
     dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    # THE SAME GATE THE BUTTON ASKS, and asked HERE rather than at plan time because this is the half
+    # that mints a version and drops the old fragments — a plan nobody commits costs nothing.
+    #
+    # The estate exposes two routes onto one operation: `/maintenance/compact` runs through
+    # `maintenance.compact_now`, which calls `require_compactable` (the feature-flag evidence gate plus
+    # the #114 shallow-clone base-refs guard), while this pair reached `lance_optimize` directly and
+    # asked neither. Both are writer-tier and published at the ingress under `/api/catalog`, so a caller
+    # who took the distributed route got a rewrite the button refuses WITH A REASON — including on a
+    # real shallow clone, where compacting materialises the shared base into the clone's own root.
+    #
+    # Imported here rather than at module scope: `catalog.services.maintenance` imports this module, so
+    # a top-level import is a cycle.
+    from catalog.services.maintenance import require_compactable
+
+    require_compactable(dataset, so)
     try:
         metrics = lance_optimize.Compaction.commit(dataset, rewrites)
     except OSError as exc:
