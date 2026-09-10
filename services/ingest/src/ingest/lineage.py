@@ -162,10 +162,35 @@ def _emitter() -> Any:  # noqa: ANN401 — Emitter
     announcement carries the catalog's authority and happens exactly once per commit. An ingest-side
     publish would be a second announcement of the same write — a double-fired cascade whose two
     triggers nothing keeps in agreement.
-    """
-    from lineage_kit import build_emitter
 
-    return build_emitter()
+    THE CREDENTIAL IS RESOLVED HERE, and it was not before. lineage-kit builds the service-door pair
+    from `LineageSettings` alone, whose `app_token` is the estate's SHARED bearer — and `service-ingest`
+    is on `LINEAGE_PRIVILEGED_SUBJECTS`, where `dapr_auth.service_principal` refuses the shared token
+    from a privileged name and does not fall back. So every emit was 401'd. Ingest's OTHER lineage
+    client, `provenance.py`, has always sent the right token through `service_identity.service_headers`:
+    one service, one door, two clients, and only one of them credentialed.
+
+    Measured on the deployed estate 2026-09-10 — `POST /api/v1/lineage` had served TWO requests in the
+    retained log and answered 401 to both, a 100% failure rate, while 806 events reached the graph over
+    the Dapr topic from producers that do not use this path. It read as a healthy estate because the
+    run still reports COMPLETE (I8, above) and the recovery hook could not write either.
+
+    The token comes from the Dapr secret store via the resolver ingest already owns — never from an
+    env var. `RASK_LINEAGE_TOKEN_<IDENTITY>` exists and is deliberately NOT used here: it is the Ray
+    lane's answer, where a pod carries several identities and has no sidecar to ask.
+    """
+    from ingest.config import settings
+    from ingest.service_identity import dedicated_token_for
+    from lineage_kit import build_emitter
+    from lineage_kit.config import LineageSettings
+
+    transport = LineageSettings()
+    identity = transport.service_identity
+    resolver = dedicated_token_for(settings()) if identity else None
+    own = resolver(identity) if resolver is not None and identity else None
+    # An identity the store simply lacks resolves to None and the shared bearer stands — the door stays
+    # the single authority on whether that is acceptable, exactly as `service_headers` leaves it.
+    return build_emitter(transport.model_copy(update={"app_token": own}) if own else transport)
 
 
 def _run(

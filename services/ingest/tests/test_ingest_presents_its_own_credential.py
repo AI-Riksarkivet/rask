@@ -25,6 +25,8 @@ explicit opt-in, and `test_with_no_store_configured_nothing_reads_one` is the te
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ingest import service_identity
@@ -127,3 +129,65 @@ def test_EVERY_door_ingest_calls_uses_the_one_builder() -> None:
         f"these build the identity headers themselves instead of calling service_headers: {offenders} — "
         "a dedicated credential applied to some doors and not others is not a credential control"
     )
+
+
+def _lineage_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The transport half of the deployed environment: an endpoint, a claimed subject, a shared token."""
+    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://rask-lineage:8000")
+    monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "service-ingest")
+    monkeypatch.setenv("APP_API_TOKEN", "the-shared-bearer")
+    monkeypatch.setenv("RASK_INGEST_SECRETS_FROM_DAPR", "true")
+    monkeypatch.delenv("RASK_LINEAGE_TOKEN_SERVICE_INGEST", raising=False)
+
+
+def _wire_headers(emitter: Any) -> dict[str, str]:
+    """The headers the built transport would actually send.
+
+    Reached through the client rather than asserted on a builder's return value, because a builder
+    that returns the right dict and a caller that never invokes it are indistinguishable from the
+    outside — which is exactly the defect this test exists for.
+    """
+    transport = emitter._client.transport  # private by intent: the wire is the subject of this test
+    return dict(transport.config.custom_headers or {})
+
+
+def test_the_EMIT_presents_the_dedicated_credential_the_READ_path_already_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE WIRE, not the builder. `service_headers` is correct and had ONE of its two lineage callers.
+
+    Ingest holds two clients for the one lineage service: `provenance.py` READS `GET /runs/{id}` with
+    the shared builder, and `lineage.py` WRITES through lineage-kit's own emitter, which knows only
+    `LineageSettings.app_token` — the estate's shared bearer. `service-ingest` is on
+    `LINEAGE_PRIVILEGED_SUBJECTS`, and `dapr_auth.service_principal` refuses the shared token from a
+    privileged name, so every emit was refused.
+
+    Measured on the deployed estate 2026-09-10, and the shape is why nobody saw it: the HTTP lineage
+    door had served exactly two requests in its retained log and answered 401 to both, while 806
+    events arrived over the Dapr topic from producers that do not use this path. A 100% failure rate
+    on the one door ingest uses read as a healthy graph, because the ingest run reports COMPLETE by
+    design (I8 — a landed commit must not become a failed run).
+    """
+    _lineage_env(monkeypatch)
+    monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _c: lambda identity: f"token-for-{identity}")
+
+    from ingest import lineage
+
+    headers = _wire_headers(lineage._emitter())
+    assert headers.get("x-lance-service-identity") == "service-ingest"
+    assert headers.get("dapr-api-token") == "token-for-service-ingest", (
+        "the emit presents the estate's shared bearer, which a privileged subject's door refuses"
+    )
+
+
+def test_with_no_dedicated_credential_the_emit_keeps_the_shared_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An identity the store simply lacks is not privileged as far as this side can tell.
+
+    The door stays the single authority on whether the shared bearer is acceptable — falling back is
+    what keeps an auth-off dev stack, and an estate that has not turned dedicated credentials on,
+    working exactly as before.
+    """
+    _lineage_env(monkeypatch)
+    monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _c: lambda _identity: None)
+
+    from ingest import lineage
+
+    assert _wire_headers(lineage._emitter()).get("dapr-api-token") == "the-shared-bearer"

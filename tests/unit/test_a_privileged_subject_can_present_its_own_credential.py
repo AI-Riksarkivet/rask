@@ -193,3 +193,43 @@ def test_EVERY_PRIVILEGED_SUBJECT_can_present_its_own() -> None:
     subjects = _privileged("LANCE_PRIVILEGED_SUBJECTS") | _privileged("LINEAGE_PRIVILEGED_SUBJECTS")
     unready = [s for s in sorted(subjects) if (owner := owners.get(s)) is not None and owner not in have]
     assert not unready, f"privileged with no client half: {unready} — every call they make will 401"
+
+
+def _emitter_building_modules() -> dict[str, str]:
+    """Every service module that constructs a lineage HTTP emitter, mapped to its source."""
+    found: dict[str, str] = {}
+    for path in (REPO / "services").rglob("*.py"):
+        if "/tests/" in str(path):
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "build_emitter(" in text:
+            found[str(path.relative_to(REPO))] = text
+    return found
+
+
+def test_a_subject_privileged_at_the_LINEAGE_door_credentials_its_EMITTER_too() -> None:
+    """THE GATE ABOVE ASKS THE WRONG QUESTION, and this is the one it should have asked.
+
+    `_services_with_a_client_half` greps a SERVICE for `dedicated_token_for`. A service can define it,
+    use it at one door, and reach a second door through a client that never calls it — which is exactly
+    what ingest did: `provenance.py` READS lineage with the credentialed builder while `lineage.py`
+    WROTE through lineage-kit's `build_emitter()`, whose only token source is `LineageSettings.app_token`,
+    the estate's SHARED bearer. `service-ingest` is on `LINEAGE_PRIVILEGED_SUBJECTS`, and
+    `dapr_auth.service_principal` refuses the shared token from a privileged name, so every emit 401'd
+    while the per-service gate stayed green.
+
+    Measured 2026-09-10 on the deployed estate: `POST /api/v1/lineage` had served two requests in the
+    retained log and refused both, a 100% failure rate on the estate's only HTTP lineage producer,
+    while 806 events reached the graph over the Dapr topic from producers that never take this path.
+
+    So the rule is stated over the CONSTRUCTION SITE rather than the service: whoever builds an emitter
+    resolves the credential in the same module. A zero-argument `build_emitter()` cannot do anything
+    else — it reads the shared bearer and has no way to learn the identity's own.
+    """
+    modules = _emitter_building_modules()
+    assert modules, "no service builds a lineage emitter — this gate is blind"
+    uncredentialed = sorted(name for name, text in modules.items() if "dedicated_token_for" not in text)
+    assert not uncredentialed, (
+        f"these build a lineage emitter without resolving a dedicated credential: {uncredentialed} — "
+        "a privileged subject's emit is refused, and the run still reports COMPLETE"
+    )

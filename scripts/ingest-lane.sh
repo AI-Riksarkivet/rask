@@ -40,6 +40,32 @@ POD_FIXTURE_DIR="/tmp/ingest-fixtures"
 # can be created and bound cleanly.
 PROJECT="${PROJECT:-lane}"
 
+# THE ONE AUTH HELPER every embedded python interpolates, as "$PY_AUTH".
+#
+# It was EIGHT copies and only the provisioning one had learned about the bearer, so `run` still sent
+# the pod's Dapr service token alone. That token is scoped to a single project, and the lane's project
+# is not it: the ingest door refused `audit.action='ingest_service_token' audit.outcome='deny'
+# audit.reason='cross_project'` while provisioning against the very same estate succeeded (measured
+# 2026-09-10). A credential rule that one path holds and another does not is this estate's most
+# repeated defect; there is one copy now, and a site that forgets it has no `_auth` to call at all.
+#
+# The blocks it lands in are DOUBLE-QUOTED shell strings, so this text must contain no backtick and no
+# double quote — either one ends the string and bash reports a syntax error pages away from the cause.
+PY_AUTH="$(
+	cat <<-'PY'
+		def _auth():
+		    # The BEARER first where one is supplied: with dedicated service credentials on, a privileged
+		    # subject's shared token is refused outright, and the ingest door scopes the service token to
+		    # one project. The service token stays as the fallback so a dev stack with auth off behaves
+		    # exactly as before.
+		    bearer = _os.environ.get('LANE_ADMIN_TOKEN')
+		    if bearer:
+		        return {'authorization': 'Bearer ' + bearer}
+		    tok = _os.environ.get('APP_API_TOKEN')
+		    return {'dapr-api-token': tok} if tok else {}
+	PY
+)"
+
 log() { printf '\033[1;36m>> %s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m  OK  %s\033[0m\n' "$*"; }
 die() {
@@ -71,6 +97,12 @@ lane_values() {
 	YAML
 }
 
+# `image.repository` is the REGISTRY; `image.catalog.repository` is a per-component NAME override —
+# two different kinds of value wearing one key name. `lance.catalogImage` feeds the second to
+# `rask.image` AS THE NAME, which prefixes the registry itself, so a registry-qualified value here
+# renders `localhost:5000/localhost:5000/lance-rest-catalog:dev`. Pinned by
+# `tests/unit/test_a_rendered_image_names_its_registry_once.py`, which reads these flags out of this
+# function so the gate cannot drift from what the lane actually passes.
 render() {
 	helm template "$RELEASE" "$ROOT/chart" \
 		--namespace "$NS" \
@@ -78,7 +110,7 @@ render() {
 		-f <(lane_values) \
 		--set-string image.repository="$REGISTRY" \
 		--set-string image.tag="$TAG" \
-		--set-string image.catalog.repository="$REGISTRY/lance-rest-catalog"
+		--set-string image.catalog.repository="lance-rest-catalog"
 }
 
 cmd_deploy() {
@@ -90,6 +122,23 @@ cmd_deploy() {
 
 	kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS"
 
+	# THE LANE MAY CHANGE CONFIGURATION; IT MAY NEVER CHANGE AN IMAGE IT DID NOT BUILD.
+	#
+	# `NS` defaults to `default`, which is the estate's OWN release namespace — so this is not the
+	# isolated slice the split below was written for, it is a second writer to the live release. The
+	# render carries the chart's image DEFAULTS (`:dev`), and applying it rewrites every Deployment to
+	# a tag the registry does not hold. Measured 2026-09-10: twelve Deployments went Pending in one
+	# apply, and `rask-maintenance` — which has no surge replica to fall back on — went down outright.
+	# The fleet's other pods survived only because a surge rollout keeps the old ReplicaSet serving,
+	# which is exactly why the damage was invisible until something restarted.
+	#
+	# Same ruling as the Tilt removal (CLAUDE.md): one owner of the cluster, not two. So every
+	# workload that ALREADY exists keeps the image it is running, and only `ingest` — the one this
+	# script builds and pins itself, two steps below — is allowed to move.
+	local live
+	live="$(mktemp)"
+	kubectl get deployment,statefulset -n "$NS" -o json >"$live" 2>/dev/null || printf '{"items":[]}' >"$live"
+
 	# Split by hand, because a single `kubectl apply -n rask` cannot deliver this manifest:
 	#   * CRDs must be Established BEFORE the CustomResources that use them (Dapr Components, the
 	#     RustFS Tenant) — one apply races that and fails on "no matches for kind";
@@ -98,10 +147,39 @@ cmd_deploy() {
 	#   * helm test hooks are not part of the release and must not be applied at all.
 	local outdir
 	outdir="$(mktemp -d)"
-	uv run --project "$ROOT" python - "$manifest" "$outdir" <<-'PY'
-		import sys, pathlib, yaml
+	uv run --project "$ROOT" python - "$manifest" "$outdir" "$live" "$RELEASE-ingest" <<-'PY'
+		import json, sys, pathlib, yaml
 
 		manifest, outdir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+		live, owned = pathlib.Path(sys.argv[3]), sys.argv[4]
+
+		# (kind, name) -> {container: image} for what is RUNNING, so a rendered default never
+		# overwrites a deployed image. See the rationale above the kubectl that produced this file.
+		deployed = {}
+		for item in (json.loads(live.read_text() or '{"items":[]}').get("items") or []):
+		    containers = ((item.get("spec") or {}).get("template") or {}).get("spec") or {}
+		    deployed[(item["kind"], item["metadata"]["name"])] = {
+		        c["name"]: c["image"] for c in containers.get("containers", []) if c.get("image")
+		    }
+
+		def preserve(doc):
+		    """Restore the running image on every container of an ALREADY-DEPLOYED workload.
+
+		    The lane owns exactly one workload and pins it to a digest itself; everything else in this
+		    namespace belongs to the release, and the render only knows the chart's `:dev` defaults.
+		    Reports each substitution, because a silent one reads as the render having been correct.
+		    """
+		    key = (doc.get("kind"), (doc.get("metadata") or {}).get("name"))
+		    if key[1] == owned or key not in deployed:
+		        return
+		    running = deployed[key]
+		    pod = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+		    for container in pod.get("containers", []):
+		        current = running.get(container.get("name"))
+		        if current and container.get("image") != current:
+		            print(f"   keeping {key[1]}/{container['name']} on {current}")
+		            container["image"] = current
+
 		buckets = {"crds": [], "default": [], "release": []}
 		for doc in yaml.safe_load_all(manifest.read_text()):
 		    if not doc:
@@ -112,13 +190,15 @@ cmd_deploy() {
 		    if doc.get("kind") == "Ingress":
 		        # NEVER apply the estate's Ingress from the lane.
 		        #
-		        # This deploys a SLICE into its own namespace, but the chart's Ingress has no host: its
+		        # This applies a SLICE of the chart, and the chart's Ingress has no host: its
 		        # rules are bare paths, including `/` and `/api`. Applied here it becomes a second
 		        # host-less claim on the same paths, and Traefik picks between them arbitrarily —
 		        # observed 2026-08-04: `/`, `/projects` and `/settings` on the real estate started
 		        # answering FastAPI's {"detail":"Not Found"} because the root was resolving to THIS
 		        # namespace's gateway. Nothing in the lane needs the ingress; it is reached in-cluster.
 		        continue
+		    if doc.get("kind") in ("Deployment", "StatefulSet"):
+		        preserve(doc)
 		    if doc.get("kind") == "CustomResourceDefinition":
 		        buckets["crds"].append(doc)
 		    elif meta.get("namespace") == "default":
@@ -212,14 +292,7 @@ cmd_provision() {
 	kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, os, sys, urllib.request, urllib.error
 import os as _os
-def _auth():
-    # The BEARER first where one is supplied: these are the admin doors. The service token stays as the
-    # fallback so a dev stack with auth off behaves exactly as before.
-    bearer = _os.environ.get('LANE_ADMIN_TOKEN')
-    if bearer:
-        return {'authorization': 'Bearer ' + bearer}
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 base = os.getenv('RASK_CATALOG_URL', 'http://rask-catalog:2333').rstrip('/')
 def post(path, body):
     # THE CREDENTIAL IS APPLIED HERE, and it was not before: this builder named only the content type,
@@ -347,7 +420,7 @@ cmd_run() {
 	# legitimate no-op path, and the run reports COMPLETE at the empty-create version. Every assertion
 	# except the row count passes. Checked here rather than trusted, and re-seeded if absent.
 	local present
-	present="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+	present="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import os
 print(len([f for f in os.listdir('$POD_FIXTURE_DIR') if f.endswith('.tif')]) if os.path.isdir('$POD_FIXTURE_DIR') else 0)
 " 2>/dev/null || echo 0)"
@@ -373,12 +446,10 @@ print(len([f for f in os.listdir('$POD_FIXTURE_DIR') if f.endswith('.tif')]) if 
 	# Timed, because A1 is a CONTRACT: 202 in under a second. Measured inside the cluster so the
 	# number is the handler's, not the port-forward's.
 	local accepted
-	accepted="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+	accepted="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, time, urllib.request
 import os as _os
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 body = json.dumps({
     'kind': 'local-dir',
     'project': '$PROJECT',
@@ -408,12 +479,10 @@ print(json.dumps(payload))
 	log "waiting for the run to reach a terminal state"
 	local body="" run_status=""
 	for _ in $(seq 1 60); do
-		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, urllib.request
 import os as _os
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 _req = urllib.request.Request('http://127.0.0.1:8830/api/ingests/$run_id', headers=_auth())
 with urllib.request.urlopen(_req, timeout=15) as r:
     print(r.read().decode())
@@ -450,12 +519,10 @@ with urllib.request.urlopen(_req, timeout=15) as r:
 
 	log "A2 — the same Idempotency-Key must start NO second run"
 	local repeat
-	repeat="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+	repeat="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, urllib.request
 import os as _os
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 body = json.dumps({'kind':'local-dir','project':'$PROJECT','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
@@ -504,12 +571,10 @@ print(sorted(os.listdir('$POD_FIXTURE_DIR-corrupt')))
 	dataset="a5-$stamp"
 	log "A5 — POST with a corrupt page among good ones"
 	local run_id
-	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, urllib.request
 import os as _os
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 body = json.dumps({'kind':'local-dir','project':'$PROJECT','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR-corrupt','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
@@ -520,11 +585,9 @@ with urllib.request.urlopen(req, timeout=30) as r:
 
 	local body="" status=""
 	for _ in $(seq 1 60); do
-		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import os as _os, urllib.request
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 _req = urllib.request.Request('http://127.0.0.1:8830/api/ingests/$run_id', headers=_auth())
 with urllib.request.urlopen(_req, timeout=15) as r:
     print(r.read().decode())
@@ -601,13 +664,11 @@ print('uploaded to s3://%s/%s' % (bucket, '$prefix'))
 
 	log "A3 — POST, then kill the pod mid-run"
 	local run_id
-	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import json, os, urllib.request
 import os as _os
 from storage import configured_endpoint
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
 body = json.dumps({'kind':'s3-prefix','project':'$PROJECT','dataset':'$dataset',
                    'options':{'bucket':bucket,'prefix':'$prefix','endpoint':configured_endpoint()}}).encode()
@@ -635,11 +696,9 @@ with urllib.request.urlopen(req, timeout=30) as r:
 
 	local body="" status=""
 	for _ in $(seq 1 90); do
-		body="$(kubectl exec -n "$NS" "$newpod" -c ingest -- python -c "
+		body="$(kubectl exec -n "$NS" "$newpod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" python -c "
 import os as _os, urllib.request
-def _auth():
-    tok = _os.environ.get('APP_API_TOKEN')
-    return {'dapr-api-token': tok} if tok else {}
+$PY_AUTH
 _req = urllib.request.Request('http://127.0.0.1:8830/api/ingests/$run_id', headers=_auth())
 with urllib.request.urlopen(_req, timeout=15) as r:
     print(r.read().decode())
