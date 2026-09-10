@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**263 open items**, deduped from 325 raw rows mined out of the seven files above.
+**264 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 18 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 18 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -767,6 +767,26 @@ _Nothing has ever been reclaimed on the live estate, the sweep is unleased and u
   `MAINTENANCE_TRASH_PURGE_ENABLED` remains report-only by default.
 - *Pinned by:* `maintenance/tests/test_the_bucket_walk_does_not_invent_coverage_gaps.py` — a directory
   of files at the bound is not a coverage gap; a directory of directories still is.
+
+**LH-130 · ~~The catalog's distributed compaction doors rewrite fragments with none of the gates its own compact button applies~~ — CLOSED 2026-09-11**
+`catalog` · conditions 2 + 5
+
+- *Closed by:* `850b1274`. `dataplane.commit_compaction` now calls `require_compactable` — the
+  feature-flag evidence gate plus the #114 shallow-clone base-refs guard, the same pair
+  `maintenance.services.optimize` asks before its own `compact_files` and the same pair
+  `maintenance.compact_now` already applied behind `POST /v1/table/{id}/maintenance/compact`.
+- *What was wrong:* the estate published TWO writer-tier routes onto one operation, both exposed at
+  the ingress under `/api/catalog`, and gated one. `compaction_plan` / `compaction_commit` reached
+  `lance_optimize` directly. So which answer a caller got depended on which door they happened to
+  call — worse than an ungated door alone, because the estate looked gated.
+- *Why the gate is on COMMIT:* planning is a manifest read that moves no byte and mints no version;
+  the commit publishes the new files and drops the old fragments. A plan nobody commits costs nothing,
+  and gating the read half would refuse callers who are only asking a question.
+- *Pinned by:* `tests/unit/test_maintenance_runs_on_workers.py` — one test that a shallow clone is
+  refused, and a second that the two doors give the IDENTICAL reason rather than merely both refusing.
+  An operator told "no" at one door and something else at the other cannot tell whether they met one
+  policy or two.
+- *Found by the backlog re-measure while checking a different row.* It was in no backlog row at all.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
