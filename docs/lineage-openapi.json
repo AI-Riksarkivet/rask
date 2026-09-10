@@ -1585,6 +1585,17 @@
             ],
             "title": "Author"
           },
+          "cascade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cascade Id"
+          },
           "consumed_from_version": {
             "anyOf": [
               {
@@ -3193,7 +3204,7 @@
     },
     "/datasets/{name}/producers": {
       "get": {
-        "description": "The runs that wrote ``name`` \u2014 who / when / how. Gated on ``can_get_metadata``.",
+        "description": "The runs that wrote ``name`` \u2014 who / when / how. Gated on ``can_get_metadata``.\n\nBounded like ``/readers`` beside it: newest-first, so the page a caller gets is the part that\nanswers \"what wrote this\", and the tail it loses is history the run board serves instead.",
         "operationId": "get_producers_datasets__name__producers_get",
         "parameters": [
           {
@@ -3203,6 +3214,18 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           },
           {
