@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**263 open items**, deduped from 325 raw rows mined out of the seven files above.
+**262 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 116 | 20 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 115 | 19 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -597,15 +597,6 @@ _The platform claims to run any workload on any engine, and today the deployed s
 ### Events are correct
 
 _The cascade, the inbox and every downstream consumer are driven by events, so a trigger that does not fire or a payload that names the wrong thing fails silently and is reported by nothing._
-
-**LH-086 · The outbox drain has NEVER worked: `drop_event` needs PutObject, lineage's policy grants only DeleteObject, so every staged event is re-published to every subscriber every tick, forever**
-`lineage, service-kit, chart` · **HIGH**
-
-- *Why open:* CAUSE FOUND 2026-09-10 by staging two probe events (one minimal, one copied from a real event) and reading the strand, which the diagnostics formatter now surfaces. **It is not a graph write** — this row said it was, and that was wrong. `ingest_event` SUCCEEDS and the re-publish SUCCEEDS; only `outbox.drop_event` fails:
-  `error="When creating key '_lineage_outbox/' in bucket 'lance-catalog': AWS Error ACCESS_DENIED during PutObject operation"`.
-  pyarrow's `S3FileSystem.delete_file` re-creates the parent directory marker, so the DELETE path issues a **PutObject** on `_lineage_outbox/`. The chart's policy statement is named `DrainItsOwnOutboxAndNothingElse` and grants exactly `s3:DeleteObject` on `*/_lineage_outbox/*` — right intent, wrong mechanism, and wrong resource too (the marker is `_lineage_outbox/`, not under `/*`). A least-privilege control that cannot perform the one operation it exists to permit.
-  **THE CONSEQUENCE IS WORSE THAN A STRAND, and is why this is HIGH.** Both probe runs reached the graph and stayed staged, so every tick re-ingests (idempotent, harmless) and **RE-PUBLISHES to `lineage.events.v1`** — every 5 minutes, for the lifetime of the estate. Subscribers include the medallion's `/bronze-arrival`, which fires the cascade, and notifications, which interrupts people. `reconcile_cron.py`'s comment argues a duplicate is safe under at-least-once; that is true of ONE redelivery and false of an unbounded loop, and `drop_event` is the only thing that bounds it.
-- *Closes when:* `drop_event` deletes through the storage seam (`packages/storage`'s `s3_client`, which service-kit already depends on) instead of pyarrow's `delete_file`, so a DELETE needs only `DeleteObject` and the shipped policy stops being decorative. Widening the policy to grant PutObject is the WRONG fix: it would let the relay forge staged events and would leave a delete path that writes. Then re-stage a probe and watch `outbox_drained` go non-zero — and clear the two `00000000-0000-5000-8000-00000lh086*` probes, which are re-publishing on every tick until it lands.
 
 **LH-088 · Every lineage restart replays the retained stream and logs ~125 `dapr_dead_letter_parked` ERRORs claiming provenance was lost**
 `lineage, notifications` · med · **blocked:** owner decision (a)/(b)/(c) — both repairs touch security-relevant behaviour

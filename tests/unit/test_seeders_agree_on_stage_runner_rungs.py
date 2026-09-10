@@ -41,9 +41,22 @@ _PYTHON = REPO / "scripts/seed_estate.py"
 #: The cascade identities whose rung decides whether a tier can be written at all.
 _STAGE_RUNNERS = ("service-silver-to-gold", "service-bronze-to-silver", "service-medallion-producer")
 
-#: Rungs that actually carry `can_create_table` (= writer) and `can_update_tag` (= owner). `validator`
-#: is deliberately absent: it yields `can_promote` and nothing else, which is the whole finding.
-_SUFFICIENT = {"owner"}
+#: The CAPABILITIES a cascade identity must end up holding, mapped to every rung that carries each.
+#:
+#: Stated as capabilities rather than as a set of sufficient rungs, because since 2026-09-10 no single
+#: rung carries both: `writer` grants `can_create_table`, the new `publisher` rung grants
+#: `can_update_tag`, and `owner` still grants both — which is why "any one of {owner}" was an adequate
+#: test before the split and is a vacuous one after it. The capability form is also strictly stronger:
+#: it refuses an identity missing EITHER half, where the old shape passed anything holding one rung
+#: from a sufficient set.
+#:
+#: `validator` is deliberately absent from both rows: it yields `can_promote` and nothing else, which
+#: is the finding this file was written for. It is still GRANTED to the cascade (it is the second door
+#: on `/publish`, for an accept-assertions override) — granted, and never sufficient.
+_REQUIRED_CAPABILITIES: dict[str, frozenset[str]] = {
+    "can_create_table": frozenset({"writer", "owner"}),
+    "can_update_tag": frozenset({"publisher", "owner"}),
+}
 
 
 def _shell_grants() -> dict[str, set[str]]:
@@ -85,17 +98,28 @@ def test_both_seeders_are_actually_parsed() -> None:
     assert "service-silver-to-gold" in python, f"{_PYTHON.name} no longer grants the gold stage runner anything"
 
 
-def test_a_cascade_stage_runner_is_granted_a_rung_that_can_actually_write_its_tier() -> None:
-    """`validator` yields `can_promote` only — it can neither describe nor create the table it promotes."""
+def test_a_cascade_stage_runner_is_granted_rungs_that_can_actually_write_its_tier() -> None:
+    """Every capability the cascade needs is carried by SOME rung it was actually granted.
+
+    `validator` yields `can_promote` only — it can neither describe nor create the table it promotes,
+    which is what made a validator-only seed 403 on its own tier. Since the owner rung was narrowed
+    (2026-09-10) the requirement is a PAIR rather than one rung, so this asks per capability: a seed
+    holding `writer` without `publisher` publishes nothing, and one holding `publisher` without
+    `writer` cannot create the table it would publish. Both fail here rather than in a stage runner log.
+    """
     offenders: list[str] = []
     for source, grants in ((_SHELL.name, _shell_grants()), (_PYTHON.name, _python_grants())):
         for identity in _STAGE_RUNNERS:
             rungs = grants.get(identity)
-            if rungs and not (rungs & _SUFFICIENT):
-                offenders.append(f"{source}: {identity} gets {sorted(rungs)}, none of which carries can_create_table/can_update_tag")
+            if not rungs:
+                continue
+            missing = sorted(cap for cap, carriers in _REQUIRED_CAPABILITIES.items() if not (rungs & carriers))
+            if missing:
+                offenders.append(f"{source}: {identity} gets {sorted(rungs)}, which carries none of {missing}")
 
     assert not offenders, (
-        "a cascade identity is seeded with a rung that cannot write the tier it owns, so its stage 403s on describe and create:\n  " + "\n  ".join(offenders)
+        "a cascade identity is seeded with rungs that cannot write the tier it owns, so its stage 403s on describe, create or publish:\n  "
+        + "\n  ".join(offenders)
     )
 
 
