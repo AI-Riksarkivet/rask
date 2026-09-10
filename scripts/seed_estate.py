@@ -292,16 +292,23 @@ DEMO_ESTATE = Estate(
         # the stage runner that raised it — and without this grant the whole review path ends in
         # `403 can_update_tag`, AFTER a person has already said yes. Measured 2026-08-23: the
         # orchestration reported FAILED with exactly that, and the approval was silently worthless.
-        *(
-            Grant(subject, rung, obj)
-            for subject, obj in (
-                ("user:service-bronze-to-silver", "namespace:acme-silver"),
-                ("user:service-silver-to-gold", "namespace:acme-gold"),
-                ("user:service-medallion-producer", "namespace:acme-silver"),
-                ("user:service-medallion-producer", "namespace:acme-gold"),
-            )
-            for rung in ("writer", "publisher", "validator")
-        ),
+        # WRITTEN OUT, never looped. `test_seeders_agree_on_stage_runner_rungs.py` parses these literals
+        # and compares them against `seed_medallion_fga.sh`'s, which is the only thing keeping two
+        # seeders in two languages agreeing about one identity's rungs. A generator expression is
+        # shorter and makes the file unreadable to that gate — its non-vacuity check caught exactly
+        # that on 2026-09-10, reporting "no longer grants the gold stage runner anything".
+        Grant("user:service-bronze-to-silver", "writer", "namespace:acme-silver"),
+        Grant("user:service-bronze-to-silver", "publisher", "namespace:acme-silver"),
+        Grant("user:service-bronze-to-silver", "validator", "namespace:acme-silver"),
+        Grant("user:service-silver-to-gold", "writer", "namespace:acme-gold"),
+        Grant("user:service-silver-to-gold", "publisher", "namespace:acme-gold"),
+        Grant("user:service-silver-to-gold", "validator", "namespace:acme-gold"),
+        Grant("user:service-medallion-producer", "writer", "namespace:acme-silver"),
+        Grant("user:service-medallion-producer", "publisher", "namespace:acme-silver"),
+        Grant("user:service-medallion-producer", "validator", "namespace:acme-silver"),
+        Grant("user:service-medallion-producer", "writer", "namespace:acme-gold"),
+        Grant("user:service-medallion-producer", "publisher", "namespace:acme-gold"),
+        Grant("user:service-medallion-producer", "validator", "namespace:acme-gold"),
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("user:carol", "assignee", "role:validators"),
         Grant("role:validators#assignee", "validator", "namespace:acme-gold"),

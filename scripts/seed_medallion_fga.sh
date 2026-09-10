@@ -164,12 +164,18 @@ if [ -n "$PROJECT" ]; then
   done
   w user:service-medallion-producer writer "namespace:$PROJECT-bronze"
   w user:service-ingest writer "namespace:$PROJECT-bronze"
-  w user:service-bronze-to-silver owner "namespace:$PROJECT-silver"
-  w user:service-silver-to-gold owner "namespace:$PROJECT-gold"
-  # The producer completes an approved hold in its own process — see the note above the
-  # single-tenant rungs. Omitted here until 2026-08-26, so a TENANT's approved promotion 403'd.
-  w user:service-medallion-producer owner "namespace:$PROJECT-silver"
-  w user:service-medallion-producer owner "namespace:$PROJECT-gold"
+  # THE SAME THREE RUNGS the estate-level block grants, never `owner` — see the reasoning there.
+  # This block is per-TENANT and was missed on the first pass of that narrowing (2026-09-10); the
+  # estate block alone would have left every project-qualified tenant over-granted while the change
+  # looked applied. `test_seeders_agree_on_stage_runner_rungs.py` is what caught it.
+  for rung in writer publisher validator; do
+    w "user:service-bronze-to-silver" "$rung" "namespace:$PROJECT-silver"
+    w "user:service-silver-to-gold" "$rung" "namespace:$PROJECT-gold"
+    # The producer completes an approved hold in its own process — see the note above the
+    # single-tenant rungs. Omitted here until 2026-08-26, so a TENANT's approved promotion 403'd.
+    w "user:service-medallion-producer" "$rung" "namespace:$PROJECT-silver"
+    w "user:service-medallion-producer" "$rung" "namespace:$PROJECT-gold"
+  done
   # NO READ GRANT FOR `service-web` — its absence is the control (Q17-8). That identity is what
   # `bff.ts` sends when there is NO session, so granting it reader on a tenant's tiers grants the
   # PUBLIC those tiers. Four such grants were seeded here, and this script is a documented

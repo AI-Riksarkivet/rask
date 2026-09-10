@@ -28,6 +28,7 @@ import pyarrow.fs as pafs
 
 from service_kit.lakehouse import outbox_metrics
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from storage import s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -70,7 +71,58 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, e
 
 def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> None:
     """Delete the staged event (called after a publish returns / after the relay re-ingests it). An
-    already-absent object is fine (idempotent). Blocking IO; callers threadpool it."""
+    already-absent object is fine (idempotent). Blocking IO; callers threadpool it.
+
+    A DELETE MUST NEED ONLY DELETE PERMISSION, and through pyarrow it did not. `S3FileSystem.delete_file`
+    re-creates the parent directory marker after removing the object, so this path issued a **PutObject**
+    on the prefix — and the relay's identity is granted, deliberately and correctly, only
+    `s3:DeleteObject` on its own outbox (`rustfs-scoped-users.yaml`, and
+    `test_the_lineage_plane_writes_nothing_it_does_not_own.py` pins that it gets no `PutObject`
+    anywhere). So the drain had never once succeeded:
+
+        lineage_outbox_event_stranded error="When creating key '_lineage_outbox/' in bucket
+        'lance-catalog': AWS Error ACCESS_DENIED during PutObject operation" (measured 2026-09-10)
+
+    The consequence was not a stranded object. `reconcile_cron` ingests, re-publishes, THEN drops —
+    the first two succeed, so every staged event was redelivered to `lineage.events.v1` on every tick
+    for the lifetime of the estate, the medallion's `/bronze-arrival` among the subscribers. The drop
+    is the only thing that ends that loop.
+
+    S3 goes through the estate's CLIENT seam (`packages/storage`), which issues a plain DeleteObject
+    and writes nothing. Everything else keeps the filesystem path: a local outbox is a real directory,
+    and `delete_file` there needs no object-store permissions at all.
+    """
+    if outbox_uri.startswith("s3://") and storage_options.get("endpoint"):
+        bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
+        # BOTH SPELLINGS, and reading one would have been a silent misfire in production. The canonical
+        # builder (`lance_storage_options`) emits `aws_`-prefixed keys precisely because the bare ones do
+        # not displace the pods' ambient AWS_* environment — while the catalog's own `storage_options()`
+        # returns the BARE form (measured 2026-09-10 against the running pod). Both genuinely reach here:
+        # `reconcile_cron` passes the first, `catalog/api/control_relay.py` the second.
+        #
+        # A reader that knows one spelling gets `None` from the other and boto3 falls back to its default
+        # chain. The lineage pod carries NO ambient `AWS_*` (measured, same day), so that is not a delete
+        # signed as the wrong identity — it is a delete with no credential at all, which leaves the object
+        # staged and the drain exactly as broken as before. A deployed fix that changes nothing is harder
+        # to notice than one that crashes. No test process has an ambient AWS_* environment either, so the
+        # spelling that fails in a pod passes every unit test; the pair is pinned in
+        # `test_the_outbox_drain_needs_no_write_permission.py` rather than left to whichever caller arrives
+        # first.
+        client = s3_client(
+            storage_options.get("endpoint"),
+            access_key=storage_options.get("aws_access_key_id") or storage_options.get("access_key_id"),
+            secret_key=storage_options.get("aws_secret_access_key") or storage_options.get("secret_access_key"),
+            session_token=storage_options.get("aws_session_token") or storage_options.get("session_token"),
+            region=storage_options.get("region"),
+        )
+        # An absent object already satisfies the post-condition, and S3's DeleteObject is idempotent for
+        # a missing key (204, no error) — so this suppression is for a NON-S3 double or backend that
+        # raises instead, the same tolerance the filesystem path below spells the same way. Catching
+        # boto3's `client.exceptions.NoSuchKey` would couple this seam to one client's exception shape
+        # for a case that client does not raise.
+        with suppress(FileNotFoundError):
+            client.delete_object(Bucket=bucket, Key=f"{prefix.rstrip('/')}/{key}.json" if prefix else f"{key}.json")
+        return
     fs, base = fs_and_base(outbox_uri, storage_options)
     with suppress(FileNotFoundError):
         fs.delete_file(f"{base}/{key}.json")
