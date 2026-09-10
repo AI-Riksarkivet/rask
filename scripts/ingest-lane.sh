@@ -175,10 +175,18 @@ ingest_pod() {
 	# `app.kubernetes.io/component`, not `app` — the chart uses the recommended-labels set, and a
 	# selector that matches nothing returns success with empty output, so a wrong label here reads
 	# as "no pod" rather than as a broken query.
+	#
+	# A TERMINATING POD IS STILL `status.phase=Running`. It carries a `deletionTimestamp` and nothing
+	# else changes, so the field selector alone happily returns a pod whose container is already gone —
+	# and `items[-1:]` took the LAST match, which right after a rollout is the dying one. Measured
+	# 2026-09-10: every step answered `unable to upgrade connection: container not found ("ingest")`
+	# immediately after `provision`, whose `kubectl set env` rolls the deployment. That is precisely
+	# when this script is run, so the trap fired on the common path rather than a rare one.
 	kubectl get pod -n "$NS" \
 		-l app.kubernetes.io/component=ingest \
 		--field-selector=status.phase=Running \
-		-o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null
+		-o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.deletionTimestamp}{"\n"}{end}' 2>/dev/null |
+		awk '$2 == "" { name = $1 } END { if (name != "") print name }'
 }
 
 # The fixtures are written INTO the pod rather than baked into the image or mounted from a
@@ -263,6 +271,33 @@ for path, body, fatal in (
 	# Authorizing the service for the tenant it just created is what an operator does, so the lane does
 	# it too rather than reaching for a project the deployment happens to already allow.
 	log "authorizing the ingest service token for $PROJECT"
+	# THE GRANT, not only the env var below. Scoping the pod to a project tells the SERVICE which tenant
+	# it serves; it writes no tuple, so the identity still could not see the tier namespace an admin had
+	# just created. The run then died reporting that namespace unprovisioned — its existence probe was
+	# answered 403 and, before the caller learned to tell 403 from 404, that read as absent (measured
+	# 2026-09-10). writer is the rung: the lane creates a table under the namespace and reads its
+	# metadata back, and anything narrower refuses the create this lane exists to drive.
+	local pod_for_grant
+	pod_for_grant="$(ingest_pod)" || die "no ingest pod"
+	kubectl exec -n "$NS" "$pod_for_grant" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" LANE_PROJECT="$PROJECT" python -c "
+import json, os, sys, urllib.request, urllib.error
+bearer = os.environ.get('LANE_ADMIN_TOKEN')
+if not bearer:
+    print('   no LANE_ADMIN_TOKEN - skipping the namespace grant (auth-off stack)')
+    sys.exit(0)
+base = os.getenv('RASK_CATALOG_URL', 'http://rask-catalog:2333').rstrip('/')
+tier = os.environ['LANE_PROJECT'] + '-' + os.environ.get('LANE_BRONZE_TIER', 'bronze')
+body = {'user': 'user:service-ingest', 'relation': 'writer', 'object': 'namespace:' + tier}
+req = urllib.request.Request(base + '/v1/access/tuples', data=json.dumps(body).encode(),
+                             headers={'Content-Type': 'application/json', 'authorization': 'Bearer ' + bearer}, method='POST')
+try:
+    with urllib.request.urlopen(req, timeout=60) as r:
+        print('   grant writer on namespace:%s -> %s' % (tier, r.status))
+except urllib.error.HTTPError as e:
+    print('   grant writer on namespace:%s -> %s %s' % (tier, e.code, e.read().decode()[:160]))
+    if e.code != 409:
+        sys.exit(1)
+" || die "could not grant the ingest identity writer on the tier namespace"
 	# …and enable the fixture source, pointed at the ONE directory the lane seeds. Unset (the chart
 	# default) means local-dir is refused outright, which is what a production ingest wants and
 	# what made the first run after the confinement fail every unit with "local-dir is not
