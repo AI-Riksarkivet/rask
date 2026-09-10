@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**268 open items**, deduped from 325 raw rows mined out of the seven files above.
+**267 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 121 | 24 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 120 | 23 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 5 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -111,16 +111,11 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* Found 2026-09-10 while verifying LH-121, and it is a DIFFERENT defect that the author bug was hiding. With the identity fix deployed, the silver stage runs now land — three `lance-medallion/embed_features` events are in the durable feed where every one was refused before — and the bronze head is still absent: `lance_ray_ingest` appears in ZERO of 120 scanned events, and a direct `/runs/{id}` lookup answers 404. The event is not lost in transit and not refused: the producer's outbox holds 0 staged objects (so the publish succeeded and the staged copy was dropped on the happy path), lineage's dead-letter backlog reports `depth: 0`, and no denial names the producer's subject. Lineage is receiving and accepting on `/lineage-events` throughout. So the head is emitted, published, acked and NOT STORED, by a path that reports success at every step. The consequence is the shape the graph is for: silver runs exist with no bronze run above them, so "what produced this row" stops one hop short of the ingest that actually did.
 - *Closes when:* Drive one `/produce` and trace the ONE event through lineage's ingest — whether `/lineage-events` is handed it at all (log the event id on entry, which nothing does today), and if so which branch discards it. Suspect the run-id derivation first: `schemas/events.py` mints `run_id_for(project + operation + token)` when a project is set and `f"{operation}-{token}"` otherwise, so a head emitted under one shape and looked up under the other reads as absent while being stored — that would make this a MEASUREMENT error rather than a loss, and it must be ruled out before anything is changed.
 
-**LH-126 · Lineage consumes its own event stream through an EPHEMERAL consumer, so every restart replays the whole stream**
-`lineage, chart` · **HIGH**
-
-- *Why open:* Read off NATS 2026-09-10 (`nats consumer ls LINEAGE`). The stream has five consumers and the one serving lineage is `lHXphyQp` — a random name, created at 15:23:17, which is when the lineage pod last started. `medallion-producer-durable`, `notifications-durable` and `maintenance-durable` are durable; lineage's is not. An ephemeral consumer keeps no cursor, so on every restart it is recreated and re-reads from the stream's start: measured, a fresh lineage pod immediately drove a flood of `ingest_run_mutation_denied` / `lineage_replay_not_reauthorized` over hundreds of historical events, all of which had already been processed. That is the same flood § LH-002's neighbour records as "~125 ERRORs per restart claiming provenance loss" — it is not a provenance defect at all, it is a subscription that cannot remember what it has seen. It also makes every restart O(stream) rather than O(new), and the stream is 2,445 messages / 5.8 MiB today.
-- *Closes when:* The lineage subscription names a DURABLE consumer, the way the other three subscribers already do, and a restart is measured to process only what arrived while the pod was down. The chart's own comment records that this component is `deliverPolicy=all` + ephemeral "BY DESIGN (replay …)" — so the ruling to overturn is written down, and overturning it needs the replay use case answered another way (the durable can be reset deliberately when a replay is actually wanted).
-
 **LH-127 · `lance-ray-durable` has been dead for 26 days and is accumulating the whole stream**
 `lineage, compute, chart` · med
 
 - *Why open:* Measured 2026-09-10: on the LINEAGE stream, consumer `lance-ray-durable` reports 2,445 unprocessed messages and a last delivery of 26 days ago — it is bound, durable, and nothing is draining it. Every event the estate emits accrues to it forever. A durable consumer nobody reads is not free: JetStream cannot age messages out of a stream while a consumer still needs them, so this one pins the entire retention window and the 5.8 MiB grows without bound. Nothing reports it — the depth is visible only by asking NATS directly.
+**NOT the same shape as lineage's own consumer, which was filed beside this and STRUCK.** Lineage's is ephemeral BY DESIGN — the chart states it ("a durable cursor would defeat its replay-rebuilds-the-graph recovery story") and `_is_replay` accepts what the replay re-presents, logging at INFO. This one is the opposite: a DURABLE consumer with a queue group that nothing is attached to, so nothing accepts and nothing acks.
 - *Closes when:* Establish whether anything is meant to consume `lance-ray-durable` (the name suggests the Ray lane). If yes, fix the subscriber and drain it; if no, delete the consumer so retention can do its job. Then add the depth of every consumer on the estate's streams to whatever the maintenance sweep already reports, so a dead subscriber is visible without a NATS client.
 
 **LH-128 · The dead-letter admin surface reports depth 0 while the DLQ stream holds 4,758 messages**
