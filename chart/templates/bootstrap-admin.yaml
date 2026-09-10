@@ -1,8 +1,18 @@
-{{- if and .Values.auth.enabled .Values.auth.bootstrapAdmin }}
-# Estate-admin bootstrap (goal cond 4): the chart itself seeds the FIRST estate admin instead of an
+{{- if .Values.auth.enabled }}
+# FGA grant bootstrap (goal cond 4): the chart itself seeds the estate's standing tuples instead of an
 # out-of-band `fga tuple write`. A post-install/post-upgrade hook grants `owner` on the FGA root object
 # (warehouse:lance_catalog — RASK_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
-# what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin.
+# what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin, plus
+# one rung per SERVICE principal that needs a standing capability.
+#
+# THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
+# was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first
+# owner rendered no Job at all and every service grant with it. Measured on the live k3s estate
+# 2026-09-10: `auth.bootstrapAdmin: ""`, `kubectl get jobs` listed no bootstrap Job, and the tuples the
+# notifications reconciler, the sweep and ingest's outbox vend each depend on were unreachable — three
+# controls that could not fire, behind a values key that has nothing to do with any of them. Who the
+# first HUMAN owner is, is a deployment's choice; that the sweep may maintain and that ingest may stage
+# are properties of the software.
 # There is no fga CLI image, so the Job reuses the catalog image (ships httpx) and speaks the OpenFGA
 # HTTP API directly: use the PINNED store id when auth.fgaStoreId sets one (rendered as
 # RASK_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
@@ -210,8 +220,11 @@ spec:
               {{- $stagers = append $stagers ((get (.Values.services.ingest.env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") | default "service-ingest") }}
               {{- end }}
               stagers = {{ $stagers | toJson }}
+              # The admin grant is the one that really is conditional on the subject: with no
+              # `auth.bootstrapAdmin` there is no human to make an owner, and the service rungs below
+              # are unaffected by that.
               grants = (
-                  [(user, "owner")]
+                  ([(user, "owner")] if subject else [])
                   + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
                   + [(m if ":" in m else f"user:{m}", "maintainer") for m in maintainers]
                   + [(s if ":" in s else f"user:{s}", "event_stager") for s in stagers]

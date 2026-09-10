@@ -1098,6 +1098,31 @@ def test_the_lineage_stager_holds_can_stage_events_on_the_estate_root() -> None:
     assert "service-ingest" in rendered.split("stagers = [")[1].split("]")[0], "ingest — the one keyless stager — is not in the list"
 
 
+def test_the_service_grants_do_not_depend_on_a_human_admin_being_named() -> None:
+    """CONTRACT: the SERVICE tuples this hook writes render whether or not `auth.bootstrapAdmin` is set.
+
+    The two facts are independent. "Who is the estate's first human owner" is a deployment's choice and
+    is frequently left unset; "the notifications reconciler may READ the estate", "the sweep may
+    MAINTAIN it", "ingest may STAGE events" are properties of the software, true of every install that
+    runs those services. Gating all of them behind the human made every one of them unreachable on an
+    estate that never named an admin.
+
+    MEASURED on the live k3s estate 2026-09-10, which is why this is a gate rather than a comment:
+    `auth.bootstrapAdmin: ""`, so `helm get` showed no bootstrap Job at all and `kubectl get jobs`
+    listed none. Every grant the hook is responsible for was unreachable — the `can_stage_events` tuple
+    CP-007 depends on could never have been written, and the door would have answered 403 to the one
+    caller it was built for while looking correctly deployed.
+
+    The admin's own `owner` grant stays conditional on the subject, which is the half that really does
+    depend on it.
+    """
+    rendered = _helm_template("auth.bootstrapAdmin=", "maintenance.vendWriteCredentials=true")
+    assert "stagers = [" in rendered, "the stager grant vanishes when no human admin is named"
+    assert "maintainers = [" in rendered, "the maintainer grant vanishes when no human admin is named"
+    assert "readers = [" in rendered, "the reader grants vanish when no human admin is named"
+    assert '"event_stager") for s in stagers' in rendered, "the stager list is not granted its rung"
+
+
 def test_every_first_party_deployment_is_hardened() -> None:
     """The docs claim "every Deployment has probes + preStop". The gateway had NEITHER (audit 2026-07-14).
 
