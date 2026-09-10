@@ -342,3 +342,63 @@ func (m *Rask) ScanZoneImage(
 	}
 	return m.scanContainer(ctx, m.ZoneImage(src, zone, "", "", ""), severity, ignoreUnfixed)
 }
+
+// sbomContainer emits a CycloneDX SBOM for an already-built image, reusing the tarball seam
+// `scanContainer` uses so the SBOM describes the EXACT bytes that were scanned and published.
+//
+// AN SBOM IS AN ARTIFACT, NOT A CONTROL, and that distinction is why this ships while image SIGNING
+// does not (§ Q17-26: a signature nothing verifies adds a control that cannot fire). An inventory is
+// useful the moment a CVE lands and somebody has to answer "which images carry this package" — it
+// needs no verifier to have value, and trivy already has the image mounted to answer it.
+//
+// CycloneDX rather than SPDX: trivy emits both, and CycloneDX is what the scanners downstream of a
+// registry consume. One format, chosen once, beats a flag nobody sets.
+func (m *Rask) sbomContainer(img *dagger.Container, name string) *dagger.File {
+	// MOUNTED UNDER THE IMAGE'S OWN NAME, not `/img.tar` as the scanner does. trivy takes the scan
+	// TARGET as `metadata.component.name`, so a tarball called `img.tar` produces an SBOM that does
+	// not say which image it describes — fine for a gate that only reports pass/fail, useless for an
+	// inventory somebody files and comes back to when a CVE lands. Verified: the emitted document
+	// carries this path.
+	tar := "/" + name + ".tar"
+	return m.trivyBase().
+		WithMountedFile(tar, img.AsTarball()).
+		WithExec([]string{
+			"trivy", "image", "--input", tar,
+			"--format", "cyclonedx", "--output", "/sbom.cdx.json",
+			// The SBOM is an inventory, never a gate: a non-zero exit here would make producing the
+			// artefact depend on the image being clean, which is exactly backwards — the image you
+			// most need an inventory for is the one with findings.
+			"--exit-code", "0",
+		}).
+		File("/sbom.cdx.json")
+}
+
+// Sbom builds a deployable from .docker/<name>.dockerfile and emits its CycloneDX SBOM.
+//
+//	dagger call sbom --name=gateway export --path=./sbom-gateway.cdx.json
+func (m *Rask) Sbom(
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+	// Dockerfile stem under .docker/, identical to `dagger call image --name=…`.
+	name string,
+) (*dagger.File, error) {
+	if name == "" {
+		return nil, fmt.Errorf("sbom: --name is required (the .docker/<stem>.dockerfile stem)")
+	}
+	return m.sbomContainer(m.Image(src, name, "", "", "", nil), name), nil
+}
+
+// ZoneSbom mirrors Sbom for a micro-frontend zone, as ScanZoneImage mirrors ScanImage.
+func (m *Rask) ZoneSbom(
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+	// Zone directory under frontend/microfrontends.
+	zone string,
+) (*dagger.File, error) {
+	if zone == "" {
+		return nil, fmt.Errorf("zone-sbom: --zone is required")
+	}
+	return m.sbomContainer(m.ZoneImage(src, zone, "", "", ""), "web-"+zone), nil
+}

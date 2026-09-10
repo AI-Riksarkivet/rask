@@ -57,3 +57,9 @@ chart/charts/
 # every lane run, so tracking it makes every verification show up as a source change.
 .a11-run-id
 .a5-run-id
+
+# SBOM exports (`make sbom NAME=…`). A generated inventory, ~326 KB per image, reproducible from the
+# image at any time — so it is an ARTEFACT to hand to a scanner or an auditor, never a tracked file.
+# Ignored rather than left loose because Dagger snapshots the HOST, not git: an untracked root file
+# enters every image build context, and this estate already carries one uncited 102 KB root artefact.
+sbom-*.cdx.json

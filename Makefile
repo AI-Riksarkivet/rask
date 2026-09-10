@@ -1,4 +1,4 @@
-.PHONY: backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -299,6 +299,19 @@ scan-secrets:
 scan-image:
 	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=gateway"; exit 1; }
 	dagger call scan-image --name=$(NAME)
+
+# THE INVENTORY, not a gate. `scan-image` answers "is this image clean today"; this answers "what is
+# IN it", which is the question a new CVE asks and the one nothing here could answer. Emitted from the
+# same tarball the scanner reads, so the SBOM describes the exact bytes that were scanned.
+sbom: ## CycloneDX SBOM for one image (NAME=gateway) — writes ./sbom-<name>.cdx.json
+	@test -n "$(NAME)" || { echo "  !! usage: make sbom NAME=gateway"; exit 1; }
+	dagger call sbom --name=$(NAME) export --path=./sbom-$(NAME).cdx.json
+	@echo "  -> ./sbom-$(NAME).cdx.json"
+
+zone-sbom: ## CycloneDX SBOM for one micro-frontend zone (ZONE=lakehouse)
+	@test -n "$(ZONE)" || { echo "  !! usage: make zone-sbom ZONE=lakehouse"; exit 1; }
+	dagger call zone-sbom --zone=$(ZONE) export --path=./sbom-web-$(ZONE).cdx.json
+	@echo "  -> ./sbom-web-$(ZONE).cdx.json"
 
 scan-zone-image:
 	@test -n "$(ZONE)" || { echo "  !! usage: make scan-zone-image ZONE=home"; exit 1; }
