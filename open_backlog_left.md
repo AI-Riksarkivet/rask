@@ -323,14 +323,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   catalog's model is older than the chart's grants. The failure was visible only as a job that failed
   on every upgrade and was never chased.
 
-**LH-142 · Credential vending 401s on EVERY maintenance rewrite, so every rewrite is signed by the ambient ROOT key**
+**LH-142 · Credential vending 401s on EVERY maintenance rewrite, so the STS path is inert and every rewrite is signed by the ambient process credential**
 `maintenance, catalog, chart` · **HIGH** · found 2026-09-11 by reading the running estate, not by a review
 
 - *Measured, and the ratio is exact.* 600 `maintenance.services.credentials` records since 20:00 on the
   live estate split **300 / 300**: every one is either `credential vending unavailable for <table> (401)`
   or `write credential AMBIENT for <table> — nothing vended; this rewrite is signed by the root key`.
   A perfect 1:1 pairing and **zero** successful scoped vends. So the STS machinery the estate's
-  zero-trust storage rule is built on is doing nothing, and the root credential is doing the work.
+  zero-trust storage rule is built on is inert, and every rewrite uses the process credential instead.
+  **NOT the tenant root, and this row said so at first by quoting the deployed log.** That message is
+  the OLD wording; `credentials.py` has since corrected it in place — "NAME THE KEY, do not rank it.
+  'the root key' is an assertion this function cannot make" — and measured on the running pod,
+  `MAINTENANCE_S3_ACCESS_KEY_ID=rask-maintenance`, a scoped identity. The defect is real and narrower
+  than "root": the blast radius is the maintenance identity's whole scope instead of one table prefix
+  for 900 seconds, rather than the tenant's everything.
 - *401, not 403, and the distinction is the whole diagnosis.* 403 is "this identity may not"; 401 is
   "the presented credential may not CLAIM this identity" — the refusal `service_principal` raises when a
   privileged subject arrives with the SHARED bearer instead of its dedicated token. `openbao.yaml`'s own
