@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**268 open items**, deduped from 325 raw rows mined out of the seven files above.
+**269 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 121 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 122 | 21 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -234,6 +234,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   the safe direction and arguably correct — the reconciler exists to answer "does the graph agree with
   the table" — but it should be a deliberate scope statement rather than an accident, and reporting
   branch coverage as EXCLUDED (the way the sweep reports its other exclusions) would make it visible.
+
+**LH-135 · The FGA model the estate RUNS does not match the model the repo ships**
+`catalog, service-kit` · med · filed 2026-09-11
+
+- *MEASURED, and the two halves disagree:* `model.fga` and `model.json` both define
+  `warehouse#event_stager` (the DSL twice, the JSON once), the deployed catalog image contains both,
+  and `fga.provision()` was driven by hand against the live store — it returned a NEW model id
+  (`01M284TTR5S8F9RK8AQAKQSC0Q`) and that model, read back by id, contains **zero** occurrences of
+  the relation. So the write path reports success and publishes a model missing a relation its own
+  source defines.
+- *The symptom it produces:* `bootstrap-admin` fails every upgrade on
+  `Invalid tuple 'warehouse:lance_catalog#event_stager@user:service-ingest'. Reason: relation
+  'warehouse#event_stager' not found`, so the ingest plane never receives its event-staging grant and
+  the job's other grants land silently around it.
+- *WHAT IS NOT THE CAUSE, ruled out rather than assumed:* the catalog is the designated provisioner
+  (`main.py:140`, `provision=True`), it carries no `fga_store_id`/`fga_model_id` pins in its
+  environment, and the image is current (`main-5a0d4065`). The remaining candidates are what
+  `load_model()` actually reads versus what the DSL says, and whether the JSON's relation is defined
+  on the type it appears to be.
+- *Not on the critical path, which is why it is filed rather than chased:* the estate is healthy and
+  the release is `deployed`. It costs one grant, on one service, and it has been failing since before
+  the store swap — every upgrade, unnoticed, which is the part that makes it a row.
 
 **LH-134 · Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
