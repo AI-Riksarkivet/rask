@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**267 open items**, deduped from 325 raw rows mined out of the seven files above.
+**268 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 120 | 20 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 121 | 21 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -234,6 +234,30 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   the safe direction and arguably correct — the reconciler exists to answer "does the graph agree with
   the table" — but it should be a deliberate scope statement rather than an accident, and reporting
   branch coverage as EXCLUDED (the way the sweep reports its other exclusions) would make it visible.
+
+**LH-134 · Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart**
+`catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
+
+- *WHAT HAPPENED.* The object store was restarted during the LH-133 cutover and never came back. It
+  answered `/health` 200 and `/health/ready` 503 forever, with its own log saying why: repeated
+  `walk_dir` timeouts (`timeout_ms: 5000`) over `.rustfs.sys/config/iam/`, then
+  `IAM failed to load initial data after 3 attempts`, then **`IAM bootstrap retry failed; service
+  remains degraded`**. It does not retry past that, so the store is permanently unavailable.
+- *THE COUNT IS THE CAUSE:* **107,485 entries** under `.rustfs.sys/config/iam/sts/` — one
+  `<access-key>/identity.json` per `AssumeRole`. `vending.mode: sts` has been the default since
+  2026-09-03 and every vend mints one; nothing prunes them, and the IAM load walks all of them inside
+  a 5-second disk timeout.
+- *IT IS NOT A PROPERTY OF THAT STORE.* Measured on the NEW store roughly twenty minutes after
+  cutover: **867** entries already under `.minio.sys/config/iam/sts/`. MinIO documents a purge of
+  EXPIRED STS credentials, which RustFS appears not to have — but "documents" is not "observed", and
+  the failure mode is a store that will not start, so it has to be driven rather than assumed.
+- *WHAT MAKES IT A CONDITION-5 ROW rather than housekeeping:* nothing measured it, nothing alerted on
+  it, and the symptom is indistinguishable from a hung store. The estate ran for days one restart away
+  from an object store that could not come back, and the only reason it surfaced is that a migration
+  restarted the pod on purpose.
+- *Closes when:* the entry count is BOUNDED — observed falling, or pruned — and something reports it.
+  A vend TTL of 900 s means every record older than that is garbage by construction, so the check is
+  cheap: count the prefix, alert on growth that does not fall. Do not close it on documentation.
 
 **LH-133 · Swap the object store from RustFS to MinIO, so a non-root identity can vend**
 `chart, storage, catalog` · **HIGH** · owner decision 2026-09-11 · unblocks LH-051
