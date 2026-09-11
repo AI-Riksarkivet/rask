@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
+**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 16 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -385,9 +385,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   other project's edges read fine.
 - *What it costs:* the silver→gold lag for that project is not measured. The cascade may be healthy or
   stalled and the monitor cannot say, which is the failure mode a lag monitor exists to prevent.
-- *403, not 401, so the identity authenticated and lacks a RUNG* — a read grant on that tenant's gold
-  dataset. The likeliest cause is a missing or unseeded tuple for that project rather than anything in
-  the monitor.
+- **THE CAUSE IS NOT A MISSING GRANT — the dataset does not exist.** Read from OpenFGA and the graph:
+  `table:advref31-gold$catalog` has ZERO tuples, and `advref31-gold$catalog` has no Dataset node at all.
+  Its siblings do (`table:advref31-silver$features` and `advref31-bronze$events` both carry owner +
+  parent, and `namespace:advref31-gold` exists with an owner and a warehouse parent but no `child`). So
+  the cascade never reached gold for that project, and the monitor is correctly unable to read producers
+  for a dataset that was never produced. A 403 is what "no tuples" looks like from a door.
+- *And it is NOT a second instance of [[LH-137]]'s composed-path refusal, checked rather than assumed:*
+  `advref31-bronze$events` does sit at a composed `s3://advref31-wh/medallion/bronze`, which is the
+  bind86 shape — but sampling every `medallion_stage_from_uri_refused` since 2026-09-09 returns 8 of 8
+  for bind86 and none for advref31. Same path shape, different story.
 - *The open question worth answering first:* whether the same grant gap reaches beyond the monitor. A
   403 on `/producers` says the medallion identity cannot read that dataset's lineage at all, and if the
   tuple is simply absent for `advref31` then other doors scoped to the same rung are affected too. Check
@@ -405,6 +412,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Closes when:* the monitor reads that project's producers — by granting the rung if the tuple is
   missing, or by naming why that project differs — and a blind edge is reported as a distinct state
   rather than only as an unreadable-edge warning, so "not measured" cannot look like "not lagging".
+
+**LH-144 · Three gold tables exist in the lineage graph with ZERO authorization tuples — created, ungoverned, and unreachable**
+`catalog` · **HIGH** · found 2026-09-11 by reading OpenFGA directly
+
+- *Measured.* Of 14 gold datasets carrying a `source_uri` in the live graph, **3 have no FGA tuples at
+  all** — `durproof-gold$catalog`, `gateprobe-gold$catalog`, `uiproof-gold$catalog`. Not a missing
+  grant: no owner, no parent, nothing. Their healthy siblings carry both
+  (`table:acme-gold$catalog` → `namespace:acme-gold parent`, `user:service-silver-to-gold owner`).
+- *This is the exact state `seed_ownership_or_compensate` exists to prevent*, and `tables.py` describes
+  it in its own words: "a failed seed left a declared-only table that its declarer could not see, could
+  not drop, and could not re-declare (native `AlreadyExists`), reserving the id against everyone,
+  permanently (F3)." Three tables are in it.
+- *Why it is HIGH rather than tidy:* a table absent from the authorization graph cannot be read,
+  maintained, dropped or re-created by anyone, including the identity that made it. Every door gated on
+  any relation refuses, and the refusals are invisible — the lineage service logs none of the 403s it
+  issues, so nothing reports the condition from either end.
+- *What is NOT yet known:* whether the compensation failed or was never reached, and whether the
+  population is larger than gold — this sampled only the 14 gold datasets that carry a `source_uri`.
+  A full sweep needs each catalog table id checked against a `Read`, which is one call per table.
+- *Closes when:* The three are either governed (seeded to their real owner) or removed, the population
+  is measured across all tiers rather than gold alone, and a table with no tuples is DETECTED —
+  a sweep that reports ungoverned tables, since today nothing does and the estate cannot tell.
 
 **LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
 `catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
