@@ -15,6 +15,36 @@ task-registry gap (a25e0fee), and the three provenance/event defects in this ver
 
 Delete this file when its remaining rows are drained.
 
+## Worked on 2026-09-11, after the verdict below was written
+
+Closed, each built with Dagger, deployed to k3s and observed on the estate: the reconcile tip/hole
+defects (`95e6adb4`, `5ac935a2`, `c127b9bd`), the BYO task-registry gap (`a25e0fee`), the cascade's
+stage-version misfiling and the `compact_table` bus refusal and the train-FAIL subject (`790d78e3`),
+the read-door 403/404 rule (`3e4e2b54`), `branches/delete`'s rung (`6fc3748c`) and the outbox relay's
+authorization (`8b53d0a4`). Freshness took the owner's 48 h (`e121fb3e`).
+
+**The DLQ question is fully analysed and needs only a decision — do not re-derive it.** Dapr 1.18.1
+dead-letters an app-returned DROP immediately, while `docs/DECISIONS.md:1347-1352` states the intended
+contract in its own words: "a DROP is an ACK, so Dapr neither redelivers nor dead-letters and
+`medallion_stage_refused_total` is the only evidence" — i.e. DLQ = exhaustion, counter = refusals.
+Three options, costed:
+
+* **A — remove the `deadLetterTopic`** (`medallion/api/events.py:50`). One line, and it does NOT deliver
+  the documented intent: refusals and exhaustion reach the DLQ by the same route, so removing it also
+  stops parking genuine exhaustion (`docs/RESILIENCE.md` gap #2 reverts).
+* **B — ack deterministic refusals** (`transform.py::_drop`, `_QUALITY_BLOCKED`). Delivers the intent
+  exactly, and retires a verb the medallion uses in FOUR producers (`transform._drop` with 11 call
+  sites, `transform._QUALITY_BLOCKED`, `promotions._DROP`, `train._DROP`) and asserts 32 times across
+  12 test files, one of them named `test_a_drop_says_which_refusal_it_was.py`. Built and reverted
+  2026-09-11 after measuring 9 immediate failures.
+* **C — annotate DROPs and route them separately.** Delivers the intent AND keeps both the verb and the
+  exhaustion net; touches the metric contract. Recommended on the measurements above.
+
+The cost is live, not theoretical: `medallion/api/dlq.py` logs every parked message at ERROR
+("operators alert on it"), so each deliberate refusal raises an operator-alertable error. A lineage pod
+roll on 2026-09-11 produced 3 replay parks — down from the 175 the audit measured, because the
+`compact_table` fix now lets maintenance events clear the bus door.
+
 ---
 
 ## Trajectory
