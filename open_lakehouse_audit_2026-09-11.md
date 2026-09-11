@@ -222,3 +222,46 @@ Ranked by severity. Nothing HIGH survived.
 - **Not root-caused, only observed:** the `unconfined_uri` refusal stopping every `bind86` silver→gold hop, and `/compaction_plan` answering 404 for medallion tier ids. Both are outside every condition-finder's scope and appear in no backlog row.
 - **The regression in this audit's own reconcile fix** (phantom `reconcile` producer on an already-provenanced tip) is known and being fixed separately; its fix was not reviewed here.
 - **Adversarial pass coverage:** the 13 findings above are the ONLY ones treated as real. Any first-run finding not in that list was neither confirmed nor refuted by an adversarial pass and should be treated as unverified, not as false.
+
+
+## Deploying the credential fix — the rotation, worked out 2026-09-11
+
+`344e9763` changes how every dedicated service token is DERIVED, so deploying it rotates all of them.
+The mechanics below are read off the chart and the code rather than assumed, because the failure mode is
+a half-rotated estate where one side presents the old token and the other expects the new one.
+
+**What regenerates, and when.**
+
+1. `make k3s-up` bumps the release revision. The OpenBao seed Job's name carries
+   `rask.bootstrapRev` = `r<Release.Revision>` (`openbao.yaml:136`), so a NEW Job is created per upgrade
+   and the seed re-runs — it does not skip as already-complete. OpenBao then holds the new tokens.
+2. The k8s Secret lags. This estate runs `externalSecrets.enabled: true`, and ESO's
+   `refreshInterval` is **`1h`** (`values.yaml:2796`), so `rask-infra-credentials` can hold the OLD
+   value for up to an hour after OpenBao holds the new one. That window is the whole risk.
+
+**Who holds which half.**
+
+* **Presenters** — pods with no Dapr sidecar, reading the token by `secretKeyRef` from
+  `rask-infra-credentials`: the seven web zones (`frontends.yaml:274`,
+  `service-token-service-web`), and the Ray head, which mounts the trainer and every stage-runner token
+  (`external-secrets.yaml:61,70` — its own comment: "the Ray head mounts it by `secretKeyRef` because it
+  runs no daprd"). These need a pod restart to see a changed Secret.
+* **Verifiers** — services that read the bundle from the Dapr secret store and compare with
+  `secrets.compare_digest`. `_secret_bundle` is `lru_cache`d for the PROCESS lifetime
+  (`dapr_auth.py:246`, whose own docstring says "rotating a dedicated credential means a rollout"), so
+  these need a restart too.
+
+**Therefore the order that avoids a mutual 401:** upgrade, confirm the seed Job completed, force the
+ESO sync (or wait out the hour) and confirm `rask-infra-credentials` actually changed, and only then
+restart presenters and verifiers together. Restarting either side before the Secret has synced
+guarantees the mismatch rather than avoiding it.
+
+**How to know it worked:** the trainer's token should equal `sha256("service-trainer-<dapr.appToken>")`
+truncated to 40 hex — and specifically must NOT equal the pre-fix value, which is
+`sha256("service-trainer-%!s(<nil>)")[:40]`. A render with a different `dapr.appToken` must produce a
+different token; that is what `test_the_dedicated_service_token_actually_contains_a_secret.py` asserts
+offline and what the live Secret should now satisfy.
+
+**Not verified here:** whether the installed ESO version honours a force-sync annotation, so "force the
+sync" may reduce to deleting the synced Secret and letting the operator recreate it. Worth checking
+before relying on a prompt rotation rather than the hour.
