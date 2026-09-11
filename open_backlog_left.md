@@ -467,8 +467,18 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Evidence:* `grep -rln 'LANCE CLAIM\|Q13' . --include=*.md` returns exactly one file: open_backlog_left.md (the row at line 217). The 13 `LANCE CLAIM` rows lived in open_lakehouse_diff_left.md, deleted by commit 8e91896e ("docs(backlog): one register of what is LEFT", 2026-09-10) — `git show 8e91896e^:open_lakehouse_diff_left.md | grep -c 'LANCE CLAIM'` = 13, and several were already re-measured on pylance 11 before deletion (Q13-2 and Q13-3 carry "STRUCK 2026-09-09 — RE-MEASURED ON pylance 11"). Q13-5 survives as its own row (LH-009). The lock is pylance 11.0.0 (uv.lock; pyproject.toml:72). The residual: claims measured on older pylance still stand in packages/service-kit/src/service_kit/lakehouse/features.py:109,228,245,400,500,508, objectfs.py:215, blobs.py:63,197, work_items.py:129, lance_session.py:6, lance_metrics.py:8 and .claude/skills/rask-lance-catalog/SKILL.md:287,297,317,474,491,518.
 - *What would reopen it:* Finding a Q13 section with `LANCE CLAIM` rows in any tracked file at HEAD would restore the row as written.
 
-**LH-025 · `create_table`'s `properties` land only in the namespace declare and the response echo, never on the dataset's schema metadata**
-`catalog` · med
+**LH-025 · ~~`create_table`'s properties never reach the dataset~~ — CLOSED 2026-09-11**
+`catalog` · was med
+
+- *Closed by `9dc53371`.* `_write_blob_into` now merges the caller's properties into the dataset's
+  schema metadata — the only place holding both the freshly-written dataset and the properties.
+  MERGE, never `replace=True`: a replace drops the internal `lineage.*` coordinates. Nothing has
+  written them at create time, but the rule belongs to the seam rather than the call site.
+- *Pinned through the REAL write* (`dir` backend + a real `lance.write_dataset`), read back through
+  `read_schema_metadata` — the door a client uses. A test asserting on the response body would have
+  passed the whole time the defect existed, because the echo was never the broken part; the eviction
+  case is asserted through the RAW dataset, since `read_schema_metadata` filters `lineage.*` out by
+  design and could never have seen them disappear.
 
 - *Why open:* Verified still true: `catalog/services/dataplane.py:324` passes `properties` into `ns.declare_table(...)` and lines 305/308/369 echo them back, but nothing writes them onto the dataset — while `update_schema_metadata` (dataplane.py:1423) proves the write path exists. So §7.1's 'stamped at create' is not readable off the table.
 - *Closes when:* In `catalog.services.dataplane.create_table`, merge `parsed_properties` into the dataset's schema metadata through the same seam `update_schema_metadata` uses (never `replace=True`, so internal `lineage.*` keys survive), pinned by a test that reads the properties back OFF the Lance dataset.
@@ -501,8 +511,20 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Evidence:* Measured on the locked SDK: `lance_namespace/__init__.py:931` raises `UnsupportedOperationError("Not supported: batch_commit_tables")`, inherited unimplemented by `lance.namespace.DirectoryNamespace` (driven directly against a real `connect("dir", …)`: two consecutive calls both raise it, never TableAlreadyExists). The estate runs that impl: services/catalog/src/catalog/core/config.py:42 `impl: str = Field(default="dir", alias="LANCE_REST_IMPL")` and chart/templates/services.yaml:70 `- { name: LANCE_REST_IMPL, value: "dir" }`. The route raises at services/catalog/src/catalog/api/v1/endpoints/versions.py:152 (`native.call`), so the non-convergent seed loop at :176-190 and its `ServiceUnavailableError` at :191-196 are dead code on this deployment. The reason nothing noticed: tests/unit/test_batch_commit_seeding.py:43 monkeypatches `ver.native.call` to a no-op, so the only test of this route never touches a backend.
 - *What would reopen it:* Show `LANCE_REST_IMPL` set to a backend that implements `batch_commit_tables` (e.g. `rest`) in a deployed values file, or a `dir`-backend call to `batch_commit_tables` that returns a response instead of UnsupportedOperationError.
 
-**LH-030 · A partially-failed warehouse delete does not report which parts failed**
-`catalog` · med
+**LH-030 · ~~A partially-failed warehouse delete reports nothing~~ — CLOSED 2026-09-11**
+`catalog` · was med
+
+- *Closed by `80587a3a`.* The endpoint already LOGGED what landed and then re-raised, so the caller
+  received a problem body that said nothing: a delete that did nothing and one that destroyed three
+  namespaces before failing were identical on the wire, and they need different next actions.
+- *Carried as RFC 9457 extension members* (§3.2) rather than in `detail`, which is deliberately
+  redacted on a 5xx because it can carry paths, DSNs and driver text. `problem_detail` refuses to let
+  an extension redefine a reserved field, so it can add to the body and never rewrite `status` or
+  un-redact `detail`.
+- *`PartiallyApplied` is a DECLARED carrier,* not an attribute stapled onto a base error — the first
+  attempt set `problem_extra` on a bare `ServiceUnavailableError` and `ty` refused it, where the
+  tempting repair is a suppression. It subclasses ServiceUnavailable because every step is idempotent
+  and the recovery is to re-issue the same call, which is what a 503 asks for.
 
 - *Why open:* The delete response is not honest about partial failure, so the caller cannot tell what was destroyed from what survived.
 - *Closes when:* Return a per-object outcome in the warehouse delete response, with a test that forces a mid-delete failure.
