@@ -205,11 +205,27 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   propagate down the cascade. The predicate exists unused (`changes._UPDATED`); what is missing is the
   publication delta using it. Condition 4 is not fully claimable until it does.
 
-**LH-009 · The lineage graph keys a dataset version by `(dataset, N)` where Lance's identity is `(branch, N)`, so a branch write reconciles as `storage_loss`**
-`lineage, maintenance` · med · **blocked:** the branch-governance item (branch-aware FGA object + vending)
+**LH-009 · ~~branch-blind reconcile~~ — THE CORRUPTING HALF CLOSED 2026-09-11; a coverage gap remains**
+`lineage` · was med
 
-- *Why open:* `lineage/core/reconcile.py:118` takes `(dataset, graph_version, storage_version)` and nothing else, and `read_storage_version(uri)` opens MAIN — `lance.dataset(uri)` has no branch argument there. The only `branch` the lineage models handle is `models.py:305`, the git `sourceCodeLocation` facet. Not live only because nothing inside rask branches yet; the fix changes the node key every reader resolves against.
-- *Closes when:* Key the graph's dataset-version node by `(branch, N)` and give `read_storage_version` a branch argument; land it with the branch-aware `canonical_object_id` work.
+- *Closed by:* `d5f1f19c` + the pin in `services/lineage/tests/test_the_reconcile_legs_agree_on_one_ref.py`.
+  Reconciliation compares three things and acts DESTRUCTIVELY on the difference — it MERGEs a synthetic
+  run and a versioned WROTE edge. The comparison is only meaningful if all three legs name one ref, and
+  they did not: `LATEST_WRITE_VERSION` returned whichever write was most recent by `event_time`
+  INCLUDING one that landed on a branch, and that was compared against main's on-disk version. A branch
+  write therefore read as main drift and triggered a back-fill, on a 300 s tick.
+- *All three legs now mean MAIN, and that is pinned as a SET rather than one assertion each* — the
+  failure mode is one leg becoming branch-aware while the others do not:
+
+      graph    LATEST_WRITE_VERSION   filters `w.ref IS NULL`
+      storage  read_storage_version   opens `lance.dataset(uri)`, which is main only
+      repair   backfill_write         stamps no ref, so it records the main write it read
+
+- *WHAT REMAINS IS A COVERAGE GAP, not corruption:* a branch is never reconciled at all, because the
+  storage leg only ever opens main. A branch that drifts is invisible rather than mis-reported. That is
+  the safe direction and arguably correct — the reconciler exists to answer "does the graph agree with
+  the table" — but it should be a deliberate scope statement rather than an accident, and reporting
+  branch coverage as EXCLUDED (the way the sweep reports its other exclusions) would make it visible.
 
 **LH-010 · HTR-lane cascade residuals: the P7b re-cut, the bronze→silver geometry stage runners, and populating the in-dataset `lineage` column**
 
