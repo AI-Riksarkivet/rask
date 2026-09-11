@@ -448,10 +448,34 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 _Multi-tenancy is the product claim; every item here is a place where one tenant's data, credentials or grants are protected by convention rather than by an enforced check._
 
 **LH-051 · `rask-catalog` is the last service presenting the RustFS root key `rustfsadmin` as its S3 identity**
-`catalog, storage, chart` · **HIGH** · **blocked:** owner decision — what may the thing that grants access itself reach, when the set of warehouses is minted at runtime (held jointly with open_ingest_design.md §2 and open_gateway.md Phase 2)
+`catalog, storage, chart` · **HIGH** · **blocked:** owner decision — narrowed to TWO options by measurement
 
-- *Why open:* Re-measured on the running pods 2026-09-10: maintenance, medallion, lineage, viewer and ingest each hold their own scoped identity (`rask-*`, secret half delivered via `LANCE_SECRETS_FROM_DAPR`), and only `LANCE_S3_ACCESS_KEY_ID=rustfsadmin` remains (chart/templates/services.yaml:92-94, values.yaml:1517-1518). It cannot be fixed by copying the other four: an STS session policy can only RESTRICT the role it is cut from, while the catalog vends for warehouses minted at RUNTIME — a role narrowed to today's buckets cannot vend tomorrow's, and a role covering every future bucket is root wearing another name.
-- *Closes when:* Owner picks the identity shape for a runtime-vending service (a role policy the warehouse registry maintains as warehouses are minted, an STS role assumed per vend, or accepting the widest role bounded by network/audit/rotation); then provision `rask-catalog` the way `rustfs.medallionAccessKey`/`maintenanceAccessKey` are — chart pre/post-upgrade provisioning hook, key defaulted to the provisioned user — and extend `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py`.
+- *Why open:* Re-measured on the running pods 2026-09-10: maintenance, medallion, lineage, viewer and
+  ingest each hold their own scoped identity, and only `LANCE_S3_ACCESS_KEY_ID=rustfsadmin` remains
+  (`chart/templates/services.yaml:92-94`). It cannot be fixed by copying the other five: an STS session
+  policy can only RESTRICT the role it is cut from, while the catalog vends for warehouses minted at
+  RUNTIME — a role narrowed to today's buckets cannot vend tomorrow's, and a role covering every future
+  bucket is root wearing another name.
+- **MEASURED 2026-09-11 — "ASSUME A ROLE PER VEND" IS NOT AVAILABLE ON THIS BACKEND, so one of the
+  three candidate answers is struck.** Probed against the live RustFS STS from inside the cluster:
+
+      AssumeRole from a SCOPED caller (rask-ray-compute)  -> REFUSED
+      AssumeRole from the ROOT caller (rustfsadmin)       -> ACCEPTED
+
+  RustFS delegates from the CALLER and does not resolve permissions for the `RoleArn`, so a catalog
+  holding a narrow identity cannot assume a wider role to vend with. `vending.StsVendor`'s docstring
+  records AssumeRole as "MEASURED" working from the Ray head on 2026-08-30 — true, but that head held
+  the ROOT key at the time (`cc75585d` corrected it), so what the measurement proved is narrower than
+  it reads: that root can assume, not that the flow is caller-agnostic.
+- *So the decision is between TWO options, not three:*
+  1. **A role policy the warehouse registry MAINTAINS** — the mint path updates the vending identity's
+     policy as warehouses are created. Keeps the identity genuinely bounded; costs a write to the
+     storage backend's policy on every warehouse mint, and a reconciler for when that write is lost.
+  2. **Accept the widest role, bounded by network + audit + rotation** — what runs today, made
+     deliberate instead of accidental, with the compensating controls named and tested.
+- *Closes when:* the owner picks one; then provision `rask-catalog` the way
+  `rustfs.medallionAccessKey`/`maintenanceAccessKey` are (chart provisioning hook, key defaulted to the
+  provisioned user) and extend `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py`.
 
 **LH-128 · ~~A cascade identity is still `owner` of every TABLE it registers, because create-on-parent seeds self-ownership~~ — STRUCK 2026-09-10 (ALREADY FIXED)**
 
