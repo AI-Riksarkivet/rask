@@ -44,8 +44,27 @@ class StorageUnreadable(Exception):
     """The dataset could not be OPENED — its state is unknown, which is not the same as gone."""
 
 
+def _names_a_storage_location(uri: str) -> bool:
+    """Could this string address storage at all? A scheme, or an absolute path.
+
+    A RELATIVE uri is not a fact about the data. `lance.dataset("medallion/bronze")` answers "not
+    found", which :func:`reads_as_absent` matches and the caller classifies MISSING_ON_STORAGE — so a
+    dataset whose graph URI was recorded relative is reported DESTROYED on every tick, forever, because
+    nothing rewrites it. Counted on the live graph 2026-09-11: 60 of 1162 Dataset nodes carry one,
+    including one named `probe-relative-loc`.
+
+    NOT RESOLVED AGAINST A ROOT, deliberately. A warehouse-bound table belongs to its warehouse's root,
+    so joining against a configured one would turn an honest failure into a confident wrong answer. The
+    repair needs an authoritative source and a place to live; classifying honestly needs neither.
+    """
+    return uri.startswith("/") or "://" in uri
+
+
 def read_storage_version(uri: str, storage_options: dict[str, str]) -> int | None:
     """The current on-disk Lance version at ``uri`` — ``None`` ONLY when the dataset is genuinely absent.
+
+    A uri that names no storage location at all — a RELATIVE path — raises before any open is attempted:
+    it is a malformed name rather than evidence about the data, and the open would answer "not found".
 
     A missing dataset is a normal "no storage version" (it may not have been written yet), not an error.
     Anything else — an unsupported manifest feature flag, missing credentials, a bad endpoint or scheme,
@@ -61,6 +80,8 @@ def read_storage_version(uri: str, storage_options: dict[str, str]) -> int | Non
     out. `service_kit.lancekit.absence` holds the vocabulary because three other seams asked the same
     question with wider lists and got the opposite answer for a missing bucket.
     """
+    if not _names_a_storage_location(uri):
+        raise StorageUnreadable(f"{uri!r} names no storage location — a relative path cannot say whether the data is there")
     try:
         return int(lance.dataset(uri, storage_options=storage_options).version)
     except BaseException as exc:
