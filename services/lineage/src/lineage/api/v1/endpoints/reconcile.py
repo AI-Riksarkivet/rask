@@ -18,6 +18,7 @@ from lineage.core.reconcile import (
     read_dangling_blob_columns,
     read_latest_write_age_hours,
     read_storage_version,
+    read_storage_versions,
     reconcile,
 )
 from lineage.schemas import ReconcileStatus
@@ -40,6 +41,13 @@ async def get_reconcile(name: str, repository: RepositoryDep, settings: Settings
     ``WROTE`` edge — surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim
     with no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the
     Lance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.
+
+    ``versions_without_lineage`` is the axis the version comparison cannot answer: it compares two
+    MAXIMA, so a write whose event was lost and which a later write superseded leaves both equal and the
+    dataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered
+    in_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here — this door
+    reports the holes and the cron sweep is what recovers them, so an operator asking a question never
+    mutates the graph as a side effect.
     """
     graph_version = await repository.latest_write_version(name)
     uri = await repository.source_uri(name)
@@ -54,4 +62,7 @@ async def get_reconcile(name: str, repository: RepositoryDep, settings: Settings
         if settings.freshness_budget_hours > 0:
             age = await run_in_threadpool(read_latest_write_age_hours, uri, opts)
             status.stale = age is not None and age > settings.freshness_budget_hours
+        on_disk = await run_in_threadpool(read_storage_versions, uri, opts)
+        if on_disk is not None:
+            status.versions_without_lineage = sorted(set(on_disk) - await repository.write_versions(name))
     return status

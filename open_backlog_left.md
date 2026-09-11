@@ -472,6 +472,53 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* On a plain `pa.string()` column every JSON function and the JSON scalar index fail (`json_get_string` coercion error; 'A JSON index can only be created on a Binary or LargeBinary field') — a silently unqueryable provenance column. pyarrow is pinned to 24.0.0 where `pa.json_()` works, so the fallback is dead code today, which is exactly why nobody will notice when it stops being dead.
 - *Closes when:* Delete the `except (AttributeError, ArrowNotImplementedError, TypeError)` fallback in `scripts/medallion_demo.py::write_gold` so a `pa.json_()` failure raises loudly.
 
+**LH-136 · ~~The reconcile sweep compares two MAXIMA, so a lost lineage event below the tip is never found and the dataset reports `in_sync`~~ — FIXED 2026-09-11**
+`lineage` · was **HIGH** · owner condition 1 (a write's provenance survives it)
+
+- *FOUND BY DRIVING THE LIVE ESTATE 2026-09-11, not by reading a row.* `reconcile` compared
+  `latest_write_version` (the graph's newest `WROTE` edge) against the dataset's current on-disk
+  version. Two maxima can agree while an intermediate version has no edge at all, so a write whose
+  lineage event was lost and which a later write then superseded was invisible: the sweep classified
+  the dataset `in_sync`, and `BACKFILLABLE_STATES` — the only path to recovery — was never entered.
+  The provenance of that version was gone permanently, and nothing else in the estate looked for it.
+- *MEASURED, on the deployed catalog and lineage services:*
+  - `bronze$events` answered `{"in_sync": true, "graph_version": 87, "storage_version": 87}` while its
+    retained versions **76 (`Overwrite`), 80, 82 and 83 (`Update`)** carried no lineage event.
+  - `transcripts_v2$annotations` answered `{"in_sync": true, "graph_version": 7, "storage_version": 7}`
+    with versions **1, 2 and 4** un-provenanced.
+  - Estate-wide, **8 of 29 retained data-operation versions held no provenance**, under a reconciler
+    reporting perfect health on every one of them. Lance's own transaction log is what separates the
+    two classes: `Append`/`Overwrite`/`Update` changed what the table says, while `Rewrite`,
+    `BaseOperation` and `CreateIndex` are maintenance and are not expected to carry provenance.
+- *THE HOLE NEEDS NO CATALOG DOOR, which is why it is a provenance property rather than an endpoint
+  bug.* A write-tier vended STS credential grants `PutObject` on `<table-prefix>/*`, and
+  `core/vending.py:148-155` says in those words that this "also covers `_versions/`" — so the holder
+  can commit a whole Lance version client-side, manifest included. Driven end to end: a vended write
+  credential appended version 2 to a governed table; `/history` reported `{"version": 2, "operation":
+  "Append"}` and the graph held one event, for version 1. **The estate's production direct-writers are
+  all legitimate users of that right** — `scripts/ray_stage_job.py` commits silver and gold with
+  `write_dataset`/`merge_insert`/`delete` against the URI, and maintenance's in-pod compaction rewrites
+  and reclaims versions — so denying `_versions/` in the session policy would break the cascade. The
+  writer emits its provenance voluntarily; this sweep is the floor under that, and the floor had a hole.
+- *FIXED.* `core/reconcile.py` gains `read_storage_versions` (one manifest-directory listing, the same
+  call the freshness axis already pays) and `_recover_holes`; the repository gains `write_versions`
+  (`cypher.WRITE_VERSIONS`, `w.ref IS NULL` so a branch's own version sequence cannot answer for
+  main's); `ReconcileStatus.versions_without_lineage` and `SweepReport.provenance_holes` report it, and
+  the cron back-fills each hole with the same minimal edge the tip back-fill already writes.
+- *THREE PROPERTIES THE FIX IS PINNED ON*
+  (`tests/unit/test_the_reconcile_sweep_sees_provenance_holes_below_the_tip.py`): the comparison is
+  ONE-DIRECTIONAL (`cleanup_old_versions` reclaims manifests, so a graph version storage no longer has
+  is not a finding — reading that direction would make every maintained dataset permanently red, which
+  is how an axis gets switched off); the axis is OFF without an injected reader; and an UNREADABLE
+  dataset is never probed, because that absence is already the version check's finding.
+- *WHAT IT DOES NOT RECOVER, stated so the axis is not mistaken for more than it is.* The back-filled
+  edge carries `author='reconcile'` and no inputs — storage can supply THAT a version was written and
+  its schema, never who wrote it or what it derived from. A hole recurring on the same dataset names a
+  producer that is not emitting, which is a defect upstream; the recovery is a floor, not a substitute.
+  Recovery is capped at `MAX_HOLES_BACKFILLED_PER_TICK` (25) per dataset per tick and the remainder is
+  logged — an UNTRACKED dataset has every retained version as a hole, and an uncapped tick would make
+  its cost a function of the largest history in the estate. The REPORT is never truncated.
+
 **LH-014 · The DIY provenance recipe (`stamp_stage`, `source_rowid`, the tier contract) is written down nowhere**
 `medallion, lineage` · low
 

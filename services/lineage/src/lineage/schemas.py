@@ -50,6 +50,11 @@ class ReconcileStatus(BaseModel):
     # the dataset's CURRENT storage schema no longer carries — the estate-wide re-check of the
     # gate's column_declared assertion (a write that bypassed the stage runner skips the gate; this doesn't).
     missing_declared_columns: list[str] = Field(default_factory=list)
+    # Provenance holes BELOW the tip: versions retained on disk that the graph holds no WROTE edge for.
+    # The version axis above compares two maxima, so it reports in_sync for a dataset whose intermediate
+    # write lost its event and was then superseded. Measured 2026-09-11 on the live estate: bronze$events
+    # answered in_sync at 87/87 with versions 76, 80, 82 and 83 carrying no lineage at all.
+    versions_without_lineage: list[int] = Field(default_factory=list)
 
 
 class DatasetRef(BaseModel):

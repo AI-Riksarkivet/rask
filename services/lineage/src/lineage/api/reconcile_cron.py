@@ -29,6 +29,7 @@ from lineage.core.reconcile import (
     read_latest_write_age_hours,
     read_storage_schema,
     read_storage_version,
+    read_storage_versions,
     reconcile_all,
 )
 from lineage.models import RunEvent, author_sub_from_payload
@@ -44,7 +45,7 @@ log = logging.getLogger(__name__)
 class SweepReport(BaseModel):
     """One cron tick's findings — the tick's response body and the shape its log line counts.
 
-    A model rather than a hand-built ``dict[str, Any]``: the tick reports SIX independent finding classes
+    A model rather than a hand-built ``dict[str, Any]``: the tick reports SEVEN independent finding classes
     plus two counters, and the response was assembled twice in one function body (once as a log ``extra``,
     once as the return) from literal keys that could drift apart silently.
     """
@@ -56,6 +57,7 @@ class SweepReport(BaseModel):
     dangling_blobs: dict[str, list[str]] = Field(default_factory=dict)
     stale: list[str] = Field(default_factory=list)
     contract_violations: dict[str, list[str]] = Field(default_factory=dict)
+    provenance_holes: dict[str, list[int]] = Field(default_factory=dict)
     outbox_drained: int = 0
     outbox_stranded: int = 0
     pruned_runs: int = 0
@@ -90,6 +92,7 @@ def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
         dangling_blobs={s.dataset: s.dangling_blob_columns for s in statuses if s.dangling_blob_columns},
         stale=[s.dataset for s in statuses if s.stale],
         contract_violations={s.dataset: s.missing_declared_columns for s in statuses if s.missing_declared_columns},
+        provenance_holes={s.dataset: s.versions_without_lineage for s in statuses if s.versions_without_lineage},
     )
 
 
@@ -111,6 +114,11 @@ def log_sweep(report: SweepReport) -> None:
     * ``stale`` — data stopped arriving inside the freshness budget; the fix is upstream.
     * ``contract_violations`` — a dataset's CURRENT schema lost a column a consumer declared, i.e. a
       write that bypassed the stage runner skipped the gate.
+    * ``provenance_holes`` — versions on disk the graph held no ``WROTE`` edge for. The ONE class here
+      the sweep does auto-fix, and it is still worth a line of its own: the recovered edge carries
+      ``author='reconcile'`` and no inputs, so the version's ACTOR and DERIVATION are gone for good even
+      though the fact of the write is restored. A hole that keeps reappearing on the same dataset names a
+      producer that is not emitting, which is a defect upstream and invisible in the backfilled count.
     """
     if report.storage_loss:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": report.storage_loss, "count": len(report.storage_loss)})
@@ -122,6 +130,15 @@ def log_sweep(report: SweepReport) -> None:
         log.warning("lineage_reconcile_stale", extra={"datasets": report.stale, "count": len(report.stale)})
     if report.contract_violations:
         log.warning("lineage_reconcile_contract_violation", extra={"datasets": report.contract_violations, "count": len(report.contract_violations)})
+    if report.provenance_holes:
+        log.warning(
+            "lineage_reconcile_provenance_holes",
+            extra={
+                "datasets": report.provenance_holes,
+                "count": len(report.provenance_holes),
+                "versions": sum(len(v) for v in report.provenance_holes.values()),
+            },
+        )
     log.info(
         "lineage_reconcile_sweep",
         extra={
@@ -132,6 +149,7 @@ def log_sweep(report: SweepReport) -> None:
             "dangling_blobs": len(report.dangling_blobs),
             "stale": len(report.stale),
             "contract_violations": len(report.contract_violations),
+            "provenance_holes": sum(len(v) for v in report.provenance_holes.values()),
             "outbox_drained": report.outbox_drained,
             "outbox_stranded": report.outbox_stranded,
             "pruned_runs": report.pruned_runs,
@@ -159,6 +177,10 @@ async def _sweep(repository: RepositoryDep, settings: SettingsDep, opts: dict[st
         # Freshness (data-contract gap #2) — arrival cadence as an ASSERTED clause: age read from
         # the version manifests (storage truth), budget 0 (default) = axis off, zero extra reads.
         read_age=lambda uri: run_in_threadpool(read_latest_write_age_hours, uri, opts),
+        # Provenance holes BELOW the tip — the axis the two-maxima version comparison is blind to. One
+        # manifest-directory listing per dataset, the same one the freshness axis above already pays, and
+        # it is what makes "a write's provenance survives it" true for a write that was later superseded.
+        read_versions=lambda uri: run_in_threadpool(read_storage_versions, uri, opts),
         freshness_budget_hours=settings.freshness_budget_hours,
         # Declared-columns patrol (Batch 23): re-check the gate's column_declared assertion
         # estate-wide — only declared datasets pay the schema read.

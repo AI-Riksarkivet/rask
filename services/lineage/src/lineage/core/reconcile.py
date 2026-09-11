@@ -10,6 +10,7 @@ The endpoint that exposes it (gated on ``can_get_metadata``) wires these to the 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Protocol
@@ -21,6 +22,9 @@ from service_kit.lakehouse import blobs
 from service_kit.lakehouse.features import unsupported_features_from_open_error
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
+
+
+log = logging.getLogger(__name__)
 
 
 def _swallow_dataset_error(exc: BaseException) -> None:
@@ -77,6 +81,28 @@ def read_storage_schema(uri: str, storage_options: dict[str, str], version: int)
     """
     try:
         return facet_fields(lance.dataset(uri, storage_options=storage_options, version=version).schema)
+    except BaseException as exc:
+        _swallow_dataset_error(exc)
+        return None
+
+
+def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int] | None:
+    """Every version RETAINED on disk at ``uri``, ascending — ``None`` when the dataset is unreadable.
+
+    The version axis compares two maxima, and a maximum cannot see a hole beneath it: a write whose
+    lineage event was lost and which a later write then superseded leaves the graph's newest version
+    equal to storage's, so the sweep reports ``in_sync`` and the back-fill never runs. Recovering that
+    write needs the version SET, which is what this reads.
+
+    ONE listing of the manifest directory, the same call :func:`read_latest_write_age_hours` already
+    makes on the freshness axis — the cost is per dataset, never per version. Reclaimed versions are
+    simply absent, which is why the comparison above this is one-directional (see :func:`reconcile_all`).
+
+    ``None`` rather than ``[]`` for an unreadable or absent dataset: an empty list would read as "this
+    dataset has no versions", and every version the graph holds would then look like storage loss.
+    """
+    try:
+        return sorted(int(v["version"]) for v in lance.dataset(uri, storage_options=storage_options).versions())
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None
@@ -163,6 +189,7 @@ class _ReconcileRepo(Protocol):
     async def source_uri(self, name: str) -> str | None: ...
     async def dropped_at(self, name: str) -> str | None: ...
     async def latest_write_version(self, name: str) -> int | None: ...
+    async def write_versions(self, name: str) -> set[int]: ...
     async def backfill_write(self, name: str, version: int, schema: SchemaFields | None = None) -> None: ...
 
 
@@ -177,6 +204,16 @@ BACKFILLABLE_STATES = (ReconcileState.STORAGE_AHEAD, ReconcileState.UNTRACKED)
 # restore / storage loss is visible instead of silently served as valid provenance.
 STORAGE_LOSS_STATES = (ReconcileState.GRAPH_AHEAD, ReconcileState.MISSING_ON_STORAGE)
 
+#: How many provenance holes one dataset may have recovered in a single tick.
+#:
+#: A dataset the graph has never recorded a write for (UNTRACKED) has EVERY retained version as a hole,
+#: so an uncapped recovery would make one tick's cost a function of the largest history in the estate —
+#: the same unbounded-work argument that keeps compaction out of the catalog's request path. Capped, the
+#: recovery converges over ticks instead, and the finding still names every hole it found. The report is
+#: therefore the complete answer and the back-fill is the bounded one; :func:`reconcile_all` logs the
+#: remainder rather than letting a truncation read as "recovered everything".
+MAX_HOLES_BACKFILLED_PER_TICK = 25
+
 
 async def reconcile_all(
     repository: _ReconcileRepo,
@@ -186,6 +223,7 @@ async def reconcile_all(
     read_schema: Callable[[str, int], Awaitable[SchemaFields | None]] | None = None,
     read_dangling: Callable[[str], Awaitable[list[str]]] | None = None,
     read_age: Callable[[str], Awaitable[float | None]] | None = None,
+    read_versions: Callable[[str], Awaitable[list[int] | None]] | None = None,
     freshness_budget_hours: float = 0,
     declared: dict[str, list[str]] | None = None,
 ) -> list[ReconcileStatus]:
@@ -261,5 +299,57 @@ async def reconcile_all(
             # being back-filled, so a write landing mid-sweep can't attach a later schema to this edge.
             schema = await read_schema(uri, storage_version) if read_schema is not None else None
             await repository.backfill_write(summary.name, storage_version, schema=schema)
+        # Provenance holes BELOW the tip — the axis the two-maxima comparison above is blind to. Only
+        # when storage is readable, on the same rule the freshness and declared-column axes follow: an
+        # unreadable dataset is already the version check's finding.
+        if read_versions is not None and storage_version is not None:
+            status.versions_without_lineage = await _recover_holes(
+                repository,
+                summary.name,
+                uri,
+                read_versions=read_versions,
+                read_schema=read_schema,
+                backfill=backfill,
+            )
         results.append(status)
     return results
+
+
+async def _recover_holes(
+    repository: _ReconcileRepo,
+    name: str,
+    uri: str,
+    *,
+    read_versions: Callable[[str], Awaitable[list[int] | None]],
+    read_schema: Callable[[str, int], Awaitable[SchemaFields | None]] | None,
+    backfill: bool,
+) -> list[int]:
+    """Versions on disk the graph holds no WROTE edge for — back-filled when ``backfill``, always reported.
+
+    ONE-DIRECTIONAL, and it has to be: ``cleanup_old_versions`` reclaims old manifests, so a maintained
+    dataset legitimately has versions in the graph that storage no longer holds. Reading that direction as
+    a finding would turn every compacted dataset in the estate permanently red, which is how an axis ends
+    up switched off. Only ``on_disk - in_graph`` is a hole.
+
+    The recovered provenance is the same minimal edge the tip back-fill writes — ``author='reconcile'``,
+    no inputs — because that is all storage can supply: it records THAT the version was written and its
+    schema, never who wrote it or what it derived from. That is a floor under the estate's provenance
+    claim, not a replacement for the producer's own event.
+    """
+    on_disk = await read_versions(uri)
+    if on_disk is None:
+        return []
+    holes = sorted(set(on_disk) - await repository.write_versions(name))
+    if not holes or not backfill:
+        return holes
+    for version in holes[:MAX_HOLES_BACKFILLED_PER_TICK]:
+        schema = await read_schema(uri, version) if read_schema is not None else None
+        await repository.backfill_write(name, version, schema=schema)
+    if len(holes) > MAX_HOLES_BACKFILLED_PER_TICK:
+        # NAMED, never silent: a truncated recovery that logged nothing would report the full finding
+        # while fixing part of it, and the next tick's smaller finding would read as progress nobody made.
+        log.warning(
+            "lineage_reconcile_holes_truncated",
+            extra={"dataset": name, "holes": len(holes), "recovered": MAX_HOLES_BACKFILLED_PER_TICK},
+        )
+    return holes

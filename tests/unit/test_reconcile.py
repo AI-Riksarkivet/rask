@@ -511,6 +511,9 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
     # datasets as destroyed. Splitting them means an unreadable dataset must land SOMEWHERE — a key
     # that appears only when non-empty would let them vanish instead, which is the quieter half of
     # the same bug.
+    # `provenance_holes` is on the same contract: it counts versions on disk the graph held no WROTE
+    # edge for, and an EMPTY map is the assertion that the sweep looked. Absent when clean, it would
+    # make "every version is accounted for" and "this build does not run that axis" the same reading.
     assert body == {
         "checked": 0,
         "outbox_drained": 0,
@@ -518,6 +521,7 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "backfilled": [],
         "storage_loss": [],
         "unreadable": {},
+        "provenance_holes": {},
         "dangling_blobs": {},
         "stale": [],
         "contract_violations": {},

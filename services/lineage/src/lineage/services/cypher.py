@@ -391,6 +391,11 @@ LATEST_WRITE_VERSION: Final = (
     "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN w.version ORDER BY r.event_time DESC LIMIT 1"
 )
 SOURCE_URI: Final = "MATCH (d:Dataset {name:$name}) RETURN d.source_uri LIMIT 1"
+# EVERY main-ref version the graph holds a WROTE edge for — the SET the tip comparison above cannot see.
+# `w.ref IS NULL` is the same main-only filter LATEST_WRITE_VERSION applies, and it is load-bearing for the
+# same reason: a branch carries its own version sequence, so a branch write at version N would otherwise
+# answer for main's version N and hide a real hole there.
+WRITE_VERSIONS: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN DISTINCT w.version"
 # Per-version schema lookup (#24). Latest = the most-recent successful WROTE edge that carries a schema;
 # at-version pins the edge whose version matches. Both return the schema JSON string + its version.
 SCHEMA_LATEST: Final = (

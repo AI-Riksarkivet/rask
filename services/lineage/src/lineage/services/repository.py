@@ -677,6 +677,27 @@ class LineageRepository:
         rows = await fetch(self._pool, self._graph, cy.LATEST_WRITE_VERSION, {"name": name}, columns=1)
         return int(rows[0][0]) if rows and rows[0][0] is not None else None
 
+    async def write_versions(self, name: str) -> set[int]:
+        """EVERY main-ref Lance version the graph holds a ``WROTE`` edge for — the set, not the tip.
+
+        :meth:`latest_write_version` answers what the graph believes is CURRENT, which is the right answer
+        for the drift classification and the wrong one for finding provenance holes: two maxima can agree
+        while an intermediate version has no edge at all. This is the other half of that question, and it
+        is one query per dataset rather than one per version.
+
+        Versions the graph cannot parse as integers are dropped rather than raising — a single malformed
+        property would otherwise make the whole dataset unassessable, and a hole reported for a version
+        that does exist is worse than the property being ignored.
+        """
+        rows = await fetch(self._pool, self._graph, cy.WRITE_VERSIONS, {"name": name}, columns=1)
+        versions: set[int] = set()
+        for row in rows:
+            try:
+                versions.add(int(row[0]))
+            except (TypeError, ValueError):
+                log.debug("lineage_write_version_unparseable", extra={"dataset": name, "value": repr(row[0])})
+        return versions
+
     async def dropped_at(self, name: str) -> str | None:
         """When ``name`` is TERMINALLY dropped — the event time of its most recent SUCCESSFUL run
         being a ``drop_table`` — else None.
