@@ -162,10 +162,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   that reported it as governed before the fix.
 
 **LH-008 · Publication deltas are insert-only: neither in-place updates nor deletions reach a consumer**
-`medallion, catalog, annotator` · med · **blocked:** owner decision: deleted-row set served on demand from the publication door vs stamped into the publish event
+`medallion, catalog` · med · **HALF CLOSED 2026-09-11**
 
-- *Why open:* `PublicationResult`'s contract has consumers resolve `_row_created_at_version > from AND <= to` and keep no bookmark, so it finds rows CREATED and is blind to rows UPDATED and DELETED. `_row_last_updated_at_version` is built in J4's change-feed door but the publication path still uses `ray_stage_job._delta_filter`, and the annotator's whole write path is `merge_insert`. Driven on a real dataset, `delta(begin,end).get_deleted_row_ids()` answered `{2}` while `get_inserted_rows()` answered 0 — while `compute.py:380` deletes rows with `when_not_matched_by_source_delete`, so a retracted row is served forever.
-- *Closes when:* Use the `updated` predicate (both clauses, including `_row_created_at_version <= begin`) in the publication delta computation, and extend `PublicationResult` in `publication.py` to carry `LanceDataset.delta(begin, end).get_deleted_row_ids()`.
+- *THE DELETION HALF IS CLOSED AND OBSERVED.* `6f58b07c` adds a `deleted` kind to the change feed,
+  served on demand from `POST /v1/table/{id}/changes`. Driven on live storage 2026-09-11: three rows
+  `{a:0, b:1, c:2}`, delete `b`, feed reports `[1]` and nothing else. A retracted row is followable.
+- *SERVED ON DEMAND, not stamped into the publish event* (decided 2026-09-11). A deleted-row set is
+  unbounded, so stamping it turns a large delete into a large message on the bus; publishing a version
+  range and letting the consumer pull is what every change-data system of this shape does.
+- *`deleted` is NOT a scan predicate, and the code refuses to pretend otherwise.* The version columns
+  describe rows the table STILL HAS, so a deleted row is absent from every scan; `change_filter`
+  refuses the kind with that reason and `dataplane.read_deleted_row_ids` answers from the TRANSACTION
+  range instead. A feed that answered the wrong rows with a 200 is the failure `changes.py`'s own
+  header exists to prevent.
+- *Two facts that came from driving the real API rather than reading it:* `delta()` REFUSES an open
+  window (`end_version=None` raises "Must specify both with_begin_version and with_end_version"), so
+  the door closes an omitted end at the version of the dataset it opened — exact, because it is the
+  same handle the delta is read from. And `get_deleted_row_ids()` returns ONLY `_rowid`, which is
+  Lance's answer rather than a projection choice: the rows are gone.
+- *WHAT IS STILL OPEN — the UPDATE half.* `scripts/ray_stage_job._delta_filter` is still
+  `_row_created_at_version > N`, i.e. insert-only, so a row UPDATED since the boundary does not
+  propagate down the cascade. The predicate exists unused (`changes._UPDATED`); what is missing is the
+  publication delta using it. Condition 4 is not fully claimable until it does.
 
 **LH-009 · The lineage graph keys a dataset version by `(dataset, N)` where Lance's identity is `(branch, N)`, so a branch write reconciles as `storage_loss`**
 `lineage, maintenance` · med · **blocked:** the branch-governance item (branch-aware FGA object + vending)
