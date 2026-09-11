@@ -660,9 +660,13 @@ def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake
 def test_register_emits_versionless_marker_with_source_uri(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     # Register attaches an existing (possibly external) location: versionless + source_uri, and it keys a
     # CREATED edge (register_table ∈ lineage _CREATE_OPS); reconcile back-fills the real on-disk version.
-    from lance_namespace import RegisterTableResponse
+    from lance_namespace import DescribeTableResponse, RegisterTableResponse
 
     fake_ns.register_table.return_value = RegisterTableResponse(location="s3://bucket/t")
+    # The door RESOLVES the location before emitting, because `register_table` echoes the caller's own
+    # path back and a relative `source_uri` reports the table as storage loss on every sweep tick. The
+    # double has to answer the describe or it hands back a MagicMock.
+    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
     captured = _capture_emit(monkeypatch, "tables")
 
     resp = client.post("/v1/table/db$t/register", json={"location": "s3://bucket/t"})
@@ -670,6 +674,22 @@ def test_register_emits_versionless_marker_with_source_uri(client: TestClient, f
     assert captured["operation"] == "register_table"
     assert captured["version"] is None  # versionless — no reopen of a possibly-external location on the path
     assert captured["source_uri"] == "s3://bucket/t"
+
+
+def test_register_emits_the_resolved_location_not_the_relative_one(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    # The regression this closes, at the layer that would have caught it: `register_table` ECHOES the
+    # caller's path, so a caller registering `t.lance` had `t.lance` stamped as the marker's `source_uri`
+    # — which opens as nothing, classifies MISSING_ON_STORAGE, and reports a live registered table as
+    # storage loss forever. `describe_table` resolves it against the table's own root.
+    from lance_namespace import DescribeTableResponse, RegisterTableResponse
+
+    fake_ns.register_table.return_value = RegisterTableResponse(location="t.lance")
+    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/9f_db$t")
+    captured = _capture_emit(monkeypatch, "tables")
+
+    resp = client.post("/v1/table/db$t/register", json={"location": "t.lance"})
+    assert resp.status_code == 200
+    assert captured["source_uri"] == "s3://bucket/9f_db$t", "the marker must carry a URI the sweep can open"
 
 
 def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

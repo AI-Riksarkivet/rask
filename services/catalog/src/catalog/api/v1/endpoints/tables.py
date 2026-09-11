@@ -626,6 +626,36 @@ async def deregister_table(
     return response
 
 
+def absolute_table_location(ns: LanceNamespace, segments: list[str], registered: str | None) -> str | None:
+    """The table's ABSOLUTE location, falling back to what the register returned.
+
+    `register_table` ECHOES the caller's own path: measured 2026-09-11 on a `dir` namespace, registering
+    `location="t.lance"` answers `response.location == 't.lance'` while `describe_table` on the same
+    table answers `/<root>/t.lance`. Emitting the echo puts a relative URI on the CREATED edge and on the
+    control event's `location` extra.
+
+    WHAT THAT COSTS IS A PERMANENT FALSE ALARM, measured rather than reasoned: the reconcile sweep opens
+    that `source_uri`, a relative path opens as nothing, and `read_storage_version` answers `None` —
+    which classifies MISSING_ON_STORAGE and reports a live registered table as storage loss on every
+    tick, with no re-run that clears it because the graph keeps the URI it was given.
+
+    THE BACKEND RESOLVES IT AGAINST THE RIGHT ROOT, which is why this asks rather than joining against a
+    configured one: a warehouse-bound table belongs to its warehouse's root, and a caller-side join would
+    be wrong for exactly the tenant tables that matter.
+
+    NEVER FAILS THE REGISTER. The registration is already committed, so an unreachable describe or an
+    empty answer leaves the registered value — no worse than before, where raising would turn a
+    successful register into a 500 the caller cannot retry into a better state. This is a metadata read,
+    not the dataset reopen the emit site's own comment refuses.
+    """
+    try:
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
+    except Exception as exc:  # noqa: BLE001 — any failure degrades to the registered value, never to a 500
+        log.warning("register_location_unresolved", extra={"table": segments, "error": str(exc)})
+        return registered
+    return getattr(described, "location", None) or registered
+
+
 @router.post("/{id}/register", response_model_exclude_none=True)
 async def register_table(
     id: str,
@@ -665,6 +695,9 @@ async def register_table(
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
 
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register)
+    # RESOLVED, not echoed — `response.location` is the caller's own relative path and a relative
+    # `source_uri` reports this table as storage loss on every sweep tick.
+    location = await run_in_threadpool(absolute_table_location, ns, segments, response.location)
     # Versionless + source_uri=the attached location, keying the CREATED edge (register_table ∈ _CREATE_OPS).
     # The registered table already holds data at some version; we don't reopen a possibly-external location on
     # the request path (a reopen failure must never fail an already-committed register) — #23 reconcile reads
@@ -677,7 +710,7 @@ async def register_table(
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
-        source_uri=response.location,
+        source_uri=location,
     )
     await emit_control(
         control,
@@ -685,7 +718,7 @@ async def register_table(
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         actor=f"user:{token.sub}" if token is not None else None,
-        extra={"location": response.location},
+        extra={"location": location},
     )
     await converge.remember(200, response)
     return response
