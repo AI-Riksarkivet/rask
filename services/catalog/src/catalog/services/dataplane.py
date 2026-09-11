@@ -366,6 +366,21 @@ def _write_blob_into(
         with suppress(Exception):  # best-effort rollback; re-raise the real write error
             ns.drop_table(DropTableRequest(id=segments))
         raise
+    if properties:
+        # STAMPED ON THE TABLE, not only on the manifest row and the reply. The spec's "properties at
+        # create" was true of `declare_table` and of the response echo and false of the Lance file, so
+        # a client that created with `{"owner": …}` and then asked the TABLE got nothing back and no
+        # error saying why — the one shape a test on the response body can never catch.
+        #
+        # MERGE, never `replace=True`, for the reason `update_schema_metadata` records: a replace drops
+        # the internal `lineage.*` coordinates that make the file self-describing. Nothing here can
+        # have written them yet, but the rule is the seam's, not this call site's, and the next edit
+        # that reorders the create would inherit it.
+        # `dict(...)`, not the mapping itself: `dict` is invariant in its value type, so a
+        # `dict[str, str]` is not a `dict[str, str | None]` — and that signature is the seam's
+        # null-DELETE dialect, which this call never uses.
+        widened: dict[str, str | None] = dict(properties)
+        dataset.update_schema_metadata(widened)
     return CreateTableResponse(location=location, version=dataset.version, properties=properties)
 
 
