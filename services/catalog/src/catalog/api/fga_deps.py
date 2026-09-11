@@ -161,6 +161,17 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "rename": "can_drop",
         "restore": "can_restore",
         "branches/create": "can_create_branch",
+        # DESTROYING a branch destroys its data AND its own version sequence — irreversible, and the
+        # heavier of the two deletions this table offers. Absent from this map it fell through to the
+        # writer default, so measured on the deployed catalog 2026-09-11 a non-owner cleared
+        # `branches/delete` (422, past the gate) while the same caller was refused `tags/delete` and
+        # `deregister` (403): the estate permitted the greater destruction and refused the lesser,
+        # because a tag is a POINTER and its delete was already mapped here.
+        #
+        # `can_drop`, not a new relation: the rung already means "may destroy this table's contents" and
+        # is what `tags/delete` and `version/delete` clear. A `can_delete_branch` would be a rung the
+        # model must define and every existing owner grant would then lack.
+        "branches/delete": "can_drop",
         "tags/create": "can_create_tag",
         "tags/update": "can_update_tag",
         # DELETE completes the tag lifecycle, and leaving it unmapped was the hole. An unmapped suffix
