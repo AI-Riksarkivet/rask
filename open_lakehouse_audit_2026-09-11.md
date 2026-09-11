@@ -154,7 +154,14 @@ Ranked by severity. Nothing HIGH survived.
 3. **Measure the stage version BEFORE `_index_lineage`** in `measure_stage` and `transform_stage` (`compute.py:178-180`, `:395-396`), drop the now-redundant index rebuild or move it before the data commit, and pin with a test that the emitted `datasetVersion` is a data operation — closes the largest gap in Condition 1. Beats everything else on blast radius: 100% of stage writes. Do it after 1-2 only because they are smaller and terminal.
 4. **`branches/delete` → `_OWNER_SUFFIX_RELATION["table"]`** with a test — closes Condition 2's one real escalation. Whether the rung is `can_create_branch` or `can_drop` is a one-line judgment, not a ruling; pick `can_drop` (it destroys data) and say so in the test.
 5. **Relay authorization: run `enforce_bus_authz` in `_drain_outbox` before `ingest_event`** (`reconcile_cron.py:369`), and make `_is_replay` require the feed row to predate the relay's own ingest (or skip the re-publish after a relay ingest) — closes Condition 5's live defect and restores E2's gate. Check `_on_cron` has a `Request` in scope first (not verified).
-6. **Register-marker URI: emit the absolute location from the register door** (`tables.py:672-681`, resolve against the project warehouse), or resolve it lineage-side; add ABSENT to the sweep's reported classes — closes Condition 1's coverage gap for externally-written data.
+6. **DONE (`cf040fff`), and the consequence was larger than this line implies.** `register_table`
+   ECHOES the caller's path, so the marker carried a RELATIVE `source_uri` — which opens as nothing,
+   classifies MISSING_ON_STORAGE, and reports a live registered table as storage loss on every tick
+   forever. Counted on the live graph: 60 of 1162 Dataset nodes carry one. The door now resolves via
+   `describe_table` rather than against a configured root, because a warehouse-bound table belongs to
+   its warehouse's root and that join would be confidently wrong. The sweep-classes half is done too
+   (`4b3bfa64`): a URI that names no location reads as UNREADABLE, not as loss. What is NOT done is
+   repairing the 60 existing nodes — forward-only, tracked as LH-141.
 7. **DROP vs DLQ: either remove the DLT from subscriptions whose DROPs are deterministic refusals, or annotate/route DROPs separately from exhaustion, then rewrite `transform.py`, `draining.py:20`, `DECISIONS.md:1349-1350` and the three test docstrings to say what Dapr 1.18.1 actually does** — closes the rest of Condition 4. Larger than 1-2 because the fix touches prose in five places and a metric contract.
 8. **`appApiToken` was not a typo and not LOW — it is the most serious finding in this audit, and this
    rating was wrong.** DONE (`344e9763`), and the severity is recorded here because the rating is what
@@ -172,9 +179,24 @@ Ranked by severity. Nothing HIGH survived.
    checks and would have printed the raw app token into the Secret. Gated twice: a rotation test that
    asserts DEPENDENCE rather than spelling, and `test_every_chart_value_a_template_names_actually
    _exists.py`, which refuses any bare `.Values` path the chart does not define (`d58d9008`).
-9. **Reconciler tip axis: apply `MAINTENANCE_OPERATIONS` in `reconcile()`** (`reconcile.py:167-189`) — Condition 1, LOW. Fold into the regression fix already in flight for 95e6adb4/5ac935a2, since both live in the same function family.
+9. **DONE (`5eb73751`), and it was the smaller half of what was there.** The tip resolves DOWNWARD to
+   the newest version that wrote data, so a compaction at the tip is not drift. Measuring a REAL
+   `compact_files()` while fixing it showed a compaction commits TWO versions — an unmodelled one,
+   then the `Rewrite` — and `_recover_holes` was back-filling a phantom `WROTE` edge on the first.
+   `BaseOperation` is the ABC leaking through `type(op).__name__`, not an operation name; reporting
+   and recovery are now separate so an unnameable version is reported and never fabricated.
 10. **Task registry: add an in-process registrant** so a transform declaration has an executor without Ray — Condition 3. Last because Condition 3 already holds in substance.
-11. Root-cause `unconfined_uri` on `bind86` and `/compaction_plan` 404 on medallion tier ids — both un-tracked, both blocking real work, neither verified beyond the symptom.
+11. **BOTH ROOT-CAUSED, from GreptimeDB rather than the live drive either was waiting on** — the
+    deployed text formatter drops `extra`, but `opentelemetry_logs.log_attributes` keeps it.
+    (a) `unconfined_uri`: all 8 refusals carry `root` = the catalog-VENDED location and `supplied` =
+    a COMPOSED tier path. The trigger's `from_uri` comes only from `extra["location"]`, and an absent
+    one produces no refusal at all — so the publication carried a location the catalog no longer
+    vends. bind86 alone composes; three other tenants write to the vended location on the same code.
+    (b) `/compaction_plan` 404: two ids, `lakehouse$bronze$events` (three segments, the ingest
+    plane's old `f"{project}${dataset}"` spelling) and `lakehouse-bronze$events`. A 400-row sample
+    splits 228 404 / 172 403, the 403s entirely in e2e residue buckets. And the row's headline is
+    REFUTED: the distributed plane runs 253 of 600 sampled outcomes, so it is not unused — what is
+    true is `fragments_removed = 0`, because nothing needs compacting. Both now tracked on LH-137.
 
 **Needs an owner decision:**
 
