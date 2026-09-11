@@ -41,7 +41,7 @@ spec:
       # The explicit component label is the P4 landmine: hook pods without one are invisible to any
       # component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
       # intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
-      # the openfga ingress gets an exclusive client list like openbao/age/rustfs.
+      # the openfga ingress gets an exclusive client list like openbao/age/minio.
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: bootstrap-admin

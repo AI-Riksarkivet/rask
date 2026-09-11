@@ -22,8 +22,8 @@ S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:${DEMO_S3_PORT:-9000}}"
 LINEAGE_URL="${LINEAGE_URL:-http://localhost:${DEMO_LINEAGE_PORT:-8000}}"
 
 echo "== 1) wipe the Lance tables on S3 (${S3_ENDPOINT}) =="
-S3_ENDPOINT="$S3_ENDPOINT" S3_ACCESS_KEY="${S3_ACCESS_KEY:-rustfsadmin}" \
-	S3_SECRET_KEY="${S3_SECRET_KEY:-rustfsadmin}" S3_BUCKET="${S3_BUCKET:-lakehouse}" \
+S3_ENDPOINT="$S3_ENDPOINT" S3_ACCESS_KEY="${S3_ACCESS_KEY:-minioadmin}" \
+	S3_SECRET_KEY="${S3_SECRET_KEY:-minioadmin}" S3_BUCKET="${S3_BUCKET:-lakehouse}" \
 	uv run --no-sync scripts/medallion_demo.py --reset
 
 echo "== 2) empty the lineage graph (Apache AGE) + the durable events feed =="

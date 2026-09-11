@@ -174,19 +174,19 @@ spec:
             # the pair from the Dapr secret store — cached, fail-closed, and the only path. The ENDPOINT
             # is config because it is not a secret.
             # It used to carry the fleet's `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair, which
-            # measured `rustfsadmin` on the running pod 2026-09-09: the RustFS ROOT credential, through
-            # env, on a pod that HAS a Dapr sidecar. The viewer also joins the rustfs netpol allowlist.
+            # measured `rustfsadmin` on the running pod 2026-09-09: the store's ROOT credential, through
+            # env, on a pod that HAS a Dapr sidecar. The viewer also joins the minio netpol allowlist.
             - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
             {{- end }}
             {{- if $root.Values.explorer.corpusS3Root }}
             # #142: ALL THREE readers serve the corpus from the governed bucket. NO secret env — the
-            # SECRET half comes from the Dapr secret store (`rustfs-secret-key` in the `lance`
+            # SECRET half comes from the Dapr secret store (`minio-secret-key` in the `lance`
             # bundle, fetched fail-closed by `storage_options`); only the ENDPOINT, ROOT and the
             # ACCESS-KEY ID (an identifier, not a secret — the MEDIA_PUBLISH_* split) are config.
             - { name: MEDIA_S3_ENDPOINT, value: {{ include "lance.s3Endpoint" $root | quote }} }
             - { name: MEDIA_S3_DB_ROOT, value: {{ $root.Values.explorer.corpusS3Root | quote }} }
             {{- $mediaSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
-            {{- if and (eq $name "viewer") $root.Values.rustfs.viewerAccessKey }}
+            {{- if and (eq $name "viewer") $root.Values.minio.viewerAccessKey }}
             # THE FALLBACK IDENTITY, and it must not be the tenant root. A store in `RASK_STORES` that
             # names a `secret` resolves its own scoped pair from the Dapr store (`viewer-s3`, seeded by
             # `openbao.yaml`) and never reads this; a store that names NONE deliberately falls back to
@@ -198,7 +198,7 @@ spec:
             # while `MEDIA_S3_ACCESS_KEY_ID=rustfsadmin` sat in its environment, so an audit of pod env
             # read "the object browser runs as root" and was wrong. It misread that way twice on the
             # same day, which is the cost of a vestigial value that looks operative.
-            - { name: MEDIA_S3_ACCESS_KEY_ID, value: {{ $root.Values.rustfs.viewerAccessKey | quote }} }
+            - { name: MEDIA_S3_ACCESS_KEY_ID, value: {{ $root.Values.minio.viewerAccessKey | quote }} }
             {{- else }}
             - name: MEDIA_S3_ACCESS_KEY_ID
               valueFrom:

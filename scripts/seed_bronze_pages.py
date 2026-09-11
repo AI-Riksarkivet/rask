@@ -26,7 +26,7 @@ So this now does BOTH halves, in order:
 
 Run against a forwarded RustFS and a reachable catalog:
 
-    kubectl port-forward svc/rask-rustfs-io 9900:9000 &
+    kubectl port-forward svc/rask-minio 9900:9000 &
     kubectl port-forward svc/rask-catalog 2333:2333 &
     uv run python scripts/seed_bronze_pages.py
 """
@@ -154,8 +154,8 @@ DELIM = "$"
 URI = os.environ.get("SEED_URI", f"s3://lance-catalog/{NAMESPACE}/{TABLE}")
 
 OPTS = {
-    "aws_access_key_id": os.environ.get("SEED_S3_KEY", "rustfsadmin"),
-    "aws_secret_access_key": os.environ.get("SEED_S3_SECRET", "rustfsadmin"),
+    "aws_access_key_id": os.environ.get("SEED_S3_KEY", "minioadmin"),
+    "aws_secret_access_key": os.environ.get("SEED_S3_SECRET", "minioadmin"),
     "aws_endpoint": os.environ.get("SEED_S3_ENDPOINT", "http://127.0.0.1:9900"),
     "aws_allow_http": "true",
     "aws_region": "us-east-1",

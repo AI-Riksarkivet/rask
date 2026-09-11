@@ -50,7 +50,7 @@ def _auth() -> dict[str, str]:
 
 
 def _fs() -> pafs.S3FileSystem:
-    return pafs.S3FileSystem(access_key="rustfsadmin", secret_key="rustfsadmin", endpoint_override=S3, scheme="http", region="")
+    return pafs.S3FileSystem(access_key="minioadmin", secret_key="minioadmin", endpoint_override=S3, scheme="http", region="")
 
 
 def _bucket_of(uri: str) -> str:
@@ -133,8 +133,8 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
     # the data base → all rows. Proves the multi-base layout is readable, not just written.
     so = {
         "endpoint": S3,
-        "access_key_id": "rustfsadmin",
-        "secret_access_key": "rustfsadmin",
+        "access_key_id": "minioadmin",
+        "secret_access_key": "minioadmin",
         "region": "",
         "allow_http": "true",
     }
@@ -162,8 +162,8 @@ def test_plain_catalog_create_is_2_2_with_stable_row_ids(catalog_ns: str) -> Non
     location = r.json()["location"]
     so = {
         "endpoint": S3,
-        "access_key_id": "rustfsadmin",
-        "secret_access_key": "rustfsadmin",
+        "access_key_id": "minioadmin",
+        "secret_access_key": "minioadmin",
         "region": "",
         "allow_http": "true",
     }

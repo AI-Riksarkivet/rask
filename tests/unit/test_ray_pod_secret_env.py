@@ -7,7 +7,7 @@ The render half of docs/DECISIONS.md "The Python estate audit"'s Jobs-API-echo P
 if the chart actually puts them there, which is what this gates.
 
 `secretKeyRef` ONTO THE SECRETS THE ESTATE ALREADY OWNS, not new material: the S3 secret is
-`<fullname>-infra-credentials/rustfs-secret-key` (the same object ExternalSecrets syncs from OpenBao
+`<fullname>-infra-credentials/minio-secret-key` (the same object ExternalSecrets syncs from OpenBao
 on the prod path) and the token is the Dapr app-token Secret's `token` key. A literal `value:` here
 would put the credential in `helm get manifest` for anyone with read on the release — the exact
 class of leak the infra-credentials header documents for the Dex secret.

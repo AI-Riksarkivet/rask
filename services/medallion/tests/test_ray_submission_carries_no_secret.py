@@ -38,7 +38,7 @@ def _settings() -> MedallionSettings:
     return MedallionSettings.model_validate(
         {
             "MEDALLION_COMPUTE_ENABLED": "true",
-            "MEDALLION_S3_ENDPOINT": "http://rustfs.invalid:9000",
+            "MEDALLION_S3_ENDPOINT": "http://minio.invalid:9000",
             "MEDALLION_S3_ACCESS_KEY_ID": "platform-key",
             "MEDALLION_S3_SECRET_ACCESS_KEY": SECRET,
             # The lineage door ON, so the token branch is exercised rather than skipped.

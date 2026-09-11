@@ -65,12 +65,12 @@ MANIFEST_PREFIX = "__manifest"
 
 def _render() -> str:
     return _helm_template(
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=m-secret",
-        "rustfs.rayComputeAccessKey=rask-ray-compute",
-        "rustfs.rayComputeSecretKey=r-secret",
-        "rustfs.medallionAccessKey=rask-medallion",
-        "rustfs.medallionSecretKey=d-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=m-secret",
+        "minio.rayComputeAccessKey=rask-ray-compute",
+        "minio.rayComputeSecretKey=r-secret",
+        "minio.medallionAccessKey=rask-medallion",
+        "minio.medallionSecretKey=d-secret",
     )
 
 
@@ -81,7 +81,7 @@ def _policy(rendered: str, name: str) -> dict:
     is the JSON `mc admin policy create` is handed, and a template that renders valid YAML around
     invalid JSON is exactly the failure this parse catches.
     """
-    job = rendered[rendered.index("component: rustfs-scoped-users") :]
+    job = rendered[rendered.index("component: minio-scoped-users") :]
     start = job.index(f"cat >/tmp/{name}.json <<'POLICY'")
     body = job[start:]
     body = body[body.index("\n") + 1 :]
@@ -360,7 +360,7 @@ def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attach
     while the credential kept its old policy. The user-add keeps its `|| true`, which genuinely does
     guard a re-run."""
     rendered = _render()
-    job = rendered[rendered.index("component: rustfs-scoped-users") :]
+    job = rendered[rendered.index("component: minio-scoped-users") :]
     creates = re.findall(r"mc admin policy create rfs \S+ \S+( \|\| true)?", job)
     assert creates, "no policy is created at all"
     assert not any(creates), "a policy create still swallows its failure — a bad policy renders as a successful hook"

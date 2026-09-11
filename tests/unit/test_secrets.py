@@ -71,7 +71,7 @@ def test_apply_lineage_secrets_noop_when_disabled(monkeypatch: pytest.MonkeyPatc
 def test_apply_lineage_secrets_consumes_store_as_sole_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "service_kit.governed.secrets.fetch_dapr_secret",
-        lambda *_a, **_k: {"rustfs-secret-key": "from-store", "postgres-password": "db-from-store"},
+        lambda *_a, **_k: {"minio-secret-key": "from-store", "postgres-password": "db-from-store"},
     )
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "database_url": "postgresql://lance@age:5432/lineage"})
     apply_lineage_secrets(settings)
@@ -91,7 +91,7 @@ def test_apply_lineage_secrets_keeps_db_url_when_store_lacks_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # S3 secret present (so it doesn't fail closed) but no DB password in the bundle → URL unchanged.
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {"rustfs-secret-key": "x"})
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {"minio-secret-key": "x"})
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "database_url": "postgresql://lance:envpw@age:5432/lineage"})
     apply_lineage_secrets(settings)
     assert settings.database_url == "postgresql://lance:envpw@age:5432/lineage"

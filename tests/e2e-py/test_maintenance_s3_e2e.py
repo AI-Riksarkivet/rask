@@ -73,8 +73,8 @@ from service_kit.lakehouse.objectfs import s3_filesystem
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
+SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
 
 #: Reuses the REGISTERED `compaction` marker (pyproject `markers`) — `make e2e-compaction` selects it.
 pytestmark = [pytest.mark.e2e, pytest.mark.compaction]

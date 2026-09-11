@@ -52,10 +52,21 @@ def _render(*extra: str) -> str:
 
 
 def test_every_zone_carries_the_infra_credentials_checksum() -> None:
-    """All seven zones consume `service-token-service-web` from that Secret, so all seven must roll."""
-    checksums = re.findall(r"checksum/infra-credentials: (\S+)", _render())
+    """All seven zones consume `service-token-service-web` from that Secret, so all seven must roll.
 
-    assert len(checksums) == 7, f"expected one per zone, found {len(checksums)}"
+    ASSERTED PER ZONE RATHER THAN AS A TOTAL. This counted every `checksum/infra-credentials` in the
+    whole render and compared it to seven, which made the count a proxy for the property — so any OTHER
+    workload correctly adopting the annotation failed this test, and the fix on offer was to remove a
+    checksum that belonged there. The object store hit exactly that when it became a first-party
+    StatefulSet that reads the same Secret.
+    """
+    rendered = _render()
+    zones = {"home", "compute", "studio", "models", "lakehouse", "explorer", "annotator"}
+    missing = {
+        zone for zone in zones if not any(f"name: rask-web-{zone}\n" in doc and "checksum/infra-credentials:" in doc for doc in rendered.split("\n---\n"))
+    }
+
+    assert not missing, f"zones consume the Secret but would not roll when it rotates: {sorted(missing)}"
 
 
 #: Workloads that consume a Secret and do NOT yet hash it into their pod template. Named rather than

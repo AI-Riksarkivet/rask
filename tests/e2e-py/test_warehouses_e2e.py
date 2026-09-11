@@ -46,7 +46,7 @@ def _auth() -> dict[str, str]:
 
 
 def _fs() -> pafs.S3FileSystem:
-    return pafs.S3FileSystem(access_key="rustfsadmin", secret_key="rustfsadmin", endpoint_override=S3, scheme="http", region="")
+    return pafs.S3FileSystem(access_key="minioadmin", secret_key="minioadmin", endpoint_override=S3, scheme="http", region="")
 
 
 def _list_bucket(bucket: str) -> list[str]:

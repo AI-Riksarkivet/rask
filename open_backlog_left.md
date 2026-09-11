@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**265 open items**, deduped from 325 raw rows mined out of the seven files above.
+**267 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 118 | 18 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 120 | 20 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -265,6 +265,23 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   its features have been moving to the commercial AIStor — it runs as a separate server so it does not
   reach rask's own Apache-2.0 licensing, but the direction is worth knowing. And Ceph RGW is the other
   STS-complete option the vending module already names, at considerably more operational weight.
+- *THE CUTOVER IS SAFE IN THIS ORDER, and the order is what makes it safe.* Measured on the live
+  estate 2026-09-11: the store holds **109 buckets / 24,132 objects / 7.1 GiB**, its four 15 GiB PVCs
+  carry `app.kubernetes.io/component: rustfs` and are Bound, and the Tenant CR carries **no
+  finalizers** — so removing its operator in the same upgrade cannot wedge the delete. Helm's
+  keep-PVC posture means the deploy DELETES THE SERVER AND KEEPS THE BYTES:
+    1. deploy the swap — MinIO comes up on new, empty PVCs; the old four are orphaned, not reclaimed;
+    2. bring up a throwaway pod mounting those four and `mc mirror` them into MinIO (7.1 GiB is
+       minutes, not hours);
+    3. verify the lakehouse end to end, THEN delete the old PVCs — never before.
+  The lakehouse is unavailable for the length of step 2, which on this estate is acceptable and on a
+  real one would want the mirror run first against a store standing beside the old one.
+- *TWO BEHAVIOURS THE HOOKS DEPEND ON WERE MEASURED AGAINST RUSTFS AND ARE NOT YET RE-DRIVEN:* that
+  `mc admin policy create` OVERWRITES (the `post-upgrade` pass is only sound because it does), and
+  that a `StringNotLike s3:prefix` condition on a Deny is ENFORCED rather than dropped. Both are
+  called out in `minio-scoped-users.yaml` with their dates and the store they were taken on. A
+  condition a store silently drops turns a Deny into a hole rather than a hard failure, so these are
+  re-drives, not formalities.
 - *Closes when:* the chart deploys MinIO in place of RustFS, every bucket and scoped user is
   provisioned by the ported hooks, the credential-isolation e2e passes against it, and the estate is
   observed serving the lakehouse from it end to end.

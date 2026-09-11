@@ -44,7 +44,7 @@ old default produced five 403s that read as a permissions problem and were a nam
 
 BEWARE THE CONTRADICTION THIS SCRIPT CANNOT FIX. With ``catalog.warehouses.enabled: true`` (the chart
 DEFAULT), ``require_warehouse_scoped`` makes every top-level namespace belong to a warehouse; but the
-chart also leaves ``medallion.buckets: {}``, so every stage falls back to ``rustfs.bucket`` — the
+chart also leaves ``medallion.buckets: {}``, so every stage falls back to ``minio.bucket`` — the
 reserved root, which no warehouse may back. On that configuration the cascade's namespaces are
 unprovisionable by construction and no ``--warehouse`` value is correct. ``bronze`` and ``silver``
 exist on the live estate only because they predate the guard. Resolving it is a topology decision

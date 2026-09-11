@@ -9,7 +9,7 @@ available': both mean write the way we always did." Those are not the same thing
 
     NOT AVAILABLE the vendor is unreachable, misconfigured, or refuses. The ambient credential on this
                   estate is the RustFS ROOT pair (measured inside the running pod 2026-09-08:
-                  `AWS_ACCESS_KEY_ID=rustfsadmin`), so degrading writes the run's bytes with the widest
+                  `AWS_ACCESS_KEY_ID=minioadmin`), so degrading writes the run's bytes with the widest
                   credential in the estate — logged at INFO as "unavailable", counted by nothing.
 
 The owner's standing rule is "never a fallback", and the estate already has the shape for saying so in

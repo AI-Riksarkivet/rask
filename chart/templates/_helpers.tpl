@@ -111,8 +111,8 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 {{- end -}}
 
-{{/* rask.minioAccessKey / rask.minioSecretKey are GONE (lance-ns-merge P4 RustFS unification):
-     the ONE store's root credential is rustfs.accessKey/secretKey everywhere — the Tenant credsSecret,
+{{/* rask.minioAccessKey / rask.minioSecretKey are GONE (lance-ns-merge P4 store unification):
+     the ONE store's root credential is minio.accessKey/secretKey everywhere — the Tenant credsSecret,
      the fleet's AWS_*, infra-credentials, and the hooks all read that single pair. */}}
 
 {{/* ── The ONE GPU signal: ray.gpuCount ────────────────────────────────────────────────────────────
@@ -456,7 +456,7 @@ dapr.io/config: "lance-tracing"
      lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
      Every one of these is referenced by a grafted lance template (services.yaml, medallion.yaml,
-     compaction.yaml, media.yaml, gateway.yaml, rustfs.yaml, openbao.yaml, dex.yaml, age-postgres.yaml,
+     compaction.yaml, media.yaml, gateway.yaml, minio-buckets.yaml, openbao.yaml, dex.yaml, age-postgres.yaml,
      otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …) or by a template still being
      merged by another owner (frontends.yaml → "lance.frontendEnv"). None of them
      was renamed: no lance name collided with a rask name.
@@ -468,10 +468,10 @@ dapr.io/config: "lance-tracing"
        medallion.{enabled,port,buckets,producer.daprAppId,stage runners} · nats.{enabled,externalUrl} ·
        observability.{enabled,dbName,tracePipeline,greptimePort,environment,externalOtlpEndpoint,
        otelCollector.{enabled,externalEndpoint}} · openbao.{enabled,port,externalAddr} · pubsub.name ·
-       resources.{default,<component>} · rustfs.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
+       resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
        services.{catalog,lineage}.{port,daprAppId,reconcile.bindingName}
-     `rustfs.bucket` (singular) is the one that is easy to lose: rask's values ship `rustfs.buckets` (a
-     LIST) and lance's `lance.stageBucket` reads `rustfs.bucket` (a STRING) — both must exist.
+     `minio.bucket` (singular) is the one that is easy to lose: rask's values ship `minio.buckets` (a
+     LIST) and lance's `lance.stageBucket` reads `minio.bucket` (a STRING) — both must exist.
      --------------------------------------------------------------------------------------------------- */}}
 
 {{/* Release name is the fullname (install as `helm install rask ./chart` → all names = rask-*). */}}
@@ -538,11 +538,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.natsHost" -}}{{ .Release.Name }}-nats{{- end -}}
 {{- define "lance.openfgaHost" -}}{{ .Release.Name }}-openfga{{- end -}}
 {{- define "lance.dexHost" -}}{{ .Release.Name }}-dex{{- end -}}
-{{/* The ONE object store's S3 host — the rustfs-operator Tenant's Service (`<tenant>-io`, Tenant CR
-     `rask-rustfs` in templates/rustfs-tenant.yaml). RESOLVED per docs/architecture/lance-ns-merge.md
-     P4 ("RustFS: rask's operator Tenant wins"): the first-party `<release>-rustfs` Service this used
+{{/* The ONE object store's S3 host — the Service in front of the StatefulSet in templates/minio.yaml.
+     P4's store unification still holds ("the ONE store"); what changed with LH-133 is the store and
+     therefore its Service name, since a first-party StatefulSet names its own Service
      to name is deleted, so fleet + lakehouse + observability all resolve the same endpoint. */}}
-{{- define "lance.rustfsHost" -}}{{ include "rask.fullname" . }}-rustfs-io{{- end -}}
+{{- define "lance.minioHost" -}}{{ include "rask.fullname" . }}-minio{{- end -}}
 {{- define "lance.openbaoHost" -}}{{ .Release.Name }}-openbao{{- end -}}
 {{- define "lance.greptimeHost" -}}{{ .Release.Name }}-greptimedb-standalone{{- end -}}
 
@@ -679,12 +679,12 @@ disabled, e.g. a managed S3 / Postgres / Vault / collector in prod), else the in
 component's OWN Service/StatefulSet keeps the plain *Host helper above; only the apps that CONNECT switch.
 This is what makes the docs/DURABILITY.md tier-3 externalization real (values-prod.yaml sets the overrides). */}}
 {{- define "lance.s3Endpoint" -}}
-{{- if .Values.rustfs.externalEndpoint -}}{{ .Values.rustfs.externalEndpoint }}{{- else -}}http://{{ include "lance.rustfsHost" . }}:{{ .Values.rustfs.port }}{{- end -}}
+{{- if .Values.minio.externalEndpoint -}}{{ .Values.minio.externalEndpoint }}{{- else -}}http://{{ include "lance.minioHost" . }}:{{ .Values.minio.port }}{{- end -}}
 {{- end -}}
 {{/*
 lance.stageBucket — the S3 bucket for a medallion stage NAMESPACE, honouring the medallion→sink zone
 model (R23: external raw is NOT a zone — ingest sources live outside the lakehouse). `medallion.buckets`
-maps a namespace to its bucket; anything unset falls back to the shared `rustfs.bucket`. So gold
+maps a namespace to its bucket; anything unset falls back to the shared `minio.bucket`. So gold
 (SINK/output) can live in its own bucket/tenant while bronze/silver (the project's medallion internals)
 stay in the project bucket — and the DEFAULT (no override) is the single-bucket layout, unchanged.
 Call: {{ include "lance.stageBucket" (list $root "gold") }}.
@@ -692,7 +692,7 @@ Call: {{ include "lance.stageBucket" (list $root "gold") }}.
 {{- define "lance.stageBucket" -}}
 {{- $root := index . 0 -}}{{- $ns := index . 1 -}}
 {{- $buckets := $root.Values.medallion.buckets | default dict -}}
-{{- default $root.Values.rustfs.bucket (index $buckets $ns) -}}
+{{- default $root.Values.minio.bucket (index $buckets $ns) -}}
 {{- end -}}
 {{- define "lance.ageConnectHost" -}}
 {{- .Values.age.externalHost | default (include "lance.ageHost" .) -}}
@@ -933,7 +933,7 @@ nothing (audit: "the HA replica count buys nothing"). ScheduleAnyway (NOT DoNotS
 kind still schedules every replica. Gated by the caller on podDisruptionBudget.enabled (the prod HA signal
 that also bumps replicas). Call: include "lance.spreadConstraints" "<component-label>". (prod-readiness P2) */}}
 {{/* Per-workload resource tier: resources.<comp> if defined, else resources.default. Lets a stateful store
-(age/rustfs) or the Arrow-IPC-buffering catalog be sized ABOVE the stateless-pod default without a
+(age/minio) or the Arrow-IPC-buffering catalog be sized ABOVE the stateless-pod default without a
 per-template edit — just set resources.<comp> in values(-prod). Every workload shared one 1-CPU/512Mi
 default before, so the stores + the 256MiB-body catalog were sized like request pods (audit). Call:
 include "lance.resources" (dict "root" $ "comp" "catalog"). (prod-readiness P2) */}}
@@ -1043,7 +1043,7 @@ livenessProbe:
   failureThreshold: 3
 {{- end -}}
 
-{{/* TCP health probes for non-HTTP-health workloads — the SvelteKit web pod (no /readyz route) and RustFS
+{{/* TCP health probes for non-HTTP-health workloads — the SvelteKit web pod (no /readyz route) and the object store
 (S3 API, no health route). A successful TCP accept on the serving port is the liveness/readiness signal.
 Call: include "lance.tcpProbes" "<portName>" (the named container port to dial). */}}
 {{- define "lance.tcpProbes" -}}
@@ -1270,7 +1270,7 @@ can never drift into a profile that sets neither.
 {{/*
 The secret half of a SCOPED STORAGE IDENTITY, derived rather than stored.
 
-Usage: {{ include "lance.scopedStorageSecret" (list . "rask-medallion" .Values.rustfs.medallionSecretKey) }}
+Usage: {{ include "lance.scopedStorageSecret" (list . "rask-medallion" .Values.minio.medallionSecretKey) }}
 
 WHY DERIVED. A scoped identity is the control this estate most wants declared in a values file, and it
 was the one that could not be: declaring it meant committing its secret. So both live scoped users were
@@ -1280,7 +1280,7 @@ hand-set env survives every upgrade and reverts the moment one values edit touch
 Deriving it makes NAMING the identity sufficient. The third argument is the operator's own value and
 WINS when set — someone supplying a secret from a manager must not have it silently replaced.
 
-ONE OVERRIDE SECURES THE WHOLE SET, which is the reason to seed from `rustfs.secretKey` rather than
+ONE OVERRIDE SECURES THE WHOLE SET, which is the reason to seed from `minio.secretKey` rather than
 from a constant: on a real deployment that value must already be overridden (`prod-credentials.yaml`
 refuses the published default), so every secret derived from it is real without a second decision.
 
@@ -1290,7 +1290,7 @@ up wrong.
 */}}
 {{- define "lance.scopedStorageSecret" -}}
 {{- $root := index . 0 -}}{{- $identity := index . 1 -}}{{- $explicit := index . 2 -}}
-{{- if $explicit -}}{{- $explicit -}}{{- else -}}{{- printf "%s-s3-%s" $identity $root.Values.rustfs.secretKey | sha256sum | trunc 40 -}}{{- end -}}
+{{- if $explicit -}}{{- $explicit -}}{{- else -}}{{- printf "%s-s3-%s" $identity $root.Values.minio.secretKey | sha256sum | trunc 40 -}}{{- end -}}
 {{- end -}}
 
 {{/*

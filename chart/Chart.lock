@@ -20,10 +20,6 @@ dependencies:
 - name: cloudnative-pg
   repository: https://cloudnative-pg.github.io/charts
   version: 0.28.3
-- name: rustfs-operator
-  repository: file://../third_party/rustfs-operator
-  version: 0.1.0
-- name: greptimedb-standalone
   repository: https://greptimeteam.github.io/helm-charts/
   version: 0.4.5
 - name: perses

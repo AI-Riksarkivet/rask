@@ -29,9 +29,9 @@ DEBRIS_PREFIXES="${DEBRIS_PREFIXES:-ctlverify e2e cd pol sec fmt}"
 
 # ── endpoints (the e2e_stack.sh port-forward defaults) ───────────────────────────────────────────────
 S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:9900}"
-S3_ACCESS_KEY="${S3_ACCESS_KEY:-rustfsadmin}"
-S3_SECRET_KEY="${S3_SECRET_KEY:-rustfsadmin}"
-ROOT_BUCKET="${ROOT_BUCKET:-lance-catalog}" # the catalog root/registry bucket (rustfs.bucket)
+S3_ACCESS_KEY="${S3_ACCESS_KEY:-minioadmin}"
+S3_SECRET_KEY="${S3_SECRET_KEY:-minioadmin}"
+ROOT_BUCKET="${ROOT_BUCKET:-lance-catalog}" # the catalog root/registry bucket (minio.bucket)
 OPENFGA_API_URL="${OPENFGA_API_URL:-http://localhost:8081}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

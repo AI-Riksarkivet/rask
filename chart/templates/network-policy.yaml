@@ -6,7 +6,7 @@
 #   (2) the kube-dns egress allow ships IN THIS SAME FILE (default-deny egress without it bricks
 #       name resolution — the audit's named footgun);
 #   (3) targeted ingress allows for the guarded stores (openbao ← secret-consuming app pods only;
-#       age-postgres:5432 ← its real clients; rustfs:9000 ← the data plane; nats ← 4222 intra-namespace
+#       age-postgres:5432 ← its real clients; minio:9000 ← the data plane; nats ← 4222 intra-namespace
 #       + 8222 admin-only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
 #       additive: the general allow must NOT cover the stores);
@@ -102,7 +102,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, rustfs, nats] }
+      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, minio, nats] }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -114,7 +114,7 @@ spec:
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
 # same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
-# controlplane pods load NO openbao-backed component and stay excluded: web/gateway/dex/rustfs/age
+# controlplane pods load NO openbao-backed component and stay excluded: web/gateway/dex/minio/age
 # can NEVER reach it. External-secrets (off-namespace, when enabled) needs an entry in
 # networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1
@@ -198,22 +198,19 @@ spec:
       ports:
         - { protocol: TCP, port: {{ .Values.age.port }} }
 ---
-# (3d) rustfs:9000 — the lakehouse bytes. Clients: the data-plane services + GreptimeDB (its
+# (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + GreptimeDB (its
 # object storage) + the snapshot backup job. The ray-lance demo pods live outside the release's
-# labels — add them via networkPolicy.rustfsExtraFrom (default provided in values).
-# ⚠ VERIFY ON A POLICY-ENFORCING CNI (P4 netpol recount): the store is now the rustfs-operator
-# Tenant (lance-ns-merge P4 "operator Tenant wins"), whose pods carry OPERATOR-set labels, not this
-# chart's. If the operator does not stamp `app.kubernetes.io/component: rustfs` on the Tenant pods,
-# this podSelector matches nothing and default-deny blocks all S3 ingress — recheck the live pod
-# labels and widen the selector before enabling networkPolicy in prod.
+# labels — add them via networkPolicy.minioExtraFrom (default provided in values).
+# The component label is stamped by the chart's own StatefulSet (templates/minio.yaml), so the
+# selector below cannot miss the way it could when a third-party operator owned the pod labels.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "lance.fullname" . }}-rustfs
+  name: {{ include "lance.fullname" . }}-minio-ingress
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   podSelector:
-    matchLabels: { app.kubernetes.io/component: rustfs }
+    matchLabels: { app.kubernetes.io/component: minio }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -226,9 +223,9 @@ spec:
                   - lineage
                   - compaction
                   - medallion-producer
-                  - rustfs-backup
+                  - minio-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
-                  - rustfs-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
+                  - minio-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
                   # The media-plane viewer serves the S3 object browser (ported from the retired
                   # volumes-api in the R6/R20 wave) — it reads s3://images-batch* from its pod, so
                   # blocking it here kills the lakehouse storage browser under prod default-deny
@@ -253,11 +250,11 @@ spec:
         - podSelector:
             matchLabels: { ray.io/is-ray-node: "yes" }
         {{- end }}
-        {{- with .Values.networkPolicy.rustfsExtraFrom }}
+        {{- with .Values.networkPolicy.minioExtraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       ports:
-        - { protocol: TCP, port: {{ .Values.rustfs.port }} }
+        - { protocol: TCP, port: {{ .Values.minio.port }} }
 ---
 # The front door: gateway + web + the P5 micro-frontend zones accept ingress from ANYWHERE
 # (NodePort/Ingress/port-forward) — they are the intended entry points and carry their own L7 guards (OIDC

@@ -82,7 +82,7 @@ frontend:
   # overlay could not render at all until this landed, which nothing noticed because the render
   # check itself was unreachable (its `make prod-render-check` target did not exist).
   # The three secrets stay OUT of the repo, exactly like dapr.appToken / age.password /
-  # rustfs.secretKey: supply them at deploy (`--set frontend.oidc.sessionSecret=…` or a values
+  # minio.secretKey: supply them at deploy (`--set frontend.oidc.sessionSecret=…` or a values
   # file). frontends.yaml fails closed on each one, so a missing value cannot ship quietly.
   oidc:
     enabled: true
@@ -144,7 +144,7 @@ backups:
     snapshotClassName: "" # set your cluster's CSI VolumeSnapshotClass
 
 # --- Secrets: the SEALED, file-backed OpenBao (no fixed root token; an operator must init + unseal).
-# NOTE devMode=false is the prod signal: the render now FAILS unless age.password + rustfs.secretKey are
+# NOTE devMode=false is the prod signal: the render now FAILS unless age.password + minio.secretKey are
 # overridden (or externalSecrets.enabled hands the Secrets to the external-secrets operator) — the
 # well-known dev credentials must not reach a prod cluster (infra-credentials.yaml guard). -----------
 openbao:
@@ -224,7 +224,7 @@ observability:
 #   externalEndpoint: https://s3.us-east-1.amazonaws.com
 # greptimedb-standalone:                             # REQUIRED COMPANION — the subchart's object-store endpoint
 #   objectStorage:                                   # is a static subchart value that CANNOT follow the
-#     s3:                                            # rustfs.externalEndpoint helper, so it must be repointed
+#     s3:                                            # minio.externalEndpoint helper, so it must be repointed
 #       endpoint: https://s3.us-east-1.amazonaws.com # HERE too or GreptimeDB writes to the deleted in-cluster
 #                                                    # RustFS. prod-render-check guards this pairing.
 # age (CloudNativePG):                               # managed Postgres for the AGE graph + OpenFGA datastore
@@ -243,7 +243,7 @@ observability:
 #   enabled: false                                   # — see externalSecrets below; the static Secrets are skipped
 #   externalAddr: https://vault.internal:8200
 # externalSecrets:                                   # ESO owns infra-credentials + observability-s3 from Vault
-#   enabled: true                                    # (no plaintext secret ships; age.password/rustfs.secretKey
+#   enabled: true                                    # (no plaintext secret ships; age.password/minio.secretKey
 #   role: lance                                      # then need NOT be set — ESO satisfies the fail-closed guard)
 # nats (managed / NACK-provisioned JetStream):       # the in-cluster single node is a SPOF: bus down = no
 #   enabled: false                                   # lineage ingest, no cascade. NACK Stream CRs are optional

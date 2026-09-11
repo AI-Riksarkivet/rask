@@ -6,7 +6,7 @@ MEASURED INSIDE THE RUNNING PODS 2026-09-08, because the Deployment's `env:` lis
 and reading only that list produces the opposite conclusion — the credential arrives through
 `envFrom`, which an `env:` survey cannot see:
 
-    rask-ingest        ListBuckets -> 106 buckets (the whole estate)   AWS_ACCESS_KEY_ID=rustfsadmin
+    rask-ingest        ListBuckets -> 106 buckets (the whole estate)   AWS_ACCESS_KEY_ID=minioadmin
     rask-maintenance   ListBuckets -> AWS Error ACCESS_DENIED          (its scoped F2-1 identity)
 
 That is the difference between the root credential and a scoped one, driven rather than inferred from
@@ -63,7 +63,7 @@ def _fleet_secret_holders(*set_values: str) -> set[str]:
             # It was written about `envFrom` — the mount an `env:` survey cannot see — and the viewer
             # took the same credential the OTHER way, as an explicit `secretKeyRef` on
             # `AWS_SECRET_ACCESS_KEY`. Measured on the running pod 2026-09-09:
-            # `AWS_ACCESS_KEY_ID=rustfsadmin` in a service this gate reported as clean. A gate that
+            # `AWS_ACCESS_KEY_ID=minioadmin` in a service this gate reported as clean. A gate that
             # knows one spelling of a mount certifies the other.
             for entry in container.get("env", []):
                 ref = ((entry.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name", "")
@@ -91,7 +91,7 @@ def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
     RENDERED WITH THE OPTIONAL PLANES ON, and that is the half this gate was missing. It rendered
     DEFAULT values, where `explorer.enabled` is off and the viewer's Deployment does not exist — so a
     service could hold the root credential and be certified clean by a gate that never rendered it.
-    Measured 2026-09-09 on the running estate, which does enable it: `AWS_ACCESS_KEY_ID=rustfsadmin`
+    Measured 2026-09-09 on the running estate, which does enable it: `AWS_ACCESS_KEY_ID=minioadmin`
     in the viewer's own environment, on a pod that HAS a Dapr sidecar. A gate that only renders the
     default deployment is a gate about a deployment nobody runs.
     """

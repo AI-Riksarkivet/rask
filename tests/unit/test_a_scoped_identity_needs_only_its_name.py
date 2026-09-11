@@ -13,7 +13,7 @@ DERIVE IT, on the estate's own precedent. `lance.dedicatedServiceToken` already 
 for the service bearer: `sha256sum` of the identity plus a secret the chart already governs, truncated.
 The same shape here means a scoped identity is named by ONE value — its access key — and its secret is
 computed. Nothing new enters git, the render is deterministic so a re-render is not a rotation, and on
-a real deployment `rustfs.secretKey` must already be overridden (`prod-credentials.yaml` refuses the
+a real deployment `minio.secretKey` must already be overridden (`prod-credentials.yaml` refuses the
 dev value), so ONE override makes every derived secret real too.
 
 THE PAIRING IS THE WHOLE TEST, and it is why this cannot be a grep. The secret is read at EIGHT sites
@@ -42,8 +42,8 @@ from test_invariants import _helm_template, _rendered_docs  # noqa: E402
 
 #: `(access-key value, the env prefix its plane uses, the OpenBao/Dapr field name)`.
 PLANES = {
-    "medallion": ("rustfs.medallionAccessKey=rask-medallion", "MEDALLION", "medallion-s3-secret-key"),
-    "maintenance": ("rustfs.maintenanceAccessKey=rask-maintenance", "MAINTENANCE", "maintenance-s3-secret-key"),
+    "medallion": ("minio.medallionAccessKey=rask-medallion", "MEDALLION", "medallion-s3-secret-key"),
+    "maintenance": ("minio.maintenanceAccessKey=rask-maintenance", "MAINTENANCE", "maintenance-s3-secret-key"),
 }
 
 
@@ -70,7 +70,7 @@ def test_naming_the_identity_is_enough_to_scope_the_plane(plane: str) -> None:
     expected = access.split("=", 1)[1]
     for name, env in envs.items():
         assert env[f"{prefix}_S3_ACCESS_KEY_ID"] == expected, f"{name} still runs as {env[f'{prefix}_S3_ACCESS_KEY_ID']} — naming the identity did not scope it"
-        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] not in ("", "rustfsadmin"), (
+        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] not in ("", "minioadmin"), (
             f"{name} pairs a scoped access key with the ROOT secret — every S3 call fails SignatureDoesNotMatch"
         )
 
@@ -96,11 +96,11 @@ def test_one_secret_string_reaches_every_site(plane: str) -> None:
 
 @pytest.mark.parametrize("plane", sorted(PLANES))
 def test_a_derived_secret_is_not_the_roots(plane: str) -> None:
-    """A derivation that collapses onto `rustfs.secretKey` would scope the NAME and nothing else."""
+    """A derivation that collapses onto `minio.secretKey` would scope the NAME and nothing else."""
     access, prefix, _ = PLANES[plane]
     envs = _env_of(prefix, access, "openbao.enabled=false")
     for name, env in envs.items():
-        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] != "rustfsadmin", f"{name} derived the root's own secret"
+        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] != "minioadmin", f"{name} derived the root's own secret"
 
 
 @pytest.mark.parametrize("plane", sorted(PLANES))
@@ -117,8 +117,8 @@ def test_an_explicit_secret_still_wins(plane: str) -> None:
 def test_naming_the_identity_EMPTY_is_the_escape_hatch_back_to_root() -> None:
     """The default is now the provisioned identity; returning to the tenant root stays possible and
     has to be DELIBERATE. What is gone is reaching root by never learning the key existed — which is
-    how lineage sat on `rustfsadmin` while holding the tightest policy in the estate."""
-    envs = _env_of("MEDALLION", "openbao.enabled=false", "rustfs.medallionAccessKey=")
+    how lineage sat on `minioadmin` while holding the tightest policy in the estate."""
+    envs = _env_of("MEDALLION", "openbao.enabled=false", "minio.medallionAccessKey=")
     assert envs, "no medallion Deployment rendered"
     for name, env in envs.items():
-        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "rustfsadmin", f"{name} ignored an explicitly emptied identity"
+        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "minioadmin", f"{name} ignored an explicitly emptied identity"

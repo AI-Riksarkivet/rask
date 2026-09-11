@@ -83,7 +83,7 @@ spec:
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.medallion.producer.daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
-            - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             - { name: MEDALLION_BRONZE_DATASET, value: {{ .Values.medallion.producer.bronzeDataset | quote }} }
             # The IIIF page lane's bronze dataset name (P7a, re-tiered by R23) — a values knob beside
@@ -111,7 +111,7 @@ spec:
             # goes through this root. Gated on `projectsEnabled` alone, the head could not see a single
             # declaration, so a declared lane's table arrived and published nothing — the whole record was
             # unreachable from the deployed chart.
-            - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.rustfs.bucket }}" }
+            - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.minio.bucket }}" }
             {{- end }}
             # Ray TRAIN head (#115): values-wired passthrough (docs/RAY-TRAIN.md; defaults mirror
             # core/config.py). lineageUrl defaults to the release's own lineage service.
@@ -255,7 +255,7 @@ spec:
             # three agreeing while the third does not is a cron firing into a 404 forever.
             - { name: MEDALLION_CASCADE_LAG_BINDING_NAME, value: {{ $.Values.medallion.cascadeLag.bindingName | quote }} }
             {{- end }}
-            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.rustfs.bucket | quote }} }
+            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.minio.bucket | quote }} }
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- /* THE SAME IDENTITY, AT LINEAGE'S DOOR. `catalog_service_identity` is who this app is to the
                  CATALOG; `fga_service_identity` is who it is when it AUTHORS a run, and lineage authorizes the
@@ -277,7 +277,7 @@ spec:
             {{- end }}
             {{- if .Values.medallion.compute }}
             # Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
-            # cascade writes actual versioned data on RustFS). The URI derives from the bronze namespace,
+            # cascade writes actual versioned data in the object store). The URI derives from the bronze namespace,
             # exactly where the bronze→silver stage runner's FROM_URI points. S3 secret follows the catalog's
             # two-tier rule (plaintext only when OpenBao is off — compute + OpenBao is not a shipped combo).
             - { name: MEDALLION_COMPUTE_ENABLED, value: "true" }
@@ -285,13 +285,13 @@ spec:
             # The medallion (project) bucket base — where bronze/silver + the model registry live. The
             # trainer resolves feature + model URIs from HERE (via silver's zone), so it stays in the project
             # bucket even when gold (sink) is zoned out. `silver` is unmapped by default →
-            # rustfs.bucket, so this is s3://<project-bucket>/medallion, unchanged on the single-bucket path.
+            # minio.bucket, so this is s3://<project-bucket>/medallion, unchanged on the single-bucket path.
             - { name: MEDALLION_STAGE_BASE_URI, value: "s3://{{ include "lance.stageBucket" (list . "silver") }}/medallion" }
             # The media ingest head (multimodal §9): /ingest-media seeds/reads the source prefix in the
             # lake bucket (demo stand-in for an external media store), lands bronze-media blobs at the
             # namespace-derived URI (MUST match the media stage runner's fromNamespace-derived FROM_URI), and
             # triggers the media lane. Dataset/namespace/topic/prefix use the code defaults.
-            - { name: MEDALLION_MEDIA_SOURCE_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
+            - { name: MEDALLION_MEDIA_SOURCE_BUCKET, value: {{ .Values.minio.bucket | quote }} }
             # hasKey+ternary (the LANCE_AUDIT_ENABLED convention, services.yaml): a key missing under
             # --reuse-values (a stored release predating §9) must render the default, not "" (pydantic
             # bool_parsing boot crash on this producer).
@@ -328,20 +328,20 @@ spec:
             {{- /* THE MEDALLION PLANE'S SCOPED IDENTITY (Q17-5). Empty values keep the tenant ROOT
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
                  data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
-                 write-denied on every other control prefix — see `rustfs-scoped-users.yaml`. */}}
+                 write-denied on every other control prefix — see `minio-scoped-users.yaml`. */}}
             {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
                  (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
-            {{- $medScoped := .Values.rustfs.medallionAccessKey }}
-            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.medallionAccessKey .Values.rustfs.accessKey (not (not $medScoped)) | quote }} }
+            {{- $medScoped := .Values.minio.medallionAccessKey }}
+            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.medallionAccessKey .Values.minio.accessKey (not (not $medScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey)) .Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
+            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.medallionAccessKey .Values.minio.medallionSecretKey)) .Values.minio.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env
             # (Batch 7 closes the gap: the env was already omitted here but nothing told the service to
             # consume the store — a store-on deployment left medallion credential-less). Fails closed.
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
             {{- if $medScoped }}
-            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `rustfs-secret-key` — the
+            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
             # tenant ROOT's secret — so a scoped access key left on that default is signed with a
             # mismatched pair and every operation fails `SignatureDoesNotMatch`. The Ray and maintenance
             # pairs both paid for this; the field was already configurable, only the chart had to use it.
@@ -439,7 +439,7 @@ spec:
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ $root.Values.pubsub.topic | quote }} }
             {{- if $root.Values.services.lineage.outbox.enabled }}
-            - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.rustfs.bucket }}/_lineage_outbox" }
+            - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- if $root.Values.dapr.sidecars }}
             - name: APP_API_TOKEN  # verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
@@ -480,7 +480,7 @@ spec:
             # A lane-bound stage runner needs it for a second reason: `services/lane.py` reads the declaration
             # straight off this root (never through a catalog client), so without it resolution raises
             # UndeclaredLaneError naming an empty control root.
-            - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.rustfs.bucket }}" }
+            - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }
             {{- if and $root.Values.medallion.goldWarehouse (eq .toNamespace "gold") }}
             # Gold SERVING warehouse (docs/DECISIONS.md "Medallion tiers"): ONLY the terminal silver→gold
             # stage runner retargets — its tenant target root becomes the project's serving=="gold" registry
@@ -514,13 +514,13 @@ spec:
             {{- /* THE MEDALLION PLANE'S SCOPED IDENTITY (Q17-5). Empty values keep the tenant ROOT
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
                  data in any warehouse, WRITES `_tasks/` because this plane registers them, and is
-                 write-denied on every other control prefix — see `rustfs-scoped-users.yaml`. */}}
+                 write-denied on every other control prefix — see `minio-scoped-users.yaml`. */}}
             {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
                  (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
-            {{- $medScoped := $root.Values.rustfs.medallionAccessKey }}
-            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.accessKey (not (not $medScoped)) | quote }} }
+            {{- $medScoped := $root.Values.minio.medallionAccessKey }}
+            - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ ternary $root.Values.minio.medallionAccessKey $root.Values.minio.accessKey (not (not $medScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" $root) }}
-            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list $root $root.Values.rustfs.medallionAccessKey $root.Values.rustfs.medallionSecretKey)) $root.Values.rustfs.secretKey (not (not $medScoped)) | quote }} }
+            - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list $root $root.Values.minio.medallionAccessKey $root.Values.minio.medallionSecretKey)) $root.Values.minio.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
             # Store-on → sole source at boot (see the producer block above). Fails closed.
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
@@ -576,7 +576,7 @@ spec:
                    with FGA off unable to authenticate at all. Same value, so the two cannot drift. */}}
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
-            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
+            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.minio.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}
             # Validator gate: after the compute write, assert the stage's data is good enough to promote
             # (row_count > 0, key column non-null); a failure emits the dataQualityAssertions facet but does

@@ -165,7 +165,7 @@ export AWS_ACCESS_KEY_ID="$S3_KEY"
 export AWS_SECRET_ACCESS_KEY="$S3_SECRET"
 # THE S3 PAIR IS READ UNDER ITS OWN NAMES TOO, and exporting only the AWS_* spelling is why suites
 # that reach the store directly reported it UNREACHABLE rather than skipping honestly: they read
-# `LANCE_E2E_S3_ACCESS_KEY`/`_SECRET_KEY`, whose defaults are `rustfsadmin`/`rustfsadmin` — a valid
+# `LANCE_E2E_S3_ACCESS_KEY`/`_SECRET_KEY`, whose defaults are `minioadmin`/`minioadmin` — a valid
 # key with the wrong secret, so every request signed and every request was refused.
 export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
 export LANCE_E2E_S3_SECRET_KEY="$S3_SECRET"

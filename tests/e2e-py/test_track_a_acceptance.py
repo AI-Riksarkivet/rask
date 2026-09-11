@@ -81,8 +81,8 @@ import requests
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
+S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
 S3_REGION = os.environ.get("LANCE_E2E_S3_REGION", "us-east-1")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 

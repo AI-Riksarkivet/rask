@@ -118,7 +118,7 @@ def test_the_catalog_lifespan_consumes_the_store_through_the_shared_seam(monkeyp
 
     def _record(settings: object) -> dict[str, str]:
         seen.append(settings)
-        return {"rustfs-secret-key": "from-store"}
+        return {"minio-secret-key": "from-store"}
 
     monkeypatch.setattr(catalog_main, "apply_dapr_secrets", _record)
     settings = CatalogSettings.model_validate({"s3_access_key_id": "x", "secrets_from_dapr": True, "s3_secret_access_key": SecretStr("")})

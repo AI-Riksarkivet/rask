@@ -375,7 +375,7 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
 
     `orphan_buckets` reports buckets that exist in storage and that no warehouse record claims. The
     estate creates some for ITSELF — `rask-observability` is the RustFS bucket this chart's own
-    rustfs-mkbucket Job provisions for GreptimeDB's object store — and no warehouse record will ever
+    minio-mkbucket Job provisions for GreptimeDB's object store — and no warehouse record will ever
     claim one, because they hold no governed tables.
 
     MEASURED live 2026-08-16: it sat in orphan_buckets on every tick. Since `report_is_clean` blocks the
@@ -383,7 +383,7 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
     the observability store. `platform_buckets` defaulted to `sweep_buckets`, which is the set the sweep
     MAINTAINS and says nothing about infrastructure it does not.
 
-    The declared set comes from `rustfs.buckets`, the same values key the mkbucket Job verifies, so the
+    The declared set comes from `minio.buckets`, the same values key the mkbucket Job verifies, so the
     exemption cannot drift away from what is actually provisioned.
     """
     from maintenance.core.config import MaintenanceSettings

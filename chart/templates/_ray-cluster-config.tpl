@@ -141,7 +141,7 @@
                      (it does its own S3 work — `outbox.stage_event` issues a HeadBucket, which needs
                      an unconditioned ListBucket a scoped policy refuses). Both measured 2026-08-30.
                      `ray-compute-*` defaults to the root credential, so this is inert until an
-                     operator provisions the scoped RustFS user. NOTHING credential-shaped rides the
+                     operator provisions the scoped MinIO user. NOTHING credential-shaped rides the
                      submission any more, so this pod is the single source and there is no second
                      value to keep in agreement. */}}
                 - name: S3_KEY

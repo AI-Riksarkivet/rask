@@ -184,7 +184,7 @@ step "5/8 provision the #3-B data buckets (the allowlist GOVERNS, it does not pr
 uv run python - <<PYEOF
 import boto3
 c = boto3.client("s3", endpoint_url="http://localhost:9900",
-                 aws_access_key_id="rustfsadmin", aws_secret_access_key="rustfsadmin",
+                 aws_access_key_id="minioadmin", aws_secret_access_key="minioadmin",
                  region_name="us-east-1")
 for b in ("mb-a", "mb-b"):
     try:

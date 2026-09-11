@@ -120,7 +120,7 @@ def test_a_vending_failure_REFUSES_rather_than_signing_with_the_storage_root() -
 
     "Falling back is strictly no worse" held only while the ambient credential was an unremarkable
     key. It is the RustFS ROOT pair — measured inside the running pod 2026-09-08,
-    `AWS_ACCESS_KEY_ID=rustfsadmin` — so the degrade signed the run's bytes with the widest credential
+    `AWS_ACCESS_KEY_ID=minioadmin` — so the degrade signed the run's bytes with the widest credential
     in the estate, at INFO, counted by nothing. The owner's standing rule is "never a fallback"; the
     escape stays reachable for an operator who names it (`allow_ambient_fallback`), so the refusal is
     about the AMBIGUITY, not about being open.

@@ -24,7 +24,7 @@ against a stack you stood up yourself::
 
 Env (defaults target the RustFS compose stack from the host)::
 
-    S3_ENDPOINT=http://localhost:9000  S3_ACCESS_KEY=rustfsadmin  S3_SECRET_KEY=rustfsadmin
+    S3_ENDPOINT=http://localhost:9000  S3_ACCESS_KEY=minioadmin  S3_SECRET_KEY=minioadmin
     S3_REGION=us-east-1  S3_BUCKET=lakehouse  LINEAGE_URL=http://localhost:8000  STEP_DELAY=2.5
 """
 
@@ -80,8 +80,8 @@ def _load_demo_env() -> None:
 _load_demo_env()
 
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT", "http://localhost:9000")
-S3_KEY = os.environ.get("S3_ACCESS_KEY", "rustfsadmin")
-S3_SECRET = os.environ.get("S3_SECRET_KEY", "rustfsadmin")
+S3_KEY = os.environ.get("S3_ACCESS_KEY", "minioadmin")
+S3_SECRET = os.environ.get("S3_SECRET_KEY", "minioadmin")
 S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 S3_BUCKET = os.environ.get("S3_BUCKET", "lakehouse")
 LINEAGE_URL = os.environ.get("LINEAGE_URL", "http://localhost:8000").rstrip("/")

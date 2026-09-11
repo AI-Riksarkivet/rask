@@ -1,12 +1,12 @@
 """A scoped storage identity the chart PROVISIONS must be the one its service actually presents.
 
-`rustfs-scoped-users.yaml` creates a least-privilege RustFS user and policy for the maintenance,
+`minio-scoped-users.yaml` creates a least-privilege RustFS user and policy for the maintenance,
 medallion and lineage planes on every install and upgrade. All three are then OFF by default —
 `rustfs.<plane>AccessKey: ""` falls back to the tenant ROOT credential — so the chart builds the
-identity, provisions it, and then hands the service `rustfsadmin` anyway.
+identity, provisions it, and then hands the service `minioadmin` anyway.
 
 MEASURED ON THE RUNNING ESTATE 2026-09-08, reading each pod's real environment rather than the
-templates: catalog, lineage, ingest and viewer all present `rustfsadmin`. The operator had armed
+templates: catalog, lineage, ingest and viewer all present `minioadmin`. The operator had armed
 maintenance and medallion by hand in a values file; lineage — whose policy is the TIGHTEST of the
 three, needing no PutObject at all — was still root because nobody knew to name it.
 
@@ -36,7 +36,7 @@ REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
 
 #: `{env var naming the identity: the workload that presents it}` — one row per plane the chart
-#: provisions a scoped RustFS user for in `rustfs-scoped-users.yaml`.
+#: provisions a scoped RustFS user for in `minio-scoped-users.yaml`.
 PROVISIONED_PLANES = {
     "MAINTENANCE_S3_ACCESS_KEY_ID": "maintenance",
     "MEDALLION_S3_ACCESS_KEY_ID": "the medallion plane",
@@ -67,7 +67,7 @@ def _render(*extra: str) -> str:
 
 
 def _root_key() -> str:
-    return str(yaml.safe_load((CHART / "values.yaml").read_text())["rustfs"]["accessKey"])
+    return str(yaml.safe_load((CHART / "values.yaml").read_text())["minio"]["accessKey"])
 
 
 def _rendered_identities(rendered: str) -> dict[str, set[str]]:
@@ -92,7 +92,7 @@ def test_no_provisioned_plane_falls_back_to_the_storage_root() -> None:
         assert rendered, f"{var} renders nowhere — this pin is asserting nothing about {plane}"
         assert root not in rendered, (
             f"{plane} presents the tenant ROOT credential {root!r} on a default install, while "
-            f"`rustfs-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
+            f"`minio-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
             "Root by default is not a deployment choice anyone made."
         )
 

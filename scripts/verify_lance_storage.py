@@ -14,7 +14,7 @@ wearing a lab coat.
 
 Run everything (Lance rows need no S3; the RustFS rows do):
 
-    kubectl port-forward svc/rask-rustfs-io 9000:9000 &
+    kubectl port-forward svc/rask-minio 9000:9000 &
     RASK_S3_ENDPOINT_URL=http://localhost:9000 \
     AWS_ACCESS_KEY_ID=$(kubectl get secret rask-rustfs -o jsonpath='{.data.accesskey}' | base64 -d) \
     AWS_SECRET_ACCESS_KEY=$(kubectl get secret rask-rustfs -o jsonpath='{.data.secretkey}' | base64 -d) \
@@ -225,7 +225,7 @@ def check_rowid_across_compaction(root: Path) -> CheckResult:
 # ── RustFS rows ───────────────────────────────────────────────────────────────────────
 
 _S3_HINT = (
-    "kubectl port-forward svc/rask-rustfs-io 9000:9000 & "
+    "kubectl port-forward svc/rask-minio 9000:9000 & "
     "RASK_S3_ENDPOINT_URL=http://localhost:9000 "
     "AWS_ACCESS_KEY_ID=$(kubectl get secret rask-rustfs -o jsonpath='{.data.accesskey}' | base64 -d) "
     "AWS_SECRET_ACCESS_KEY=$(kubectl get secret rask-rustfs -o jsonpath='{.data.secretkey}' | base64 -d) "

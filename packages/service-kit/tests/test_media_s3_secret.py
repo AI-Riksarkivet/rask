@@ -22,7 +22,7 @@ from service_kit.media.config import Settings
 
 
 def _settings(**over: object) -> Settings:
-    base: dict[str, object] = {"MEDIA_S3_ENDPOINT": "http://rustfs:9000", "MEDIA_S3_ACCESS_KEY_ID": "rustfsadmin"}
+    base: dict[str, object] = {"MEDIA_S3_ENDPOINT": "http://rustfs:9000", "MEDIA_S3_ACCESS_KEY_ID": "minioadmin"}
     base.update(over)
     return Settings.model_validate(base)
 
@@ -50,7 +50,7 @@ def test_secret_comes_from_the_store(monkeypatch: pytest.MonkeyPatch) -> None:
     opts = _settings().storage_options()
     assert opts is not None
     assert opts["aws_secret_access_key"] == "from-the-store"
-    assert opts["aws_access_key_id"] == "rustfsadmin"
+    assert opts["aws_access_key_id"] == "minioadmin"
 
 
 def test_missing_store_secret_FAILS_CLOSED(monkeypatch: pytest.MonkeyPatch) -> None:

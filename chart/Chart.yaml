@@ -91,10 +91,6 @@ dependencies:
     version: "0.28.3"
     repository: https://cloudnative-pg.github.io/charts
     condition: cnpg.enabled
-  - name: rustfs-operator
-    version: "0.1.0"
-    repository: "file://../third_party/rustfs-operator"
-    condition: rustfs.enabled
   # Observability — GreptimeDB (unified metrics/logs/traces store) + Perses (dashboards-as-code),
   # both shared with lance-ns at the same version.
   - name: greptimedb-standalone

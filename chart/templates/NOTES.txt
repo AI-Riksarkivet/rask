@@ -39,8 +39,8 @@ Services (ClusterIP):
   - age:       {{ include "lance.ageHost" $root }}:5432 (Apache AGE — the lineage graph)
 {{- end }}
 {{- end }}
-{{- if .Values.rustfs.enabled }}
-  - rustfs:    {{ include "rask.fullname" $root }}-rustfs-io:{{ .Values.rustfs.port }} (in-cluster, console :{{ .Values.rustfs.consolePort }} via -rustfs-console)
+{{- if .Values.minio.enabled }}
+  - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }} via -minio console)
 {{- end }}
 {{- if .Values.ray.enabled }}
   - ray:       {{ include "rask.fullname" $root }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})
@@ -115,7 +115,7 @@ Observability (OTel Collector + GreptimeDB + Perses):
   - collector:  {{ .externalEndpoint }} (EXTERNAL — no in-cluster Collector is deployed)
 {{- end }}
 {{- end }}
-  - storage:    RustFS bucket {{ .Values.observability.bucket }} ({{ include "rask.fullname" $root }}-rustfs-io:{{ .Values.rustfs.port }})
+  - storage:    bucket {{ .Values.observability.bucket }} ({{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }})
   App OTLP target (catalog/lineage/medallion/compaction): {{ include "lance.otlpEndpoint" $root }}
   The rask fleet (incl. gateway) and Ray Serve export OTLP/HTTP straight to GreptimeDB
   (table opentelemetry_traces, pipeline greptime_trace_v1; gated by RASK_OTEL_ENABLED).
@@ -190,7 +190,7 @@ Reminders:
 {{- end }}
 {{- if not $reconcile }}
        - services.lineage.reconcile.enabled=false -> nothing drains the outbox and nothing back-fills.
-         A lost event stays lost, and staged events accumulate in s3://{{ $.Values.rustfs.bucket }}/_lineage_outbox forever.
+         A lost event stays lost, and staged events accumulate in s3://{{ $.Values.minio.bucket }}/_lineage_outbox forever.
 {{- end }}
      Re-enable with: helm upgrade ... --set services.lineage.outbox.enabled=true --set services.lineage.reconcile.enabled=true
 {{- end }}

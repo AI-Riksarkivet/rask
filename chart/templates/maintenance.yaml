@@ -192,7 +192,7 @@ spec:
             # The SAME prefix the catalog, the stage runners and the drain name, because `lineage`'s reconcile
             # cron is the only thing that reads it. A private prefix here would stage objects nothing
             # ever collects, which reads as durability and is not.
-            - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- end }}
             {{- /* #79 reclamation. OFF unless explicitly asked for: with it on, a drop past
@@ -228,35 +228,35 @@ spec:
             - { name: MAINTENANCE_COMPACT_THREADS, value: {{ .Values.maintenance.compactThreads | quote }} }
             - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- /*
-              THE SCOPED PAIR WINS, BOTH HALVES OR NEITHER. `rustfs.accessKey` is the TENANT ROOT, and
+              THE SCOPED PAIR WINS, BOTH HALVES OR NEITHER. `minio.accessKey` is the TENANT ROOT, and
               maintenance compacts with it — a write — so it also reaches `_projects/`, `_protection/`
               and `_policies/`, the records that govern maintenance itself. A provisioned scoped user
-              (rustfs-scoped-users) replaces it; empty leaves today's behaviour exactly, because
+              (minio-scoped-users) replaces it; empty leaves today's behaviour exactly, because
               repointing a live service at a credential nobody created would take the sweep down on
               upgrade. Requiring BOTH halves is the Ray pair's measured lesson: setting one gives
               `SignatureDoesNotMatch` on every operation.
             */ -}}
             {{- /* The ACCESS KEY alone scopes the plane; the secret is derived unless supplied
                  (`lance.scopedStorageSecret`), so declaring the identity needs no secret in a values file. */ -}}
-            {{- $scoped := .Values.rustfs.maintenanceAccessKey }}
-            - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.maintenanceAccessKey .Values.rustfs.accessKey (not (not $scoped)) | quote }} }
+            {{- $scoped := .Values.minio.maintenanceAccessKey }}
+            - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.maintenanceAccessKey .Values.minio.accessKey (not (not $scoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.rustfs.maintenanceAccessKey .Values.rustfs.maintenanceSecretKey)) .Values.rustfs.secretKey (not (not $scoped)) | quote }} }
+            - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.maintenanceAccessKey .Values.minio.maintenanceSecretKey)) .Values.minio.secretKey (not (not $scoped)) | quote }} }
             {{- else }}
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
             # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
             - { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- if $scoped }}
-            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `rustfs-secret-key` — the
+            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
             # TENANT ROOT's secret — so a scoped access key left on that default is signed with a
             # mismatched pair and every operation fails `SignatureDoesNotMatch`. That is the Ray pair's
             # measured lesson, and the field was already configurable; only the chart had to use it.
             - { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }
             {{- end }}
             {{- end }}
-            - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
+            - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.minio.bucket | quote }} }
             {{- /* The #50 policy registry root defaults to this bucket, matching the catalog's
-                   LANCE_REST_ROOT (also .Values.rustfs.bucket, services.yaml). If LANCE_CONTROL_ROOT ever
+                   LANCE_REST_ROOT (also .Values.minio.bucket, services.yaml). If LANCE_CONTROL_ROOT ever
                    moves the catalog's registry, set MAINTENANCE_POLICY_ROOT to the same value — a wrong root
                    lists cleanly as "no policies" (the sweep logs compaction_policies_loaded per tick). */}}
             {{- /* EVERY bucket that can hold Lance data must be swept, or its tables accumulate superseded
@@ -267,7 +267,7 @@ spec:
                    RUNTIME, so they are appended by the operator as tenants are onboarded. */}}
             {{- $extra := list }}
             {{- range $ns, $bkt := .Values.medallion.buckets }}
-            {{- if ne $bkt $.Values.rustfs.bucket }}{{ $extra = append $extra $bkt }}{{ end }}
+            {{- if ne $bkt $.Values.minio.bucket }}{{ $extra = append $extra $bkt }}{{ end }}
             {{- end }}
             {{- range .Values.catalog.multibase.dataBases }}
             {{- $extra = append $extra (. | replace "s3://" "" | trimSuffix "/") }}
@@ -277,10 +277,10 @@ spec:
                    record will ever claim. Without them `orphan_buckets` reports each one as drift on
                    every tick forever, and a report whose contract is "clean certifies the estate" can
                    then never be clean. Measured 2026-08-16: `rask-observability`, created by this
-                   chart's own rustfs-mkbucket Job for GreptimeDB's object store, sat in that list.
-                   Sourced from `rustfs.buckets` — the set the operator provisions and that same Job
+                   chart's own minio-mkbucket Job for GreptimeDB's object store, sat in that list.
+                   Sourced from `minio.buckets` — the set the operator provisions and that same Job
                    VERIFIES — so the two cannot drift apart. */}}
-            - { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ .Values.rustfs.buckets | default list | uniq | join "," | quote }} }
+            - { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ .Values.minio.buckets | default list | uniq | join "," | quote }} }
             - { name: MAINTENANCE_S3_REGION, value: "us-east-1" }
             {{- /* The drift reconciler's inputs. It only ever READS: OpenFGA says who, the control-root
                    registries say what exists, object storage holds the bytes. Every one of these mirrors a

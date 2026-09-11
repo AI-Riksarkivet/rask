@@ -446,7 +446,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MEDALLION_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="MEDALLION_DAPR_SECRET_KEY")
-    dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="MEDALLION_DAPR_SECRET_S3_FIELD")
+    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="MEDALLION_DAPR_SECRET_S3_FIELD")
     s3_region: str = Field(default="us-east-1", alias="MEDALLION_S3_REGION")
 
     @property

@@ -4,8 +4,8 @@ Q17-5, the estate's one MISSING zero-trust control of nineteen. Measured on the 
 2026-09-07, two consumers were already scoped and three were not:
 
     rask-maintenance          MAINTENANCE_S3_ACCESS_KEY_ID = rask-maintenance      scoped
-    rask-medallion-producer   MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
-    the three stage runners' own     MEDALLION_S3_ACCESS_KEY_ID = rustfsadmin             ROOT
+    rask-medallion-producer   MEDALLION_S3_ACCESS_KEY_ID = minioadmin             ROOT
+    the three stage runners' own     MEDALLION_S3_ACCESS_KEY_ID = minioadmin             ROOT
 
 THE RAY LANE IS NOT A STAGE RUNNER ENV AND IS NOT THIS FILE'S SUBJECT. No credential rides `runtime_env` —
 `ray_submit.py` says why: the Jobs API echoes it back on `GET /api/jobs/<id>`, an unauthenticated
@@ -14,14 +14,14 @@ POD's own environment, which `chart/templates/rayservice.yaml` mounts by `secret
 infra-credentials. A stage runner env naming the Ray lane's key would bind to no setting and read as a
 control while being decoration, so its ABSENCE from the assertions below is deliberate.
 
-THE PAIR IS THE WHOLE TEST. `dapr_secret_s3_field` defaults to `rustfs-secret-key`, which IS the
+THE PAIR IS THE WHOLE TEST. `dapr_secret_s3_field` defaults to `minio-secret-key`, which IS the
 tenant root's secret — so a scoped ACCESS KEY left on that default is signed with a mismatched pair
 and every S3 call fails `SignatureDoesNotMatch`. Both the Ray and the maintenance pairs paid for that
 once. A render that moves one half and not the other looks correct in a diff and takes the cascade
 down on contact, which is exactly the class of failure a grep-shaped test cannot see.
 
 THE DEFAULT IS THE SCOPED IDENTITY (2026-09-08). It was empty — the tenant root — and the reason was
-ordering, not preference: `rustfs-scoped-users` ran `post-upgrade`, so a chart that named the key
+ordering, not preference: `minio-scoped-users` ran `post-upgrade`, so a chart that named the key
 rolled pods onto a credential the object store had not been told about yet. The hook now runs
 `pre-upgrade`, so the user exists before the roll, and explicitly emptying the key is the deliberate
 way back to root.
@@ -40,7 +40,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_invariants import _rendered_docs  # noqa: E402
 
 
-SCOPED = ("rustfs.medallionAccessKey=rask-medallion", "rustfs.medallionSecretKey=d-secret")
+SCOPED = ("minio.medallionAccessKey=rask-medallion", "minio.medallionSecretKey=d-secret")
 #: The producer plus every stage runner — one identity, because `medallion.yaml` renders their S3 env from
 #: one values pair and they do one class of work.
 MEDALLION_DEPLOYMENTS = ("medallion-producer", "bronze-to-silver", "silver-to-gold")
@@ -64,7 +64,7 @@ def test_the_default_IS_the_provisioned_identity() -> None:
 
     This pinned the opposite until 2026-09-08, and said so honestly: "It is also the honest statement
     of where the estate stands — Q17-13 is the row for fixing the default." That row is done. The
-    empty default's real defence was ordering — `rustfs-scoped-users` ran `post-upgrade`, so naming a
+    empty default's real defence was ordering — `minio-scoped-users` ran `post-upgrade`, so naming a
     key rolled pods onto a credential that did not exist yet — and the HOOK is what was wrong: it now
     runs `pre-upgrade` too.
     """

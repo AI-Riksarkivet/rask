@@ -68,10 +68,10 @@ spec:
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: LANCE_REST_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             - { name: LANCE_REST_IMPL, value: "dir" }
-            - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.rustfs.bucket }}" }
+            - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.minio.bucket }}" }
             - { name: LANCE_NS_DELIMITER, value: "$" }
             - { name: LANCE_ALLOW_EXTERNAL_BLOBS, value: {{ .Values.vending.allowExternalBlobs | quote }} }
-            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.rustfs.bucket) | quote }} }
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.minio.bucket) | quote }} }
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
             # Load-shed cap on concurrent in-flight Arrow-IPC writes (each buffers up to maxBodyBytes).
             # hasKey+ternary, not `| default`, for the same two reasons as LANCE_AUDIT_ENABLED below: a
@@ -97,9 +97,9 @@ spec:
             # fragments across (?data_base=... per request, validated against this list). Empty = feature off.
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.minio.secretKey | quote }} }
             {{- else }}
             # OpenBao on → the S3 secret comes ONLY from the Dapr secret store at boot; it is deliberately
             # NOT in pod env (the audit's 'plaintext still ships' fix). The catalog fails closed if the
@@ -110,7 +110,7 @@ spec:
             - { name: LANCE_S3_ALLOW_HTTP, value: "true" }
             - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
             # Data-plane credential vending (Track B). mode_b (default) = server-mediated, no creds leave the
-            # catalog; sts = AssumeRole + per-table session policy against the RustFS STS endpoint (short-TTL
+            # catalog; sts = AssumeRole + per-table session policy against the store's STS endpoint (short-TTL
             # scoped creds the client uses for direct object I/O).
             - { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }
             {{- if or (eq .Values.vending.mode "sts") (eq .Values.vending.mode "web_identity") }}
@@ -147,7 +147,7 @@ spec:
             # The SAME prefix `LINEAGE_OUTBOX_URI` names below, because that is the only thing that drains
             # it: lineage's reconcile cron re-ingests and re-publishes what it finds there. A private prefix
             # would stage objects nothing ever reads, which looks like durability and is not.
-            - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). ON →
             # mutations publish a CatalogControlEvent onto a DEDICATED broadcast pubsub (no queueGroupName)
@@ -181,7 +181,7 @@ spec:
             # A PRIVATE PREFIX, never `_lineage_outbox`: lineage's reconcile cron parses everything in
             # its prefix as an OpenLineage RunEvent and DELETES what it cannot, so a shared prefix
             # destroys these events rather than relaying them (the catalog refuses to boot on equality).
-            - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_control_outbox" }
+            - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_control_outbox" }
             # The binding name IS the route this app serves it on — one string with the Component above.
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
             {{- end }}
@@ -518,20 +518,20 @@ spec:
                  needs no secret in a values file. Empty falls back to the tenant ROOT, which is what an
                  install runs until one is named — a chart that silently repointed a live service at a
                  credential nobody created would take it down on upgrade. */}}
-            {{- $linScoped := .Values.rustfs.lineageAccessKey }}
-            - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.rustfs.lineageAccessKey .Values.rustfs.accessKey (not (not $linScoped)) | quote }} }
+            {{- $linScoped := .Values.minio.lineageAccessKey }}
+            - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.lineageAccessKey .Values.minio.accessKey (not (not $linScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LINEAGE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.rustfs.lineageAccessKey .Values.rustfs.lineageSecretKey)) .Values.rustfs.secretKey (not (not $linScoped)) | quote }} }
+            - { name: LINEAGE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.lineageAccessKey .Values.minio.lineageSecretKey)) .Values.minio.secretKey (not (not $linScoped)) | quote }} }
             {{- else if $linScoped }}
             {{- /* THE OTHER HALF OF THE PAIR, and the half that has bitten twice. `dapr_secret_s3_field`
-                 defaults to `rustfs-secret-key` — the tenant ROOT's secret — so a SCOPED access key left
+                 defaults to `minio-secret-key` — the tenant ROOT's secret — so a SCOPED access key left
                  on that default is signed with a mismatched pair and every operation fails
                  `SignatureDoesNotMatch`. The Ray and maintenance pairs each paid for this. */}}
             - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }
             {{- end }}
-            - { name: LINEAGE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
+            - { name: LINEAGE_S3_BUCKET, value: {{ .Values.minio.bucket | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
-            - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- if not .Values.auth.enabled }}
             {{- include "lance.governedAuthAck" . | nindent 12 }}

@@ -18,7 +18,7 @@ reconciler that silently stops seeing part of the estate. And a reconciler that 
 why the READ stays wide and the WRITE is what gets scoped.
 
 THE PAIR IS THE PART THAT HAS BITTEN TWICE. A scoped ACCESS KEY left on the default secret field
-(`rustfs-secret-key`, the tenant ROOT's) is signed with a mismatched pair, and every operation fails
+(`minio-secret-key`, the tenant ROOT's) is signed with a mismatched pair, and every operation fails
 `SignatureDoesNotMatch` — the Ray and maintenance identities each paid for it. So this asserts the
 field moves WITH the key, not merely that the key was set.
 """
@@ -36,7 +36,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_invariants import _rendered_docs  # noqa: E402
 
 
-SCOPED = "rustfs.lineageAccessKey=rask-lineage"
+SCOPED = "minio.lineageAccessKey=rask-lineage"
 
 
 def _lineage_env(*sets: str) -> dict[str, str]:
@@ -97,14 +97,14 @@ def test_the_gate_can_see_both_halves() -> None:
 def test_the_DEFAULT_is_the_scoped_identity_and_EMPTY_is_the_way_back() -> None:
     """Measured 2026-09-08: lineage was the one plane of three whose identity was built, provisioned
     and never selected — `helm get values` named maintenance and medallion and not lineage — so the
-    running pod presented `rustfsadmin` while holding the tightest policy in the estate. The default
+    running pod presented `minioadmin` while holding the tightest policy in the estate. The default
     now names it; explicitly emptying the key is the deliberate way back."""
     default = _lineage_env()
     assert default.get("LINEAGE_S3_ACCESS_KEY_ID") == "rask-lineage", "lineage presents the tenant root on a default install"
     assert default.get("LINEAGE_DAPR_SECRET_S3_FIELD") == "lineage-s3-secret-key", "the scoped key is paired with the tenant root's secret field"
 
-    unnamed = _lineage_env("rustfs.lineageAccessKey=")
-    assert unnamed.get("LINEAGE_S3_ACCESS_KEY_ID") == "rustfsadmin", "an explicitly emptied identity did not fall back"
+    unnamed = _lineage_env("minio.lineageAccessKey=")
+    assert unnamed.get("LINEAGE_S3_ACCESS_KEY_ID") == "minioadmin", "an explicitly emptied identity did not fall back"
     assert "LINEAGE_DAPR_SECRET_S3_FIELD" not in unnamed, "the scoped secret field is set with no scoped key"
 
 

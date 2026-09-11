@@ -15,7 +15,7 @@ spec:
       backoffLimit: 3
       template:
         metadata:
-          # The component label is load-bearing under the prod NetworkPolicy: the age-postgres and rustfs
+          # The component label is load-bearing under the prod NetworkPolicy: the age-postgres and minio
           # ingress rules allow `from` component=backup-pg — without this label the CronJob pod matches
           # neither, default-deny drops its pg_dump SYN + mc upload, and the backup silently never runs.
           labels:
@@ -69,24 +69,24 @@ spec:
           {{- end }}
           containers:
             - name: upload
-              image: {{ .Values.rustfs.mcImage }}
+              image: {{ .Values.minio.mcImage }}
               env:
-                - name: RUSTFS_SECRET_KEY
+                - name: MINIO_SECRET_KEY
                   valueFrom:
-                    secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
+                    secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
               command:
                 - sh
                 - -c
                 - |
                   set -e
-                  mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"
-                  mc cp --recursive /dump/ rfs/{{ .Values.rustfs.bucket }}/_backups/pg/$(date +%Y-%m-%dT%H-%M-%SZ)/
+                  mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"
+                  mc cp --recursive /dump/ rfs/{{ .Values.minio.bucket }}/_backups/pg/$(date +%Y-%m-%dT%H-%M-%SZ)/
                   {{- if gt (int .Values.backups.pgDump.keep) 0 }}
                   # Retention (P4): keep the newest {{ .Values.backups.pgDump.keep }} dumps, prune older ones
                   # so the backup prefix doesn't grow unbounded. Dir names are ISO timestamps → sort lexically.
-                  mc ls rfs/{{ .Values.rustfs.bucket }}/_backups/pg/ | awk '{print $NF}' | sort -r \
+                  mc ls rfs/{{ .Values.minio.bucket }}/_backups/pg/ | awk '{print $NF}' | sort -r \
                     | tail -n +{{ add (int .Values.backups.pgDump.keep) 1 }} \
-                    | while read -r d; do mc rm --recursive --force "rfs/{{ .Values.rustfs.bucket }}/_backups/pg/$d"; done
+                    | while read -r d; do mc rm --recursive --force "rfs/{{ .Values.minio.bucket }}/_backups/pg/$d"; done
                   {{- end }}
               volumeMounts: [{ name: dump, mountPath: /dump }]
 {{- end }}

@@ -3577,7 +3577,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pylance" },
     { name = "ray", extra = ["data", "default", "serve"] },
-    { name = "service-kit", extra = ["lancekit"] },
+    { name = "service-kit", extra = ["lancekit", "media"] },
 ]
 
 [package.metadata]
@@ -3587,7 +3587,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pylance", specifier = ">=11.0.0" },
     { name = "ray", extras = ["data", "default", "serve"], specifier = ">=2.58" },
-    { name = "service-kit", extras = ["lancekit"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["lancekit", "media"], editable = "packages/service-kit" },
 ]
 
 [[package]]

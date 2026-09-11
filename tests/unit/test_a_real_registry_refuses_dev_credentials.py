@@ -2,7 +2,7 @@
 
 Q17-13 / §F2-9, whose title is the finding: "refuse well-known defaults in the base chart, NOT ONLY on
 devMode=false". Four of the five values it names already have a guard — `age.password`,
-`dex.clientSecret` and `rustfs.secretKey` in `infra-credentials.yaml`, and `dapr.appToken` in
+`dex.clientSecret` and `minio.secretKey` in `infra-credentials.yaml`, and `dapr.appToken` in
 `dapr-app-token.yaml`, which even carries the two-case shape (placeholder always, dev default on the
 prod signal). The fifth, `openbao.devMode`, is the SIGNAL rather than a credential.
 
@@ -35,7 +35,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 #: The values a fresh install carries, and what each authenticates.
 WELL_KNOWN = {
-    "rustfs.secretKey": "rustfsadmin",
+    "minio.secretKey": "minioadmin",
     "age.password": "lance",
     "dapr.appToken": "lance-dev-dapr-app-token-override-me",
 }
@@ -118,7 +118,7 @@ def test_a_DEV_MODE_openbao_does_not_reach_a_real_registry() -> None:
         "--set",
         "image.localImages=false",
         "--set-string",
-        "rustfs.secretKey=a-real-secret-value-32-chars-long",
+        "minio.secretKey=a-real-secret-value-32-chars-long",
         "--set-string",
         "age.password=a-real-secret-value-32-chars-long",
         "--set-string",

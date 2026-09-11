@@ -102,8 +102,8 @@ def main() -> None:
     if not so:  # mode_b/server_mediated on this deployment → use the store creds directly (still client→store)
         so = {
             "endpoint": S3,
-            "access_key_id": "rustfsadmin",
-            "secret_access_key": "rustfsadmin",
+            "access_key_id": "minioadmin",
+            "secret_access_key": "minioadmin",
             "allow_http": "true",
             "virtual_hosted_style_request": "false",
             "region": "us-east-1",

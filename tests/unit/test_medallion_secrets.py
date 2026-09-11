@@ -45,8 +45,8 @@ def test_flag_on_store_is_the_sole_source(monkeypatch: pytest.MonkeyPatch) -> No
     import service_kit.governed.secrets as secrets_mod
 
     def fake_fetch(store: str, key: str, *, require: str) -> dict[str, str]:
-        assert (store, key, require) == ("lance-secrets", "lance", "rustfs-secret-key")
-        return {"rustfs-secret-key": "from-store"}
+        assert (store, key, require) == ("lance-secrets", "lance", "minio-secret-key")
+        return {"minio-secret-key": "from-store"}
 
     monkeypatch.setattr(secrets_mod, "fetch_required_secrets", fake_fetch)
     settings = _settings(MEDALLION_SECRETS_FROM_DAPR="true")

@@ -146,7 +146,7 @@ class MediaSettings(BaseSettings):
     s3_access_key_id: str | None = Field(default=None, alias="MEDIA_S3_ACCESS_KEY_ID")
     s3_secret_access_key: str | None = Field(default=None, alias="MEDIA_S3_SECRET_ACCESS_KEY")
     # The SECRET half comes from the Dapr secret store, fail-closed — the MEDIA_PUBLISH_* precedent
-    # below: coordinates are config, the secret is not. `rustfs-secret-key` is already seeded in the
+    # below: coordinates are config, the secret is not. `minio-secret-key` is already seeded in the
     # `lance` bundle by the chart's infra-credentials plane. MEDIA_S3_SECRET_ACCESS_KEY exists for
     # tests and sidecar-less dev only; the chart never sets it.
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
@@ -156,7 +156,7 @@ class MediaSettings(BaseSettings):
     #: still be moved on its own.
     s3_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MEDIA_S3_SECRET_STORE", "RASK_SECRET_STORE"))
     s3_secret_key: str = Field(default="lance", alias="MEDIA_S3_SECRET_KEY")
-    s3_secret_field: str = Field(default="rustfs-secret-key", alias="MEDIA_S3_SECRET_FIELD")
+    s3_secret_field: str = Field(default="minio-secret-key", alias="MEDIA_S3_SECRET_FIELD")
     s3_region: str = Field(default="us-east-1", alias="MEDIA_S3_REGION")
     s3_db_root: str | None = Field(default=None, alias="MEDIA_S3_DB_ROOT")
 

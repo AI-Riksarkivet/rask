@@ -44,7 +44,7 @@ from viewer.api.v1.endpoints import pages as pages_ep
 
 TABLE = "bronze$pages"
 LOCATION = "s3://rask-lake/bronze/pages.lance"
-SECRET = "connect to rustfs.internal:9000: connection refused"
+SECRET = "connect to minio.internal:9000: connection refused"
 
 
 def _state(http: object | None = None) -> AppState:

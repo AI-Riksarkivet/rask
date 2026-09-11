@@ -66,7 +66,7 @@ def test_side_loaded_images_remain_supported_but_only_as_an_explicit_opt_in() ->
 _REAL_CREDENTIALS = (
     "openbao.devMode=false",
     "age.password=a-real-secret-value-32-chars-long",
-    "rustfs.secretKey=a-real-secret-value-32-chars-long",
+    "minio.secretKey=a-real-secret-value-32-chars-long",
     "dapr.appToken=a-real-secret-value-32-chars-long",
 )
 
@@ -185,19 +185,26 @@ def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> N
     down with it. The failure is invisible in review (the values file simply lacks a key) and reads
     in the cluster as "the lakehouse is flaky".
     """
-    rendered = _render("image.localImages=true", "rustfs.enabled=true")
+    rendered = _render("image.localImages=true", "minio.enabled=true")
     assert rendered.returncode == 0, rendered.stderr
 
-    tenants = [doc for doc in yaml.load_all(rendered.stdout, Loader=FAST_LOADER) if doc and doc.get("kind") == "Tenant"]
-    assert tenants, "the RustFS Tenant did not render — this test would pass vacuously"
+    stores = [
+        doc
+        for doc in yaml.load_all(rendered.stdout, Loader=FAST_LOADER)
+        if doc
+        and doc.get("kind") == "StatefulSet"
+        and doc["metadata"]["labels"].get("app.kubernetes.io/component") != "age"
+        and any(c["name"] == "minio" for c in doc["spec"]["template"]["spec"]["containers"])
+    ]
+    assert stores, "the object store did not render — this test would pass vacuously"
 
     def _mib(quantity: str) -> int:
         text = str(quantity)
         return int(text.removesuffix("Gi")) * 1024 if text.endswith("Gi") else int(text.removesuffix("Mi"))
 
-    for tenant in tenants:
-        for pool in tenant["spec"]["pools"]:
-            limit = pool["resources"]["limits"]["memory"]
+    for store in stores:
+        for container in store["spec"]["template"]["spec"]["containers"]:
+            limit = container["resources"]["limits"]["memory"]
             assert _mib(limit) >= 2048, f"the object store is capped at {limit} — it OOMKills under real load"
 
 

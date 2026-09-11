@@ -1,6 +1,6 @@
 """The maintenance plane can be given a credential that is not the RustFS tenant root.
 
-`MAINTENANCE_S3_ACCESS_KEY_ID` renders from `.Values.rustfs.accessKey` — `rustfsadmin`, the same pair
+`MAINTENANCE_S3_ACCESS_KEY_ID` renders from `.Values.minio.accessKey` — `minioadmin`, the same pair
 the Tenant's credsSecret uses. So the service that compacts every dataset in every bucket does it with
 a key that also reaches `_projects/`, `_protection/` and `_policies/`: the records that decide what
 maintenance itself is permitted to do. Anything able to run code in that pod can rewrite its own
@@ -18,7 +18,7 @@ a prefix-conditioned user, list/get/put/delete on the data prefixes, nothing on 
 
 THE DEFAULT IS THE PROVISIONED IDENTITY (2026-09-08). It was empty — the tenant root — because a
 chart repointing a live service at a credential nobody created would take maintenance down on
-upgrade. That hazard was ordering, not preference: `rustfs-scoped-users` ran `post-upgrade`, so the
+upgrade. That hazard was ordering, not preference: `minio-scoped-users` ran `post-upgrade`, so the
 user was created AFTER the pods had already rolled onto it. The hook now runs `pre-upgrade` as well,
 so the credential exists before anything presents it, and explicitly emptying the key is the
 deliberate way back to root.
@@ -45,7 +45,7 @@ def _maintenance_env(rendered: str) -> dict[str, str]:
 def test_the_default_IS_the_provisioned_identity() -> None:
     """A default install must not present the tenant root for a user the same release provisions.
 
-    This asserted the opposite, guarding an ordering hazard that was real: `rustfs-scoped-users` ran
+    This asserted the opposite, guarding an ordering hazard that was real: `minio-scoped-users` ran
     `post-upgrade`, so naming the key rolled pods onto a credential the object store had not heard of.
     The hook now runs `pre-upgrade`, so the user exists before the roll.
     """
@@ -56,12 +56,12 @@ def test_the_default_IS_the_provisioned_identity() -> None:
 def test_a_provisioned_key_replaces_the_tenant_root() -> None:
     rendered = _helm_template(
         "maintenance.enabled=true",
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=maintenance-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=maintenance-secret",
     )
     env = _maintenance_env(rendered)
     assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rask-maintenance", "maintenance still renders the tenant root even with a scoped user provisioned"
-    assert "rustfsadmin" not in env.get("MAINTENANCE_S3_ACCESS_KEY_ID", "")
+    assert "minioadmin" not in env.get("MAINTENANCE_S3_ACCESS_KEY_ID", "")
 
 
 def test_the_scoped_user_is_actually_provisioned_not_just_referenced() -> None:
@@ -71,8 +71,8 @@ def test_the_scoped_user_is_actually_provisioned_not_just_referenced() -> None:
     would be worse than none: it would read as hardening that an operator cannot actually apply."""
     rendered = _helm_template(
         "maintenance.enabled=true",
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=maintenance-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=maintenance-secret",
     )
     assert "mc admin user add" in rendered, "no Job creates the user the Deployment now points at"
     assert "mc admin policy" in rendered, "the user is created with no policy, i.e. with whatever RustFS defaults to"
@@ -83,10 +83,13 @@ def test_the_policy_denies_the_records_that_govern_maintenance() -> None:
     turn off the guard that stops it destroying a shallow clone's source, or re-pace itself."""
     rendered = _helm_template(
         "maintenance.enabled=true",
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=maintenance-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=maintenance-secret",
     )
-    policy = rendered[rendered.index("mc admin policy") - 4000 : rendered.index("mc admin policy") + 4000]
+    # The scoped-users Job's OWN document, not a +/-4000-character window around a marker: the window
+    # passed only while the policy happened to sit inside it, so a render that moved anything turned a
+    # real assertion into a search of unrelated YAML.
+    policy = next(doc for doc in rendered.split("\n---\n") if "component: minio-scoped-users" in doc)
     for guarded in ("_projects/", "_protection/", "_policies/"):
         assert guarded in policy, f"the policy never mentions {guarded}, so nothing stops the compaction credential rewriting it"
 
@@ -96,7 +99,7 @@ def test_a_secret_alone_attaches_to_the_identity_the_chart_already_names() -> No
     the chart always names one, so an operator supplying only a secret is supplying the secret FOR
     that identity — which is the whole point of `lance.scopedStorageSecret` being derivable: a values
     file can declare an identity, or a secret, or both, and never a mismatched pair."""
-    env = _maintenance_env(_helm_template("maintenance.enabled=true", "rustfs.maintenanceSecretKey=maintenance-secret"))
+    env = _maintenance_env(_helm_template("maintenance.enabled=true", "minio.maintenanceSecretKey=maintenance-secret"))
     assert env.get("MAINTENANCE_S3_ACCESS_KEY_ID") == "rask-maintenance", "a supplied secret detached the plane from its provisioned identity"
     assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD") == "maintenance-s3-secret-key", "the identity and its secret field came apart"
 
@@ -111,8 +114,8 @@ def test_the_policy_covers_every_bucket_the_sweep_is_told_to_sweep() -> None:
     """
     rendered = _helm_template(
         "maintenance.enabled=true",
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=maintenance-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=maintenance-secret",
         "catalog.multibase.dataBases[0]=s3://extra-base",
     )
     env = _maintenance_env(rendered)
@@ -135,13 +138,13 @@ def test_the_scoped_secret_has_its_own_field_in_the_store() -> None:
 
     On a governed estate the secret half does not come from pod env at all — `MAINTENANCE_SECRETS_FROM_DAPR`
     sends it to the Dapr secret store, and `dapr_secret_s3_field` names WHICH field to read, defaulting
-    to `rustfs-secret-key` (the tenant root's). So a scoped access key with that default reads the root's
+    to `minio-secret-key` (the tenant root's). So a scoped access key with that default reads the root's
     secret and signs with a mismatched pair. The field is already configurable; the chart has to use it.
     """
     rendered = _helm_template(
         "maintenance.enabled=true",
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=maintenance-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=maintenance-secret",
     )
     env = _maintenance_env(rendered)
     assert env.get("MAINTENANCE_DAPR_SECRET_S3_FIELD") == "maintenance-s3-secret-key", (
@@ -154,8 +157,8 @@ def test_the_scoped_secret_is_actually_seeded() -> None:
     `fetch_required_secrets` raises rather than degrading."""
     rendered = _helm_template(
         "maintenance.enabled=true",
-        "rustfs.maintenanceAccessKey=rask-maintenance",
-        "rustfs.maintenanceSecretKey=maintenance-secret",
+        "minio.maintenanceAccessKey=rask-maintenance",
+        "minio.maintenanceSecretKey=maintenance-secret",
     )
     assert "maintenance-s3-secret-key=" in rendered, "nothing seeds the field the Deployment now reads"
 

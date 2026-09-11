@@ -1,7 +1,7 @@
 # rask Helm chart
 
 Deploys the full rask fleet to Kubernetes — the **single deploy artifact** for
-both local k3s and production. In-cluster CloudNativePG (Postgres), RustFS
+both local k3s and production. In-cluster CloudNativePG (Postgres), MinIO
 (object store), and KubeRay are optional: gate them with `*.enabled` toggles.
 
 ## Fleet
@@ -21,7 +21,7 @@ Each toggle gates **both** the operator subchart and the custom resource it mana
 | Toggle | Operator | What it provisions | Service |
 |---|---|---|---|
 | `cnpg.enabled=true` | CloudNativePG (`cloudnative-pg` 0.28.3) | `Cluster` named `rask-postgres` (instances, storage, image all under `cnpg.*`) | `rask-postgres-rw:5432` |
-| `rustfs.enabled=true` | RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) | `Tenant` named `rask-rustfs` — 1 pod / 4 PVCs (erasure-coding minimum); buckets provisioned natively via `spec.buckets` | `rask-rustfs-io:9000` (S3), `rask-rustfs-console:9001` (console) |
+| `minio.enabled=true` | MinIO, as a first-party StatefulSet (no operator) | `rask-minio` — 1 pod / 4 PVCs (erasure-coding minimum); buckets, users and policies provisioned by the `mc` hooks | `rask-minio:9000` (S3), console on `:9001` |
 | `ray.enabled=true` | — | KubeRay `RayService` (head + GPU worker) | — |
 
 Set all three to `true` for local k3s. Leave them `false` for production and
@@ -40,8 +40,8 @@ activated. The Collector is the **single log shipper** (Vector retired, owner ru
 | GreptimeDB (`greptimedb-standalone` 0.4.5, app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
 | Perses (`perses` 0.22.0) | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` pointing at `http://rask-greptimedb-standalone:4000/v1/prometheus` is pre-configured |
 
-**Storage:** GreptimeDB persists to the in-cluster RustFS S3 (`rask-rustfs-io:9000`,
-bucket `rask-observability`). The bucket is auto-provisioned by the RustFS Tenant's
+**Storage:** GreptimeDB persists to the in-cluster MinIO S3 (`rask-minio:9000`,
+bucket `rask-observability`). The bucket is auto-provisioned by the bucket-init Job's
 `spec.buckets` — no manual setup required.
 
 **App instrumentation:** the FastAPI fleet (via `service_kit.setup_otel` — called
@@ -78,7 +78,7 @@ helm upgrade --install rask chart/ \
   --set config.RAY_DASHBOARD_URL=http://<ray-head>:8265 \
   --set ingress.host=rask.example.org \
   --set cnpg.enabled=false \
-  --set rustfs.enabled=false \
+  --set minio.enabled=false \
   --set ray.enabled=false
 ```
 

@@ -1,6 +1,6 @@
 """A compaction's WRITE must be signed by a table-scoped credential, not the root object-store key.
 
-Maintenance held `rustfsadmin` and rewrote fragments with it. Compaction is a write — it lands new
+Maintenance held `minioadmin` and rewrote fragments with it. Compaction is a write — it lands new
 data files and commits a new manifest — so this was a service performing writes across every bucket in
 the estate with one long-lived key, which is the exact posture the catalog's vending door exists to
 end. Proven end-to-end for the ingest plane 2026-09-03 (a credential vended for one table read AND
@@ -39,7 +39,7 @@ _SCOPED = {
     "aws_session_token": "vended-token-7c1e",
     "endpoint": "http://rustfs:9000",
 }
-_AMBIENT = {"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin", "endpoint": "http://rustfs:9000"}
+_AMBIENT = {"aws_access_key_id": "minioadmin", "aws_secret_access_key": "minioadmin", "endpoint": "http://rustfs:9000"}
 
 
 class _Response:
@@ -74,7 +74,7 @@ def door(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def test_the_rewrite_is_signed_by_the_vended_credential(door: list[dict[str, Any]]) -> None:
     options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
     assert options == _SCOPED
-    assert options["aws_access_key_id"] != "rustfsadmin"
+    assert options["aws_access_key_id"] != "minioadmin"
 
 
 def test_the_vend_names_the_table_and_asks_for_the_write_tier(door: list[dict[str, Any]]) -> None:

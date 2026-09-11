@@ -104,7 +104,7 @@ service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST 
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
 - **In-cluster deps** (gated by values toggles — each gate covers both the operator subchart and its CR):
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
-  - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.
+  - `minio.enabled` — MinIO as a first-party StatefulSet, no operator (LH-133: RustFS gates STS `AssumeRole` to root and cannot grant the right, so the catalog could not hold a scoped identity there). S3 at `rask-minio:9000`, console on `:9001`. 1 pod / 4 PVCs (erasure-coding minimum). Buckets, users and policies are provisioned by the `mc` hooks. Values under `minio.*`.
   - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
   - `observability.enabled` — two optional subcharts + the first-party OTel Collector (see below).
 

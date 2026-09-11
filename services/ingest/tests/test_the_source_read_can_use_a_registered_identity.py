@@ -1,7 +1,7 @@
 """An estate-internal source read can be signed by a registered identity, not only the ambient one.
 
 the lakehouse register, row H8 (drained 2026-09-10; in git history). MEASURED INSIDE THE RUNNING POD 2026-09-08: `rask-ingest` holds
-`AWS_ACCESS_KEY_ID=rustfsadmin` — the RustFS ROOT credential — and a pyarrow filesystem built from its
+`AWS_ACCESS_KEY_ID=minioadmin` — the RustFS ROOT credential — and a pyarrow filesystem built from its
 ambient environment listed 106 buckets, the whole estate. Its governed WRITES already sign with a
 catalog-vended STS credential, so the root pair's only standing use is the SOURCE READ.
 
@@ -33,7 +33,7 @@ import pytest
 from ingest.objectstore import resolve_source_connection
 
 
-_ENDPOINT = "http://rustfs.example:9000"
+_ENDPOINT = "http://minio.example:9000"
 
 
 def _register(monkeypatch: pytest.MonkeyPatch, *stores: dict[str, object]) -> None:

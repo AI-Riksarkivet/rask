@@ -388,7 +388,7 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: daprd injects. Both halves or neither — the door requires both, and sending one is a refusal
     #: whose reason is invisible from this side.
     catalog_service_identity: str = Field(default="service-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
-    dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
+    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
 
     @property
     def resolved_policy_root(self) -> str:

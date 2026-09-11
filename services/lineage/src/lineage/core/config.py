@@ -155,7 +155,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LINEAGE_DAPR_SECRET_KEY")
-    dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
+    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
     dapr_secret_db_field: str = Field(default="postgres-password", alias="LINEAGE_DAPR_SECRET_DB_FIELD")
 
     # --- Durable /events feed retention, in DAYS of arrival time (the estate's own `received_at`, never

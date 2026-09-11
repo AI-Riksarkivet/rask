@@ -26,7 +26,7 @@ from maintenance.services import credentials
 from service_kit.lakehouse.table_locations import table_id_from_location
 
 
-AMBIENT = {"aws_access_key_id": "rustfsadmin"}
+AMBIENT = {"aws_access_key_id": "minioadmin"}
 CASCADE_URI = "s3://lance-catalog/medallion/bronze"
 
 

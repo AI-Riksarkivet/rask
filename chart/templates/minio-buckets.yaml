@@ -1,13 +1,14 @@
-{{- if .Values.rustfs.enabled }}
-# RustFS bucket-init — the provisioning Job for the ONE object store, the rustfs-operator Tenant
-# (templates/rustfs-tenant.yaml, S3 Service `<tenant>-io:9000` = `lance.rustfsHost`). RESOLVED per
-# docs/architecture/lance-ns-merge.md P4 ("RustFS: rask's operator Tenant wins; ... bucket-init
-# re-pointed at operator Tenant endpoint `<tenant>-io:9000`"): the first-party RustFS Deployment and
+{{- if .Values.minio.enabled }}
+# Bucket-init — the provisioning Job for the ONE object store
+# (templates/minio.yaml, S3 Service `<tenant>-io:9000` = `lance.minioHost`). RESOLVED per
+# P4's store unification holds; LH-133 changed WHICH store. The buckets are created by this Job
+# rather than declared on a CR, because a StatefulSet has no `spec.buckets` field — which also removes
+# the operator-reconcile failure mode the timeout below was written for. The first-party Deployment and
 # its Service that used to live in this file are DELETED. The Tenant provisions the
-# static platform bucket set natively (spec.buckets = rustfs.buckets); this Job covers what a static
+# static platform bucket set natively (spec.buckets = minio.buckets); this Job covers what a static
 # CR list cannot express — the values-driven medallion zone buckets (a map whose unset entries fall
-# back to rustfs.bucket) and the observability toggle — and it also runs against
-# rustfs.externalEndpoint (managed S3, where no Tenant exists). Idempotent: `mc mb --ignore-existing`.
+# back to minio.bucket) and the observability toggle — and it also runs against
+# minio.externalEndpoint (managed S3, where no Tenant exists). Idempotent: `mc mb --ignore-existing`.
 #
 # It is ALSO the estate's only detector for a Tenant that silently refused to provision — see the
 # VERIFY step in the container script below (live-proof 2026-07-28, defect 3).
@@ -18,7 +19,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "rask.fullname" . }}-rustfs-mkbucket-{{ include "rask.bootstrapRev" . }}
+  name: {{ include "rask.fullname" . }}-minio-mkbucket-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   # Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
@@ -30,12 +31,12 @@ spec:
     metadata:
       # The explicit component label is the P4 landmine (see bootstrap-admin.yaml): pods without one
       # are invisible to any component-scoped NetworkPolicy `from` list. Here it is LOAD-BEARING, not just
-      # hygiene — rustfs:9000's ingress admits an enumerated client list ONLY (network-policy.yaml 3d,
-      # which names rustfs-mkbucket), so an unlabeled pod's `mc alias set` loop waits forever under a
+      # hygiene — minio:9000's ingress admits an enumerated client list ONLY (network-policy.yaml 3d,
+      # which names minio-mkbucket), so an unlabeled pod's `mc alias set` loop waits forever under a
       # policy-enforcing CNI and every prod install/upgrade wedges before a bucket exists.
       labels:
         {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: rustfs-mkbucket
+        app.kubernetes.io/component: minio-mkbucket
     spec:
       restartPolicy: OnFailure
       {{- if .Values.security.serviceAccounts.enabled }}
@@ -43,40 +44,40 @@ spec:
       {{- end }}
       containers:
         - name: mc
-          image: {{ .Values.rustfs.mcImage }}
+          image: {{ .Values.minio.mcImage }}
           # The S3 root secret from a k8s Secret (not interpolated plaintext into the shell command) —
-          # `mc alias set` reads it from "$RUSTFS_SECRET_KEY", so it never appears in the rendered Job
+          # `mc alias set` reads it from "$MINIO_SECRET_KEY", so it never appears in the rendered Job
           # command/args. Same credential pair the Tenant boots with (credsSecret, templates/secrets.yaml).
           env:
-            - name: RUSTFS_SECRET_KEY
+            - name: MINIO_SECRET_KEY
               valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
+                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
           command:
             - sh
             - -c
             - |
               set -e
-              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"; do echo wait-rustfs; sleep 3; done
+              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"; do echo wait-minio; sleep 3; done
 
               # --- CREATE: the values-driven buckets a static CR list cannot express. -----------------
-              mc mb --ignore-existing rfs/{{ .Values.rustfs.bucket }}
+              mc mb --ignore-existing rfs/{{ .Values.minio.bucket }}
               {{- if .Values.observability.enabled }}
               mc mb --ignore-existing rfs/{{ .Values.observability.bucket }}  # GreptimeDB object store
               {{- end }}
               {{- range $ns, $bkt := .Values.medallion.buckets }}
-              {{- if and $bkt (ne $bkt $.Values.rustfs.bucket) }}
+              {{- if and $bkt (ne $bkt $.Values.minio.bucket) }}
               mc mb --ignore-existing rfs/{{ $bkt }}  # medallion storage zone ({{ $ns }}: ingest-source / gold-sink)
               {{- end }}
               {{- end }}
 
-              {{- if .Values.rustfs.externalEndpoint }}
+              {{- if .Values.minio.externalEndpoint }}
               # --- CREATE (external S3): with no Tenant, nothing else provisions the static set. -------
-              {{- range .Values.rustfs.buckets }}
+              {{- range .Values.minio.buckets }}
               mc mb --ignore-existing rfs/{{ . }}
               {{- end }}
               {{- else }}
-              # --- VERIFY: the buckets the OPERATOR owns (rustfs.buckets → Tenant spec.buckets). -------
-              # live-proof 2026-07-28, defect 3: the rustfs-operator refused to reconcile the Tenant
+              # --- VERIFY: the buckets the OPERATOR owns (minio.buckets → Tenant spec.buckets). -------
+              # live-proof 2026-07-28, defect 3 (under the previous store): its operator refused to reconcile the Tenant
               # (StatefulSetUpdateValidationFailed, "Reconcile is blocked by user-fixable configuration"),
               # so spec.buckets was never provisioned — and NOTHING said so. The store answered, this Job
               # went green because it only ever created its OWN buckets, and the single symptom surfaced
@@ -88,10 +89,10 @@ spec:
               # Deliberately NOT `mc mb` on these: creating them here would paper over a Tenant that is
               # still broken for every OTHER thing it owns, and the next failure would be even further
               # from its cause.
-              want="{{ join " " .Values.rustfs.buckets }}"
+              want="{{ join " " .Values.minio.buckets }}"
               # A tick counter, not `date` arithmetic: the mc image is a micro base and carrying a
               # dependency on coreutils' date would trade one silent failure for another.
-              tries={{ div (.Values.rustfs.bucketVerifyTimeoutSeconds | int) 5 | max 1 }}
+              tries={{ div (.Values.minio.bucketVerifyTimeoutSeconds | int) 5 | max 1 }}
               i=0
               while : ; do
                 missing=""
@@ -101,20 +102,20 @@ spec:
                 [ -z "$missing" ] && break
                 i=$((i + 1))
                 [ "$i" -ge "$tries" ] && break
-                echo "waiting for the RustFS Tenant to provision:$missing"
+                echo "waiting for the MinIO StatefulSet to provision:$missing"
                 sleep 5
               done
               if [ -n "$missing" ]; then
                 echo "!! MISSING BUCKETS:$missing"
-                echo "!! These come from values rustfs.buckets, which render into the Tenant's spec.buckets —"
-                echo "!! the rustfs-operator provisions them, this Job only verifies them. Missing buckets mean"
+                echo "!! These come from values minio.buckets, which render into the Tenant's spec.buckets —"
+                echo "!! this Job creates them with mc. A failure here is the store refusing the create, so"
                 echo "!! the operator did not reconcile the Tenant. Diagnose with:"
-                echo "!!   kubectl describe tenant {{ include "rask.fullname" . }}-rustfs"
-                echo "!!   kubectl logs -l app.kubernetes.io/name=rustfs-operator"
+                echo "!!   kubectl describe statefulset {{ include "lance.minioHost" . }}"
+                echo "!!   kubectl logs -l app.kubernetes.io/component=minio"
                 echo "!! The usual cause is a wedged StatefulSet update ('Reconcile is blocked by user-fixable"
-                echo "!! configuration') — e.g. a storageClass the cluster does not have (rustfs.storageClass"
+                echo "!! configuration') — e.g. a storageClass the cluster does not have (minio.storageClass"
                 echo "!! defaults to \"\" = the cluster default) or an immutable field changed under the operator."
-                echo "!! Raise rustfs.bucketVerifyTimeoutSeconds if this store is merely slow."
+                echo "!! Raise minio.bucketVerifyTimeoutSeconds if this store is merely slow."
                 exit 1
               fi
               echo "verified the operator-owned bucket set:$want"

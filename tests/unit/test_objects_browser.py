@@ -162,7 +162,7 @@ def test_a_missing_bucket_is_a_404_naming_the_bucket(client: TestClient, path: s
     detail = resp.json()["detail"]
     assert "corpus-derived" in detail, f"the answer must NAME the missing bucket: {detail!r}"
     assert "bucket not found" in detail, f"the answer must say it is the BUCKET that is missing: {detail!r}"
-    assert "rustfs.buckets" in detail, f"the answer must point at the fix: {detail!r}"
+    assert "minio.buckets" in detail, f"the answer must point at the fix: {detail!r}"
 
 
 def test_a_missing_key_and_a_missing_bucket_do_not_read_the_same(client: TestClient) -> None:

@@ -1,0 +1,201 @@
+{{- if .Values.minio.enabled }}
+# The ONE in-cluster object store. It is MinIO rather than RustFS for one measured reason (LH-133):
+# RustFS gates STS `AssumeRole` to the ROOT account and the right is not policy-grantable — a
+# policy-attached scoped user answers HTTP 403 while root receives a session token, and
+# `mc admin policy create` refuses a statement carrying `sts:AssumeRole` outright ("invalid resource,
+# type: 'unknown'"). Under `vending.mode: sts` that made the catalog's root key a REQUIREMENT of the
+# mode rather than an oversight, so the estate could not reach zero trust on it. The identical probe on
+# MinIO accepts the scoped user AND enforces the narrowing (cross-tenant GET and read-tier PUT both
+# AccessDenied), which is the whole capability the credential vending design rests on.
+#
+# A STATEFULSET, NOT AN OPERATOR TENANT, and that is a deliberate departure from the P4 ruling's
+# mechanism while keeping its guarantee. P4 pinned the "keep-PVC posture via Tenant spec"; a
+# StatefulSet's `volumeClaimTemplates` has exactly that property — its PVCs survive pod rolls AND
+# `helm uninstall`, because helm never owned them. What changes is that swapping backends no longer
+# swaps one operator subchart for another: there is no second CRD set to install, version and keep in
+# step with the store it manages. If a multi-node topology is ever wanted, the MinIO operator can be
+# introduced without touching a single consumer — every one of them resolves a Service name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.minioHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  # The S3 endpoint every consumer resolves (`lance.s3Endpoint`). A normal ClusterIP rather than the
+  # headless peer Service below: clients want one address load-balanced across replicas, and only the
+  # servers themselves need to address each other individually.
+  selector:
+    app.kubernetes.io/component: minio
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: s3, port: {{ .Values.minio.port }}, targetPort: s3 }
+    - { name: console, port: {{ .Values.minio.consolePort }}, targetPort: console }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.minioHost" . }}-hl
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  # HEADLESS, and load-bearing rather than conventional: MinIO addresses its peers by stable DNS
+  # (`<pod>.<headless>.<ns>.svc`), which only a headless Service publishes. `publishNotReadyAddresses`
+  # is what lets the set form a quorum at all — every member is unready until the cluster is up, so
+  # waiting for readiness before publishing DNS is a deadlock.
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/component: minio
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: s3, port: {{ .Values.minio.port }}, targetPort: s3 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "lance.minioHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "lance.minioHost" . }}-hl
+  replicas: {{ .Values.minio.servers }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: minio
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        # A ROTATION MUST REACH THE POD THAT HOLDS THE SECRET. The root credential arrives by
+        # `secretKeyRef`, which k8s resolves once at pod start — so changing it in the Secret leaves the
+        # running server on the old value while every client is reprovisioned with the new one, and the
+        # store answers SignatureDoesNotMatch with nothing naming the cause. The checksum makes the
+        # pod template change when the Secret does, so helm rolls it. Pinned by
+        # tests/unit/test_a_rotated_secret_reaches_the_pods_that_hold_it.py, which caught this template
+        # without it.
+        checksum/infra-credentials: {{ include (print $.Template.BasePath "/infra-credentials.yaml") $ | sha256sum }}
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      {{- if .Values.security.infraContexts.enabled }}
+      # uid 1000 is the minio image's built-in `minio-user`, which owns the on-disk data. A mismatched
+      # uid does NOT CrashLoop — the server READS fine and every WRITE fails — which is the failure
+      # mode that took the data plane down live on 2026-07-13 under the previous store, so the uid and
+      # the fsGroup are pinned together rather than left to the image default.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.security.infraContexts.minio.runAsUser }}
+        {{- with .Values.security.infraContexts.minio.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
+        seccompProfile: { type: RuntimeDefault }
+      {{- end }}
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image | quote }}
+          args:
+            # One server, N drives: MinIO derives its erasure set from the drive list, and unlike the
+            # previous store it does not refuse volumes that share a physical disk — so the
+            # `UNSAFE_BYPASS_DISK_CHECK` escape hatch single-node k3s needed has no counterpart here
+            # and is deliberately absent rather than ported.
+            - server
+            {{- range $i := until (int .Values.minio.volumesPerServer) }}
+            - /data-{{ $i }}
+            {{- end }}
+            - --address
+            - ":{{ .Values.minio.port }}"
+            - --console-address
+            - ":{{ .Values.minio.consolePort }}"
+          env:
+            # secretKeyRef, never `value:` — a literal here is readable in `kubectl get statefulset
+            # -o yaml`, `kubectl describe` and `helm get manifest`, which is the "same secret still
+            # recoverable from another surface" finding infra-credentials.yaml exists for.
+            #
+            # It goes to the INFRA tier rather than through the Dapr secret store like the fleet's
+            # credentials, and that is not a shortcut: the consumer is the object store itself, a
+            # third-party server with no daprd sidecar — the exact case infra-credentials.yaml's own
+            # header enumerates.
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lance.fullname" . }}-infra-credentials
+                  key: minio-access-key
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lance.fullname" . }}-infra-credentials
+                  key: minio-secret-key
+            {{- if .Values.minio.oidc.enabled }}
+            # OIDC identity provider (Dex) for STS AssumeRoleWithWebIdentity — a client presents its
+            # Dex id_token and the store mints short-TTL creds bound to ROLE_POLICY, which the
+            # catalog's inline session policy then scopes per-table (Track B / credential vending).
+            - name: MINIO_IDENTITY_OPENID_CONFIG_URL
+              value: "{{ .Values.dex.issuer }}/.well-known/openid-configuration"
+            - name: MINIO_IDENTITY_OPENID_CLIENT_ID
+              value: {{ .Values.dex.clientId | quote }}
+            - name: MINIO_IDENTITY_OPENID_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lance.fullname" . }}-infra-credentials
+                  key: dex-client-secret
+            - name: MINIO_IDENTITY_OPENID_SCOPES
+              value: "openid,email"
+            # The base policy every Dex-authenticated token assumes; the per-request session policy can
+            # only narrow it. `readwrite` is a built-in policy (full S3).
+            - name: MINIO_IDENTITY_OPENID_ROLE_POLICY
+              value: {{ .Values.minio.oidc.rolePolicy | quote }}
+            {{- end }}
+          ports:
+            - { name: s3, containerPort: {{ .Values.minio.port }} }
+            - { name: console, containerPort: {{ .Values.minio.consolePort }} }
+          # `/minio/health/live` answers before the erasure set is formed, which is what a LIVENESS
+          # probe must do — a readiness-shaped liveness check kills a node that is waiting for its
+          # peers and the set never forms. Readiness uses the cluster-aware endpoint instead.
+          livenessProbe:
+            httpGet: { path: /minio/health/live, port: s3 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /minio/health/cluster, port: s3 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources: {{- include "lance.resources" (dict "root" . "comp" "minio") | nindent 12 }}
+          {{- if .Values.security.readOnlyRootFilesystem }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          {{- end }}
+          volumeMounts:
+            {{- range $i := until (int .Values.minio.volumesPerServer) }}
+            - { name: data-{{ $i }}, mountPath: /data-{{ $i }} }
+            {{- end }}
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        # The BOUNDED helper, not a bare emptyDir: an unbounded one draws from the node's ephemeral
+        # storage, so a runaway write evicts every pod on the node rather than only this one.
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+  volumeClaimTemplates:
+    {{- range $i := until (int .Values.minio.volumesPerServer) }}
+    - metadata:
+        name: data-{{ $i }}
+        # The labels are LOAD-BEARING — templates/backup-snapshot.yaml selects the lakehouse PVCs by
+        # this pair, so renaming the component without updating that selector silently stops backing
+        # up the estate's data while every backup run still reports success.
+        labels:
+          app.kubernetes.io/instance: {{ $.Release.Name }}
+          app.kubernetes.io/component: minio
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $.Values.minio.storage | quote }}
+        {{- with $.Values.minio.storageClass }}
+        # `with`, not a bare quote: `storageClassName: ""` DISABLES dynamic provisioning in k8s —
+        # an empty value must render NO field so the cluster-default StorageClass applies. A
+        # non-existent class leaves the PVCs Pending forever with no event on the pod and no
+        # chart-level complaint, which is how that failure was found the first time.
+        storageClassName: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}

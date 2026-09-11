@@ -435,7 +435,7 @@ ray-up:
 	@if ray status >/dev/null 2>&1; then \
 	  echo "Ray already running. ray-status / ray-down to inspect / stop."; \
 	else \
-	  S3_SECRET=$${S3_SECRET:-rustfsadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
+	  S3_SECRET=$${S3_SECRET:-minioadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
 	  uv run ray start --head --port=$(RAY_HEAD_PORT) \
 	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
 	  echo "Ray dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \
@@ -747,8 +747,8 @@ k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the r
 	  --set explorer.corpus.mode=$(CORPUS) \
 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
-	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
-	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}
+	  $${AWS_ACCESS_KEY_ID:+--set-string minio.accessKey=$$AWS_ACCESS_KEY_ID} \
+	  $${AWS_SECRET_ACCESS_KEY:+--set-string minio.secretKey=$$AWS_SECRET_ACCESS_KEY}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/ray/health"

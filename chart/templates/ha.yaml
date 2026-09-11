@@ -2,7 +2,7 @@
 HA for the stateless request-serving services — the lakehouse pair AND the fleet, derived from
 `.Values.services` rather than named, plus controlplane from its own values block. Off by default
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
-(AGE/RustFS) get HA from their operators in rask (CNPG / rustfs-operator), NOT from here. The
+(AGE/MinIO) get HA from their operators in rask (CNPG), NOT from here. The
 event-driven stage runners/producer are intentionally excluded — eviction is safe there (Dapr redelivers, and
 the medallion ingest path is idempotent).
 

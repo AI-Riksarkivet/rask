@@ -2,7 +2,7 @@
 #
 # Two systems now install from this one file:
 #   * the rask fleet (gateway/compute/controlplane),
-#     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
+#     KubeRay Serve, CloudNativePG, the MinIO StatefulSet, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + medallion + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
@@ -30,10 +30,10 @@ serviceAccount:
 # domain services + /default frontends + default Postgres/Ray/NATS/migration).
 # Default false => front-door-only install (picker + controlplane + gateway +
 # operators). Set true to restore the old single-tenant stack.
-# NOTE: this is separate from the operator subchart toggles (cnpg/rustfs/...),
+# NOTE: this is separate from the operator subchart toggles (cnpg/...),
 # which stay enabled so per-project stacks keep working. The OBJECT STORE is
-# deliberately NOT in this list: rustfs.enabled alone gates the operator Tenant
-# (lance-ns-merge P4) because the lakehouse plane resolves `rask-rustfs-io:9000`
+# deliberately NOT in this list: minio.enabled alone gates the operator Tenant
+# (lance-ns-merge P4) because the lakehouse plane resolves `rask-minio:9000`
 # regardless of singleTenant.
 # The storage registry served to the object browser. Empty => the built-in defaults (every store on
 # the deployment's own S3). Declare stores here when they do NOT all live on one backend: `endpoint`
@@ -47,7 +47,7 @@ storage:
   # DECLARED rather than left to the built-in defaults, and the reason is the `secret` field: a store
   # that declares one takes its credentials from the Dapr secret store (`objects.py::_creds`, cached
   # and fail-closed); one that declares none falls back to the deployment's process env. That fallback
-  # is what put the RustFS ROOT credential in the viewer's environment.
+  # is what put the store's ROOT credential in the viewer's environment.
   # These two ARE the built-in defaults (`service_kit.schemas.storage.DEFAULT_STORES`) — same names,
   # buckets and roles — carrying the secret that makes the Dapr path the only path.
   stores:
@@ -71,8 +71,8 @@ existingSecret: ""
 
 # Random creds are generated once on first install and pinned across upgrades
 # via `lookup`. Override here to force a value.
-# The OBJECT-STORE credential pair is NOT here (lance-ns-merge P4 RustFS unification): it is
-# rustfs.accessKey/secretKey — one pair for the Tenant credsSecret, the fleet AWS_*, and the lakehouse
+# The OBJECT-STORE credential pair is NOT here (lance-ns-merge P4 store unification): it is
+# minio.accessKey/secretKey — one pair for the Tenant credsSecret, the fleet AWS_*, and the lakehouse
 # apps; `make k3s-up` injects it from .env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
 # (postgresPassword died at P7a with the rask app-DB Cluster; the AGE Postgres creds live under `age`.)
 secrets:
@@ -470,7 +470,7 @@ services:
       enabled: true
       bindingName: lineage-reconcile-cron
       schedule: "@every 300s" # demo cadence (prod: e.g. "0 */15 * * * *")
-    # #4 transactional outbox: producers stage each lineage event to s3://<rustfs.bucket>/_lineage_outbox
+    # #4 transactional outbox: producers stage each lineage event to s3://<minio.bucket>/_lineage_outbox
     # BEFORE the fire-and-forget publish; the reconcile sweep DRAINS any survivor (a crash between the Lance
     # commit and the publish), re-ingesting the FULL event (inputs/author/columnLineage) — closing the loss
     # window the DLQ + version-only back-fill cannot. Requires reconcile.enabled (the drain runs in the sweep).
@@ -479,7 +479,7 @@ services:
     # than either half alone — reconcile without the outbox can only back-fill that a version EXISTS
     # (author, inputs and column lineage are gone), and the outbox without reconcile stages events that
     # nothing ever drains. Cost is one S3 PUT + DELETE per lineage event against the already-provisioned
-    # `rustfs.bucket`; the whole thing is a no-op when the URI env isn't rendered.
+    # `minio.bucket`; the whole thing is a no-op when the URI env isn't rendered.
     outbox:
       enabled: true
     # Run-node retention (§4): the reconcile cron prunes graph :Run nodes older than this many days
@@ -602,13 +602,13 @@ resources:
   #
   # RAISED TO 6Gi 2026-09-06, which is the "raise it with the estate" this note used to defer. The
   # estate grew to 104 buckets and ~8 000 datasets, and at 2Gi the store stopped being able to START:
-  # `exitCode 137, reason OOMKilled`, dying seconds after `Starting: /usr/bin/rustfs` with the liveness
+  # `exitCode 137, reason OOMKilled`, dying seconds after the server's own start line with the liveness
   # probe timing out on /health, then CrashLoopBackOff on a 5m backoff. The host had 419 GB free, so
   # the ceiling was this limit and nothing else. What tipped it was running the live e2e suites in full
   # for the first time — and those suites are ordinary listings and writes, which is the point: a store
   # that cannot survive its own estate's test suite cannot survive its estate. Every service's storage
   # is this one pod, so the blast radius is the whole lakehouse.
-  rustfs:
+  minio:
     requests: { cpu: 100m, memory: 1Gi }
     limits: { cpu: "2", memory: 6Gi }
   # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
@@ -702,12 +702,13 @@ security:
   # Per-image uid/fsGroup (data/secret holders need the RIGHT ids for their PVCs, not helper reuse):
   infraContexts:
     enabled: false
-    rustfs: { runAsUser: 10001, fsGroup: 10001 } # MUST match the rustfs image's built-in `rustfs` user
-    # (uid 10001) — it is what owns the on-disk data. A mismatched uid (this was 1000) does NOT CrashLoop:
-    # RustFS starts and READS fine (world-readable dirs), but EVERY WRITE fails `Io error: Permission
-    # denied (os error 13)` → S3 500/AccessDenied to every client. Live 2026-07-13: the whole data plane
-    # was write-dead under infraContexts until this was corrected. fsGroup alone can't rescue it (the
-    # dirs are mode 755 owned by group 10001, so a different group has no write bit).
+    minio: { runAsUser: 1000, fsGroup: 1000 } # MUST match the minio image's built-in `minio-user`
+    # (uid 1000) — it is what owns the on-disk data. THE FAILURE MODE IS THE REASON THIS IS PINNED
+    # RATHER THAN LEFT TO THE IMAGE: a mismatched uid does NOT CrashLoop. The server starts and READS
+    # fine (world-readable dirs) while EVERY WRITE fails `Permission denied` → S3 500/AccessDenied to
+    # every client. Live 2026-07-13, under the previous store and its own uid, the whole data plane was
+    # write-dead under infraContexts until this was corrected. fsGroup alone cannot rescue it: the dirs
+    # are mode 755 owned by the image's group, so a different group has no write bit.
     age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
     openbao: { runAsUser: 100, fsGroup: 1000 } # hashicorp vault-family image uid
     dex: { runAsUser: 1001, fsGroup: 1001 }
@@ -717,7 +718,7 @@ security:
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
 # guarded stores (openbao ← secret-consuming app pods ONLY; age-postgres ← its real clients;
-# rustfs ← the data plane + GreptimeDB). Default OFF; flip in values-prod on a policy-enforcing CNI.
+# minio ← the data plane + GreptimeDB). Default OFF; flip in values-prod on a policy-enforcing CNI.
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
 networkPolicy:
@@ -730,9 +731,9 @@ networkPolicy:
   # Extra `from` peers for the openbao policy — e.g. the external-secrets operator's namespace when
   # externalSecrets.enabled: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: external-secrets}}}]
   openbaoExtraFrom: []
-  # Extra `from` peers for the rustfs policy — the ray-lance demo pods live outside the release's
+  # Extra `from` peers for the minio policy — the ray-lance demo pods live outside the release's
   # component labels (deploy/ray-lance-demo.yaml), so grant them here when running `make ray-demo`:
-  rustfsExtraFrom:
+  minioExtraFrom:
     - podSelector:
         matchLabels: { app: ray-lance-head }
     - podSelector:
@@ -927,17 +928,19 @@ auth:
 # --- Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ----
 # POST /v1/table/<id>/credentials?tier=read|write returns scoped creds (or mode=server_mediated). Modes:
 #   mode_b        (default) — nothing vended; clients use the server-mediated Arrow-IPC data endpoints.
-#   web_identity  — the RUSTFS-NATIVE path: the caller's Dex id_token is exchanged via
-#                   AssumeRoleWithWebIdentity for creds bound to ROLE_POLICY, narrowed per-table by an inline
-#                   session policy. Requires rustfs.oidc.enabled + auth.enabled (the caller presents a token).
-#   sts           — plain AssumeRole + session policy. Works on a compliant STS: AWS / MinIO / Ceph / moto
-#                   AND RustFS. Measured 2026-08-30 against the live RustFS STS — a SigV4-signed AssumeRole
-#                   returns a session token and the inline policy is enforced (out-of-scope prefix, bucket
-#                   and read-tier PUT all 403). An UNSIGNED probe answers InvalidRequest, which is about
-#                   signing, not support; reading it as "unsupported" is what kept this mode unused.
-#                   It is also the only mode that can serve the CASCADE: web_identity needs the caller to
-#                   present an OIDC token, and a stage runner authenticates with dapr-api-token +
-#                   x-lance-service-identity, never a bearer.
+#   web_identity  — the caller's Dex id_token is exchanged via AssumeRoleWithWebIdentity for creds bound
+#                   to ROLE_POLICY, narrowed per-table by an inline session policy. Requires
+#                   minio.oidc.enabled + auth.enabled (the caller presents a token). It is the only mode
+#                   under which the catalog holds NO storage credential at all — but it cannot serve the
+#                   CASCADE, whose stage runners authenticate with dapr-api-token +
+#                   x-lance-service-identity and never hold a bearer.
+#   sts           — plain AssumeRole + session policy. Works on a compliant STS: AWS / MinIO / Ceph / moto.
+#                   WHO MAY CALL IT IS THE PART THAT BITES, and it is why this estate's store is MinIO
+#                   (LH-133): measured 2026-09-11, same request shape and one run, a policy-attached
+#                   scoped user is ACCEPTED by MinIO and answered HTTP 403 by RustFS, which gates
+#                   AssumeRole to root and cannot grant the right (its policy engine refuses an
+#                   `sts:AssumeRole` statement outright). A store that only lets ROOT vend forces the
+#                   catalog to hold the root key, which is the opposite of what this mode is for.
 #   static        — pre-provisioned per-bucket keys.
 vending:
   # STS by default, because scoped short-lived credentials ARE the zero-trust posture and `mode_b`
@@ -949,12 +952,14 @@ vending:
   # and the door answered 503 (fixed 01222590), and the credential it then returned omitted `allow_http`
   # so no Lance client could be built from it (fixed 3cb13c88). `sts` was unusable, not unwanted.
   #
-  # PROVEN on RustFS 2026-09-03, which is what makes this default honest rather than aspirational:
-  # a credential vended for one table read that table (4 rows) and was refused on another with
-  # 403 AccessDenied. The store enforces the session policy; the scoping is real.
+  # PROVEN, which is what makes this default honest rather than aspirational: a credential vended for
+  # one table read that table (4 rows) and was refused on another with 403 AccessDenied (2026-09-03).
+  # Re-driven against MinIO on 2026-09-11 from a SCOPED (non-root) caller — in-scope GET allowed,
+  # cross-tenant GET and read-tier PUT both AccessDenied. The store enforces the session policy from an
+  # identity that is not root, which is the whole property the zero-trust posture rests on.
   mode: sts # mode_b | web_identity | sts | static
   ttlSeconds: 900
-  assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # RustFS ignores it; boto3 requires the param
+  assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # inherited-policy stores ignore it; boto3 requires the param
   # ENCRYPTION AT REST for every DIRECT write, carried in the vended storage options (§ J5). A vended
   # client writes to object storage with the catalog out of the path, so this is the only channel that
   # reaches it.
@@ -965,7 +970,7 @@ vending:
   # pairing at boot rather than passing it on — object_store ignores an option it does not recognise,
   # so a wrong value would write plaintext while the config claimed encryption.
   #
-  # RustFS ignores SSE headers; this is for an AWS/S3 deployment.
+  # A store that ignores SSE headers simply writes unencrypted; this is for an AWS/S3 deployment.
   encryption: {}
   # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
   # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source
@@ -976,7 +981,7 @@ vending:
   # The SAFER alternative to the blanket flag: a comma-separated allowlist of approved external base URIs
   # (e.g. "s3://media-bucket/approved,s3://other/base"). External Blob.from_uri pointers are accepted ONLY
   # under a registered base, with the blanket bypass left off — a curated media source without the SSRF door.
-  # Empty = the chart defaults it to the release's own model-artifact base (s3://<rustfs.bucket>/models/,
+  # Empty = the chart defaults it to the release's own model-artifact base (s3://<minio.bucket>/models/,
   # the #92 allowlist for #115 registry pointers — plain-path artifacts in the lake's own bucket, no SSRF
   # surface). Overriding REPLACES that default — include the models base yourself or the train registry's
   # external pointers get rejected.
@@ -1006,7 +1011,7 @@ catalog:
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
-  # unbound namespace always routes to the shared rustfs.bucket, so single-tenant flows are untouched.
+  # unbound namespace always routes to the shared minio.bucket, so single-tenant flows are untouched.
   warehouses:
     enabled: true
   # #3-B Lance multi-base DATA distribution: the ALLOWLIST of bucket URIs a single table's fragments may be
@@ -1045,7 +1050,7 @@ catalog:
   # on equal prefixes rather than trusting this comment.
   #
   # Cost is one S3 PUT + DELETE per catalog MUTATION (not per row) against the already-provisioned
-  # rustfs.bucket. Requires catalog.controlEmit (nothing stages when emission is off).
+  # minio.bucket. Requires catalog.controlEmit (nothing stages when emission is off).
   controlOutbox:
     enabled: true
     # ONE STRING: the Dapr Component's name (catalog-control-relay-cron.yaml), the app's
@@ -1085,11 +1090,11 @@ medallion:
   enabled: true
   port: 8000
   # Storage ZONES (medallion → gold SINK). Maps a stage NAMESPACE to its S3 bucket; anything unset
-  # falls back to the shared `rustfs.bucket`, so the DEFAULT here is the single-bucket layout
+  # falls back to the shared `minio.bucket`, so the DEFAULT here is the single-bucket layout
   # (unchanged, e2e-safe). Override to zone gold (sink/output) into its OWN bucket/tenant, while
   # bronze/silver (the project's medallion internals) stay in the project bucket. External raw is NOT a
   # zone (R23): the ingest sources (IIIF, external object storage) live outside the lakehouse entirely.
-  # Any non-default bucket listed here is auto-provisioned by rustfs-mkbucket. Same RustFS endpoint/creds
+  # Any non-default bucket listed here is auto-provisioned by minio-mkbucket. Same endpoint/creds
   # serve all buckets; a truly external S3 per zone (own endpoint) is future.
   # Per-zone bucket override, e.g. { gold: lance-sink } to land the serving tier outside the shared
   # bucket. Every value here is appended to LANCE_RESERVED_BUCKETS (services.yaml), so naming a bucket
@@ -1100,7 +1105,7 @@ medallion:
   # resolving a bucket of their own. See `producer.bronzeNamespace` for why they are nested.
   buckets: {}
   # #84 per-tenant medallion routing (OPT-IN). When true, the producer + stage runners get
-  # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<rustfs.bucket> the
+  # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<minio.bucket> the
   # catalog's LANCE_REST_ROOT names), so a `project`-carrying POST /produce (or stage trigger) resolves
   # that project's ACTIVE warehouse (`_warehouses/*.json`, provisioned via POST /v1/warehouses) and the
   # cascade reads/writes s3://<project-bucket>/medallion/<stage> with project-qualified lineage
@@ -1173,9 +1178,9 @@ medallion:
     schedule: "@every 300s"
   stageRunnerReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
-  # event-driven cascade produces actual versioned data on RustFS, not just provenance — the lineage graph
+  # event-driven cascade produces actual versioned data in the object store, not just provenance — the lineage graph
   # then reflects what storage holds and outputStatistics carry real rows/bytes. Off by default (the demo
-  # ships as a pure lineage-emit). Each stage's FROM_URI/TO_URI derive from rustfs.bucket + its namespace, so
+  # ships as a pure lineage-emit). Each stage's FROM_URI/TO_URI derive from minio.bucket + its namespace, so
   # the chain lines up (producer bronze -> bronze->silver -> silver->gold). REQUIRES OpenBao off
   # (`--set openbao.enabled=false`): the medallion is a dummy producer with no OpenBao secret-fetch (unlike
   # the catalog), so with OpenBao on the plaintext S3 secret is withheld and it fails fast at boot. Real
@@ -1735,7 +1740,7 @@ explorer:
   # Where the pods mount the corpus (read-only, all three services).
   # #142: set to a warehouse bucket (e.g. "s3://bind86-wh") to serve the media corpus from the
   # GOVERNED object store instead of the mounted volume. VIEWER ONLY so far — search/annotator
-  # still need creds + a rustfs NetworkPolicy row before they can follow. "" = the disk, unchanged.
+  # still need creds + a minio NetworkPolicy row before they can follow. "" = the disk, unchanged.
   corpusS3Root: ""
   corpusMountPath: /media-corpus
   # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
@@ -1921,16 +1926,16 @@ stateStore:
     # state store, so a running stage runner keeps the OLD scope list until it restarts.
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
-# managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
+# managed/operator path (CloudNativePG for AGE — the rask deployment), DISABLE these
 # and let the operators do backups (PITR + scheduled, better than this). These exist so a self-contained
-# in-cluster-prod deploy (in-cluster RustFS PVC + AGE) isn't backup-less. ---------------------------------
+# in-cluster-prod deploy (in-cluster object-store PVC + AGE) isn't backup-less. ---------------------------------
 backups:
   # pg_dump the lineage + OpenFGA DBs (gzip) → the lakehouse S3 under _backups/pg/<date>/.
   pgDump:
     enabled: false
     schedule: "0 2 * * *" # daily 02:00
     keep: 7 # retention: prune all but the newest N daily dumps each run, so the backups don't grow unbounded
-  # CSI VolumeSnapshot of the RustFS lakehouse PVC. Needs a CSI snapshotter + a VolumeSnapshotClass.
+  # CSI VolumeSnapshot of the lakehouse PVC. Needs a CSI snapshotter + a VolumeSnapshotClass.
   volumeSnapshot:
     enabled: false
     schedule: "0 3 * * *" # daily 03:00
@@ -1940,8 +1945,8 @@ backups:
     kubectlImage: alpine/k8s:1.31.3
 
 # --- HA: PodDisruptionBudget + (optional) HPA for the stateless request-serving services. Off by default
-# (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE/RustFS) get HA from their
-# operators (CNPG / rustfs-operator), NOT from here. ------------------------------------------------
+# (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE/MinIO) get HA from their
+# operators (CNPG), NOT from here. ------------------------------------------------
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
@@ -1969,52 +1974,57 @@ autoscaling:
   # worked value; below it a spiky I/O-bound service oscillates between min and max.
   scaleDownStabilizationSeconds: 300
 
-# --- In-cluster S3 (RustFS) ------------------------------------------------------------------------
-# RESOLVED (docs/architecture/lance-ns-merge.md P4: "RustFS: rask's operator Tenant wins; lance-ns's
-# per-warehouse bucket provisioning re-pointed at `<tenant>-io:9000`; keep-PVC posture via Tenant
-# spec"): ONE object store renders. `enabled` gates the rustfs-operator subchart + the Tenant CR
-# (templates/rustfs-tenant.yaml) + the bucket-init hook (templates/rustfs.yaml) as one unit — on
-# rustfs.enabled ALONE, not singleTenant, because the lakehouse/medallion/observability consumers
-# render without singleTenant and must resolve the store. The ONE endpoint is the Tenant's S3 Service
-# `rask-rustfs-io:9000` (`lance.rustfsHost`/`lance.s3Endpoint`); the first-party Deployment + Service
-# (`rask-rustfs:9000`) are deleted. RustFS erasure coding requires servers*volumesPerServer >= 4;
-# standalone is servers=1, volumesPerServer=4 (1 pod, 4 PVCs).
-rustfs:
+# --- In-cluster S3 (MinIO) ------------------------------------------------------------------------
+# ONE object store renders — P4's unification, which still holds; LH-133 changed WHICH store and
+# therefore its mechanism. `enabled` gates the StatefulSet + Services (templates/minio.yaml), the
+# bucket-init hook (templates/minio-buckets.yaml) and the scoped-user hook
+# (templates/minio-scoped-users.yaml) as ONE unit — on minio.enabled ALONE, not singleTenant, because
+# the lakehouse/medallion/observability consumers render without singleTenant and must resolve the
+# store. The ONE endpoint is `rask-minio:9000` (`lance.minioHost`/`lance.s3Endpoint`).
+#
+# P4's KEEP-PVC POSTURE IS PRESERVED, by a different mechanism: it was pinned to an operator Tenant
+# spec, and a StatefulSet's own `volumeClaimTemplates` has the identical property — PVCs survive pod
+# rolls AND `helm uninstall`, because helm never owned them.
+#
+# Erasure coding wants servers*volumesPerServer >= 4; the default is servers=1, volumesPerServer=4
+# (1 pod, 4 PVCs).
+minio:
   enabled: true
-  # lance-ns's PINNED tag wins over rask's `rustfs/rustfs:latest`: it is multi-arch (amd64+arm64) and
-  # rustfs is pre-1.0, so `latest` silently moves under a running data store.
-  image: rustfs/rustfs:1.0.0-beta.8
+  # PINNED, never `latest`: a moving tag on a running data store changes the server under its own
+  # on-disk format with no diff anywhere.
+  image: minio/minio:RELEASE.2025-04-22T22-12-26Z
   servers: 1
   volumesPerServer: 4
-  # Single-node k3s: all 4 local-path volumes share one physical disk, which
-  # trips RustFS's distinct-disk erasure safety check. Bypass it for local/CI.
-  # Set false for a real multi-node / multi-disk object store.
-  bypassDiskCheck: true
+  # (No distinct-disk escape hatch here, and that is a property of the store rather than an omission:
+  # the previous one refused volumes sharing a physical disk and needed an UNSAFE bypass flag to run on
+  # single-node k3s at all. MinIO derives its erasure set from the drive list and does not.)
   port: 9000
   consolePort: 9001
-  # Per Tenant volume: 4 volumes × 15Gi => ~60Gi total (local-path is unmetered on dev k3s);
+  # Per volume: 4 volumes × 15Gi => ~60Gi total (local-path is unmetered on dev k3s);
   # values-prod raises it to 200Gi/volume for the real lakehouse + 14d of observability.
   storage: "15Gi"
-  # Tenant PVCs. EMPTY = the CLUSTER'S DEFAULT StorageClass — the only portable default, and the reason
-  # this is no longer `"local-path"`: that is the name k3s's provisioner happens to use, it does NOT
+  # The data PVCs. EMPTY = the CLUSTER'S DEFAULT StorageClass — the only portable default, and the
+  # reason this is not `"local-path"`: that is the name k3s's provisioner happens to use, it does NOT
   # exist on stock kind (whose default class is `standard`) or on any managed cluster, and a
-  # non-existent class makes the four Tenant PVCs sit Pending FOREVER with no event on the pod and no
+  # non-existent class makes the four PVCs sit Pending FOREVER with no event on the pod and no
   # chart-level complaint (live-proof 2026-07-28, defect 2 — the run had to alias a StorageClass into
   # the cluster to proceed). Set an explicit class only to pin a specific one (prod: a CSI class that
   # supports VolumeSnapshot + encryption, see values-prod.yaml).
-  storageClass: ""                    # Tenant PVCs; "" => the cluster's default StorageClass
-  accessKey: rustfsadmin
-  secretKey: rustfsadmin
+  storageClass: ""                    # data PVCs; "" => the cluster's default StorageClass
+  # THE STORE'S ROOT ACCOUNT. Every scoped identity below exists so that nothing in the fleet presents
+  # THIS pair; it remains only because the store itself must boot with one.
+  accessKey: minioadmin
+  secretKey: minioadmin
   # THE COMPUTE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
-  # The Ray pods ran on `accessKey`/`secretKey` — the RustFS TENANT ROOT — so anything able to run
+  # The Ray pods ran on `accessKey`/`secretKey` — the store's ROOT account — so anything able to run
   # code there reached every tenant's bytes, the project registry, the protection records and the
-  # observability bucket. A prefix-conditioned RustFS user policy fixes that, and is ENFORCED
+  # observability bucket. A prefix-conditioned MinIO user policy fixes that, and is ENFORCED
   # (measured 2026-08-30: `medallion*` and `*-wh` allowed; `_projects/`, `_protection/`, `_policies/`
   # and `rask-observability` all AccessDenied from the pod's own credential).
   #
   # NAMING THE IDENTITY IS ENOUGH: set the access key alone and the secret is DERIVED
-  # (`lance.scopedStorageSecret` — sha256 of the identity plus `rustfs.secretKey`, the
+  # (`lance.scopedStorageSecret` — sha256 of the identity plus `minio.secretKey`, the
   # `lance.dedicatedServiceToken` shape), so declaring a scoped identity in a values file needs no
   # secret in git. Set the secret key too and yours wins, for an operator supplying one from a manager.
   # One value therefore reaches all of: the pod env, the OpenBao seed and the `mc` user creation —
@@ -2022,10 +2032,10 @@ rustfs:
   # `SignatureDoesNotMatch` on every call (measured, twice) and looks correct in a diff.
   #
   # EMPTY = the root credential, i.e. today's behaviour, so this stays inert until an identity is
-  # named. `rustfs-scoped-users` then creates the policy and the user with the same `mc` image the
+  # named. `minio-scoped-users` then creates the policy and the user with the same `mc` image the
   # bucket-init Job uses.
   # NAMED 2026-09-10, the third identity `medallionAccessKey`/`maintenanceAccessKey` already are.
-  # While it was empty, `infra-credentials.yaml`'s `| default .Values.rustfs.accessKey` made the
+  # While it was empty, `infra-credentials.yaml`'s `| default .Values.minio.accessKey` made the
   # ESO-delivered `ray-compute-secret-key` the tenant ROOT — measured on the live estate, both
   # `ray-compute-access-key` and `ray-compute-secret-key` decoded to `rustfsadmin`. So the SANCTIONED
   # delivery path was handing out root while a hand-applied Secret carried the scoped credential the
@@ -2035,7 +2045,7 @@ rustfs:
   rayComputeSecretKey: ""
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
-  # `MAINTENANCE_S3_ACCESS_KEY_ID` renders from `accessKey` — the RustFS TENANT ROOT — and maintenance
+  # `MAINTENANCE_S3_ACCESS_KEY_ID` renders from `accessKey` — the store's ROOT account — and maintenance
   # COMPACTS with it, which is a write. So the service that rewrites every dataset in every bucket also
   # reaches `_projects/`, `_protection/` and `_policies/`: the records that decide what maintenance
   # itself is permitted to do. A compromise there can turn off the shallow-clone guard that stops a
@@ -2064,7 +2074,7 @@ rustfs:
   # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three stage runners share one, because
   # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
   # is the whole setting; the secret is derived unless supplied (`lance.scopedStorageSecret`).
-  # Provisioned by `rustfs-scoped-users.yaml` as `rask-medallion`: data in any warehouse, `_tasks/`
+  # Provisioned by `minio-scoped-users.yaml` as `rask-medallion`: data in any warehouse, `_tasks/`
   # writable because this plane REGISTERS them, every other control prefix read-only. Named here rather
   # than left empty for the reason above — an install must not come up on the tenant root.
   medallionAccessKey: rask-medallion
@@ -2075,7 +2085,7 @@ rustfs:
   # changes anywhere are DELETES of its own outbox objects once the relay has re-ingested them
   # (`outbox.drop_event`). It calls `stage_event` nowhere — staging is the producers' half — so this
   # identity needs NO PutObject at all, which no other plane can say.
-  # Provisioned by `rustfs-scoped-users.yaml` as `rask-lineage`. Named here rather than left empty:
+  # Provisioned by `minio-scoped-users.yaml` as `rask-lineage`. Named here rather than left empty:
   # measured on the running estate 2026-09-08, lineage was the one plane of the three whose identity
   # was built, provisioned and never selected, so it presented `rustfsadmin` while holding the tightest
   # policy in the estate.
@@ -2086,7 +2096,7 @@ rustfs:
   # and `get_object` and nothing else — so its identity needs no PutObject and no DeleteObject, which
   # not even lineage's can say.
   # Named here rather than left empty because the alternative is what was measured on the running
-  # estate 2026-09-09: `AWS_ACCESS_KEY_ID=rustfsadmin` in the viewer's own env — the RustFS ROOT
+  # estate 2026-09-09: `AWS_ACCESS_KEY_ID=rustfsadmin` in the viewer's own env — the store's ROOT
   # credential, on a pod that HAS a Dapr sidecar and could have asked the secret store for a scoped
   # one. The widest credential in the estate, reached by the one path the goal forbids.
   viewerAccessKey: rask-viewer
@@ -2096,7 +2106,7 @@ rustfs:
   bucket: lance-catalog
   # The STATIC platform bucket set, provisioned natively by the Tenant (spec.buckets). The
   # values-driven extras — medallion.buckets zones + the observability toggle — are provisioned by
-  # the bucket-init hook (templates/rustfs.yaml), which a static CR list cannot express.
+  # the bucket-init hook (templates/minio-buckets.yaml), which a static CR list cannot express.
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
@@ -2108,17 +2118,17 @@ rustfs:
   # exits 1 with the diagnosis and the kubectl commands when the deadline passes.
   bucketVerifyTimeoutSeconds: 300
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
-  # in-cluster RustFS — pair with rustfs.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
+  # in-cluster MinIO — pair with minio.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
-  # (rustfs.persistence is GONE with the first-party Deployment — durability is the Tenant's
+  # (minio.persistence is GONE with the first-party Deployment — durability is the Tenant's
   # volumeClaimTemplate above: StatefulSet-owned PVCs survive pod rolls AND `helm uninstall`, the
   # keep-PVC posture the P4 ruling pins to the Tenant spec. `storageClass` sizes/classes them.)
-  mcImage: minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (multi-arch); `mc` speaks plain S3 → bootstraps buckets on RustFS too
-  # OIDC identity provider for STS AssumeRoleWithWebIdentity (Track B). When on, RustFS trusts Dex id_tokens
+  mcImage: minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (multi-arch); `mc` speaks plain S3 and admin → buckets, users and policies
+  # OIDC identity provider for STS AssumeRoleWithWebIdentity (Track B). When on, the store trusts Dex id_tokens
   # → a client can mint short-TTL creds it scopes per-table via the catalog's vending endpoint (vending.mode=
-  # web_identity). Off by default (plain dev needs no STS). Enabling it rolls RustFS (the env lands in the
-  # Tenant spec, templates/rustfs-tenant.yaml).
+  # web_identity). Off by default (plain dev needs no STS). Enabling it rolls the store (the env lands in the
+  # Tenant spec, templates/minio.yaml).
   oidc:
     enabled: false
     rolePolicy: readwrite # built-in full-S3 base policy; the per-request session policy narrows it per-table
@@ -2211,7 +2221,7 @@ ray:
   runtimeClassName: "nvidia" # only rendered when gpuCount > 0
   hfCacheStorage: "10Gi"
   # The HF weight-cache PVC's class. "" => the cluster's DEFAULT StorageClass (this was hardcoded
-  # `local-path`, the same non-portable name as rustfs.storageClass — it wedged the PVC, and with it
+  # `local-path`, the same non-portable name as minio.storageClass — it wedged the PVC, and with it
   # the Ray head, on any cluster whose provisioner is named anything else).
   hfCacheStorageClass: ""
   shmSize: "8Gi"
@@ -2757,7 +2767,7 @@ externalSecrets:
   refreshInterval: "1h"
   kvMount: secret # the Vault KV mount path
   kvVersion: "v2"
-  secretPath: lance # the KV key holding postgres-password + rustfs-secret-key (e.g. secret/data/lance)
+  secretPath: lance # the KV key holding postgres-password + minio-secret-key (e.g. secret/data/lance)
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
   role: lance-infra # the Vault role the operator's ServiceAccount assumes (also names its policy)
   # WHOSE ServiceAccount the role is bound to. Defaults match a stock external-secrets install; the
@@ -2794,12 +2804,10 @@ cloudnative-pg:
     mutating:
       failurePolicy: Ignore
 
-# rustfs operator subchart (vendored at third_party/, gated by rustfs.enabled).
-rustfs-operator: {}
 
 # ---- observability stack ---------------------------------------------------
 # OTel-first: a single OpenTelemetry Collector is the telemetry hub, GreptimeDB the store, Perses the
-# dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by RustFS S3. The
+# dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by the in-cluster S3. The
 # Collector RECEIVES app OTLP, TAILS infra-pod logs (filelog), and SCRAPES the Dapr sidecars
 # (prometheus + k8s SD), exporting everything OTLP → GreptimeDB (:4000/v1/otlp).
 # `observability.enabled` gates the two subcharts' (greptimedb-standalone, perses) Chart.yaml condition AND the OTLP wiring.
@@ -2820,7 +2828,7 @@ observability:
   # Legacy escape hatch: ship OTLP to an off-cluster endpoint AND run no in-cluster store. Prefer
   # otelCollector.externalEndpoint (the OTel-first prod path); this stays for a raw non-Collector target.
   externalOtlpEndpoint: "" # e.g. http://otel-collector.observability:4318/v1/otlp
-  bucket: "rask-observability"          # RustFS bucket for GreptimeDB object storage
+  bucket: "rask-observability"          # bucket for GreptimeDB object storage
   # Retention for logs/traces/metrics. Applied as a database-level TTL on the
   # GreptimeDB `public` database via a post-install/post-upgrade hook Job
   # (templates/greptimedb-ttl-job.yaml), so every table (opentelemetry_logs,
@@ -2846,13 +2854,13 @@ observability:
   # are cluster-internal (port-forward) and the edge credential guarded nothing. GreptimeDB
   # `auth.enabled` + Perses OIDC via Dex remain the documented follow-on if they are re-exposed.
 
-# GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster RustFS S3.
+# GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster MinIO S3.
 # RESOLVED (lance-ns-merge P4 "operator Tenant wins"): the endpoint names the ONE object store — the
-# rustfs-operator Tenant's S3 Service `rask-rustfs-io:9000`, which renders whenever rustfs.enabled
+# the object store's S3 Service `rask-minio:9000`, which renders whenever minio.enabled
 # (regardless of singleTenant). Both values below are STATIC subchart values that cannot follow chart
-# helpers: externalizing RustFS means overriding `endpoint` too (values-prod's EXTERNALIZE block
+# helpers: externalizing the store means overriding `endpoint` too (values-prod's EXTERNALIZE block
 # documents the pairing; prod_render_check proves it atomic), and `existingSecretName` must equal the
-# rendered `<release>-observability-s3` Secret (templates/observability.yaml — rustfs.accessKey/secretKey,
+# rendered `<release>-observability-s3` Secret (templates/observability.yaml — minio.accessKey/secretKey,
 # the ONE store credential pair).
 greptimedb-standalone:
   # The ONLY seam this subchart offers for engine tuning (its templates/configmap.yaml renders
@@ -2959,7 +2967,7 @@ greptimedb-standalone:
       bucket: "rask-observability"
       region: "us-east-1"
       root: "/greptimedb"
-      endpoint: "http://rask-rustfs-io:9000"
+      endpoint: "http://rask-minio:9000"
     credentials:
       existingSecretName: "rask-observability-s3"
 

@@ -36,8 +36,8 @@ pytestmark = pytest.mark.e2e
 def _so() -> dict[str, str]:
     return {
         "endpoint": S3,
-        "access_key_id": "rustfsadmin",
-        "secret_access_key": "rustfsadmin",
+        "access_key_id": "minioadmin",
+        "secret_access_key": "minioadmin",
         "region": "us-east-1",
         "allow_http": "true",
         "virtual_hosted_style_request": "false",

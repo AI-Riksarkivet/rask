@@ -16,7 +16,7 @@ claimed sync ``def`` while all three routes were coroutines doing boto3 inline).
 
 **Failure posture (live-proof 2026-07-28, defect 2).** A bucket that does not exist
 on the S3 backend is an EXPECTED, diagnosable state — the chart provisions
-``rustfs.buckets`` through an operator Tenant, and a blocked Tenant leaves them
+``minio.buckets`` through the chart's bucket-init hook, and a failed hook leaves them
 absent. It used to surface as an unhandled ``botocore`` ``NoSuchBucket`` → HTTP 500
 → the storage browser's "Storage service unreachable", which named neither the
 bucket nor the cause. Every route below now translates the S3 boundary through
@@ -187,7 +187,7 @@ def _missing_bucket(bucket: str) -> NotFoundError:
     """
     return NotFoundError(
         f"bucket not found: {bucket} — the S3 backend has no such bucket. "
-        "The platform provisions it from the chart's rustfs.buckets; check that the "
+        "The platform provisions it from the chart's minio.buckets; check that the "
         "object store actually created it."
     )
 
@@ -204,7 +204,7 @@ def _resolve_missing(client: object, exc: ObjectNotFoundError, *, store: str) ->
     `exc.bucket` is the real bucket (that is what the boto call named), while `store` is what the
     CALLER addressed. The key-level answer uses the caller's vocabulary and the bucket-level one
     uses the operator's — VS-22: both used to be the store name, so the bucket-not-found 404 sent an
-    operator to look for a `rustfs.buckets` entry that had never been named that.
+    operator to look for a `minio.buckets` entry that had never been named that.
     """
     return _missing_bucket(exc.bucket) if _bucket_missing(client, exc.bucket) else NotFoundError(f"object not found: {store}/{exc.key}")
 

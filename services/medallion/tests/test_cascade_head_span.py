@@ -172,7 +172,7 @@ def _media_settings() -> MedallionSettings:
             # The four `media_head_enabled` actually gates on — read off the predicate, not guessed.
             # A skipped test proves nothing, and a head that never enables would make this file
             # silently assert about the media path without ever running it.
-            "MEDALLION_S3_ENDPOINT": "http://rustfs.invalid:9000",
+            "MEDALLION_S3_ENDPOINT": "http://minio.invalid:9000",
             # `MedallionSettings` refuses an S3 endpoint with no credential ("every Lance write would
             # 403") — a fail-closed validator, not an obstacle. The endpoint is unroutable and nothing
             # in this test reaches S3; the seeder is replaced.

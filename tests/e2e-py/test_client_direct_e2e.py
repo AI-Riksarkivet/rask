@@ -142,8 +142,8 @@ def test_client_direct_commit_lands_with_zero_byte_ingress(catalog: str) -> None
         (cred.get("credentials") or {}).get("storage_options")
         or {
             "endpoint": S3,
-            "access_key_id": "rustfsadmin",
-            "secret_access_key": "rustfsadmin",
+            "access_key_id": "minioadmin",
+            "secret_access_key": "minioadmin",
             "allow_http": "true",
             "virtual_hosted_style_request": "false",
             "region": "us-east-1",
@@ -206,7 +206,7 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
     def _vend() -> tuple[str, int, dict]:
         c = requests.post(f"{catalog}/v1/table/{_TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30).json()
         so = _reachable((c.get("credentials") or {}).get("storage_options") or {
-            "endpoint": S3, "access_key_id": "rustfsadmin", "secret_access_key": "rustfsadmin",
+            "endpoint": S3, "access_key_id": "minioadmin", "secret_access_key": "minioadmin",
             "allow_http": "true", "virtual_hosted_style_request": "false", "region": "us-east-1",
         })  # fmt: skip
         return c["location"], c["read_version"], so

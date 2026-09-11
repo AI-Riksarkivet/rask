@@ -42,7 +42,7 @@ _REAL = (
     "openbao.devMode=false",
     "dapr.appToken=a-real-app-token",
     "age.password=a-real-age-password",
-    "rustfs.secretKey=a-real-rustfs-secret",
+    "minio.secretKey=a-real-rustfs-secret",
 )
 
 

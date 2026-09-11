@@ -41,7 +41,7 @@ _PROD_BASE = (
     "singleTenant.enabled=true",
     "openbao.devMode=false",
     "age.password=x",
-    "rustfs.secretKey=x",
+    "minio.secretKey=x",
     "dapr.appToken=x",
 )
 

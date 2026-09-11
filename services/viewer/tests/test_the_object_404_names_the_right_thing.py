@@ -6,9 +6,9 @@ storage registry — and the real bucket only appears at the boto call, via `_re
 `_missing_bucket` then told the operator:
 
     bucket not found: <store name> — the S3 backend has no such bucket. The platform provisions it
-    from the chart's rustfs.buckets; check that the object store actually created it.
+    from the chart's minio.buckets; check that the object store actually created it.
 
-That sentence is about `rustfs.buckets`, which lists BUCKETS. An operator handed a store name goes
+That sentence is about `minio.buckets`, which lists BUCKETS. An operator handed a store name goes
 looking for a bucket nobody ever asked the chart to create, on a route whose whole reason to exist
 is diagnosing an unprovisioned store. The names coincide for the shipped defaults, which is exactly
 why it survived: it only misleads where it matters, on a store that renames its bucket.
@@ -81,7 +81,7 @@ def test_the_listing_404_names_the_bucket(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(NotFoundError) as caught:
         asyncio.run(objects_ep.list_objects(checker=_allow, subject="gina", settings=_settings(), bucket=STORE.name))
     assert STORE.bucket in str(caught.value), (
-        f"the 404 said {str(caught.value)!r} — an operator checking rustfs.buckets for {STORE.name!r} will not find it; the bucket is {STORE.bucket!r}"
+        f"the 404 said {str(caught.value)!r} — an operator checking minio.buckets for {STORE.name!r} will not find it; the bucket is {STORE.bucket!r}"
     )
 
 

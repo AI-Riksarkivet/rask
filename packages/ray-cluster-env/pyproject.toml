@@ -22,7 +22,12 @@ requires-python = ">=3.13"
 dependencies = [
     # The baked job scripts' platform seam: service_kit.lakehouse.{blobs,media,stage_stamp} and the
     # lancekit extra's Lance-plane subtree (the OTel base instrumentation rides service-kit's core).
-    "service-kit[lancekit]",
+    # `media` IS LOAD-BEARING, not optional here, and the line above used to omit it while the comment
+    # named it. `service_kit.lakehouse.media` imports `PIL` at module scope and `ray_stage_job.py`
+    # imports that module at module scope, so without the extra the baked stage job cannot import AT
+    # ALL — `ModuleNotFoundError: No module named 'PIL'` before it reads a single argument. It fails
+    # identically for a tabular run that will never touch an image, because the import is unconditional.
+    "service-kit[lancekit,media]",
     # Lance/Arrow core — `import lance`, `lance.optimize`, `pyarrow`/`pyarrow.fs`.
     "pylance>=11.0.0",
     "pyarrow",

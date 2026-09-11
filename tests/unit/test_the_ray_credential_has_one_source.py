@@ -8,7 +8,7 @@ sidecar gets it through `secretKeyRef` onto a Secret the estate already owns, wh
 `external-secrets.yaml` syncs FROM OpenBao on the prod path.
 
 So the rule this gate keeps is the ONE-SOURCE rule, not a no-Dapr rule: the credential is a key on
-`infra-credentials` — the same object that already carries `rustfs-secret-key` — so the dev Secret and
+`infra-credentials` — the same object that already carries `minio-secret-key` — so the dev Secret and
 the ESO sync agree by construction. A second Secret invented beside it would be a second source, and
 on the prod path it would be the one ESO does not fill.
 
@@ -66,7 +66,7 @@ def _secret_keys(rendered: str, name_fragment: str) -> set[str]:
 def test_the_ray_compute_credential_rides_the_infra_secret() -> None:
     """One object, so the dev Secret and the ESO sync cannot disagree about where it lives."""
     keys = _secret_keys(_render(), "infra-credentials")
-    assert "rustfs-secret-key" in keys, "this test no longer sees the Secret it is asserting about"
+    assert "minio-secret-key" in keys, "this test no longer sees the Secret it is asserting about"
     assert {"ray-compute-access-key", "ray-compute-secret-key"} <= keys, (
         f"the Ray plane's scoped credential is not on infra-credentials; keys present: {sorted(keys)}"
     )

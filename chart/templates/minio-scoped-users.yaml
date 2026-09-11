@@ -1,17 +1,17 @@
-{{- $ray := .Values.rustfs.rayComputeAccessKey }}
-{{- $maint := .Values.rustfs.maintenanceAccessKey }}
-{{- $medallion := .Values.rustfs.medallionAccessKey }}
-{{- $lineage := .Values.rustfs.lineageAccessKey }}
-{{- $viewer := .Values.rustfs.viewerAccessKey }}
-{{- if and .Values.rustfs.enabled (or $ray $maint $medallion $lineage $viewer) }}
-# RustFS SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
+{{- $ray := .Values.minio.rayComputeAccessKey }}
+{{- $maint := .Values.minio.maintenanceAccessKey }}
+{{- $medallion := .Values.minio.medallionAccessKey }}
+{{- $lineage := .Values.minio.lineageAccessKey }}
+{{- $viewer := .Values.minio.viewerAccessKey }}
+{{- if and .Values.minio.enabled (or $ray $maint $medallion $lineage $viewer) }}
+# SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
 #
 # `rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
 # and user with the mc image the mkbucket Job already uses, then set these." So the estate's one proven
 # scoped-user precedent was a values knob that only a hand-run `mc` session could turn, and a fresh
 # install came up on the tenant root. This is that step, written once for both consumers.
 #
-# WHY A POLICY AND NOT JUST A USER: a RustFS user created with no policy gets whatever the server
+# WHY A POLICY AND NOT JUST A USER: a MinIO user created with no policy gets whatever the server
 # defaults to, which is not a documented deny. The point of this Job is the DENY — the compaction
 # credential must not reach `_projects/`, `_protection/` or `_policies/`, the records that decide what
 # maintenance is permitted to do. A credential that can rewrite its own governing policy can turn off
@@ -21,16 +21,18 @@
 # reading the docs:
 #
 #   * `s3:ListBucket` is BUCKET-scoped, not object-scoped. An object-scoped rule constrains a LIST not
-#     at all — the first attempt allowed the whole control plane to be listed and looked like RustFS
-#     ignoring Deny.
+#     at all — the first attempt allowed the whole control plane to be listed and looked like the
+#     store ignoring Deny.
 #   * the prefix condition must be `medallion*`, NOT `medallion/*`: Lance lists with `prefix=medallion/`
 #     and `StringLike` does not match a trailing-slash pattern against it.
 #   * a bucket-NAME allow-list cannot govern this estate at all, because the buckets that hold tenant
 #     data are minted at runtime by `POST /v1/warehouses`. See the long note above the policies.
 #
-# IDEMPOTENT. `mc admin policy create` OVERWRITES an existing policy — probed against this estate's
-# RustFS 1.0.0-beta.8 on 2026-09-04: a second create with different content returned exit 0 and the
-# readback showed the new document. So the create carries no `|| true`; the only thing one could
+# IDEMPOTENT — AND RE-VERIFY IT, because the probe behind this predates the store. `mc admin policy
+# create` OVERWRITES an existing policy: a second create with different content returned exit 0 and the
+# readback showed the new document, probed 2026-09-04 against RustFS 1.0.0-beta.8, the store this
+# estate ran BEFORE the LH-133 swap. The `post-upgrade` pass below depends on exactly that overwrite,
+# so it is load-bearing rather than incidental, and it has NOT yet been re-driven against MinIO. So the create carries no `|| true`; the only thing one could
 # swallow is a REAL failure (malformed JSON, admin denied), leaving the credential on its previous
 # policy while the hook reports success. `user add` and `attach` keep theirs. Note what `user add` does
 # on a re-run, because the `|| true` hides it either way: it ROTATES the existing user's secret rather
@@ -39,20 +41,20 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "rask.fullname" . }}-rustfs-scoped-users-{{ include "rask.bootstrapRev" . }}
+  name: {{ include "rask.fullname" . }}-minio-scoped-users-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
   annotations:
     {{- /* THREE PHASES, AND EACH ANSWERS A DIFFERENT FAILURE.
 
          `pre-upgrade` is what lets the identities be NAMED by default. With only `post-upgrade` the
-         RustFS user is created after the Deployments have been updated, so pods restart holding a
+         MinIO user is created after the Deployments have been updated, so pods restart holding a
          credential the object store has never heard of and 403 until the hook catches up — and that
          window is the entire reason every scoped identity shipped defaulted to the tenant ROOT key.
 
-         `post-upgrade` STAYS, and is not a leftover: `rustfs-mkbucket` is deliberately not a hook
-         (see rustfs.yaml), so it lands with the release manifest and therefore runs AFTER this
+         `post-upgrade` STAYS, and is not a leftover: `minio-mkbucket` is deliberately not a hook
+         (see minio-buckets.yaml), so it lands with the release manifest and therefore runs AFTER this
          pre-upgrade pass. An upgrade that adds a bucket would have a policy written before it exists,
-         which RustFS accepts and then silently governs nothing. The post pass rewrites the same
+         which the store accepts and then silently governs nothing. The post pass rewrites the same
          policies once the bucket is there — sound only because `mc admin policy create` overwrites,
          which is probed and recorded above.
 
@@ -68,7 +70,7 @@ spec:
     metadata:
       labels:
         {{- include "rask.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: rustfs-scoped-users
+        app.kubernetes.io/component: minio-scoped-users
     spec:
       restartPolicy: OnFailure
       {{- if .Values.security.serviceAccounts.enabled }}
@@ -76,40 +78,40 @@ spec:
       {{- end }}
       containers:
         - name: mc
-          image: {{ .Values.rustfs.mcImage }}
+          image: {{ .Values.minio.mcImage }}
           # Every secret arrives as an env var read by `mc`, never interpolated into the rendered
           # command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
           # discloses a key.
           env:
-            - name: RUSTFS_SECRET_KEY
+            - name: MINIO_SECRET_KEY
               valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
+                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
             {{- if $maint }}
             - name: MAINTENANCE_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.maintenanceAccessKey .Values.rustfs.maintenanceSecretKey) | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.maintenanceAccessKey .Values.minio.maintenanceSecretKey) | quote }}
             {{- end }}
             {{- if $ray }}
             - name: RAY_COMPUTE_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.rayComputeAccessKey .Values.rustfs.rayComputeSecretKey) | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.rayComputeAccessKey .Values.minio.rayComputeSecretKey) | quote }}
             {{- end }}
             {{- if $medallion }}
             - name: MEDALLION_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.medallionAccessKey .Values.rustfs.medallionSecretKey) | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.medallionAccessKey .Values.minio.medallionSecretKey) | quote }}
             {{- end }}
             {{- if $lineage }}
             - name: LINEAGE_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.lineageAccessKey .Values.rustfs.lineageSecretKey) | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.lineageAccessKey .Values.minio.lineageSecretKey) | quote }}
             {{- end }}
             {{- if $viewer }}
             - name: VIEWER_SECRET_KEY
-              value: {{ include "lance.scopedStorageSecret" (list . .Values.rustfs.viewerAccessKey .Values.rustfs.viewerSecretKey) | quote }}
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.viewerAccessKey .Values.minio.viewerSecretKey) | quote }}
             {{- end }}
           command:
             - sh
             - -c
             - |
               set -e
-              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"; do echo wait-rustfs; sleep 3; done
+              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"; do echo wait-minio; sleep 3; done
 
               {{- /*
                 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so neither policy enumerates one.
@@ -119,7 +121,7 @@ spec:
                 `POST /v1/warehouses`, with an operator-chosen name; the Ray stage/train jobs then read and
                 write `<that warehouse root>/medallion/<tier>` for every tenant trigger, and the sweep
                 enumerates the same buckets itself out of the registry (`sweep.py::_buckets_to_sweep`).
-                An allow-list built from `rustfs.bucket` + `medallion.buckets` + `catalog.multibase.dataBases`
+                An allow-list built from `minio.bucket` + `medallion.buckets` + `catalog.multibase.dataBases`
                 covers none of them: those three name the shared bucket, the cascade storage zones and the
                 fragment-spreading allowlist, and a per-warehouse bucket is by construction in none.
 
@@ -136,16 +138,19 @@ spec:
                 for.
 
                 The control bucket keeps its tight listing through `StringNotLike` on `s3:prefix` rather
-                than through its name. That operator was PROBED against this estate's RustFS
-                (1.0.0-beta.8) before being depended on: with `Deny s3:ListBucket` conditioned
-                `StringNotLike s3:prefix medallion*`, `lance-catalog/medallion/` listed while
-                `lance-catalog/` and `lance-catalog/_projects/` were denied and other buckets listed
-                freely. Enforced, not ignored — which matters, because a condition RustFS dropped would
-                turn a Deny into a hole rather than a hard failure.
+                than through its name. That operator was PROBED before being depended on — with
+                `Deny s3:ListBucket` conditioned `StringNotLike s3:prefix medallion*`,
+                `lance-catalog/medallion/` listed while `lance-catalog/` and `lance-catalog/_projects/`
+                were denied and other buckets listed freely. Enforced, not ignored — which matters,
+                because a condition the store DROPPED would turn a Deny into a hole rather than a hard
+                failure. READ THE DATE ON THAT: it was driven against RustFS 1.0.0-beta.8, the store
+                this estate ran before the LH-133 swap, and condition support is exactly the kind of
+                thing two S3 implementations differ on. Re-drive it against MinIO before relying on
+                this deny.
 
                 WHAT THE WIDENING COSTS, measured rather than reasoned about: the compute credential can
                 ENUMERATE the estate's buckets. Neither policy grants `s3:ListAllMyBuckets`, and that does
-                not withhold the list — RustFS answers an enumeration by falling back to per-bucket
+                not withhold the list — the store answers an enumeration by falling back to per-bucket
                 `ListBucket`/`GetBucketLocation`, which `arn:aws:s3:::*` grants everywhere. Driven with the
                 deployed credential: `mc ls ray/` returned 104 buckets. Bucket NAMES are disclosed and, under
                 the object-wildcard resource, object reads outside the denied control prefixes. (Spelling
@@ -160,7 +165,7 @@ spec:
                 which evaluates the rendered JSON as IAM does instead of grepping it for a bucket name — a
                 grep is what let the old shape render green.
               */}}
-              {{- $control := .Values.rustfs.bucket }}
+              {{- $control := .Values.minio.bucket }}
 
               {{- if $maint }}
               # --- MAINTENANCE: rewrite data, never the records that govern the rewrite. -------------
@@ -223,9 +228,9 @@ spec:
               # `_policies/<kind>/` and are written only by the catalog, which holds a different
               # credential; this user can reach them, and narrowing that needs the stamp to move first.
               mc admin policy create rfs rask-maintenance /tmp/maintenance.json
-              mc admin user add rfs {{ .Values.rustfs.maintenanceAccessKey }} "$MAINTENANCE_SECRET_KEY" || true
-              mc admin policy attach rfs rask-maintenance --user {{ .Values.rustfs.maintenanceAccessKey }} || true
-              echo "provisioned scoped user {{ .Values.rustfs.maintenanceAccessKey }} (rask-maintenance)"
+              mc admin user add rfs {{ .Values.minio.maintenanceAccessKey }} "$MAINTENANCE_SECRET_KEY" || true
+              mc admin policy attach rfs rask-maintenance --user {{ .Values.minio.maintenanceAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.minio.maintenanceAccessKey }} (rask-maintenance)"
               {{- end }}
 
               {{- if $ray }}
@@ -307,9 +312,9 @@ spec:
               # Lance lists with `prefix=medallion/` and `StringLike` does not match a trailing-slash
               # pattern against it, a lesson that cost a cascade the first time this policy was written.
               mc admin policy create rfs rask-ray-compute /tmp/ray-compute.json
-              mc admin user add rfs {{ .Values.rustfs.rayComputeAccessKey }} "$RAY_COMPUTE_SECRET_KEY" || true
-              mc admin policy attach rfs rask-ray-compute --user {{ .Values.rustfs.rayComputeAccessKey }} || true
-              echo "provisioned scoped user {{ .Values.rustfs.rayComputeAccessKey }} (rask-ray-compute)"
+              mc admin user add rfs {{ .Values.minio.rayComputeAccessKey }} "$RAY_COMPUTE_SECRET_KEY" || true
+              mc admin policy attach rfs rask-ray-compute --user {{ .Values.minio.rayComputeAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.minio.rayComputeAccessKey }} (rask-ray-compute)"
               {{- end }}
 
               {{- if $medallion }}
@@ -377,9 +382,9 @@ spec:
               # blocked output; one that can delete `_trash/` strands bytes behind an undrop that can no
               # longer find them.
               mc admin policy create rfs rask-medallion /tmp/medallion.json
-              mc admin user add rfs {{ .Values.rustfs.medallionAccessKey }} "$MEDALLION_SECRET_KEY" || true
-              mc admin policy attach rfs rask-medallion --user {{ .Values.rustfs.medallionAccessKey }} || true
-              echo "provisioned scoped user {{ .Values.rustfs.medallionAccessKey }} (rask-medallion)"
+              mc admin user add rfs {{ .Values.minio.medallionAccessKey }} "$MEDALLION_SECRET_KEY" || true
+              mc admin policy attach rfs rask-medallion --user {{ .Values.minio.medallionAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.minio.medallionAccessKey }} (rask-medallion)"
               {{- end }}
 
               {{- if $lineage }}
@@ -427,9 +432,9 @@ spec:
                 estate. That failure mode is why the read stays wide and the WRITE is what gets scoped.
               */}}
               mc admin policy create rfs rask-lineage /tmp/lineage.json
-              mc admin user add rfs {{ .Values.rustfs.lineageAccessKey }} "$LINEAGE_SECRET_KEY" || true
-              mc admin policy attach rfs rask-lineage --user {{ .Values.rustfs.lineageAccessKey }} || true
-              echo "provisioned scoped user {{ .Values.rustfs.lineageAccessKey }} (rask-lineage)"
+              mc admin user add rfs {{ .Values.minio.lineageAccessKey }} "$LINEAGE_SECRET_KEY" || true
+              mc admin policy attach rfs rask-lineage --user {{ .Values.minio.lineageAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.minio.lineageAccessKey }} (rask-lineage)"
               {{- end }}
 
               {{- if $viewer }}

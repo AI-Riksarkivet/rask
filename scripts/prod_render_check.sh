@@ -16,7 +16,7 @@ CHART="${CHART:-chart}"
 # One array, used by all four helm calls below: adding a fifth without them would fail the whole script
 # at that line with no message (set -e + command substitution), which is how this reached CI red.
 # Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
-# a legitimate prod render — the same reason the appToken/age/rustfs dummies exist.
+# a legitimate prod render — the same reason the appToken/age/minio dummies exist.
 #
 # image.repository joined this array on 2026-08-22. It became `required` in 3c909e0a (2026-08-04,
 # "registry required") and NOTHING here supplied it, so all four renders died on the guard and the whole
@@ -24,7 +24,7 @@ CHART="${CHART:-chart}"
 # step 6 of .dagger/charts.go's chain and step 2 had been failing on the SAME guard since the same
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
 # does NOT pin a registry (the deployer supplies theirs), so the check must, exactly as it does for the
-# appToken and the age/rustfs credentials.
+# appToken and the age/minio credentials.
 COMMON=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
@@ -35,7 +35,7 @@ trap 'rm -f "$OUT"' EXIT
 helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
+  --set age.password=ci-dummy-pw --set minio.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set ingress.host=lance.example.com "${COMMON[@]}" > "$OUT"
 
@@ -51,8 +51,8 @@ grep -q -- "-openbao" "$OUT" || fail "prod NetworkPolicy set missing the openbao
 # two explicit rules must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
 # sidecars live in nearly every app pod) and 8222 (monitor) from the web-lakehouse zone pods. The windowed
 # greps pin the from-selector + port to THEIR rule, not a stray match elsewhere.
-grep -qF "values: [openbao, age, rustfs, nats]" "$OUT" \
-  || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/rustfs)"
+grep -qF "values: [openbao, age, minio, nats]" "$OUT" \
+  || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/minio)"
 grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
 grep -A20 "name: rask-nats-clients" "$OUT" | grep -q "port: 4222" \
   || fail "the nats-clients rule must target the 4222 client port"
@@ -101,11 +101,11 @@ done
 spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
 [ "$spread" -ge 4 ] || fail "prod must spread the 4 multi-replica services across nodes (>=4), got $spread"
 
-# 6. Resource tiers: the memory-heavy workloads (catalog Arrow buffer, age dual-store, rustfs data plane)
+# 6. Resource tiers: the memory-heavy workloads (catalog Arrow buffer, age dual-store, minio data plane)
 # get a 1Gi limit above the shared 512Mi default. The default render tiers NOTHING to 1Gi (verified), so a
 # non-zero count here proves the per-workload tiers apply on the prod overlay only.
 tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
-[ "$tiers" -ge 3 ] || fail "prod must tier the memory-heavy workloads (catalog/age/rustfs) to 1Gi, got $tiers"
+[ "$tiers" -ge 3 ] || fail "prod must tier the memory-heavy workloads (catalog/age/minio) to 1Gi, got $tiers"
 
 # 7. Alerting engine (P3b): vmalert + Alertmanager deployed, vmalert wired to GreptimeDB's PromQL endpoint,
 # and the PROVEN rules actually mounted (a known alertname must appear — proves .Files.Get loaded rules.yml,
@@ -164,47 +164,47 @@ peak=$((cap * body + headroom))
   || fail "catalog sizing incoherent: $cap × $body buffered bodies + 512Mi headroom = $peak bytes > the $cat_mem limit"
 
 # 10. RustFS externalize is ATOMIC (operator-handoff audit): the greptimedb-standalone object-store endpoint
-# is a static subchart value that can't follow the rustfs.externalEndpoint helper, so externalizing RustFS
+# is a static subchart value that can't follow the minio.externalEndpoint helper, so externalizing the object store
 # without ALSO repointing GreptimeDB leaves its object backend at the deleted in-cluster service. The
-# values-prod EXTERNALIZE block documents both as a pair; prove that when BOTH are set no in-cluster rustfs
-# DNS survives anywhere (app env OR the greptime config), and that setting ONLY the rustfs half leaks.
+# values-prod EXTERNALIZE block documents both as a pair; prove that when BOTH are set no in-cluster minio
+# DNS survives anywhere (app env OR the greptime config), and that setting ONLY the minio half leaks.
 EXT_S3=https://s3.ext.example.com
 atomic=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
+  --set age.password=ci-dummy-pw --set minio.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" \
+  --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" \
   --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
-grep -q "rask-rustfs-io" <<<"$atomic" \
-  && fail "externalizing RustFS + the greptime endpoint companion still leaks in-cluster rustfs DNS"
-# Negative: rustfs externalized but the greptime companion OMITTED must still show the leak (proves the pairing
+grep -q "rask-minio:9000" <<<"$atomic" \
+  && fail "externalizing the object store + the greptime endpoint companion still leaks in-cluster store DNS"
+# Negative: minio externalized but the greptime companion OMITTED must still show the leak (proves the pairing
 # is load-bearing, i.e. the guard above isn't vacuous).
 leak=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
+  --set age.password=ci-dummy-pw --set minio.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
-grep -q "rask-rustfs-io" <<<"$leak" \
-  || fail "the rustfs-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
+  --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
+grep -q "rask-minio:9000" <<<"$leak" \
+  || fail "the store-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
 
 # 11. External Secrets Operator path renders (operator-handoff audit): externalSecrets.enabled=true must
 # render the SecretStore + ExternalSecret CRs, SKIP the static infra-credentials + observability-s3 Secrets,
-# and SATISFY the fail-closed prod-secret guard WITHOUT age.password/rustfs.secretKey (ESO supplies them).
+# and SATISFY the fail-closed prod-secret guard WITHOUT age.password/minio.secretKey (ESO supplies them).
 eso=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set externalSecrets.enabled=true "${COMMON[@]}" 2>/dev/null) \
-  || fail "prod render with externalSecrets.enabled=true FAILED (age.password/rustfs.secretKey should not be required)"
+  || fail "prod render with externalSecrets.enabled=true FAILED (age.password/minio.secretKey should not be required)"
 grep -q "kind: SecretStore" <<<"$eso" || fail "ESO path must render a SecretStore"
 grep -q "kind: ExternalSecret" <<<"$eso" || fail "ESO path must render the ExternalSecret CRs"
 grep -A2 "name: rask-infra-credentials" <<<"$eso" | grep -q "stringData:" \
   && fail "ESO path must SKIP the static infra-credentials Secret (external-secrets owns it)"
 
 # 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, audit 2026-07-24: the
-# unlabeled rustfs-mkbucket hook matched no rustfs-ingress client and every prod install wedged before a
+# unlabeled minio-mkbucket hook matched no minio-ingress client and every prod install wedged before a
 # bucket existed). Pod-template label indents only — 8 spaces (Job) / 12 (CronJob) — so the heredoc'd
 # VolumeSnapshot labels inside a command string can't satisfy the check. Then pin the load-bearing pair:
-# the mkbucket pod label AND its admission in the rustfs ingress client list.
+# the mkbucket pod label AND its admission in the minio ingress client list.
 # post-delete hooks are exempt: the landmine class is INSTALL-time wedging (an unlabeled hook pod
 # that no netpol ingress rule admits), and a post-delete hook cannot wedge an install. Today's only
 # such job is the vendored nfd 0.17.3 prune (node-API-only, needs no ingress admission), whose
@@ -219,7 +219,7 @@ jobs_missing=$(awk '
 ' "$OUT")
 [ -z "$jobs_missing" ] \
   || fail "Job/CronJob pod templates missing the component label (invisible to component-scoped NetworkPolicies): $(tr '\n' ' ' <<<"$jobs_missing")"
-grep -q "app.kubernetes.io/component: rustfs-mkbucket" "$OUT" || fail "the mkbucket hook pod must carry its component label"
-grep -q -- "- rustfs-mkbucket" "$OUT" || fail "the rustfs ingress client list must admit the mkbucket hook component"
+grep -q "app.kubernetes.io/component: minio-mkbucket" "$OUT" || fail "the mkbucket hook pod must carry its component label"
+grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must admit the mkbucket hook component"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, alerting on, no-bespoke-scraper, write-cap=$cap fits $cat_mem, rustfs-externalize atomic, ESO path renders, hook pods labeled"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, alerting on, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled"

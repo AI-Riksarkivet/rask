@@ -700,7 +700,7 @@ _UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
     # convenience. The flag names what it costs (`INSECURE`, the same convention as
     # `LANCE_INSECURE_ALLOW_UNAUTHENTICATED`): ON, a refused or unreachable credential vend may sign
     # the run's bytes with the pod's AMBIENT credential — which on this estate is the RustFS ROOT pair
-    # (measured inside the running pod 2026-09-08: `AWS_ACCESS_KEY_ID=rustfsadmin`). Rendering it from
+    # (measured inside the running pod 2026-09-08: `AWS_ACCESS_KEY_ID=minioadmin`). Rendering it from
     # the chart would ship the fallback the owner's standing rule forbids, so the branch that never
     # fires in this deployment is the branch working.
     "RASK_INGEST_INSECURE_ALLOW_AMBIENT_STORAGE": "on, a failed vend signs with the storage ROOT; the absent state is the fail-closed one",
@@ -1128,13 +1128,13 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
 
     The estate mints five scoped RustFS users and publishes each one's secret into OpenBao for ESO to
     sync. Four derive it with `lance.scopedStorageSecret`. `ray-compute` alone read
-    `rayComputeSecretKey | default rustfs.secretKey` — and `rayComputeSecretKey` ships empty, so the
+    `rayComputeSecretKey | default minio.secretKey` — and `rayComputeSecretKey` ships empty, so the
     published value WAS the RustFS root credential.
 
     MEASURED on the live estate 2026-09-11, by hash so nothing was disclosed: `ray-compute-secret-key`,
-    `ray-compute-access-key` and `rustfs-secret-key` in `rask-infra-credentials` were byte-identical,
+    `ray-compute-access-key` and `minio-secret-key` in `rask-infra-credentials` were byte-identical,
     all three 11 bytes. The chart CREATES `rask-ray-compute` with the derived secret
-    (`rustfs-scoped-users.yaml`) and PUBLISHED the root one under its name, so the pair can never
+    (`minio-scoped-users.yaml`) and PUBLISHED the root one under its name, so the pair can never
     match: a consumer either signs as root — defeating the scoping entirely — or fails
     `SignatureDoesNotMatch`. The Ray head's own manifest asserts the opposite in a comment, which is
     how it survived.
@@ -1144,9 +1144,9 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
     every identity, so the next one added is covered without remembering this.
     """
     root = "SENTINEL-ROOT-SECRET-DO-NOT-PUBLISH"
-    rendered = _helm_template(f"rustfs.secretKey={root}", "auth.bootstrapAdmin=user:gate-probe")
+    rendered = _helm_template(f"minio.secretKey={root}", "auth.bootstrapAdmin=user:gate-probe")
 
-    offenders = [line.strip() for line in rendered.splitlines() if root in line and re.search(r"[a-z-]*(?<!rustfs-)secret[-_]key\s*[=:]", line)]
+    offenders = [line.strip() for line in rendered.splitlines() if root in line and re.search(r"[a-z-]*(?<!minio-)secret[-_]key\s*[=:]", line)]
     assert offenders == [], "a SCOPED identity is published with the ROOT storage secret:\n  " + "\n  ".join(offenders)
 
 
@@ -1934,7 +1934,7 @@ def _job_by_component(rendered: str, component: str) -> str | None:
 #: schema migration (the server crash-loops against an unmigrated datastore), the OpenBao seed (the
 #: medallion stage runners resolve S3 creds through the Dapr secret store at boot), the JetStream provisioner
 #: (a daprd sidecar subscribes at startup) and the bucket-init (the lakehouse apps' object store).
-_BOOTSTRAP_JOBS = ["openfga-migrate", "openbao-seed", "nats-stream", "rustfs-mkbucket"]
+_BOOTSTRAP_JOBS = ["openfga-migrate", "openbao-seed", "nats-stream", "minio-mkbucket"]
 
 #: The inverse set — Jobs that wait for the APPS and that nothing waits on. A post-install hook is
 #: exactly the right shape for these, and converting them would be the same mistake mirrored.
@@ -2006,23 +2006,23 @@ def test_the_bucket_init_verifies_the_buckets_the_operator_owns() -> None:
     import yaml
 
     values = yaml.safe_load((CHART / "values.yaml").read_text())
-    expected = values["rustfs"]["buckets"]
-    assert expected, "rustfs.buckets is empty — this guard would pass vacuously"
+    expected = values["minio"]["buckets"]
+    assert expected, "minio.buckets is empty — this guard would pass vacuously"
 
     rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
-    job = _job_by_component(rendered, "rustfs-mkbucket")
+    job = _job_by_component(rendered, "minio-mkbucket")
     assert job is not None, "the bucket-init Job does not render"
 
     missing = [b for b in expected if b not in job]
     assert not missing, f"the bucket-init Job never mentions these operator-owned buckets, so it cannot notice they are absent: {missing}"
 
     assert "exit 1" in job, "the bucket-init Job must FAIL when the operator-owned buckets are absent, not log and pass"
-    assert "kubectl describe tenant" in job, "the failure message must carry the command that shows WHY the Tenant did not reconcile"
-    assert "rustfs.storageClass" in job, "the failure message must name the usual cause (a StorageClass the cluster does not have)"
+    assert "kubectl describe statefulset" in job, "the failure message must carry the command that shows WHY the store did not come up"
+    assert "minio.storageClass" in job, "the failure message must name the usual cause (a StorageClass the cluster does not have)"
     # The create/verify split: the operator's buckets must not be silently created behind its back.
     for bucket in expected:
-        assert f"mc mb --ignore-existing rfs/{bucket}\n" not in job or bucket == values["rustfs"]["bucket"], (
-            f"{bucket} is operator-owned (rustfs.buckets) — creating it here would mask a Tenant that never reconciled"
+        assert f"mc mb --ignore-existing rfs/{bucket}\n" not in job or bucket == values["minio"]["bucket"], (
+            f"{bucket} is operator-owned (minio.buckets) — creating it here would mask a Tenant that never reconciled"
         )
 
 
@@ -2200,7 +2200,7 @@ _REAL_REGISTRY = (
     "image.repository=reg.example",
     "openbao.devMode=false",
     "age.password=a-real-secret-value-32-chars-long",
-    "rustfs.secretKey=a-real-secret-value-32-chars-long",
+    "minio.secretKey=a-real-secret-value-32-chars-long",
     "dapr.appToken=a-real-secret-value-32-chars-long",
 )
 
@@ -2404,43 +2404,43 @@ def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
     )
 
 
-def test_the_rustfs_tenant_carries_NO_plaintext_credential() -> None:
-    """The Tenant CR's OIDC client secret must be a `secretKeyRef`, never a `value:`.
+def test_the_object_store_carries_NO_plaintext_credential() -> None:
+    """The object store's OIDC client secret must be a `secretKeyRef`, never a `value:`.
 
     THE REGRESSION THIS GATES. `RUSTFS_IDENTITY_OPENID_CLIENT_SECRET` shipped as
-    `value: {{ .Values.dex.clientSecret }}` — readable in `kubectl get tenant -o yaml`,
-    `kubectl describe` and `helm get manifest` — while every sibling credential in the estate was
-    already behind a guard. It sat outside that guard because a Tenant is consumed by the RustFS
-    operator, which has no daprd sidecar and so cannot read the Dapr secret store the fleet services
-    use. That is the case `infra-credentials.yaml` exists for, and this asserts the Tenant actually
-    uses it.
+    a plaintext `value:` — readable in `kubectl get statefulset -o yaml`, `kubectl describe` and
+    `helm get manifest` — while every sibling credential in the estate was already behind a guard. It
+    sat outside that guard because the object store has no daprd sidecar and so cannot read the Dapr
+    secret store the fleet services use. That is the case `infra-credentials.yaml` exists for, and
+    this asserts the store actually uses it.
 
-    Latent-by-default is not a defence: `rustfs.oidc.enabled` is off in the shipped values, so this
+    Latent-by-default is not a defence: `minio.oidc.enabled` is off in the shipped values, so this
     renders only on estates running STS credential vending — which is precisely where a leaked client
     secret is worth the most.
     """
-    rendered = _helm_template("rustfs.enabled=true", "rustfs.oidc.enabled=true")
+    rendered = _helm_template("minio.enabled=true", "minio.oidc.enabled=true")
     docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
 
-    tenants = [d for d in docs if d.get("kind") == "Tenant"]
-    assert tenants, "no Tenant rendered — this gate would pass vacuously"
+    stores = [d for d in docs if d.get("kind") == "StatefulSet" and any(c["name"] == "minio" for c in d["spec"]["template"]["spec"]["containers"])]
+    assert stores, "the object store did not render — this gate would pass vacuously"
 
-    for tenant in tenants:
-        for env in (tenant.get("spec") or {}).get("env") or []:
-            if not str(env.get("name", "")).endswith("_CLIENT_SECRET"):
-                continue
-            assert "value" not in env, f"{env['name']} renders a PLAINTEXT value on the Tenant CR: {env!r}"
-            ref = ((env.get("valueFrom") or {}).get("secretKeyRef")) or {}
-            assert ref.get("name") and ref.get("key"), f"{env['name']} has neither a value nor a usable secretKeyRef: {env!r}"
+    for store in stores:
+        for container in store["spec"]["template"]["spec"]["containers"]:
+            for env in container.get("env") or []:
+                if not str(env.get("name", "")).endswith("_CLIENT_SECRET"):
+                    continue
+                assert "value" not in env, f"{env['name']} renders a PLAINTEXT value on the store: {env!r}"
+                ref = ((env.get("valueFrom") or {}).get("secretKeyRef")) or {}
+                assert ref.get("name") and ref.get("key"), f"{env['name']} has neither a value nor a usable secretKeyRef: {env!r}"
 
-            # The reference must RESOLVE — a secretKeyRef at an absent key is a pod that never starts,
-            # and it would only surface on the enabled path, which is the narrowest possible place to
-            # discover it.
-            secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
-            target = secrets.get(ref["name"])
-            assert target is not None, f"{env['name']} references Secret {ref['name']!r}, which the chart does not render"
-            keys = set(target.get("stringData") or {}) | set(target.get("data") or {})
-            assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"
+                # The reference must RESOLVE — a secretKeyRef at an absent key is a pod that never
+                # starts, and it would only surface on the enabled path, which is the narrowest
+                # possible place to discover it.
+                secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+                target = secrets.get(ref["name"])
+                assert target is not None, f"{env['name']} references Secret {ref['name']!r}, which the chart does not render"
+                keys = set(target.get("stringData") or {}) | set(target.get("data") or {})
+                assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -6239,7 +6239,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:    silently pre-empt it. It is listed HERE, visibly, rather than being missing from a
 #:    hand-written first-party tuple where nobody could tell the difference.
 _UNCOVERED_DEPLOYMENTS = (
-    "dapr", "nats", "openfga", "dex", "cloudnative-pg", "openbao", "rustfs", "kueue",
+    "dapr", "nats", "openfga", "dex", "cloudnative-pg", "openbao", "minio", "kueue",
     "kuberay", "greptimedb", "perses", "vmalert", "alertmanager",
     "otel-collector",
 )  # fmt: skip
@@ -6491,7 +6491,7 @@ def test_the_media_head_can_register_the_bronze_it_lands() -> None:
     connected to, so `MEDALLION_MEDIA_BRONZE_URI` must resolve under `MEDALLION_CATALOG_ROOT` or the
     media head fails closed on every call. The two are rendered from DIFFERENT expressions —
     `lance.stageBucket` honours the `medallion.buckets` zoning map for the media namespace, while the
-    catalog root is `rustfs.bucket` flat — so zoning `bronze-media` into its own bucket would make the
+    catalog root is `minio.bucket` flat — so zoning `bronze-media` into its own bucket would make the
     ingest door 503 with nothing in the chart looking wrong. `relative_location` is the exact seam the
     producer uses, so this asserts registerability rather than a string resemblance.
     """
