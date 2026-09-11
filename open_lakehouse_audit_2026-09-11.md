@@ -262,6 +262,19 @@ truncated to 40 hex — and specifically must NOT equal the pre-fix value, which
 different token; that is what `test_the_dedicated_service_token_actually_contains_a_secret.py` asserts
 offline and what the live Secret should now satisfy.
 
-**Not verified here:** whether the installed ESO version honours a force-sync annotation, so "force the
-sync" may reduce to deleting the synced Secret and letting the operator recreate it. Worth checking
-before relying on a prompt rotation rather than the hour.
+**The operator, measured 2026-09-11.** ESO is installed and healthy — `external-secrets` v2.10.0 in the
+`external-secrets` namespace, three pods running — and the `ExternalSecret` this depends on is real:
+
+    NAME                     STORE        REFRESH INTERVAL   STATUS         READY   LAST SYNC
+    rask-infra-credentials   rask-vault   1h                 SecretSynced   True    54m
+
+So the lag is not theoretical: at that moment the Secret was 54 minutes into its hour. A seed landing
+just after a sync waits nearly the full interval.
+
+**Two ways to skip the wait, and which is which.** `force-sync` is ESO's standard annotation for this
+(`kubectl annotate externalsecret rask-infra-credentials force-sync=$(date +%s) --overwrite`) — standard
+for the operator, NOT exercised here, since triggering it speculatively mutates shared state. The
+fallback needs no annotation support at all: the target uses `creationPolicy: Owner`, so deleting the
+synced Secret has the operator recreate it from the store. Confirm afterwards that
+`rask-infra-credentials` actually changed before restarting anything — that check is the whole point of
+the sequence above.
