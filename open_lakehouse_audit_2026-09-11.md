@@ -310,3 +310,36 @@ is a real finding rather than a repeat of today's:
 **One thing NOT verified:** whether the deployed Ray head image carries the `RASK_DEST_TABLE` stamp fix.
 The Ray head is not chart-owned, so its image moves independently and the tier-stamp symptom may persist
 after a chart deploy. Check it separately rather than reading a stale stamp as a new defect.
+
+
+## The warning channel is 91% two designed refusals, measured 2026-09-11
+
+Counted over one hour of `opentelemetry_logs` at WARN or worse, across the whole estate:
+
+    maintenance_refused_protected_base   10,461   50.4%
+    orphan_scan_skipped                   8,398   40.5%
+    ------------------------------------------------------
+    combined                             18,859   90.9%
+    everything else                       1,881    9.1%
+
+**Both are correct and both are permanent.** A dataset another resolves its files through cannot be
+compacted without breaking the dependent; a dataset carrying manifest feature flag 16 (`base_paths`)
+cannot be safely orphan-scanned. Branches and shallow clones set that flag by construction, so neither
+condition ever clears — the same datasets are refused on every tick, forever.
+
+**What that costs is the channel, not the refusals.** Nine warnings in ten are structural, so a
+genuinely new one arrives at roughly 1-in-11 by volume. This estate already argues against exactly that
+elsewhere — the truncation warning exists so "a smaller finding next tick does not read as progress
+nobody made", and `MAINTENANCE_OPERATIONS` exists because "a finding an operator learns to skim past is
+the failure mode this module already guards against". Those arguments apply hardest to the channel that
+carries them.
+
+**Both numbers are already counted.** `compaction_datasets_refused_total` covers the `#64` flag refusals
+(`base_paths` / shallow clone) — the same population, as a series, with no per-tick repetition. So the
+WARNING lines add volume rather than information; what they add uniquely is the per-dataset REASON
+naming the blocking dependent, which is the half worth keeping.
+
+**The proportionate change**, not made here because a log level is an operator-experience call rather
+than a correctness one: keep the per-dataset detail at DEBUG and emit one WARNING per sweep carrying the
+count. That is the shape `log_sweep` already uses for the reconcile classes, and it would return the
+warning channel to reporting things that changed.
