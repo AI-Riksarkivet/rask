@@ -235,6 +235,40 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   the table" — but it should be a deliberate scope statement rather than an accident, and reporting
   branch coverage as EXCLUDED (the way the sweep reports its other exclusions) would make it visible.
 
+**LH-133 · Swap the object store from RustFS to MinIO, so a non-root identity can vend**
+`chart, storage, catalog` · **HIGH** · owner decision 2026-09-11 · unblocks LH-051
+
+- *WHY, in one measurement:* RustFS gates `AssumeRole` to root and the right cannot be granted — a
+  policy-attached scoped user gets HTTP 403 while root gets a session token, and `mc admin policy
+  create` refuses an `sts:AssumeRole` statement outright (*"invalid resource, type: 'unknown'"*). The
+  identical probe on MinIO accepts the scoped user AND enforces the narrowing (cross-tenant GET and
+  read-tier PUT both `AccessDenied`). Full evidence on LH-051. This is NOT the ARN-roles feature on
+  RustFS's roadmap — letting a non-root user assume at all is a different capability, and it is the
+  one the estate needs.
+- *THE DATA PLANE IS ALREADY PORTABLE, which is what makes this a chart migration rather than a
+  rewrite.* Measured: 40 Python files mention `rustfs` and essentially all of it is PROSE — comments,
+  docstrings and one operator-facing error message — plus a single config DEFAULT
+  (`media/config.py::s3_secret_field = "rustfs-secret-key"`). `storage/client.py` is generic by
+  construction and says so in its first line. The endpoint is already `RASK_S3_ENDPOINT_URL` with
+  alias fallbacks, so no service needs a code change to point elsewhere.
+- *THE SURFACE IS THE CHART:* 25 templates name RustFS and `values.yaml` carries 78 such lines. The
+  load-bearing ones are the operator + `rustfs-tenant.yaml` (a Tenant CR with a `volumeClaimTemplate`
+  whose keep-PVC durability posture the P4 ruling pins — the MinIO equivalent must preserve it),
+  `rustfs-scoped-users.yaml` (which ALREADY drives `minio/mc` and whose `mc admin policy create` /
+  `user add` / `policy attach` calls port unchanged), the bucket bootstrap job, `external-secrets.yaml`
+  and `_helpers.tpl`.
+- *DO NOT FOLD LH-051 INTO THIS ROW.* The swap is the prerequisite; giving the catalog a scoped user
+  and a warehouse-covering policy is the fix, and keeping them separate is what lets the migration be
+  verified on its own (every existing suite still green against the new store) before the credential
+  changes underneath it.
+- *Two things to settle while doing it, neither a blocker:* MinIO's community edition is AGPL-3.0 and
+  its features have been moving to the commercial AIStor — it runs as a separate server so it does not
+  reach rask's own Apache-2.0 licensing, but the direction is worth knowing. And Ceph RGW is the other
+  STS-complete option the vending module already names, at considerably more operational weight.
+- *Closes when:* the chart deploys MinIO in place of RustFS, every bucket and scoped user is
+  provisioned by the ported hooks, the credential-isolation e2e passes against it, and the estate is
+  observed serving the lakehouse from it end to end.
+
 **LH-132 · The cascade's delta lane and its full lane DISAGREE about a deleted row**
 `medallion` · med · filed 2026-09-11
 
