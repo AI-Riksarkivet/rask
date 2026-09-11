@@ -159,7 +159,7 @@ def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any)
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     output = lineage["data"]["outputs"][0]
     assert output["name"] == "silver$features"
-    assert output["facets"]["version"]["datasetVersion"] == str(lance.dataset(silver).version)
+    assert output["facets"]["version"]["datasetVersion"] == str(_newest_data_version(silver))
     # …and the standard outputStatistics facet carries the runtime-measured rows + on-disk bytes it wrote.
     stats = output["facets"]["outputStatistics"]
     assert stats["rowCount"] == 4
@@ -483,3 +483,26 @@ def test_quality_off_emits_no_assertions_facet(tmp_path: Any) -> None:
     output = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)["data"]["outputs"][0]
     assert "outputStatistics" in output["facets"]
     assert "dataQualityAssertions" not in output["facets"]
+
+
+def _newest_data_version(uri: str) -> int:
+    """The newest version at ``uri`` whose transaction CHANGED ROWS.
+
+    A stage rebuilds the lineage JSON index after its write, and that commits a `CreateIndex` version of
+    its own. The announced version must be the data commit beneath it — measured 2026-09-11, all 253
+    stage-authored edges in the estate named the index build instead, so four datasets had no producer
+    edge on any retained data version. Asserting against `ds.version` pinned that defect, because
+    `ds.version` is "whatever the dataset is at now", not "where this run's data landed".
+    """
+    import lance
+
+    ds = lance.dataset(uri)
+    for entry in sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True):
+        number = int(entry["version"])
+        try:
+            operation = type(getattr(ds.read_transaction(number), "operation", None)).__name__
+        except Exception:  # noqa: BLE001 — an unreadable transaction is not evidence of maintenance
+            return number
+        if operation not in {"Rewrite", "CreateIndex", "UpdateConfig"}:
+            return number
+    raise AssertionError(f"{uri} has no data-operation version")

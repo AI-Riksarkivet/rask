@@ -808,12 +808,17 @@ def test_dropped_at_derives_from_the_latest_successful_run(monkeypatch: pytest.M
 def _capture_with_graph_version(monkeypatch: pytest.MonkeyPatch, event: dict[str, Any], graph_version: str | None) -> list[tuple[str, dict]]:
     """Ingest one event; the fake answers the latest-WROTE-version probe with ``graph_version``."""
     import lineage.services.repository as repo_mod
+    from lineage.services import cypher as cy
 
     calls: list[tuple[str, dict]] = []
 
     async def _capture(_conn: object, _graph: str, query: str, params: dict) -> list[list[object]]:
         calls.append((query, params))
-        if "ORDER BY r.event_time DESC" in query and "w.version" in query:
+        # Matched against the STATEMENT ITSELF, never its text. Keyed on `ORDER BY r.event_time DESC`
+        # this double silently stopped matching when the tip query became `max(toInteger(w.version))`,
+        # so the probe answered "nothing recorded yet" and a stale event pruned the live inventory —
+        # a double keyed on a spelling proves whatever the spelling happens to be.
+        if query == cy.LATEST_WRITE_VERSION:
             return [[graph_version]] if graph_version is not None else []
         return []
 

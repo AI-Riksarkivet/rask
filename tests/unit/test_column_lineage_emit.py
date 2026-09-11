@@ -347,4 +347,27 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     }
     # …and it is the REAL written version being described, not a fabricated one.
     facets = lineage["data"]["outputs"][0]["facets"]
-    assert facets["version"]["datasetVersion"] == str(lance.dataset(silver).version)
+    assert facets["version"]["datasetVersion"] == str(_newest_data_version(silver))
+
+
+def _newest_data_version(uri: str) -> int:
+    """The newest version at ``uri`` whose transaction CHANGED ROWS.
+
+    A stage rebuilds the lineage JSON index after its write, and that commits a `CreateIndex` version of
+    its own. The announced version must be the data commit beneath it — measured 2026-09-11, all 253
+    stage-authored edges in the estate named the index build instead, so four datasets had no producer
+    edge on any retained data version. Asserting against `ds.version` pinned that defect, because
+    `ds.version` is "whatever the dataset is at now", not "where this run's data landed".
+    """
+    import lance
+
+    ds = lance.dataset(uri)
+    for entry in sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True):
+        number = int(entry["version"])
+        try:
+            operation = type(getattr(ds.read_transaction(number), "operation", None)).__name__
+        except Exception:  # noqa: BLE001 — an unreadable transaction is not evidence of maintenance
+            return number
+        if operation not in {"Rewrite", "CreateIndex", "UpdateConfig"}:
+            return number
+    raise AssertionError(f"{uri} has no data-operation version")

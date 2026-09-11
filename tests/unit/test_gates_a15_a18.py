@@ -304,7 +304,7 @@ def test_a18_a_PASSING_batch_publishes_the_version_it_actually_COMMITTED(tmp_pat
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))
     assert result == {"status": "SUCCESS"}
 
-    committed = lance.dataset(str(tmp_path / "silver")).version
+    committed = _newest_data_version(str(tmp_path / "silver"))
     events = [p for p in dapr.published if p["topic"] == settings.lineage_topic]
     written = [e for e in events if e["data"]["outputs"] and e["data"]["outputs"][0]["name"] == settings.to_dataset]
 
@@ -353,3 +353,26 @@ def test_a18_two_DIFFERENT_triggers_each_produce_their_own_run(tmp_path: Path, t
 
     run_ids = {p["data"]["run"]["runId"] for p in dapr.published if p["topic"] == settings.lineage_topic}
     assert len(run_ids) == 1
+
+
+def _newest_data_version(uri: str) -> int:
+    """The newest version at ``uri`` whose transaction CHANGED ROWS.
+
+    A stage rebuilds the lineage JSON index after its write, and that commits a `CreateIndex` version of
+    its own. The announced version must be the data commit beneath it — measured 2026-09-11, all 253
+    stage-authored edges in the estate named the index build instead, so four datasets had no producer
+    edge on any retained data version. Asserting against `ds.version` pinned that defect, because
+    `ds.version` is "whatever the dataset is at now", not "where this run's data landed".
+    """
+    import lance
+
+    ds = lance.dataset(uri)
+    for entry in sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True):
+        number = int(entry["version"])
+        try:
+            operation = type(getattr(ds.read_transaction(number), "operation", None)).__name__
+        except Exception:  # noqa: BLE001 — an unreadable transaction is not evidence of maintenance
+            return number
+        if operation not in {"Rewrite", "CreateIndex", "UpdateConfig"}:
+            return number
+    raise AssertionError(f"{uri} has no data-operation version")

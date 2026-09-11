@@ -99,9 +99,12 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     assert by_output["bronze$events"].inputs == []  # the dummy seed has no external source
     assert by_output["silver$features"].inputs[0].name == "bronze$events"
     assert by_output["gold$catalog"].inputs[0].name == "silver$features"
-    # Every successful hop carries the real Lance version on its output (the WROTE edge the graph records).
+    # Every successful hop carries the version its DATA landed at on its output (the WROTE edge the graph
+    # records). Not `ds.version`: a stage rebuilds the lineage JSON index after writing, committing a
+    # `CreateIndex` of its own, and asserting against the current version pinned the edge to that index
+    # build — measured 2026-09-11 as 253 of 253 stage-authored edges estate-wide.
     for name, ns in (("bronze$events", "bronze"), ("silver$features", "silver"), ("gold$catalog", "gold")):
-        assert by_output[name].output_version(name) == str(lance.dataset(uris[ns]).version)
+        assert by_output[name].output_version(name) == str(_newest_data_version(uris[ns]))
 
     # T6: every tier DECLARES its canonical name on the dataset itself, equal to the name the event
     # emitted. The URI is composed from the NAMESPACE alone (`medallion/bronze` is both `bronze$events`
@@ -569,3 +572,19 @@ def test_gold_stage_runner_target_selection(tmp_path: Any, flag_on: bool, gold_p
     event = next(p["data"] for p in dapr.published if p["topic"] == settings.lineage_topic)
     assert event["outputs"][0]["namespace"] == "acme-gold"
     assert event["outputs"][0]["name"] == "acme-gold$catalog"
+
+
+def _newest_data_version(uri: str) -> int:
+    """The newest version at ``uri`` whose transaction CHANGED ROWS — never the index build above it."""
+    import lance
+
+    ds = lance.dataset(uri)
+    for entry in sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True):
+        number = int(entry["version"])
+        try:
+            operation = type(getattr(ds.read_transaction(number), "operation", None)).__name__
+        except Exception:  # noqa: BLE001 — an unreadable transaction is not evidence of maintenance
+            return number
+        if operation not in {"Rewrite", "CreateIndex", "UpdateConfig"}:
+            return number
+    raise AssertionError(f"{uri} has no data-operation version")
