@@ -684,6 +684,31 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   stage registered its output at its own composed write path (`to_uri = {root}/medallion/{to_namespace}`,
   `transform.py:601`, the write half the read-side I2 fix deliberately left alone), or the table was
   re-registered later. That decides whether the fix is at registration or at publication.
+- **(b) ROOT-CAUSED 2026-09-11 FROM THE SAME SOURCE, and it is TWO causes rather than one — the row's
+  framing is wrong.** `compaction_plane_unavailable_falling_back` carries `uri`, `table_id` and
+  `reason`; sampling 40 from the live estate:
+
+      26/40  403 — the catalog REFUSES the plan: the id resolves, `service-maintenance` lacks the rung
+      14/40  404 — the id names no table
+
+  So the dominant reason the distributed plane is unused is AUTHORIZATION, not the identifier crossing
+  this row and the earlier narrowing both blamed. 543 `maintenance_rewrite_denied` in the same window
+  are the refusals that stop a dataset outright.
+- *The 404 half is an identifier defect, and a provenance one underneath it.* The failing ids are
+  `lakehouse$bronze$events` — THREE segments, which the catalog parses as namespace `lakehouse` then
+  `bronze` then table `events`, naming nothing — and `lakehouse-bronze$events`. Worse, ONE id is sent
+  for three different datasets:
+
+      table_id lakehouse$bronze$events  <-  s3://lance-catalog/medallion/lakehouse$bronze
+      table_id lakehouse$bronze$events  <-  s3://lance-catalog/medallion/lakehouse$silver
+      table_id lakehouse$bronze$events  <-  s3://lance-catalog/medallion/lakehouse$gold
+
+  The id is `declared_table_id(ds)`, the `lineage.dataset_id` stamped in schema metadata — so silver and
+  gold each claim to BE the bronze dataset. That is a condition-1 defect in its own right, independent
+  of compaction: every lineage edge those tiers carry attaches to the wrong Dataset node.
+- *Still unmeasured on this half:* why `lakehouse-bronze$events` 404s as well, since it is the correct
+  two-segment shape — warehouse scoping is the obvious candidate and the catalog's table list would
+  settle it.
 - *Closes when:* Drive one `bind86` silver→gold hop (owner-authorised 2026-09-11), print `supplied` vs
   `read_root` at the refusal, and fix whichever of the three the values name; reproduce (b) by calling
   `/compaction_plan` with a medallion tier id and fixing whichever of the id resolution or the route is
