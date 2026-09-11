@@ -881,6 +881,23 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 - *Closes when:* Provision `vending.mode=web_identity` (requires `rustfs.oidc.enabled` + `auth.enabled`) plus a SECOND tenant with its own admin subject in `scripts/e2e_stack.sh`, add the widened-policy sabotage lever to the harness chart values, then run the credential attack e2e unskipped in CI.
 
 **LH-055 · The FGA model has no `branch`/`column`/`base`/`estate` type, `can_set_protection` collapses onto `can_drop`, and `project` has no security_admin/data_admin/role_creator split or machine identity**
+
+- *RE-MEASURED 2026-09-11 — THE TYPE GAPS ARE REAL; THE PROTECTION CLAUSE IS A DOCUMENTED DECISION.*
+  Read off `model.json`: no `branch`, `column`, `base` or `estate` type, no `can_set_protection`
+  relation anywhere, and `project` carries only `admin` / `member` / `team` / the `can_*` derived from
+  them. Every type gap the row names is present, and this is the first row today that measured exactly
+  as written.
+- *BUT `can_set_protection` "collapsing onto `can_drop`" is a decision with a recorded reason,* not an
+  oversight: `fga_deps.py:209-213` — "arming/disarming the safety on an object is a statement about its
+  DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be able to
+  disarm protection they could never act on." Splitting it would need to say what the ARM bar is
+  separately from the DISARM bar, because only the second is dangerous. Treat that clause as a design
+  question, not a defect to fix.
+- *WHAT THE REST NEEDS IS OWNER DESIGN INPUT, which is why it is not being worked:* a `branch` type
+  needs a rule for what a branch-scoped grant means when the branch is a whole parallel dataset; a
+  `column` type needs the classification vocabulary LH-058 is about; `security_admin` / `data_admin` /
+  `role_creator` are a policy split about who may hand out what. Adding the types without answering
+  those ships a model that grants nothing and an enforcement surface that checks nothing.
 `catalog, service-kit, openfga` · **HIGH** · **blocked:** owner decision on the model shape (and on introducing `estate` vs documenting the warehouse-as-root convention) — coordinate with the `role`→`project` edge so `model.fga` changes once
 
 - *Why open:* Re-measured 2026-09-09: all five Lakekeeper per-action rungs are zero. `_OWNER_SUFFIX_RELATION` maps `protection` to `can_drop`, so the person protection is meant to stop holds the rung that disarms it — four-eyes is unexpressible. `project` carries only admin+member, so one principal holds both data power and granting power. And root-ness is a convention: `model.fga` declares no `estate`, so `can_observe_events`/`can_browse_storage` exist on EVERY warehouse and resolve to that warehouse's owner — only the app checking them against `settings.fga_root_object` keeps them estate-scoped, and a future check on a non-root warehouse would silently grant estate-wide privilege and still pass `fga model test`.
