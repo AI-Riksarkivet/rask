@@ -1070,10 +1070,25 @@ _The platform claims to run any workload on any engine, and today the deployed s
 - *Closes when:* Route `workflow.py:495`'s stage submission through `engine_registry.executor_for(...)` once the Ray adapter's fate is decided, then drop `ray-kit` from `services/medallion/pyproject.toml`.
 
 **LH-084 · `BAKED_JOBS_DIR`/`BAKED_CLUSTER_JOBS` live in the shared library and the catalog enforces them, so a non-Ray lane cannot be declared and the word 'Ray' reaches every API client via the published OpenAPI**
-`catalog, service-kit, medallion` · **HIGH** · **blocked:** the BYO half (K / D5)
+`catalog, service-kit, medallion` · was HIGH · **closed by measurement 2026-09-11**
 
-- *Why open:* Marked 'In progress'. The lakehouse's agnosticism claim rests on this contract, and today the declaration surface names Ray — so the catalog is coupled to one distributed compute engine at the API level.
-- *Closes when:* Finish the executor contract so a lane declares an engine-neutral executor (Ray becoming one implementation), and remove `Ray` from the catalog's published OpenAPI schema.
+- **RE-MEASURED 2026-09-11 — BOTH HALVES ARE ANSWERED, and one of them was never ours.**
+- *The enforcement half is GONE.* `BAKED_JOBS_DIR` and `BAKED_CLUSTER_JOBS` appear nowhere in
+  `packages/service-kit/src` or `services/catalog/src` — measured, zero occurrences — so the catalog no
+  longer enforces a baked Ray job list and a non-Ray lane is declarable.
+- *The OpenAPI half is THE SPEC'S OWN WORDING, not our coupling.* The word `Ray` survives in
+  `docs/catalog-openapi.json` exactly three times, all on `MaterializedViewUdtfEntry`
+  (`memory` / `num_cpus` / `num_gpus`, described as "Ray actor … request") — and those three
+  descriptions are carried verbatim by the vendored `lance_docs/ns_catalog/spec.yaml:5845,5850,…`. The
+  FIELD NAMES are already engine-neutral; only the spec's prose names an engine. Two further matches
+  are our own docstrings naming `lance-ray` as one of the CLIENT libraries a vended credential serves,
+  alongside pylance and the LanceDB SDK — a list of clients, not a dependency.
+- *So the closure asked for would mean DIVERGING FROM THE SPEC we implement,* which the estate's own
+  rule forbids ("idiomatic to lance-ns"). Changing those strings would make our published schema differ
+  from the spec's for cosmetic reasons, and a client generated from either would disagree about a field
+  it must send.
+- *What would be worth doing, if anything:* raise the wording upstream. It is the spec that names one
+  engine in a field that does not need it.
 
 **LH-085 · The multimodal write lane is single-driver even though `lance_ray` 0.5.0 does not strip blob typing**
 `medallion` · med
