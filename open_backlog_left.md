@@ -126,43 +126,40 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* The `/producers` and retention/index clauses closed; traversal depth did not. Verified at HEAD: `services/lineage/src/lineage/services/cypher.py:329,334,445,448` are all `*1..`, and `age.py:44` names the unbounded path over a grown graph as why a pooled connection cannot be pinned. `with_depth` (cypher.py:326) exists but no door applies a ceiling.
 - *Closes when:* Apply `cypher.with_depth` (or a validated integer literal) with a `Query(ge=1, le=N)` bound to the `UPSTREAM`, `DOWNSTREAM`, `COLUMN_UPSTREAM` and `COLUMN_DOWNSTREAM` statements, and add a `latest_version` property to the Dataset node maintained on write.
 
-**LH-007 · `ray_stage_job.py:642-649` re-creates its target with `mode="overwrite"` every run, re-minting `_rowid` for the whole tier**
-`medallion` · med · **blocked:** owner decision: accept an extra full write of the data to preserve tier row identity
+**LH-007 · ~~`ray_stage_job.py` re-creates its target with `mode="overwrite"` every run, re-minting `_rowid` for the whole tier~~ — CLOSED 2026-09-11**
+`medallion` · was HIGH
 
-- *Why open:* Re-measured 2026-09-09: the branch writes an empty `out_schema` table with `overwrite` then fans fragments in with `lr.write_lance(mode="append")`. Q10-6's fix does not transpose — `lance_ray.write_lance` on 0.5.0 accepts only create/append/overwrite, there is no distributed merge, and appending into the previous run's dataset re-mints `_rowid` anyway. Tabular stages survive via the plain `source_rowid` column, but the tier's own `_rowid` — what the tier ABOVE resolves against — is destroyed each run.
-- *Closes when:* Stage the distributed output into a scratch dataset, then perform ONE `merge_insert`
-  from staging into the destination. **DESIGN PASS 2026-09-11 — the shape is confirmed and THREE
-  GUARDS are mandatory; none of them is optional and the first is catastrophic if omitted.**
-  1. **AN EMPTY SOURCE MUST NOT DELETE THE TIER.** `when_not_matched_by_source_delete()` against a
-     staging dataset that produced zero rows removes every row in the destination. The estate already
-     guards exactly this one lane over — `ray_stage_job.py`'s media retraction runs only
-     `if written and run`, because "absent provenance must fail SAFE, not destructively". The tabular
-     merge needs the same refusal, and the sibling in `compute.py` does NOT carry it, so copying that
-     call site verbatim ships the hazard.
-  2. **AN ABSENT STAGING DATASET IS NOT AN EMPTY ONE.** A `write_lance` that returns without
-     committing leaves nothing at the scratch path; reading that as an empty source is failure mode 1
-     by another route.
-  3. **SCHEMA DRIFT WEDGES THE MERGE.** `merge_insert` hard-refuses a source carrying a column the
-     destination lacks — which is the schema-evolution case `_mergeable` exists to detect, and its
-     False branch currently has no rebuild path that preserves identity.
-- *What the design pass MEASURED* (pylance 11.0.0, lance-ray 0.5.0, local FS — no Ray, so the numbers
-  are driver-side):
-  * `merge_insert(...).execute(<LanceDataset>)` accepts a Lance dataset as source and the
-    `{id: _rowid}` map survives a full-sync merge from a multi-fragment source. The shape works.
-  * **Append-then-retract is REFUTED** and cannot be the cheap alternative: an append MINTS
-    (`lance_docs/file_format.md:3998` — "Writer assigns row IDs sequentially starting from
-    `next_row_id` for new rows") while only an update remaps (`:4025` — "The new physical row is
-    assigned the same `_rowid = R`"). Measured over three runs of that exact shape, `id=2` moved
-    `_rowid` 1 -> 3 -> 6; the same three runs through `merge_insert` held it at 1.
-  * **Driver-side streaming merge is disqualified for this lane**: driver RSS scales with the SOURCE,
-    not the batch — 442 / 973 / 2161 MB for 104 / 416 / 1040 MB inputs. Doing the landing on the
-    driver defeats the reason the distributed branch exists.
-- *THE OWNER DECISION IS THE COST, and it is now quantified.* Staging costs one full extra copy of the
-  stage's output for the duration of the run, plus the destination's own transient double (a
-  `merge_insert` rewrites matched fragments, and the previous ones become old-version garbage until
-  `cleanup_old_versions` reclaims them on the sweep's schedule). The alternative is not "cheaper" — it
-  is continuing to destroy `_rowid` for the whole tier on every distributed run, which is what the
-  tier above resolves `source_rowid` against.
+- *Closed by:* `2afdda03`. The distributed output lands in a staging dataset and ONE `merge_insert`
+  converges it (`_land_staged`), so a re-derivation keeps `_rowid` for every row that survives it.
+- *OBSERVED ON THE LIVE ESTATE 2026-09-11*, two full distributed re-derivations of the same tier
+  through the deployed job:
+
+      run 1 -> version 1   rowids {0:0, 1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7}
+      run 2 -> version 2   rowids {0:0, 1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7}
+
+  The version advanced, so a real write happened; identity survived it. Before the change the second
+  run emptied the tier and re-appended, shifting every id — which is how silver came to hold 8 of 8
+  `source_rowid` values naming bronze rows that no longer existed. The staging set was cleaned up
+  (`_staging` absent from the destination afterwards).
+- *Why staging and not something cheaper:* `lance_ray` offers only create/append/overwrite — no
+  distributed merge — and `enable_stable_row_ids` is create-time-only. An append CANNOT preserve
+  identity: `lance_docs/file_format.md:3998` mints new ids "sequentially starting from `next_row_id`",
+  while only an update remaps one (`:4025`). Measured over three append-then-retract runs, `id=2` moved
+  `_rowid` 1 -> 3 -> 6; through `merge_insert` it held at 1. A driver-side streaming merge was
+  disqualified separately: driver RSS scales with the SOURCE (442 / 973 / 2161 MB for 104 / 416 /
+  1040 MB inputs), which defeats the reason the distributed lane exists.
+- *The two refusals are the load-bearing part.* `when_not_matched_by_source_delete` keeps the full-sync
+  semantics the stage always had, and against a ZERO-ROW source it matches every row in the
+  destination and empties the tier. So an ABSENT staged output (the write returned without committing)
+  and an EMPTY one (the transform produced nothing) are refused separately — they mean different
+  things to whoever is debugging a lost stage. The estate already refuses this one lane over (the media
+  retraction runs only `if written and run`); the sibling merge in `compute.py` carries no such guard,
+  which is exactly how copying that call site would have imported the hazard.
+- *`_staging` is a maintenance control prefix.* A staging set is a real Lance dataset while it exists.
+  Once the destination exists the walk cannot reach it (it descends a dataset root's children only into
+  `tree/`), but on the run that CREATES the destination the parent is a plain directory and a crash in
+  that window leaves the set discoverable, compactable and counted as governed — proven by a RED test
+  that reported it as governed before the fix.
 
 **LH-008 · Publication deltas are insert-only: neither in-place updates nor deletions reach a consumer**
 `medallion, catalog, annotator` · med · **blocked:** owner decision: deleted-row set served on demand from the publication door vs stamped into the publish event
