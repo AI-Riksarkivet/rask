@@ -79,5 +79,12 @@ def register_tasks(settings: MedallionSettings) -> int:
             log.exception("task_registration_failed", extra={"task": task.task, "engine": engine})
             continue
         landed += 1
-    log.info("ray_tasks_registered", extra={"declared": len(settings.ray_tasks), "registered": landed, "control_root": settings.control_root})
+    # Counted over BOTH planes' declarations, and named for neither: `declared` read
+    # `len(settings.ray_tasks)` while `registered` counted every landing, so the first estate to register
+    # an in-process task logged `declared=3 registered=4` — a line whose two numbers answered different
+    # questions. Measured on the live producer 2026-09-11, the tick this fix shipped.
+    log.info(
+        "tasks_registered",
+        extra={"declared": len(declared), "registered": landed, "engines": sorted({engine for _, engine in declared}), "control_root": settings.control_root},
+    )
     return landed
