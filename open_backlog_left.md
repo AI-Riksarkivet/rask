@@ -467,7 +467,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   thing — `403 Forbidden` on `GET http://rask-lineage:8000/datasets/advref31-gold$catalog/producers`,
   `project=advref31`, `edge=silver->gold`. 8 of 8 sampled, one project, one edge. Not estate-wide: every
   other project's edges read fine.
-- **FIXED IN CODE 2026-09-11, not yet observed in the cluster.** The two reads are now separate calls,
+- **BUILT AND WAITING ON THE ROLL.** `lance-rest-catalog:main-24edb624` is built with Dagger and
+  verified present in the registry (283 tags; the tag is there, not merely a zero exit). The roll is
+  blocked — `kubectl set image` is refused here as a Shared Cluster Mutation — so the fix is not yet
+  observed live. Ten workloads share that image and the pins file has ONE key for it, so they must move
+  together or `values-live-pins.yaml` stops being true; only medallion's three files differ between
+  `main-b641103f` and this build, which is what makes rolling all ten safe.
+  *What observing it means:* the tick should report `destination_invisible: 1` and a
+  `medallion_cascade_lag_destination_invisible{lance_medallion_edge="silver->gold",lance_medallion_project="advref31"}`
+  series should appear. If it instead stays at 0 with `unmeasurable: 252`, then that tenant's silver has
+  no `published` tag and the state is a different one — an unpublished mid-cascade tier — which is worth
+  its own row rather than a patch to this one.
+  *The ALERT cannot be observed here at all, by design:* `observability.alerting.enabled` defaults false
+  (dev has no on-call) and no vmalert pod exists in this cluster — verified, `helm get manifest` names
+  it zero times. The chart's own note makes promtool the bar for a rule and the prod drill the bar for
+  the round-trip; `make alert-rules-check` passes, 42 rules.
+- **FIXED IN CODE 2026-09-11.** The two reads are now separate calls,
   because which store refused is the whole discriminator: both refusing means the project does not run
   that lane (251 of 252 cells — correct, and silent); a source that HAS published into a destination
   this subject cannot read is a lane that is running and unmeasured, and is reported as its own state.
