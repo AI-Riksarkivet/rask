@@ -1118,3 +1118,33 @@ tests:
             exp_annotations:
               summary: "Flow nodes are failing"
               description: "A node in a flow graph ended failed. Dapr's own workflow family reports success for these runs — the orchestrator returns a failed VALUE rather than raising — so this counter is the only signal that distinguishes them. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+
+  # The measured failure: every rewrite ambient, and NO `tier="scoped"` series at all. The absent-series
+  # case is the one that matters — a rule comparing two vectors would match nothing here and never fire.
+  - interval: 1m
+    input_series:
+      - series: 'compaction_credential_tier_total{tier="ambient"}'
+        values: "0+5x39"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: CompactionSigningWithAmbientCredential
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "Most rewrites are signed by the ambient credential, not a vended one"
+              description: "Credential vending is failing, so maintenance is rewriting data under its process credential instead of a per-table 900-second vended one. The blast radius of every rewrite becomes the maintenance identity's whole scope rather than one table prefix, and the STS machinery the estate's storage rule is built on is doing nothing. Check the vend refusals in `maintenance.services.credentials` — a 401 there is an identity that cannot present its own token, a 403 is one that may not maintain the table."
+
+  # The healthy estate must NOT page. LH-078's measured posture was 8 ambient against 277 scoped; an
+  # alert firing on that is one nobody reads by the second week.
+  - interval: 1m
+    input_series:
+      - series: 'compaction_credential_tier_total{tier="ambient"}'
+        values: "0+1x39"
+      - series: 'compaction_credential_tier_total{tier="scoped"}'
+        values: "0+35x39"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: CompactionSigningWithAmbientCredential
+        exp_alerts: []

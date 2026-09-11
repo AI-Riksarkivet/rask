@@ -389,6 +389,36 @@ groups:
             running without maintaining. Usually a pylance upgrade introducing a flag the guard does not
             know. Check the refusal reasons in the maintenance_sweep log line.
 
+      # A rewrite signs with a table-scoped vended credential or with the ambient process credential,
+      # and until this series existed the only signal was an `info` line per dataset. Measured
+      # 2026-09-11: 600 records in one window, 300 vend 401s and 300 ambient fallbacks, ZERO scoped —
+      # a state that had been true long enough to be cited in a closed backlog row as evidence that an
+      # unrelated fix was working. The STS path can be entirely inert and look like ordinary traffic.
+      #
+      # A RATIO, not a count, and `clamp_min` is why it can fire when the scoped series is ABSENT
+      # rather than zero: with no successful vends there is no `tier="scoped"` series at all, so a rule
+      # comparing the two vectors matches nothing and never fires — the failure this file already
+      # records for `outbox_oldest_age`. Dividing by the clamped TOTAL makes the all-ambient case a
+      # ratio of 1 instead of an empty vector. No traffic at all yields an empty numerator and no page,
+      # which is correct: a dead sweep is CompactionSweepStopped's job, not this one.
+      - alert: CompactionSigningWithAmbientCredential
+        expr: >-
+          sum(increase(compaction_credential_tier_total{tier="ambient"}[30m]))
+          / clamp_min(sum(increase(compaction_credential_tier_total[30m])), 1) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Most rewrites are signed by the ambient credential, not a vended one"
+          description: >-
+            Credential vending is failing, so maintenance is rewriting data under its process credential
+            instead of a per-table 900-second vended one. The blast radius of every rewrite becomes the
+            maintenance identity's whole scope rather than one table prefix, and the STS machinery the
+            estate's storage rule is built on is doing nothing. Check the vend refusals in
+            `maintenance.services.credentials` — a 401 there is an identity that cannot present its own
+            token, a 403 is one that may not maintain the table.
+
   - name: dapr-control-plane
     rules:
       # THE REMINDER FAILURE DOMAIN, which nothing watched.
