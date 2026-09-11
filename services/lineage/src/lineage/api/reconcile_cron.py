@@ -30,6 +30,7 @@ from lineage.core.reconcile import (
     read_storage_schema,
     read_storage_version,
     read_storage_versions,
+    read_version_operations,
     reconcile_all,
 )
 from lineage.models import RunEvent, author_sub_from_payload
@@ -181,6 +182,10 @@ async def _sweep(repository: RepositoryDep, settings: SettingsDep, opts: dict[st
         # manifest-directory listing per dataset, the same one the freshness axis above already pays, and
         # it is what makes "a write's provenance survives it" true for a write that was later superseded.
         read_versions=lambda uri: run_in_threadpool(read_storage_versions, uri, opts),
+        # Which of those holes are real. A compaction/index/config version commits with no lineage BY
+        # DESIGN, so classifying is what keeps the finding worth reading; one transaction read per hole,
+        # and a healthy dataset has none.
+        read_operations=lambda uri, versions: run_in_threadpool(read_version_operations, uri, opts, versions),
         freshness_budget_hours=settings.freshness_budget_hours,
         # Declared-columns patrol (Batch 23): re-check the gate's column_declared assertion
         # estate-wide — only declared datasets pay the schema read.

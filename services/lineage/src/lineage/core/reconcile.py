@@ -108,6 +108,34 @@ def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int
         return None
 
 
+def read_version_operations(uri: str, storage_options: dict[str, str], versions: list[int]) -> dict[int, str | None]:
+    """The Lance transaction OPERATION behind each of ``versions`` — ``None`` where it cannot be read.
+
+    Read only for versions already found to be provenance holes, which on a healthy dataset is none: the
+    cost is one transaction-file read per anomaly, never one per version per tick. One dataset open serves
+    every hole, the same shape ``dataplane.table_history`` uses to answer the catalog's commit log.
+
+    A version whose transaction is unreadable — written before transaction files existed, or reclaimed —
+    maps to ``None``, which :data:`MAINTENANCE_OPERATIONS` treats as unknown and therefore reportable.
+    """
+    try:
+        dataset = lance.dataset(uri, storage_options=storage_options)
+    except BaseException as exc:
+        _swallow_dataset_error(exc)
+        return dict.fromkeys(versions)
+    operations: dict[int, str | None] = {}
+    for version in versions:
+        try:
+            txn = dataset.read_transaction(version)
+        except BaseException as exc:
+            _swallow_dataset_error(exc)
+            operations[version] = None
+            continue
+        op = getattr(txn, "operation", None)
+        operations[version] = type(op).__name__ if op is not None else None
+    return operations
+
+
 def read_dangling_blob_columns(uri: str, storage_options: dict[str, str]) -> list[str]:
     """Blob-v2 columns at ``uri`` whose payloads no longer dereference — ``[]`` when healthy/no blobs.
 
@@ -204,6 +232,29 @@ BACKFILLABLE_STATES = (ReconcileState.STORAGE_AHEAD, ReconcileState.UNTRACKED)
 # restore / storage loss is visible instead of silently served as valid provenance.
 STORAGE_LOSS_STATES = (ReconcileState.GRAPH_AHEAD, ReconcileState.MISSING_ON_STORAGE)
 
+#: Lance transaction operations that PRESERVE what the table says, so a version carrying one is not
+#: expected to have provenance and is not a hole.
+#:
+#: Grounded in pylance 11.0.0's own docstrings rather than inferred: ``Rewrite`` "rewrites one or more
+#: files and indices into one or more files and indices" (compaction), ``CreateIndex`` "creates an index
+#: on the dataset", ``UpdateConfig`` "updates dataset metadata". Every other operation Lance defines
+#: changes what a reader sees — ``Restore`` "restores a previous version of the dataset", ``Project`` is
+#: "drop column or rename/swap column", ``DataReplacement`` "replaces existing datafiles" — so each is a
+#: write whose provenance must survive it.
+#:
+#: A DENYLIST RATHER THAN AN ALLOWLIST, and the direction is the whole point. An operation this estate has
+#: never seen reads as a hole and gets REPORTED; an allowlist would drop it silently, and for a control
+#: whose only job is finding missing provenance, failing silent is the one mode that cannot be tolerated.
+#: That also settles the two non-operations a transaction read can yield: ``BaseOperation`` is
+#: ``type(op).__name__`` for an op pylance has no subclass for, and an unreadable transaction reads as
+#: ``None``. Both are unknown, and unknown is reported.
+#:
+#: WITHOUT THIS THE AXIS IS 20% NOISE, measured on the live estate 2026-09-11: of the 10 holes it found,
+#: 8 were real data writes and 2 were a ``CreateIndex`` and a maintenance version on
+#: ``transcripts_v2$annotations`` that never had provenance and never should. A finding an operator learns
+#: to skim past is the failure mode this module already guards against elsewhere.
+MAINTENANCE_OPERATIONS = frozenset({"Rewrite", "CreateIndex", "UpdateConfig"})
+
 #: How many provenance holes one dataset may have recovered in a single tick.
 #:
 #: A dataset the graph has never recorded a write for (UNTRACKED) has EVERY retained version as a hole,
@@ -224,6 +275,7 @@ async def reconcile_all(
     read_dangling: Callable[[str], Awaitable[list[str]]] | None = None,
     read_age: Callable[[str], Awaitable[float | None]] | None = None,
     read_versions: Callable[[str], Awaitable[list[int] | None]] | None = None,
+    read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]] | None = None,
     freshness_budget_hours: float = 0,
     declared: dict[str, list[str]] | None = None,
 ) -> list[ReconcileStatus]:
@@ -308,6 +360,7 @@ async def reconcile_all(
                 summary.name,
                 uri,
                 read_versions=read_versions,
+                read_operations=read_operations,
                 read_schema=read_schema,
                 backfill=backfill,
             )
@@ -321,6 +374,7 @@ async def _recover_holes(
     uri: str,
     *,
     read_versions: Callable[[str], Awaitable[list[int] | None]],
+    read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]] | None,
     read_schema: Callable[[str, int], Awaitable[SchemaFields | None]] | None,
     backfill: bool,
 ) -> list[int]:
@@ -340,6 +394,12 @@ async def _recover_holes(
     if on_disk is None:
         return []
     holes = sorted(set(on_disk) - await repository.write_versions(name))
+    if holes and read_operations is not None:
+        # A compaction, an index build and a config change each commit a version and correctly emit no
+        # lineage, so without this the axis reports every maintained dataset. Paid ONLY on the holes, which
+        # is why the classifier can afford a transaction read at all.
+        operations = await read_operations(uri, holes)
+        holes = [v for v in holes if operations.get(v) not in MAINTENANCE_OPERATIONS]
     if not holes or not backfill:
         return holes
     for version in holes[:MAX_HOLES_BACKFILLED_PER_TICK]:

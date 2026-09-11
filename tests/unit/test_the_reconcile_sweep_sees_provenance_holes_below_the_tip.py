@@ -39,7 +39,7 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 
-from lineage.core.reconcile import read_storage_versions, reconcile_all
+from lineage.core.reconcile import read_storage_versions, read_version_operations, reconcile_all
 from lineage.schemas import DatasetSummary
 
 
@@ -177,3 +177,97 @@ def test_an_unreadable_dataset_is_never_probed_for_holes(tmp_path: Path) -> None
     assert probed == []
     assert statuses[0].versions_without_lineage == []
     assert repo.backfilled == []
+
+
+# --- The classifier: which holes are REAL ---------------------------------------------------- #
+
+
+def test_read_version_operations_names_the_transaction_behind_each_version(tmp_path: Path) -> None:
+    """The reader, against real Lance: a create is an `Overwrite`, an append is an `Append`.
+
+    Asserted on a real dataset rather than a double, because the whole classification rests on
+    `type(op).__name__` matching the names :data:`MAINTENANCE_OPERATIONS` is written against — a pylance
+    upgrade that renamed one would make the denylist silently stop matching, and a mocked transaction
+    would never notice.
+    """
+    uri = _four_version_dataset(tmp_path)
+    operations = read_version_operations(uri, {}, [1, 2])
+    assert operations == {1: "Overwrite", 2: "Append"}
+    assert read_version_operations(str(tmp_path / "missing.lance"), {}, [1]) == {1: None}
+
+
+def test_a_maintenance_version_is_not_a_provenance_hole(tmp_path: Path) -> None:
+    """A compaction, an index build and a config change commit a version and emit NO lineage, correctly.
+
+    Measured on the live estate 2026-09-11: without this, 2 of the 10 holes the axis found were a
+    `CreateIndex` and a maintenance version on `transcripts_v2$annotations` — 20% of the finding was
+    noise, and a finding an operator learns to skim past has the same value as no finding at all.
+    """
+    uri = _four_version_dataset(tmp_path)
+    repo = _HoledRepo(graph_versions={1, 4}, uri=uri)
+
+    async def read_version(_uri: str) -> int | None:
+        return 4
+
+    async def read_versions(_uri: str) -> list[int] | None:
+        return [1, 2, 3, 4]
+
+    async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
+        return {2: "Rewrite", 3: "Update"}  # 2 compacted, 3 is a real write that lost its event
+
+    statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions, read_operations=read_operations))
+
+    assert statuses[0].versions_without_lineage == [3]
+    assert repo.backfilled == [("db$t", 3)], "the compaction must not be attributed to a writer"
+
+
+def test_an_unknown_operation_is_reported_rather_than_skipped(tmp_path: Path) -> None:
+    """The denylist's DIRECTION, which is the property that matters more than its contents.
+
+    `BaseOperation` is what `type(op).__name__` yields for an operation pylance has no subclass for, and a
+    transaction that cannot be read at all yields None. Neither is evidence the version was maintenance.
+    An allowlist would drop both silently; for a control whose only job is finding missing provenance,
+    failing silent is the one mode that cannot be tolerated, so unknown is reported.
+    """
+    uri = _four_version_dataset(tmp_path)
+    repo = _HoledRepo(graph_versions={1, 4}, uri=uri)
+
+    async def read_version(_uri: str) -> int | None:
+        return 4
+
+    async def read_versions(_uri: str) -> list[int] | None:
+        return [1, 2, 3, 4]
+
+    async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
+        return {2: "BaseOperation", 3: None}
+
+    statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions, read_operations=read_operations))
+
+    assert statuses[0].versions_without_lineage == [2, 3]
+
+
+def test_the_classifier_is_asked_only_about_holes(tmp_path: Path) -> None:
+    """Cost: one transaction read per ANOMALY, never per version per tick.
+
+    A healthy dataset has no holes, so the classifier must not be called at all — otherwise every sweep
+    over every dataset pays a transaction read per retained version, which is the unbounded-work shape
+    this estate keeps out of its hot paths.
+    """
+    uri = _four_version_dataset(tmp_path)
+    repo = _HoledRepo(graph_versions={1, 2, 3, 4}, uri=uri)
+    asked: list[list[int]] = []
+
+    async def read_version(_uri: str) -> int | None:
+        return 4
+
+    async def read_versions(_uri: str) -> list[int] | None:
+        return [1, 2, 3, 4]
+
+    async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
+        asked.append(versions)
+        return {}
+
+    statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions, read_operations=read_operations))
+
+    assert asked == [], "a dataset with no holes must cost no transaction reads"
+    assert statuses[0].versions_without_lineage == []

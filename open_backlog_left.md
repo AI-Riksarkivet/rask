@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**269 open items**, deduped from 325 raw rows mined out of the seven files above.
+**270 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 122 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 123 | 21 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -511,6 +511,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   is not a finding — reading that direction would make every maintained dataset permanently red, which
   is how an axis gets switched off); the axis is OFF without an injected reader; and an UNREADABLE
   dataset is never probed, because that absence is already the version check's finding.
+- *WHAT THE AXIS THEN SHOWED ABOUT THE ESTATE, which is a bigger finding than the sweep bug.* Splitting
+  `bronze$events`'s 87 versions by the AUTHOR on their `WROTE` edge: **61 carry a real producer** (full
+  provenance), **9 carry both a producer and `reconcile`** (the sweep raced the emit — redundant, not
+  lost), **13 carry ONLY `reconcile`** (the actor and the derivation are gone; the bare fact survives)
+  and **4 carried nothing at all** (76, 80, 82, 83 — what this fix finds). All 23 retained versions of
+  that table are DATA operations, so none of the 17 is a compaction being mis-read. **~20% of the
+  busiest governed table's writes lost their producer's provenance**, in a contiguous band (65-67,
+  71-84) that names a sustained Ray-lane emit failure rather than a one-off. The sweep is the floor;
+  the producer is the defect, and it belongs to [[LH-004]]'s emit-kernel work, not here.
+- *THE CLASSIFIER IS WHY THE FINDING IS WORTH READING.* First deployed without one, the axis reported
+  `transcripts_v2$annotations` holes `[1, 2, 3, 4, 6]` — but 3 is a `CreateIndex` and 6 a maintenance
+  version, so **2 of the 10 holes estate-wide were false positives**. `MAINTENANCE_OPERATIONS` is a
+  DENYLIST of the three pylance documents as content-preserving (`Rewrite`, `CreateIndex`,
+  `UpdateConfig`); everything else — including `BaseOperation`, which is what `type(op).__name__` yields
+  for an op pylance has no subclass for, and an unreadable transaction's `None` — is unknown and is
+  REPORTED. An allowlist would fail silent, which for a control whose only job is finding missing
+  provenance is the one direction that cannot be tolerated. Paid one transaction read per HOLE, so a
+  healthy dataset pays none.
 - *WHAT IT DOES NOT RECOVER, stated so the axis is not mistaken for more than it is.* The back-filled
   edge carries `author='reconcile'` and no inputs — storage can supply THAT a version was written and
   its schema, never who wrote it or what it derived from. A hole recurring on the same dataset names a

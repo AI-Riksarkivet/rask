@@ -15,10 +15,12 @@ from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import audit_read, require_metadata_access
 from lineage.core.config import storage_options
 from lineage.core.reconcile import (
+    MAINTENANCE_OPERATIONS,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
     read_storage_version,
     read_storage_versions,
+    read_version_operations,
     reconcile,
 )
 from lineage.schemas import ReconcileStatus
@@ -64,5 +66,11 @@ async def get_reconcile(name: str, repository: RepositoryDep, settings: Settings
             status.stale = age is not None and age > settings.freshness_budget_hours
         on_disk = await run_in_threadpool(read_storage_versions, uri, opts)
         if on_disk is not None:
-            status.versions_without_lineage = sorted(set(on_disk) - await repository.write_versions(name))
+            holes = sorted(set(on_disk) - await repository.write_versions(name))
+            if holes:
+                # A compaction / index build / config change commits a version and emits no lineage by
+                # design; reporting those would make every maintained dataset look un-provenanced.
+                operations = await run_in_threadpool(read_version_operations, uri, opts, holes)
+                holes = [v for v in holes if operations.get(v) not in MAINTENANCE_OPERATIONS]
+            status.versions_without_lineage = holes
     return status
