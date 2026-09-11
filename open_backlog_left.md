@@ -368,6 +368,10 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   dedicated token is DERIVED, and the upgrade re-runs the seed. If the 401 is a stale or absent seeded
   value, re-seeding both ends consistently is exactly what fixes it — so re-measure this row immediately
   after the deploy before doing anything else to it.
+- **THE VISIBILITY HALF IS DONE** (`eb564cd6` + `4fcba209`). The fallback is now a counter and an
+  alert rather than an `info` line per dataset, so "every rewrite is ambient" cannot be the quiet state
+  again — which is how this went unnoticed long enough to be cited as evidence for an unrelated fix. The
+  AUTHENTICATION half is still open and still needs the secret store.
 - *Closes when:* The maintenance identity presents its dedicated token at the catalog's vend door — root
   cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
   refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
@@ -1602,6 +1606,13 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 `maintenance, catalog` · low
 
 - *Why open:* The headline is fixed (207 AMBIENT → 8, 277 SCOPED, via `_ALTERNATIVE_RUNGS` giving the `credentials` action a second rung), but the remaining 8 are a different population: the 92 per-warehouse `maintainer` tuples cover every warehouse in the registry, so these are tables the registry does not account for. The ambient fallback is loud in the pod log and reaches no report field, counter or alert.
+- **THE SECOND HALF LANDED 2026-09-11** (`eb564cd6` + `4fcba209`): the AMBIENT-vs-SCOPED split is a
+  series (`compaction_credential_tier_total`, one counter with a `tier` attribute so the number is the
+  RATIO) and an alert that pages when most rewrites go ambient. Proven to fire on a synthetic all-ambient
+  series and proven NOT to on this row's own measured healthy posture (8 ambient against 277 scoped).
+  What remains here is the first half — identifying the tables the registry does not account for.
+- *And this row's "207 AMBIENT → 8" no longer describes the estate:* measured 2026-09-11 it is EVERY
+  vend, on a 401 rather than a 403, which is a different failure and is tracked as [[LH-142]].
 - *Closes when:* Identify the 8 tables whose `POST /v1/table/{id}/credentials?tier=write` still 403s despite `can_maintain` and either register them or make the vend failure refuse the rewrite instead of falling back to the ambient key; and expose the AMBIENT-vs-SCOPED split as a counter/alert rather than only a log line.
 
 **LH-079 · Two standing answers on the `x-api-key` principal contradict each other, and its key store and rotation model are undesigned**
