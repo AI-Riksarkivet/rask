@@ -19,7 +19,7 @@ control relay takes for its own reason.
 
 from __future__ import annotations
 
-from medallion.services.cascade_lag import ConsumedRange, EdgeNotMeasurable, LagTickReport, run_lag_tick
+from medallion.services.cascade_lag import STORES_DISAGREE, BlindEdge, ConsumedRange, EdgeNotMeasurable, LagTickReport, run_lag_tick
 
 
 class _Gauge:
@@ -41,7 +41,7 @@ def test_a_healthy_estate_publishes_a_point_per_edge() -> None:
         consumed=lambda edge, project: [ConsumedRange(from_version=None, to_version={"bronze->silver": 7, "silver->gold": 1}[edge])],
         gauge=gauge,
     )
-    assert report == LagTickReport(edges=2, published_points=2, unknown=0, failed=0)
+    assert report == LagTickReport(edges=2, published_points=2, failed=0)
     assert sorted(v for v, _ in gauge.points) == [0, 2]
 
 
@@ -67,7 +67,7 @@ def test_an_unknown_edge_is_counted_and_publishes_nothing() -> None:
     distinguishable from a tick that ran and found everything healthy."""
     gauge = _Gauge()
     report = run_lag_tick(edges=EDGES[:1], published=lambda e, p: 3, consumed=lambda e, p: [ConsumedRange(from_version=None, to_version=8)], gauge=gauge)
-    assert report == LagTickReport(edges=1, published_points=0, unknown=1, failed=0)
+    assert report == LagTickReport(edges=1, published_points=0, failed=0, blind=[BlindEdge(edge="bronze->silver", project="acme", reason=STORES_DISAGREE)])
     assert gauge.points == []
 
 
@@ -77,7 +77,7 @@ def test_a_tick_over_no_declared_edges_is_not_an_error() -> None:
     gauge = _Gauge()
     assert run_lag_tick(
         edges=[], published=lambda e, p: 1, consumed=lambda e, p: [ConsumedRange(from_version=None, to_version=1)], gauge=gauge
-    ) == LagTickReport(edges=0, published_points=0, unknown=0, failed=0)
+    ) == LagTickReport(edges=0, published_points=0, failed=0)
 
 
 def _raise_unmeasurable(edge: str, project: str) -> int | None:

@@ -1360,13 +1360,21 @@ series for `medallion_cascade_lag` to fire on. The detector's own `lag_for_edge`
 (`if not consumed: lag = published`) that cannot be reached in production.
 
 The discriminator is the SOURCE side, which is read from the catalog and answers for itself. Both
-stores refusing means the project does not run that lane — on the live estate, 251 of 252 such cells,
-correctly silent. A source that HAS published into a destination the subject cannot read is a lane that
-is running and unmeasured: `medallion.cascade.lag_destination_invisible`, and
-`MedallionCascadeDestinationInvisible` after 30m. It publishes no lag VALUE, deliberately — absent and
-forbidden are indistinguishable at that door, and the estate holds gold tables that exist with zero
-tuples, so a guessed first-hop lag could be a confident number for a hop that had in fact run. The
-alert tells the operator to ask the graph, which can tell the two apart.
+stores refusing means the project does not run that lane — on the live estate, 252 of 267 cells,
+correctly silent. A cell whose source HAS published is a lane that is running, and the detector owes it
+an answer; when it cannot give one the cell is BLIND, carried with its reason and published as
+`medallion.cascade.lag_blind{reason}`, paged by `MedallionCascadeLagBlind` after 30m.
+
+Two reasons, one closed vocabulary, because a field per state is precisely how two sibling readers came
+to classify one identical refusal differently. `destination_invisible` — the source published into a
+destination that cannot be read. `stores_disagree` — both stores answered and contradicted each other, a
+consumed frontier ahead of the published version, which was counted without an identity and so could be
+seen but never named. Measured 2026-09-11: of 15 cells with a published source, one of each.
+
+Neither publishes a lag VALUE, deliberately. For `destination_invisible`, absent and forbidden are
+indistinguishable at that door and the estate holds gold tables that exist with zero tuples, so a
+guessed first-hop lag could be a confident number for a hop that had in fact run; for `stores_disagree`
+there is no arithmetic to trust at all. The alert names the lane and the runbook branches on the reason.
 
 *The lesson worth keeping is about the prose, not the metric.* `MedallionCascadeLag` described itself
 as firing "for a hop that NEVER ARRIVED — which no counter can see". Read as a specification that was

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only: the instruments module must not import a service at runtime.
-    from medallion.services.cascade_lag import LagGauge
+    from medallion.services.cascade_lag import BlindEdge, LagGauge
 
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -76,22 +76,27 @@ _cascade_lag = _meter.create_gauge(
     description="Source versions a destination tier has not yet consumed — the LOSS detector a refusal counter cannot be.",
 )
 
-#: A lane whose SOURCE has published into a destination this subject cannot read. Its own series
-#: rather than a value of `medallion.cascade.lag`, because the lag is genuinely UNKNOWN here and every
-#: sentinel a gauge could carry is also a real lag — the argument `record_edge_lag` makes at length.
+#: A lane the detector owed a lag and could not give one, BY REASON. Its own series rather than a
+#: value of `medallion.cascade.lag`, because the lag is genuinely unknown here and every sentinel a
+#: gauge could carry is also a real lag — the argument `record_edge_lag` makes at length.
+#:
+#: ONE INSTRUMENT WITH A CLOSED REASON, the shape `record_refused` already uses for its four refusals.
+#: A gauge per reason is how two names for one condition drift apart, which is the defect this series
+#: was added to report in the first place.
 #:
 #: A GAUGE SET TO 1, never a per-tick counter. The condition is a LEVEL that persists until someone
-#: creates the destination or grants the rung, and counting it once a tick is the "one gap counted 1210
-#: times" mistake docs/DECISIONS.md records. A cell that recovers simply stops receiving points and the series goes
-#: stale, which is how `medallion.cascade.lag` already resolves and what its alert's `for:` tolerates.
+#: creates the destination, grants the rung or repairs the tag, and counting it once a tick is the "one
+#: gap counted 1210 times" mistake docs/DECISIONS.md records. A cell that recovers simply stops receiving points and
+#: the series goes stale, which is how `medallion.cascade.lag` already resolves and what a `for:`
+#: tolerates.
 #:
 #: BOUNDED BY THE SOURCE READ: a cell reaches here only when the catalog answered with a published
-#: version, so the 251 cells naming lanes their project does not run can never enter it. Measured on
-#: the live estate 2026-09-11 — 267 declared cells, 14 with a published source, 1 of those unreadable.
-_cascade_lag_destination_invisible = _meter.create_gauge(
-    "medallion.cascade.lag_destination_invisible",
+#: version, so the cells naming lanes their project does not run can never enter it. Measured on the
+#: live estate 2026-09-11 — 267 declared cells, 15 with a published source, 2 of those blind.
+_cascade_lag_blind = _meter.create_gauge(
+    "medallion.cascade.lag_blind",
     unit="{edge}",
-    description="A lane publishing into a destination the detector cannot read — the lost hop no lag value can express.",
+    description="A running lane whose lag cannot be stated, by reason (destination_invisible|stores_disagree).",
 )
 
 _stage_refused = _meter.create_counter(
@@ -275,19 +280,19 @@ def cascade_lag_gauge() -> LagGauge:
     return _cascade_lag
 
 
-def record_destination_invisible(cells: Sequence[tuple[str, str]]) -> None:
-    """Publish one point per lane that is publishing into a destination it cannot read.
+def record_blind_edges(cells: Sequence[BlindEdge]) -> None:
+    """Publish one point per running lane whose lag could not be stated, labelled by reason.
 
     Takes the cells rather than a count, because the operator's first question is WHICH lane and a
-    count cannot answer it. Both labels are bounded by construction — ``edge`` comes from the declared
-    lane map and ``project`` from the warehouse registry, the same pair `record_edge_lag` uses, so the
-    two series join on a shared key.
+    count cannot answer it. All three labels are bounded by construction — ``edge`` comes from the
+    declared lane map, ``project`` from the warehouse registry and ``reason`` from this module's closed
+    vocabulary — so the first two join with `record_edge_lag`'s own series on a shared key.
 
     Publishes nothing for a healthy estate, which is the intended shape: this is an exception series,
-    and a zero per measurable cell would say the same thing at fourteen times the volume.
+    and a zero per measurable cell would say the same thing at fifteen times the volume.
     """
-    for edge, project in cells:
-        _cascade_lag_destination_invisible.set(1, {"lance.medallion.edge": edge, "lance.medallion.project": project})
+    for cell in cells:
+        _cascade_lag_blind.set(1, {"lance.medallion.edge": cell.edge, "lance.medallion.project": cell.project, "lance.medallion.reason": cell.reason})
 
 
 def record_other_lane(transition: str) -> None:

@@ -180,37 +180,45 @@ groups:
             for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost
             trigger, a publish that did not land, a stage runner that was down — PROVIDED the destination can be
             read; a lost hop whose destination was never created at all is invisible here and pages as
-            MedallionCascadeDestinationInvisible instead. The repair is edge-addressed: POST /api/stage-runners/stages/rerun
+            MedallionCascadeLagBlind instead. The repair is edge-addressed: POST /api/stage-runners/stages/rerun
             with the published table, the range, and the token from the DLQ line if you have it. Runbook:
             docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # C3 a, THE OTHER HALF, and it exists because the rule above cannot cover it. A lag is arithmetic
-      # over two reads, and the second read is lineage's `/datasets/{name}/producers` — gated router-level
-      # by `require_metadata_access`, which runs BEFORE existence resolution. So a destination that was
-      # never written answers 403 exactly as a forbidden one does, the detector cannot honestly publish a
-      # level for either, and `medallion_cascade_lag` has no series to fire on. Measured 2026-09-11: one
-      # tenant's silver->gold sits in that state, its silver published and its gold absent from the
-      # graph. A WARNING line is the only other evidence such a cell can leave, and a line in a channel
-      # that is overwhelmingly designed refusals is not a signal an operator can be paged on.
+      # over two reads, and a cell can defeat that arithmetic in two ways that both leave NO series for
+      # `medallion_cascade_lag` to fire on — so an estate could be blind on every lane and page nobody.
       #
-      # THE SOURCE SIDE IS WHAT MAKES IT REPORTABLE. A cell only reaches this series when the catalog
+      #   destination_invisible — lineage's `/datasets/{name}/producers` is gated router-level by
+      #     `require_metadata_access`, which runs BEFORE existence resolution, so a destination that was
+      #     never written answers 403 exactly as a forbidden one does. Measured 2026-09-11: one tenant's
+      #     silver->gold, its silver published and its gold absent from the graph.
+      #   stores_disagree — both stores answered and contradicted each other (a consumed frontier ahead
+      #     of the published version: a tag moved backwards, or a lineage run outlived its table). No
+      #     sentinel a gauge could carry is safe, so nothing is published. Measured 2026-09-11: one cell,
+      #     on every tick, nameable by nothing in the system.
+      #
+      # THE SOURCE SIDE IS WHAT MAKES EITHER REPORTABLE. A cell only reaches this series when the catalog
       # answered with a published version, so the ~250 cells naming lanes their project does not run
-      # cannot enter it — measured, 1 of 267.
-      - alert: MedallionCascadeDestinationInvisible
-        expr: max by (lance_medallion_edge, lance_medallion_project) (medallion_cascade_lag_destination_invisible) == 1
+      # cannot enter it — measured, 2 of 267.
+      #
+      # ONE RULE, REASON ON THE LABEL, exactly as MedallionStageRefused carries its four refusals: the
+      # two are diagnosed differently but neither is actionable without naming the lane, and the runbook
+      # step branches on the same label.
+      - alert: MedallionCascadeLagBlind
+        expr: max by (lance_medallion_edge, lance_medallion_project, lance_medallion_reason) (medallion_cascade_lag_blind) == 1
         for: 30m
         labels:
           severity: warning
           service: medallion
         annotations:
-          summary: "Cascade edge {{ $labels.lance_medallion_edge }} publishes into a destination the detector cannot read"
+          summary: "Cascade edge {{ $labels.lance_medallion_edge }} cannot be measured ({{ $labels.lance_medallion_reason }})"
           description: >-
-            This lane's source has published, so the lane is running, but its destination could not be read
-            for 30 minutes — so no lag can be computed and MedallionCascadeLag is structurally blind to it.
-            Two causes answer alike at the door: the destination was NEVER CREATED, meaning the hop has never
-            run, or it exists with no authorization tuple for the medallion identity. Check the graph first —
-            a dataset absent from lineage means a lost first hop; a dataset present means a governance gap.
-            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+            This lane's source has published, so the lane is running, but its lag could not be stated for
+            30 minutes — so MedallionCascadeLag is structurally blind to it. destination_invisible: the
+            destination was NEVER CREATED, meaning the hop has never run, or it exists with no authorization
+            tuple for the medallion identity; ask the graph, which can tell those apart. stores_disagree: the
+            consumed frontier is ahead of the published version, so a tag moved backwards or a lineage run
+            outlived the table it names. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: MedallionStageDenied
         expr: sum(rate(medallion_stage_denied_total[5m])) > 0

@@ -36,9 +36,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import Protocol
+from typing import Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 log = logging.getLogger(__name__)
@@ -58,6 +58,50 @@ class EdgeNotMeasurable(Exception):
     lag 0, a fabricated healthy series for a cascade that does not exist. So it is its own count, and
     publishes nothing.
     """
+
+
+#: A lane whose SOURCE has published into a destination this subject cannot read. Absence and
+#: forbiddance answer alike at lineage's door — its metadata gate runs before existence resolution —
+#: so the hop may never have run or may have run into a table carrying no tuples.
+DESTINATION_INVISIBLE: Final = "destination_invisible"
+
+#: Both stores answered and CONTRADICTED each other: a consumed frontier ahead of the source's
+#: published version, which means a tag moved backwards or a lineage run outlived the table it names.
+STORES_DISAGREE: Final = "stores_disagree"
+
+#: CLOSED, and closed for the reason `metrics.record_refused` states: a reason label taken from a
+#: caller would be an unbounded series, and here the values are decided by this module alone.
+BLIND_REASONS: Final = frozenset({DESTINATION_INVISIBLE, STORES_DISAGREE})
+
+
+class BlindEdge(BaseModel):
+    """One declared cell the detector could not state a lag for, and WHY.
+
+    Blind is not the same as unmeasurable, and the near-miss in the words is worth the care: an
+    UNMEASURABLE cell has no source, so the project does not run that lane and there is nothing to
+    measure — the overwhelming majority, and correctly silent. A BLIND cell has a published source, so
+    the lane is running and the detector owes an answer it cannot give.
+
+    Carried as identities rather than counts because the operator's first question is WHICH lane, and
+    both fields are bounded by construction — ``edge`` comes from the declared lane map and ``project``
+    from the warehouse registry, the same pair `record_edge_lag` labels with.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    edge: str
+    project: str
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_is_in_the_closed_vocabulary(cls, value: str) -> str:
+        """ENFORCED, not merely documented. `reason` becomes a metric label, and the estate's rule is
+        that a label's values are bounded by construction — prose saying so is the shape that lets a
+        later edit publish an unbounded series without anything objecting."""
+        if value not in BLIND_REASONS:
+            raise ValueError(f"blind reason {value!r} is not one of {sorted(BLIND_REASONS)}")
+        return value
 
 
 class ConsumedRange(BaseModel):
@@ -196,30 +240,30 @@ def record_edge_lag(lag: EdgeLag, *, gauge: LagGauge) -> None:
 class LagTickReport(BaseModel):
     """What one tick measured. ``edges`` is the denominator every other field is read against.
 
-    ``unknown``, ``failed``, ``unmeasurable`` and ``destination_invisible`` are four separate states and
-    each hides a different thing when folded. UNKNOWN means both stores answered and DISAGREED; FAILED
-    means one could not be read at all, and a rising count is an outage; UNMEASURABLE means the SOURCE
-    is not visible, so this project does not run this lane — a steady state rather than an event, which
-    an estate holding abandoned projects reports hundreds of every tick, and letting those land in
-    ``failed`` buries a real outage in them.
+    ``failed``, ``unmeasurable`` and ``blind`` are three separate states and
+    each hides a different thing when folded. FAILED means a store could not be read at all, and a rising
+    count is an outage; UNMEASURABLE means the SOURCE is not visible, so this project does not run this
+    lane — a steady state rather than an event, which an estate holding abandoned projects reports
+    hundreds of every tick, and letting those land in ``failed`` buries a real outage in them.
 
-    DESTINATION_INVISIBLE IS THE ONE THAT CARRIES A FINDING. A lane whose source has PUBLISHED is
-    running; if its destination cannot be read, the detector has found a hop it cannot account for —
-    the case this module exists for. Measured on the live estate 2026-09-11: of 267 declared cells, 252
-    answer "not visible", and exactly one of those has a published source. Folded into ``unmeasurable``
-    it is one part in 252 and says nothing, which is indistinguishable from a healthy lane.
+    ``blind`` IS THE ONE THAT CARRIES A FINDING. A lane whose source has PUBLISHED is running, so a
+    detector that cannot state its lag has found a hop it cannot account for — the case this module
+    exists for. Measured on the live estate 2026-09-11: of 267 declared cells, 252 have no visible
+    source, and of the 15 that do, one destination cannot be read and one pair of stores disagrees.
+    Folded into ``unmeasurable`` those two are one part in 252 and say nothing, which is
+    indistinguishable from a healthy lane.
     """
 
     edges: int
     published_points: int
-    unknown: int
     failed: int
     unmeasurable: int = 0
-    #: Cells whose SOURCE has published and whose DESTINATION this subject cannot read — carried as
-    #: identities rather than a count because one of them is actionable and the caller must be able to
-    #: name it. Bounded by construction: a cell reaches this list only when the source answered with a
-    #: version, which on the live estate 2026-09-11 was 14 of 267 cells, one of them invisible.
-    destination_invisible: list[tuple[str, str]] = Field(default_factory=list)
+    #: Every cell the detector owed a lag and could not give one, each carrying its reason. ONE list
+    #: rather than a field per reason: both mean "this lane is running and its lag cannot be stated",
+    #: and a field per state is the shape that let two sibling readers classify one identical refusal
+    #: differently. Bounded — a cell reaches it only when the source answered with a published version,
+    #: which on the live estate 2026-09-11 was 15 of 267 cells.
+    blind: list[BlindEdge] = Field(default_factory=list)
     #: Cells NOT asked about this tick because :class:`AbsentEdgeMemo` has seen them refuse
     #: repeatedly. Counted rather than silent for the same reason `unmeasurable` is separate from
     #: `failed`: a detector that quietly stops asking looks exactly like one with nothing to report.
@@ -312,7 +356,7 @@ def run_lag_tick(
     gauge tolerates. So no lock, no ``replicas: 1`` pin and no dedupe key — unlike lineage's reconciler,
     which takes an advisory lock because it WRITES.
     """
-    report = LagTickReport(edges=len(edges), published_points=0, unknown=0, failed=0)
+    report = LagTickReport(edges=len(edges), published_points=0, failed=0)
     if memo is not None:
         memo.begin_tick()
     for edge, project in edges:
@@ -354,7 +398,7 @@ def run_lag_tick(
                 continue
             # A PUBLISHED SOURCE AND AN UNREADABLE DESTINATION. The lane is running and the detector
             # cannot see where it lands — the loss this module exists for, and the one cell of 267 that
-            # is not like the other 251. It publishes NO lag: `require_metadata_access` runs before
+            # is not one of the 252 naming a lane their project does not run. It publishes NO lag: `require_metadata_access` runs before
             # existence resolution, so absent and forbidden answer alike, and this estate holds gold
             # tables that exist with zero tuples. Guessing would publish a confident level for a hop
             # that had in fact run.
@@ -362,20 +406,32 @@ def run_lag_tick(
             # DELIBERATELY NOT MEMOIZED. `AbsentEdgeMemo` exists to stop probing cells that name
             # nothing, and each probe costs an `access_denied` audit record; this cell is the estate's
             # only evidence of that lost hop, so it pays one record a tick and stays in the population.
-            report.destination_invisible.append(cell)
-            log.warning("cascade_lag_destination_unreadable", extra={"edge": edge, "project": project, "published": published_version})
+            report.blind.append(BlindEdge(edge=edge, project=project, reason=DESTINATION_INVISIBLE))
+            log.warning("cascade_lag_edge_blind", extra={"edge": edge, "project": project, "reason": DESTINATION_INVISIBLE, "published": published_version})
             continue
         except Exception as exc:  # noqa: BLE001 — one edge's read must never end the tick
             log.warning("cascade_lag_edge_unreadable", extra={"edge": edge, "project": project, "error": str(exc)})
             report.failed += 1
             continue
 
-        lag = lag_for_edge(edge=edge, project=project, published=published_version, consumed=consumed_ranges)
-        if not lag.known:
-            report.unknown += 1
-            continue
+        # BOTH STORES ANSWERED, so the cell is back in the normal population — recorded HERE rather
+        # than after the lag is known, because answering is what the memo asks about and a disagreement
+        # is still an answer. Left until later, a cell that had been invisible three times and then
+        # became merely contradictory would stay skipped until the 20-tick re-probe: silent for exactly
+        # the reason this list exists to prevent.
         if memo is not None:
             memo.record_present(cell)
+
+        lag = lag_for_edge(edge=edge, project=project, published=published_version, consumed=consumed_ranges)
+        if not lag.known:
+            # BOTH STORES ANSWERED AND CONTRADICTED EACH OTHER, which is a finding rather than an
+            # absence — and it is named here for the same reason the case above is. `record_edge_lag`
+            # publishes nothing (no sentinel is safe), so the cell has no series, and a count in a log
+            # line names no edge: an estate where every lane disagreed would publish nothing, page
+            # nobody, and read exactly like a cascade with no lag.
+            report.blind.append(BlindEdge(edge=edge, project=project, reason=STORES_DISAGREE))
+            log.warning("cascade_lag_edge_blind", extra={"edge": edge, "project": project, "reason": STORES_DISAGREE, "published": published_version})
+            continue
         record_edge_lag(lag, gauge=gauge)
         report.published_points += 1
     log.info(
@@ -383,11 +439,13 @@ def run_lag_tick(
         extra={
             "edges": report.edges,
             "published": report.published_points,
-            "unknown": report.unknown,
             "failed": report.failed,
             "unmeasurable": report.unmeasurable,
             "skipped": report.skipped,
-            "destination_invisible": len(report.destination_invisible),
+            # Per REASON, not a single total: the two are diagnosed and repaired differently, and a
+            # summed "blind" count would hide one rising while the other fell.
+            "destination_invisible": sum(1 for blind in report.blind if blind.reason == DESTINATION_INVISIBLE),
+            "stores_disagree": sum(1 for blind in report.blind if blind.reason == STORES_DISAGREE),
         },
     )
     return report

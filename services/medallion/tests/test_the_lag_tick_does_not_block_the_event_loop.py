@@ -63,7 +63,7 @@ def app(monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[int]]:
     def _blocking_tick(**_kwargs: Any) -> LagTickReport:
         ticked_on.append(threading.get_ident())
         time.sleep(TICK_BLOCK_SECONDS)  # stands in for the sequential per-edge `httpx.get` calls
-        return LagTickReport(edges=0, published_points=0, unknown=0, failed=0)
+        return LagTickReport(edges=0, published_points=0, failed=0)
 
     monkeypatch.setattr(cascade_lag_cron, "run_lag_tick", _blocking_tick)
     monkeypatch.setattr("medallion.services.cascade_lag_readers.declared_edges", lambda _s: [])

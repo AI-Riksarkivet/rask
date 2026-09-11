@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from starlette.concurrency import run_in_threadpool
 
 from medallion.api.dependencies import SettingsDep
-from medallion.core.metrics import cascade_lag_gauge, record_destination_invisible
+from medallion.core.metrics import cascade_lag_gauge, record_blind_edges
 from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, run_lag_tick
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -71,7 +71,7 @@ async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dap
     # whether the value is known, while this is a fact the report already carries. `_tick` returns the
     # report to the sidecar, so the identities are on the wire either way; the series is what an alert
     # can reach. Pinned by `test_the_lag_cron_publishes_the_blind_lanes_it_found`.
-    record_destination_invisible(report.destination_invisible)
+    record_blind_edges(report.blind)
     return report
 
 

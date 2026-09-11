@@ -106,10 +106,16 @@ target (`medallion_stage_denied` rises); re-seed with `scripts/seed_medallion_fg
 blocked a bad batch (`medallion_stage_quality_blocked`) — by design, the bad batch does not promote; the
 failed run is in the lineage graph. (3) With Ray on, the stage Ray job failed/timed out — check
 `ray job list` on `ray-lance-head`. (4) The delivery exhausted retries and parked — see
-[DLQ parking](#dlq-parking--a-delivery-gave-up). (5) **`MedallionCascadeDestinationInvisible`** — the lane's
-source publishes but its destination cannot be read, so no lag exists to page on. Two conditions answer
-alike at lineage's door, because its metadata gate runs before existence resolution, and telling them
-apart is the first diagnostic step:
+[DLQ parking](#dlq-parking--a-delivery-gave-up). (5) **`MedallionCascadeLagBlind`** — the lane's source
+publishes but its lag cannot be stated, so no lag series exists to page on. **Branch on the alert's
+`lance_medallion_reason` label.**
+
+*`stores_disagree`*: the consumed frontier is ahead of the published version — a `published` tag moved
+backwards, or a lineage run outlived the table it names. Compare the table's tag against the runs that
+claim to have consumed it; the graph is the side that can hold a stale row.
+
+*`destination_invisible`*: two conditions answer alike at lineage's door, because its metadata gate runs
+before existence resolution, and telling them apart is the first diagnostic step:
 
 ```bash
 kubectl exec rask-age-0 -- psql -U lance -d lineage -tAc "LOAD 'age'; SET search_path = ag_catalog, \"\$user\", public;

@@ -474,7 +474,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   together or `values-live-pins.yaml` stops being true; only medallion's three files differ between
   `main-b641103f` and this build, which is what makes rolling all ten safe.
   *What observing it means:* the tick should report `destination_invisible: 1` and a
-  `medallion_cascade_lag_destination_invisible{lance_medallion_edge="silver->gold",lance_medallion_project="advref31"}`
+  `medallion_cascade_lag_blind{lance_medallion_edge="silver->gold",lance_medallion_project="advref31",lance_medallion_reason="destination_invisible"}`
   series should appear. If it instead stays at 0 with `unmeasurable: 252`, then that tenant's silver has
   no `published` tag and the state is a different one — an unpublished mid-cascade tier — which is worth
   its own row rather than a patch to this one.
@@ -490,7 +490,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   that exist with zero tuples ([[LH-144]]), so a guessed first-hop lag could be a confident number for
   a hop that had in fact run. The cell is deliberately NOT memoized into silence: it is the estate's
   only evidence of that lost hop, so it pays one audit record a tick and stays in the population.
-  `medallion.cascade.lag_destination_invisible` carries it and `MedallionCascadeDestinationInvisible`
+  `medallion.cascade.lag_blind{reason="destination_invisible"}` carries it and `MedallionCascadeLagBlind`
   pages on it after 30m. Gated by `test_a_running_lane_is_not_dismissed_as_unmeasurable.py` (5 tests,
   RED first) and two promtool cases, one of which pins that `MedallionCascadeLag` stays SILENT on the
   same input — an operator must not be able to silence one and believe the other covers it.
@@ -544,8 +544,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *This is the same class as [[LH-143]] one notch milder,* and worth fixing the same way: the state is
   real and named internally, and the gap is that it stops at the report. The fix is symmetric with
   `destination_invisible` — carry the identities, export a series, alert on persistence.
-- *Not folded into [[LH-143]]'s fix deliberately:* that change earns its scope from a measured live
-  loss; this one is a hole found by reading the same code, and should be sized on its own evidence.
+- *Sized on its own evidence, then folded after all,* and the reversal is the interesting part. The
+  intent was to keep it separate because [[LH-143]] earns its scope from a measured live loss and this
+  was found by reading. Re-measuring settled it: `unknown: 1` is on EVERY tick, stable, and the tick at
+  21:38 UTC shows the same. Two states that both mean "this lane is running and its lag cannot be
+  stated", reported through two different fields, is the exact shape that produced [[LH-143]] — two
+  sibling readers classifying one identical refusal differently. So they became one closed vocabulary.
+- **FIXED IN CODE 2026-09-11, in the same image as [[LH-143]] and not yet observed.** `unknown: int`
+  is gone; both states are `LagTickReport.blind: list[BlindEdge]` carrying `edge`, `project` and a
+  reason from a closed set — `destination_invisible` and `stores_disagree` — exported as
+  `medallion.cascade.lag_blind{reason}` and paged by one `MedallionCascadeLagBlind`, the shape
+  `medallion.stage.refused` already uses for its four refusals. The tick line reports the two reasons
+  SEPARATELY rather than as a sum, so one rising while the other falls cannot hide.
+  *`ty` earned its keep here:* it flagged `pydantic-discarded-extra-argument` at four test sites still
+  passing `unknown=`, each of which would otherwise have asserted against a silently dropped kwarg.
 - *Closes when:* an operator can name which edge disagreed and be paged when the disagreement persists.
 
 **LH-144 · Three gold tables exist in the lineage graph with ZERO authorization tuples — created, ungoverned, and unreachable**
