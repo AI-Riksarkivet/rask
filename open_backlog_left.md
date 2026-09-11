@@ -726,6 +726,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   stage registered its output at its own composed write path (`to_uri = {root}/medallion/{to_namespace}`,
   `transform.py:601`, the write half the read-side I2 fix deliberately left alone), or the table was
   re-registered later. That decides whether the fix is at registration or at publication.
+- **(b)'s HEADLINE IS REFUTED — the distributed plane is NOT unused.** The row says "0 distributed
+  commits against 24 in-pod fallbacks in 24 h". `maintenance_dataset_outcome` carries `mode` per
+  dataset, and its own docstring supplies the query; run over 600 outcomes since 2026-09-11 12:00:
+
+      distributed  253
+      in_pod       347
+      fragments_removed  0
+
+  So the door is driven for roughly two datasets in five, and "cannot be driven for exactly the datasets
+  the cascade writes" is false as written. (600 is a LIMIT rather than a random draw, so the RATIO is
+  indicative; any distributed outcome at all refutes "0", and 253 is not a boundary case.)
+- *And `fragments_removed = 0` is the number that actually matters here,* matching LH-134's
+  "`fragments_removed_total=0` across 785 ticks": compaction runs, distributed and in-pod alike, and
+  removes nothing — because nothing needs compacting. So the 404/403 populations are a correctness
+  defect worth fixing on their own terms, not the reason the estate is uncompacted. It is not.
+
 - **(b) ROOT-CAUSED 2026-09-11 FROM THE SAME SOURCE, and it is TWO causes rather than one — the row's
   framing is wrong.** `compaction_plane_unavailable_falling_back` carries `uri`, `table_id` and
   `reason`; sampling 40 from the live estate:
