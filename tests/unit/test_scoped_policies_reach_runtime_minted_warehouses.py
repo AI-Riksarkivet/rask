@@ -372,7 +372,7 @@ def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attach
 # contact: that policy denies the control prefixes TOTALLY, which is right for a Ray stage job (it
 # reads FROM_URI, writes TO_URI and consults nothing) and wrong for the SERVICES that drive it. The
 # medallion reaches those records directly over S3, not through the catalog door — measured
-# 2026-09-07: `task_register.register_ray_tasks` WRITES `_tasks/`, and `transform_spec.resolve_task`
+# 2026-09-07: `task_register.register_tasks` WRITES `_tasks/`, and `transform_spec.resolve_task`
 # / `resolve_transform` / `gate_specs` / `project_root` READ `_tasks/`, `_transforms/`, `_gates/` and
 # the warehouse registry. So the deny is write-only like maintenance's, with `_tasks/` carved out
 # because this plane is that prefix's REGISTRAR rather than its consumer.
@@ -387,7 +387,7 @@ def test_the_medallion_writes_a_runtime_minted_warehouse_bucket(medallion: dict)
 
 
 def test_the_medallion_may_REGISTER_a_task_because_it_owns_that_prefix(medallion: dict) -> None:
-    """THE ONE CARVE-OUT, and the reason this is not the Ray policy. `register_ray_tasks` writes
+    """THE ONE CARVE-OUT, and the reason this is not the Ray policy. `register_tasks` writes
     `_tasks/<hash>.json` at boot; the Ray lane is that prefix's untrusted consumer and is denied it
     totally. Denying the registrar would leave `engine_choice` refusing every task nobody registered —
     a cascade that cannot run anything, with the policy looking correct."""

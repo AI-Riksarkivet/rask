@@ -37,7 +37,7 @@ from medallion.api.stage_runner_ops import router as stage_runner_ops_router
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
 from medallion.core.config import get_settings
-from medallion.services.task_register import register_ray_tasks
+from medallion.services.task_register import register_tasks
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.auth_lifespan import attach_auth
@@ -77,8 +77,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # WHAT THIS ESTATE'S RAY PLANE CAN RUN, asserted by a plane that can actually run it. The catalog
     # consults `_tasks/` when a transform is declared, so a task nobody registered is refused at the
     # door rather than discovered at submit. AFTER `apply_dapr_secrets`, because the write needs the
-    # S3 credential that call splices in. Non-fatal by design — see `register_ray_tasks`.
-    await run_in_threadpool(register_ray_tasks, get_settings())
+    # S3 credential that call splices in. Non-fatal by design — see `register_tasks`.
+    await run_in_threadpool(register_tasks, get_settings())
     # The Dapr client targets the local sidecar (localhost) — cheap to build, no broker reachability
     # needed at boot. The sidecar persists publishes to NATS JetStream; a delivery that exhausts its
     # retries dead-letter-parks on the subscriber's dlq.* topic (Dapr-native DLQ, default-on via the

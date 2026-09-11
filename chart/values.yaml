@@ -1322,6 +1322,12 @@ medallion:
     # The training job is not a row transform — it reads a governed table and emits a MODEL — so it
     # constrains no cardinality rather than claiming one the vocabulary cannot express.
     - { task: train, command: "python /home/ray/jobs/ray_train_job.py" }
+  # WHAT THE IN-PROCESS PLANE CAN RUN. Declared separately from `rayTasks` and rendered OUTSIDE the
+  # `ray` guard, because this is the plane an estate that brings no Ray cluster runs on — and a plane
+  # that registers nothing leaves `_tasks/` empty, which makes the catalog's declaration door answer
+  # 422 for every transform. The engine is stamped by the registering plane, never by this list.
+  inprocessTasks:
+    - { task: stage-transform, command: "medallion.transform_stage", cardinalities: ["1:1", "1:N"] }
   # When true, after the compute writes a stage's Lance dataset the stage runner runs data-quality assertions on it
   # (row_count > 0, key column non-null) and BLOCKS promotion on failure — the failed run + its
   # dataQualityAssertions facet are still emitted (auditable in lineage), but the next stage is NOT

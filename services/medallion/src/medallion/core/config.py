@@ -31,17 +31,20 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lakehouse.warehouse_registry import project_namespace as project_namespace
 
 
-class RayTaskDeclaration(BaseModel):
-    """One task the estate's Ray plane can run, as the CHART declares it.
+class TaskDeclaration(BaseModel):
+    """One task a plane of this estate can run, as the CHART declares it.
 
-    The engine is deliberately absent: this plane submits to Ray, so it stamps ``engine="ray"`` on
-    the registration itself. Letting the chart supply it would make a typo register a task no
-    submitter here answers to — a declaration that validates at the catalog door and then resolves
-    to nothing at submit, which is the failure the registry exists to move earlier.
+    ENGINE-NEUTRAL, and named so: the same shape declares what the Ray plane runs and what the
+    in-process engine runs, because the only thing that differs between them is which plane writes
+    the registration. The engine is deliberately absent from the row — the registering plane stamps
+    its own. Letting the chart supply it would make a typo register a task no executor here answers
+    to: a declaration that validates at the catalog door and then resolves to nothing at dispatch,
+    which is the failure the registry exists to move earlier.
 
     ``command`` is the ENGINE's business and the platform never parses it. For Ray it is the Jobs
-    API entrypoint; the script it names must be baked into the image the cluster runs, which
-    `tests/unit/test_ray_job_images.py` checks against the dockerfile's own COPY list.
+    API entrypoint, and the script it names must be baked into the image the cluster runs, which
+    `tests/unit/test_ray_job_images.py` checks against the dockerfile's own COPY list. For the
+    in-process engine it names a callable that plane already hosts.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -302,7 +305,14 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: is what keeps an engine's name out of the published OpenAPI: a second engine registers its own
     #: tasks under the same prefix and the declaration door learns nothing new. Empty leaves the
     #: registry untouched — an estate that declares no transforms needs none.
-    ray_tasks: list[RayTaskDeclaration] = Field(default_factory=list, alias="MEDALLION_RAY_TASKS")
+    ray_tasks: list[TaskDeclaration] = Field(default_factory=list, alias="MEDALLION_RAY_TASKS")
+    #: What the IN-PROCESS plane can run, declared exactly like the Ray list above.
+    #:
+    #: Without it a Ray-less estate registers NOTHING, so `_tasks/` is empty and the catalog's
+    #: declaration door answers 422 for every transform — a catalog door failing for a compute reason,
+    #: which is the coupling the registry exists to remove. The in-process engine is a real second
+    #: engine (`engine_choice` says so in those words), and a real engine registers what it hosts.
+    inprocess_tasks: list[TaskDeclaration] = Field(default_factory=list, alias="MEDALLION_INPROCESS_TASKS")
     #: THE WORKLOAD'S OWN PARAMETERS — the channel that makes ``ray_entrypoint`` usable.
     #:
     #: A per-lane JSON object, forwarded into the job's ``runtime_env.env_vars`` under the

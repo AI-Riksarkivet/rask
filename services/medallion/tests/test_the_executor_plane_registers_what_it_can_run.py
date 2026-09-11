@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services.task_register import RAY_ENGINE, register_ray_tasks
+from medallion.services.task_register import RAY_ENGINE, register_tasks
 from medallion.services.transform_spec import UnrunnableTaskError, resolve_task
 from service_kit.lakehouse import task_registry
 from service_kit.lakehouse.task_registry import TaskRegistration
@@ -39,7 +39,7 @@ def _settings(tmp_path: Path, **over: object) -> MedallionSettings:
 def test_the_chart_declaration_lands_in_the_registry(tmp_path: Path) -> None:
     """The write, read back the way the catalog reads it — a different process, nothing shared but
     the control root."""
-    assert register_ray_tasks(_settings(tmp_path)) == 2
+    assert register_tasks(_settings(tmp_path)) == 2
 
     stored = task_registry.get_task(str(tmp_path), {}, "dummy-lane")
 
@@ -54,7 +54,7 @@ def test_the_ENGINE_is_stamped_by_the_plane_not_supplied_by_the_chart(tmp_path: 
     The registering plane knows what it submits to; a values file does not, and a typo there would
     survive every test that only checks the record round-trips.
     """
-    register_ray_tasks(_settings(tmp_path))
+    register_tasks(_settings(tmp_path))
 
     stored = task_registry.get_task(str(tmp_path), {}, "stage-transform")
 
@@ -64,7 +64,7 @@ def test_the_ENGINE_is_stamped_by_the_plane_not_supplied_by_the_chart(tmp_path: 
 def test_a_task_without_its_own_build_stamp_inherits_the_planes(tmp_path: Path) -> None:
     """One build stamp governs both halves, so a stale registration is detectable against the image
     the submitter is actually running."""
-    register_ray_tasks(_settings(tmp_path))
+    register_tasks(_settings(tmp_path))
 
     stored = task_registry.get_task(str(tmp_path), {}, "stage-transform")
 
@@ -73,7 +73,7 @@ def test_a_task_without_its_own_build_stamp_inherits_the_planes(tmp_path: Path) 
 
 def test_declaring_no_tasks_writes_NOTHING(tmp_path: Path) -> None:
     """An estate that declares no transforms needs no registry, and boot must not manufacture one."""
-    assert register_ray_tasks(_settings(tmp_path, ray_tasks=[])) == 0
+    assert register_tasks(_settings(tmp_path, ray_tasks=[])) == 0
     assert task_registry.get_task(str(tmp_path), {}, "stage-transform") is None
 
 
@@ -83,9 +83,9 @@ def test_an_unwritable_control_root_is_LOGGED_and_not_FATAL(tmp_path: Path, capl
     legible: the door answers 422 naming the exact task that is missing.
     """
     with caplog.at_level("ERROR"):
-        assert register_ray_tasks(_settings(tmp_path, control_root="")) == 0
+        assert register_tasks(_settings(tmp_path, control_root="")) == 0
 
-    assert "ray_tasks_unregisterable" in caplog.text
+    assert "tasks_unregisterable" in caplog.text
 
 
 # --- the submit path's half -----------------------------------------------------------------------
@@ -113,6 +113,6 @@ def test_a_task_registered_for_ANOTHER_engine_is_refused_HERE(tmp_path: Path) ->
 def test_a_registered_task_resolves_to_its_command(tmp_path: Path) -> None:
     """The happy path, and the reason the submit path reads the registry at all: what a transform
     RUNS comes from the plane that registered it, never from the transform record."""
-    register_ray_tasks(_settings(tmp_path))
+    register_tasks(_settings(tmp_path))
 
     assert resolve_task(_settings(tmp_path), task="stage-transform", engine=RAY_ENGINE).command == "python /home/ray/jobs/ray_stage_job.py"

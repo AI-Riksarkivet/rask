@@ -135,6 +135,12 @@ spec:
             - { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }
             {{- end }}
             {{- end }}
+            {{- if .Values.medallion.inprocessTasks }}
+            # OUTSIDE the `ray` guard on purpose: this is what the estate runs when it brings no Ray
+            # cluster, so gating it on Ray would leave exactly that estate with an empty registry and a
+            # catalog door refusing every declaration.
+            - { name: MEDALLION_INPROCESS_TASKS, value: {{ .Values.medallion.inprocessTasks | toJson | quote }} }
+            {{- end }}
             {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}
             # Rendered under fgaEnabled OR auth.enabled: the #64 human door below NEEDS the FGA client
             # (can_administer) — auth-on without these envs left the client on its unreachable default URL,

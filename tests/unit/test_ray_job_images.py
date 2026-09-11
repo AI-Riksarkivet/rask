@@ -227,10 +227,10 @@ def test_the_chart_declaration_parses_into_the_setting_that_reads_it() -> None:
     a cluster. `extra="forbid"` is what makes a typo'd key a failure at all, and this is where that
     failure is cheap.
     """
-    from medallion.core.config import RayTaskDeclaration
+    from medallion.core.config import TaskDeclaration
 
     for task in _chart_ray_tasks():
-        RayTaskDeclaration.model_validate(task)
+        TaskDeclaration.model_validate(task)
 
 
 def test_a_registered_cardinality_is_in_the_platform_vocabulary() -> None:
