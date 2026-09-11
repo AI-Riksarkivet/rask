@@ -386,6 +386,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   nothing. `lakehouse-bronze$events` (94) is the CORRECT spelling and 404s anyway, which is not a stamp
   problem at all but a table the catalog does not hold under that id. Only the first belongs to this
   row.
+- **THE SAME DEFECT HAS A GRAPH-SIDE TWIN, measured 2026-09-11, and it shares this row's design
+  question.** `register_table` ECHOED the caller's relative path and the door emitted it as the CREATED
+  edge's `source_uri` (fixed forward by `cf040fff`, which now resolves via `describe_table`). Counted
+  over every Dataset node in the live graph:
+
+      1162 datasets carry a source_uri
+      1102 absolute (all s3://)
+        60 RELATIVE — e.g. `silver/loop-1785786423_cae1f8ffb5a1`, `transcripts_v2.lance/chunks.lance`,
+           `probe-relative-loc`
+
+  A relative URI opens as nothing, so each of those 60 classifies MISSING_ON_STORAGE and is reported as
+  storage loss every tick. One of them is named `acme-bronze$zzprobe8926` pointing at
+  `probe-relative-loc` — someone probed exactly this and it was never carried further.
+- *The fix is FORWARD-ONLY, which is what makes it this row's problem too:* `cf040fff` stops new ones,
+  and the 60 keep their URI because nothing rewrites a Dataset node's `source_uri` after the fact. Same
+  shape as the stale stamp above — a wrong value repaired only by a write that may never come — with the
+  same authoritative source available (the catalog resolves the location) and the same open question
+  about where the repair belongs.
 - *Closes when:* A stamp repair exists that does not require a data write, sourced from something that
   can actually name the table — the catalog's own location→id answer is the only authoritative one, and
   whether that means a reverse lookup, a registry read, or carrying the id on the registration is the
