@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**229 open items**, deduped from 325 raw rows mined out of the seven files above. A further 49 rows
+**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 83 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -421,22 +421,48 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
   refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
 
-**LH-143 · ~~The cascade-lag monitor is blind for one project's silver→gold edge — the lineage producers door 403s it~~ — CLOSED AND OBSERVED 2026-09-11**
+**LH-143 · The cascade-lag detector cannot report a hop that NEVER RAN — the one case it exists for — because an absent destination is indistinguishable from a forbidden one**
 `medallion, lineage` · low · found 2026-09-11 by reading the estate's own warnings
 
-- **CLOSED BY THE DEPLOY, observed on `main-b641103f`.** The cascade-lag cron has run since the
-  restart and its tick reports:
+- **NOT CLOSED, AND THE DEPLOY MADE IT QUIETER RATHER THAN BETTER.** This row was marked closed on
+  2026-09-11 on the strength of `cascade_lag_edge_unreadable` going to zero. It went to zero because
+  the deploy shipped `625e3b06`, which translates a 403 from the producers door into
+  `EdgeNotMeasurable` — the same edge, moved from a bucket that WARNS into one that is silent by
+  design. Measured on the tick either side of the restart:
 
-      edges 267   failed 0   published 14   skipped 0   unknown 1   unmeasurable 252
+  | | pre-deploy | post-deploy |
+  |---|---|---|
+  | edges | 267 | 267 |
+  | published | 13 | 14 |
+  | unknown | 2 | 1 |
+  | **failed** | **1** | **0** |
+  | unmeasurable | 0 | **252** |
+  | skipped | 251 | 0 |
 
-  `failed: 0` against 19 unreadable edges per tick before, with 267 edges actually evaluated — so this
-  is the monitor working, not the cron failing to run.
-- **AND THE CAUSE WAS THE CREDENTIAL DEFECT, not a missing grant — this row's diagnosis was wrong
-  twice.** Filed as a missing read rung; corrected to "the gold dataset does not exist"; the operative
-  cause was that the medallion presented the SHARED bearer because its dedicated token was derived from
-  a value no values file defined, and lineage refuses a privileged subject that cannot claim its own
-  identity. Same root as [[LH-142]] and [[LH-078]] — three rows, three different symptoms, one broken
-  `sha256("<identity>-%!s(<nil>)")`.
+  `failed` was ONE, not the 19 the closure claimed — 19 was a count over a window, and one edge per
+  tick is what the records show. `advref31 silver->gold` has never once appeared in `published`.
+  (`skipped` 251 -> 0 and `unmeasurable` 0 -> 252 are the restart clearing `AbsentEdgeMemo`, which
+  re-probes every cell until three consecutive misses; not a change in what is known.)
+- **THE SHARPENED FINDING: `lag_for_edge`'s first-ever-hop branch CANNOT FIRE in production.** Its
+  `if not consumed: return EdgeLag(lag=published, known=True)` is the shape the module's own docstring
+  calls "the case this detector most needs to report". Reaching it requires `consumed_reader` to return
+  an EMPTY sequence — but a destination that was never written has no Dataset node at all, lineage's
+  `/datasets/{name}/producers` is gated router-level by `require_metadata_access` which runs BEFORE
+  existence resolution, and `consumed_reader` maps that 403 to `EdgeNotMeasurable`. So the only way to
+  an empty sequence is a dataset that EXISTS and has no producing run. A hop that never happened is
+  dropped, counted, and never published. That is a control that cannot fire, and `625e3b06` — a fix for
+  audit-log noise — is what closed the last path to it.
+- *Measured end to end, 2026-09-11:* (1) `advref31-gold$catalog` has NO Dataset node — asked of AGE
+  directly, `MATCH (d:Dataset)` filtered to that tenant returns exactly `advref31-bronze$events` and
+  `advref31-silver$features`; (2) the producers route's 403 is therefore absence, not forbiddance;
+  (3) the edge sat in `failed` before the deploy and sits in `unmeasurable` after it. The tenant's
+  silver is published and its gold was never written — a real, reportable first-hop lag that the
+  detector reports as nothing.
+- **THE CREDENTIAL DEFECT WAS NOT THE CAUSE, and the check that would have shown that was cheap.**
+  The closure credited [[LH-142]]'s broken `dapr.appToken` derivation. But 13 other edges read
+  lineage successfully with the SAME credential on the SAME tick, and a broken privileged token
+  answers 401, not 403 — the sampled records say `403 Forbidden` on one dataset. One edge failing
+  while thirteen succeed was never consistent with a credential that cannot be presented.
 - *Measured:* `cascade_lag_edge_unreadable` fires every tick, and every sampled record is the same
   thing — `403 Forbidden` on `GET http://rask-lineage:8000/datasets/advref31-gold$catalog/producers`,
   `project=advref31`, `edge=silver->gold`. 8 of 8 sampled, one project, one edge. Not estate-wide: every
