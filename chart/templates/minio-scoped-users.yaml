@@ -62,22 +62,24 @@ metadata:
          `post-install` covers the fresh install, where there is no upgrade phase to run in and no
          running pod to strand.
 
-         A PRE-UPGRADE HOOK MAY ONLY CONSUME A SECRET KEY THE PREVIOUS RELEASE ALREADY PUBLISHED, and
-         that is a permanent property of the phase rather than a caution about this one change. This
-         Job takes the store's root credential by `secretKeyRef` from `infra-credentials`, which under
-         `externalSecrets.enabled` is owned by ESO and filled from OpenBao — and the mapping that
-         names a key arrives with the release's OWN templates, which helm applies only AFTER its
-         pre-upgrade hooks. So an upgrade that renames that key deadlocks: the hook cannot start
-         (`CreateContainerConfigError: couldn't find key`), helm waits for the hook, and the
-         ExternalSecret that would create the key is in the manifest helm has not applied yet.
+         A PRE-UPGRADE HOOK MAY ONLY CONSUME A SECRET KEY THE PREVIOUS RELEASE ALREADY PUBLISHED —
+         a permanent property of the phase, and a CONSTRAINT ON RENAMES rather than a reason to drop
+         the phase. This Job takes the store's root credential by `secretKeyRef` from
+         `infra-credentials`, which under `externalSecrets.enabled` is owned by ESO and filled from
+         OpenBao; the mapping that names a key arrives with the release's OWN templates, which helm
+         applies only AFTER its pre-upgrade hooks. So an upgrade that RENAMES that key deadlocks: the
+         hook cannot start (`CreateContainerConfigError: couldn't find key`), helm waits for it, and
+         the ExternalSecret that would create the key sits in the manifest helm has not applied.
          Measured on the live estate 2026-09-11 — seeding the property into OpenBao does not break it
-         either, and patching the Secret by hand is reverted by ESO within seconds, because ESO
-         reconciles continuously rather than on its refresh interval.
+         either, and a hand-patched Secret is reverted by ESO within seconds, because ESO reconciles
+         continuously rather than on its refresh interval.
 
-         The pre-upgrade pass is therefore dropped. What it bought was a window — pods restarting with
-         a credential the store has not heard of yet — and the post pass closes that within one
-         reconcile; what it cost was an upgrade that cannot proceed at all. */}}
-    "helm.sh/hook": post-install,post-upgrade
+         DROPPING THE PHASE IS THE WRONG REPAIR, and was tried: it reopens exactly the window this Job
+         exists to close, and `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py`
+         fails on it by design. RENAMING an ESO-delivered key takes TWO releases — publish the new
+         name alongside the old in release N, move the consumers in N+1 — because one release cannot
+         both introduce a key and consume it before it exists. */}}
+    "helm.sh/hook": post-install,pre-upgrade,post-upgrade
     # Ordering WITHIN a phase: after any hook that provisions buckets.
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
