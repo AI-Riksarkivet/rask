@@ -1075,7 +1075,13 @@ def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
             "runId": run_id,
             "facets": {
                 "lance": lance,
-                "author": custom_facet(_PRODUCER, name=settings.author, sub=settings.author),
+                # `sub` is the SERVICE IDENTITY, not the display name. The lineage bus door authorizes
+                # AS `author.sub` and demands `can_write_data` on every output; `settings.author` is the
+                # role literal `data_eng`, which holds that on nothing, so stamping it here got this event
+                # refused and the failed run left no trace in the graph. `build_run_event` keeps the two
+                # apart at every other emit site (see :747-748); this one builds its event by hand —
+                # because it reports a job that died before emitting — and was left behind by that fix.
+                "author": custom_facet(_PRODUCER, name=settings.author, sub=settings.fga_service_identity),
                 "errorMessage": {"message": reason, "programmingLanguage": "PYTHON"},
             },
         },

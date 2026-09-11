@@ -55,7 +55,18 @@ log = logging.getLogger(__name__)
 #: issue. `create_index` is here because building an index changes no row either; it is emitted by BOTH
 #: the sweep and the catalog's own door, which is exactly why the rule below accepts EITHER rung rather
 #: than swapping one for the other.
-_MAINTENANCE_OPERATIONS: Final = frozenset({"compaction", "create_index"})
+#:
+#: A COMPACTION HAS TWO SPELLINGS AND BOTH BELONG HERE. The sweep emits `compaction`
+#: (`maintenance/core/lineage_emit.py`) and the catalog's on-demand `/compaction_commit` door emits
+#: `compact_table` (`catalog/core/lineage_emit.py`); each names its own door and neither changes a row.
+#: With only the first listed, the catalog's event fell to the data-write rule and demanded
+#: `can_write_data` — the rung the owner's zero-trust ruling deliberately refuses the sweep — so it was
+#: refused terminally. Measured 2026-09-11: 9 of 9 `compact_table` messages on the LINEAGE stream were
+#: rejected `can_write_data required on outputs`, none reached the graph, and each is refused again on
+#: every restart replay. Nothing downstream notices: this path does not dead-letter a refusal, the
+#: outbox has already dropped its staged copy, and the reconciler excludes `Rewrite` from holes.
+#: `maintenance/services/arrival.py` has named both spellings all along — this list was the one adrift.
+_MAINTENANCE_OPERATIONS: Final = frozenset({"compaction", "compact_table", "create_index"})
 
 #: The relation a data write demands. Named once so the two doors cannot drift on it.
 _WRITE_RELATIONS: Final = ("can_write_data",)

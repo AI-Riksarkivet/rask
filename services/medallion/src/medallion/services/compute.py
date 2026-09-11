@@ -175,9 +175,17 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
     a merge leaves `id_idx` standing); the Ray lane still overwrites, which is why this rebuild remains.
     """
     upstream_schema = lance.dataset(from_uri, storage_options=storage_options).schema
-    if _LINEAGE_COLUMN in lance.dataset(to_uri, storage_options=storage_options).schema.names:
+    target = lance.dataset(to_uri, storage_options=storage_options)
+    # THE DATA COMMIT'S VERSION, captured BEFORE the index rebuild below — an index build commits a
+    # `CreateIndex` version of its own, so measuring afterwards named it instead of the write. Measured
+    # 2026-09-11: all 253 stage-authored producer edges in the estate sat on a `CreateIndex` version,
+    # and four datasets had no producer edge on ANY retained data version.
+    data_version = int(target.version)
+    if _LINEAGE_COLUMN in target.schema.names:
         _index_lineage(to_uri, storage_options)
-    result = measure(to_uri, storage_options)
+    # Everything BUT the version is read after the rebuild, from one open: an index changes no row and
+    # no column, so rows/bytes/schema are unaffected and a second open would buy nothing.
+    result = measure(to_uri, storage_options).model_copy(update={"version": data_version})
     # result.fields IS the written schema (facet_fields of the just-measured dataset) — its names are all
     # the edge reconstruction needs on the output side, so the target is opened once, not twice.
     written_columns = [field["name"] for field in result.fields]
@@ -391,9 +399,12 @@ def transform_stage(
             enable_stable_row_ids=True,
             initial_bases=[lance.DatasetBasePath(carried_base, _EXTERNAL_BASE_NAME)] if carried_base else None,
         )
+    # Same rule as `measure_stage`: the edge must name the version the ROWS landed at, not the
+    # `CreateIndex` the rebuild below commits.
+    data_version = int(lance.dataset(to_uri, storage_options=storage_options).version)
     if lineage is not None:
         _index_lineage(to_uri, storage_options)
-    result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
+    result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows, "version": data_version})
     # Declare the input→output column edges for the columnLineage facet (#1) — blob_payloads' keys ARE this
     # stage's blob columns (the deriver source). The stage runner attaches the single upstream dataset identity.
     result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
