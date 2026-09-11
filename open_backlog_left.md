@@ -688,12 +688,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   framing is wrong.** `compaction_plane_unavailable_falling_back` carries `uri`, `table_id` and
   `reason`; sampling 40 from the live estate:
 
-      26/40  403 — the catalog REFUSES the plan: the id resolves, `service-maintenance` lacks the rung
-      14/40  404 — the id names no table
+      228/400  404 — the id names no table, across just TWO ids
+      172/400  403 — `can_maintain required on table:<id>`, across NINE tables
 
-  So the dominant reason the distributed plane is unused is AUTHORIZATION, not the identifier crossing
-  this row and the earlier narrowing both blamed. 543 `maintenance_rewrite_denied` in the same window
-  are the refusals that stop a dataset outright.
+  BOTH causes are real and neither dominates the way a first 40-row sample suggested — that sample read
+  26/40 in favour of 403 and the 400-row one reverses it, so any proportional claim here needs the larger
+  draw. 543 `maintenance_rewrite_denied` in the same window are the refusals that stop a dataset outright.
+  The populations are what matter more than the ratio, because both are a handful of datasets retried
+  every tick:
+
+      404: lakehouse$bronze$events (134, bucket lance-catalog), lakehouse-bronze$events (94, lakehouse-wh)
+      403: 9 tables, entirely in lane-wh / e2e-iso-a / e2e-iso-b / bind86-wh / research-bucket
+
+  So the IDENTIFIER half hits the platform's OWN medallion datasets, while the AUTHORIZATION half is
+  confined to test and e2e residue buckets — the same residue population LH-002 tracks, and the reason
+  LH-078's per-warehouse `maintainer` tuples do not cover them (a warehouse the registry does not
+  account for grants nothing).
 - *The 404 half is an identifier defect, and a provenance one underneath it.* The failing ids are
   `lakehouse$bronze$events` — THREE segments, which the catalog parses as namespace `lakehouse` then
   `bronze` then table `events`, naming nothing — and `lakehouse-bronze$events`. Worse, ONE id is sent
