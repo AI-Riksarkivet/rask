@@ -1532,6 +1532,17 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 `catalog, service-kit` · med · **blocked:** owner ruling on per-action vs one-check authorization (the delete path also needs the `fga` CLI, which 403s through the sandbox proxy)
 
 - *Why open:* `model.fga:443,445` still define `can_set_property: editor` and `can_cancel: committer` as removal candidates awaiting this decision, and `fga_deps._authorize_transaction` (`api/fga_deps.py:381`) picks between exactly `can_describe` and `can_set_status` — so anyone who can commit can also edit properties, and the model claims a distinction nothing enforces.
+- **BOTH PREMISES RE-MEASURED 2026-09-11; one citation is stale and the tooling obstacle is not what it
+  says.** The substance holds: `can_set_property: editor` and `can_cancel: committer` are still defined
+  and still referenced by nothing that authorizes per action — but at `model.fga:492,494`, not the
+  `443,445` this row cites, which now hold `can_revoke_grant` / `can_read_assignments`. A reader
+  checking the cited lines finds unrelated relations and can reasonably conclude the row is stale when
+  it is not.
+- *The `fga` CLI is present and runs:* `.localbin/fga` answers `v0.6.4`. It is not on PATH, which is
+  what "needs the fga CLI" reads as from a shell. The recorded obstacle — "403s through the sandbox
+  proxy" — is about network EGRESS, and the store is an in-cluster `ClusterIP` (`rask-openfga`,
+  8081/8080/3000), so a port-forward is the path this row has not tried rather than a wall. Worth one
+  attempt before the tooling half is treated as blocking anything.
 - *Closes when:* Either extend `endpoints/transactions.py`'s `alter` route to authorize per state-action (making `can_set_property`/`can_cancel` real doors), or delete both lines from `model.fga` with `fga model test` green — noting that deleting the `editor` rung is a second decision, since `viewer` inherits from it and it carries its own direct-grant slot.
 
 **LH-078 · 8 credential vends per tick still 403, so 8 rewrites sign with the ambient root key, and no counter or alert surfaces it**
