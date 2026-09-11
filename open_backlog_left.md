@@ -105,6 +105,26 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
 `lineage, maintenance` · **HIGH**
 
+- **ROOT-CAUSED 2026-09-11: `storage_loss` IS TWO STATES, AND THE BENIGN ONE DOMINATES.**
+  `STORAGE_LOSS_STATES = (GRAPH_AHEAD, MISSING_ON_STORAGE)` (`reconcile.py:272`), and `summarize_sweep`
+  reports both under one name. `GRAPH_AHEAD` means the dataset is READABLE and merely sits at a lower
+  version than the graph records — which is precisely this row's own re-measurement ("29 of the 32 are
+  LIVE, catalog-registered, readable tables ... `count_rows` answers 3"). A table an e2e run dropped and
+  recreated is at v1 while the graph still holds v3: benign, expected, and indistinguishable in the
+  report from data destruction.
+- *So the WARN is ~91% benign by this row's own count, and the label is what makes it unreadable.* The
+  constant's comment argues the grouping deliberately ("the graph claims a version/dataset that on-disk
+  Lance no longer has"), and that argument holds for MISSING_ON_STORAGE; for GRAPH_AHEAD it describes a
+  rollback that a recreate also produces. One name for both is why the line reads as 32 destroyed
+  datasets every tick.
+- *The names live in GreptimeDB, which settles the composition question this row could not:* the
+  `lineage_reconcile_storage_loss` WARN carries the full list, and it is e2e residue by name —
+  `probe$nonexistent`, `e2e-ns$t178b2dda`, `tracka$…`, `trackansd…`, `cli07837ns$t2`. Measured stable at
+  `storage_loss=32, unreadable=2, stale=268, checked=356` across every tick sampled.
+- *Smaller, truer fix than the row asks for:* split the two states into their own report fields and
+  their own WARN lines, so `graph_ahead` (benign after a recreate) stops being spelled as loss. That is
+  a `SweepReport` change plus `summarize_sweep`/`log_sweep`, no new probe and no extra I/O, and it makes
+  the residue question answerable instead of arguing about pruning first.
   **RE-MEASURED 2026-09-11 — THE SYMPTOM IS REAL, THE DIAGNOSIS IS WRONG, AND THE REMEDY CLOSES
   NOTHING.** Both WARN lines do fire on every 300 s tick at exactly `storage_loss=32, unreadable=2`.
   But the 32 are NOT dead test residue whose storage is gone: **29 of the 32** — every one alice's
