@@ -639,6 +639,30 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   STILL UNMEASURED, and it decides the fix: whether the stamped id resolves for the tiers that DO
   carry a `$` leaf. That needs the live catalog's table list beside what the sweep sends, so the
   drive below still stands.
+- **(a) IS ROOT-CAUSED 2026-09-11 WITHOUT A DRIVE — the `extra` the deployed text formatter drops is in
+  GreptimeDB, which this row listed as unqueried.** All 8 refusals, byte-identical:
+
+      root     = s3://bind86-wh/78de8931_bind86-silver$features   (catalog-VENDED, uuid8 layout)
+      supplied = s3://bind86-wh/medallion/silver                  (the COMPOSED tier path)
+      project  = bind86   transition = silver->gold   at transform.py:682-683
+
+  **It is candidate (1), in its STALE form; (2) and (3) are refuted.** The refusal itself proves
+  `from_uri` was PRESENT — `_confine_from_uri` checks nothing when it is absent (`if supplied:`), so an
+  omitted location produces no refusal at all. And `publication_trigger.py:147` sets that field from
+  exactly one source, `extra["location"]`. So the catalog's publish control event carried
+  `s3://bind86-wh/medallion/silver` as the location of a table it now vends at
+  `s3://bind86-wh/78de8931_bind86-silver$features`. (3) is refuted because the composed value arrived
+  THROUGH the publication rather than being composed by the consumer — the consumer's own resolution was
+  correct, and `read_root` is the vended location. (2) is refuted because the 10 publication triggers
+  that day all name `dataset=silver$features`, the same object `read_root` resolves to.
+- *So the defect is one location recorded at publication and a different one vended at trigger time*,
+  and the guard is working exactly as designed: `transform.py:667` already says the composed layout is
+  "a path no catalog-written table has ever occupied". The fix belongs where `location` is STAMPED on the
+  publish control event, not in the confinement check.
+- *What a drive is still needed for:* which writer stamped the composed location — whether the silver
+  stage registered its output at its own composed write path (`to_uri = {root}/medallion/{to_namespace}`,
+  `transform.py:601`, the write half the read-side I2 fix deliberately left alone), or the table was
+  re-registered later. That decides whether the fix is at registration or at publication.
 - *Closes when:* Drive one `bind86` silver→gold hop (owner-authorised 2026-09-11), print `supplied` vs
   `read_root` at the refusal, and fix whichever of the three the values name; reproduce (b) by calling
   `/compaction_plan` with a medallion tier id and fixing whichever of the id resolution or the route is
