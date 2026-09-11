@@ -235,27 +235,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   the table" — but it should be a deliberate scope statement rather than an accident, and reporting
   branch coverage as EXCLUDED (the way the sweep reports its other exclusions) would make it visible.
 
-**LH-135 · The FGA model the estate RUNS does not match the model the repo ships**
-`catalog, service-kit` · med · filed 2026-09-11
+**LH-135 · ~~the running FGA model is missing a relation the repo defines~~ — NOT A MODEL DEFECT; CLOSED 2026-09-11**
+`catalog` · was med
 
-- *MEASURED, and the two halves disagree:* `model.fga` and `model.json` both define
-  `warehouse#event_stager` (the DSL twice, the JSON once), the deployed catalog image contains both,
-  and `fga.provision()` was driven by hand against the live store — it returned a NEW model id
-  (`01M284TTR5S8F9RK8AQAKQSC0Q`) and that model, read back by id, contains **zero** occurrences of
-  the relation. So the write path reports success and publishes a model missing a relation its own
-  source defines.
-- *The symptom it produces:* `bootstrap-admin` fails every upgrade on
-  `Invalid tuple 'warehouse:lance_catalog#event_stager@user:service-ingest'. Reason: relation
-  'warehouse#event_stager' not found`, so the ingest plane never receives its event-staging grant and
-  the job's other grants land silently around it.
-- *WHAT IS NOT THE CAUSE, ruled out rather than assumed:* the catalog is the designated provisioner
-  (`main.py:140`, `provision=True`), it carries no `fga_store_id`/`fga_model_id` pins in its
-  environment, and the image is current (`main-5a0d4065`). The remaining candidates are what
-  `load_model()` actually reads versus what the DSL says, and whether the JSON's relation is defined
-  on the type it appears to be.
-- *Not on the critical path, which is why it is filed rather than chased:* the estate is healthy and
-  the release is `deployed`. It costs one grant, on one service, and it has been failing since before
-  the store swap — every upgrade, unnoticed, which is the part that makes it a row.
+- *WHAT IT ACTUALLY WAS: a stale IMAGE, not a broken write path.* The catalog IS the FGA provisioner
+  (`main.py:140`, `provision=True`) and rewrites the authorization model at boot from its own bundled
+  `model.json`. The estate was running `lance-rest-catalog:main-8c229296`, built before
+  `warehouse#event_stager` existed — measured, that image's bundled model contains ZERO occurrences of
+  it — so every boot re-published a model without the relation and `bootstrap-admin` failed on the
+  tuple for `user:service-ingest`, on every upgrade, for as long as the estate stayed behind main.
+- *Closed by deploying current main.* Verified on the live estate: the deployed pod's `load_model()`
+  carries the relation, `check can_stage_events` for `user:service-ingest` on
+  `warehouse:lance_catalog` answers **True**, and the exact tuple write that had been failing now
+  succeeds.
+- *THE ROW'S OWN EVIDENCE WAS WRONG and that is worth keeping.* It recorded "`fga.provision()`
+  returned a NEW model id whose contents, read back by id, contain zero occurrences" — the read-back
+  queried the wrong model, and the conclusion drawn from it (that the write path publishes a model
+  missing a relation its source defines) described a defect that did not exist. The lesson is the
+  estate's own: a verdict is not evidence it is still true, and a read-back has to be shown to be
+  reading the thing it claims to.
+- *What remains is a REAL gap this exposed, filed on its own terms:* nothing detects that the deployed
+  catalog's model is older than the chart's grants. The failure was visible only as a job that failed
+  on every upgrade and was never chased.
 
 **LH-134 · Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
