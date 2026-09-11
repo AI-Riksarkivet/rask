@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 47 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 16 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -341,9 +341,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   catalog's model is older than the chart's grants. The failure was visible only as a job that failed
   on every upgrade and was never chased.
 
-**LH-142 · Credential vending 401s on EVERY maintenance rewrite, so the STS path is inert and every rewrite is signed by the ambient process credential**
+**LH-142 · ~~Credential vending 401s on EVERY maintenance rewrite, so the STS path is inert and every rewrite is signed by the ambient process credential~~ — FIXED AND OBSERVED 2026-09-11**
 `maintenance, catalog, chart` · **HIGH** · found 2026-09-11 by reading the running estate, not by a review
 
+- **CLOSED BY THE DEPLOY, observed on the live estate 2026-09-11.** The row predicted this: "the deploy
+  may close this by itself... re-measure immediately after". Deployed `main-b641103f` (the image carrying
+  the corrected token derivation from `344e9763`); maintenance restarted and its own log window shows:
+
+      before   300 x `credential vending unavailable (401)`   300 x AMBIENT   0 x SCOPED
+      after      0 x 401                                                     41 x SCOPED
+
+  So every rewrite now signs with a table-scoped 900-second vended credential instead of the ambient
+  process credential. The STS path the estate's storage rule is built on is doing its job for the first
+  time in this window.
+- *Why it was broken is now readable:* both ends derive the dedicated token from the chart helper, and
+  the helper was hashing a value no values file defined (`%!s(<nil>)`). Deploying the corrected
+  derivation and restarting both the presenter and the verifier is what made the two agree.
 - *Measured, and the ratio is exact.* 600 `maintenance.services.credentials` records since 20:00 on the
   live estate split **300 / 300**: every one is either `credential vending unavailable for <table> (401)`
   or `write credential AMBIENT for <table> — nothing vended; this rewrite is signed by the root key`.
