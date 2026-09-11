@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**229 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
+**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 83 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -323,6 +323,33 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   catalog's model is older than the chart's grants. The failure was visible only as a job that failed
   on every upgrade and was never chased.
 
+**LH-142 · Credential vending 401s on EVERY maintenance rewrite, so every rewrite is signed by the ambient ROOT key**
+`maintenance, catalog, chart` · **HIGH** · found 2026-09-11 by reading the running estate, not by a review
+
+- *Measured, and the ratio is exact.* 600 `maintenance.services.credentials` records since 20:00 on the
+  live estate split **300 / 300**: every one is either `credential vending unavailable for <table> (401)`
+  or `write credential AMBIENT for <table> — nothing vended; this rewrite is signed by the root key`.
+  A perfect 1:1 pairing and **zero** successful scoped vends. So the STS machinery the estate's
+  zero-trust storage rule is built on is doing nothing, and the root credential is doing the work.
+- *401, not 403, and the distinction is the whole diagnosis.* 403 is "this identity may not"; 401 is
+  "the presented credential may not CLAIM this identity" — the refusal `service_principal` raises when a
+  privileged subject arrives with the SHARED bearer instead of its dedicated token. `openbao.yaml`'s own
+  seeding comment predicts exactly this for this identity: "`maintenance.catalogServiceIdentity` is on
+  this list because the catalog's `LANCE_PRIVILEGED_SUBJECTS` names it: a privileged subject whose token
+  is not seeded resolves to nothing, falls back to the shared bearer, and is refused — so the SEED is a
+  third half of this control." The control and its prediction are both present; what is missing is the
+  token actually reaching the door.
+- *Why nothing caught it:* the fallback is INFO-level and per-dataset, so it reads as routine. LH-078
+  tracks its milder ancestor (8 vends per tick 403ing) and rates it LOW on the strength of "207 AMBIENT
+  → 8". That ratio no longer holds: it is now every vend.
+- *It also invalidates a closure.* LH-134 records "after: 0 records/min" as evidence its lazy-vend fix
+  worked. That fix (`27ce13f3`) is NOT deployed — the running maintenance image `main-8c229296` has no
+  `_may_write_anything`, checked in the pod — so the observed halt is vends FAILING, not vends being
+  skipped. Same number, opposite cause, and the worse one.
+- *Closes when:* The maintenance identity presents its dedicated token at the catalog's vend door — root
+  cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
+  refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
+
 **LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
 `catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
 
@@ -461,7 +488,11 @@ _Every governance promise the lakehouse makes rests on the run record being emit
       after    2,232 records   growing     0/min
 
   The count FELL, which answers the open question about MinIO's purge: it does run, and it was simply
-  being outpaced roughly fifty to one. The sweep is unaffected — policies loaded, 95 registry buckets
+  being outpaced roughly fifty to one.
+  **THIS CLOSURE IS WRONG, re-measured 2026-09-11: the fix it credits is NOT DEPLOYED.** `27ce13f3` is
+  not an ancestor of the running image, and the deployed `sweep.py` has no `_may_write_anything` —
+  checked inside the pod. The halt is vends FAILING (401 on every one, see [[LH-142]]), not vends being
+  skipped. Same number, opposite cause. Reopen on the deploy and re-measure then. The sweep is unaffected — policies loaded, 95 registry buckets
   discovered, datasets walked, no errors.
 - *The probe is conservative and says so in one direction only:* more than one fragment, any superseded
   version with cleanup on, any real index with optimize on, and every unreadable or unanswerable case
