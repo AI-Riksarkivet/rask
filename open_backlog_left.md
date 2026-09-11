@@ -346,6 +346,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   worked. That fix (`27ce13f3`) is NOT deployed — the running maintenance image `main-8c229296` has no
   `_may_write_anything`, checked in the pod — so the observed halt is vends FAILING, not vends being
   skipped. Same number, opposite cause, and the worse one.
+- **NARROWED 2026-09-11 to the store, by eliminating everything else.** `service_headers`
+  (`catalog_identity.py`) presents the dedicated token when `secrets_from_dapr` is on AND the resolver
+  finds one, else the shared bearer. Checked in the RUNNING pod rather than the chart:
+  `MAINTENANCE_SECRETS_FROM_DAPR=true` and `MAINTENANCE_CATALOG_SERVICE_IDENTITY=service-maintenance`.
+  Both chart lists carry the identity — minted (`openbao.yaml:218`) and demanded
+  (`services.yaml:243,302`). So the toggle is on, the identity is right, and the two lists agree.
+  What remains is the token's PRESENCE or VALUE in the store at one end or the other, which needs
+  secret-store access to settle and is the next step for whoever has it.
+- *A hypothesis that was wrong, recorded so it is not retried:* grepping `services.yaml` for
+  `MAINTENANCE_SECRETS_FROM_DAPR` finds nothing and suggests a missing toggle. It is set in
+  `maintenance.yaml:248` and `maintenance-worker.yaml:204` — maintenance has its own template. The
+  running pod is what settled it.
+- *The deploy may close this by itself, which is a reason to try it first:* `344e9763` changes how every
+  dedicated token is DERIVED, and the upgrade re-runs the seed. If the 401 is a stale or absent seeded
+  value, re-seeding both ends consistently is exactly what fixes it — so re-measure this row immediately
+  after the deploy before doing anything else to it.
 - *Closes when:* The maintenance identity presents its dedicated token at the catalog's vend door — root
   cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
   refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
