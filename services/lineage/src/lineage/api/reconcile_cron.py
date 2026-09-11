@@ -16,11 +16,13 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
+from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, Field, ValidationError
 
 from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
+from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import declared_columns_map, storage_options
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
@@ -251,6 +253,7 @@ async def _prune_old_events(repository: RepositoryDep, settings: SettingsDep) ->
 
 
 async def _on_cron(
+    request: Request,
     repository: RepositoryDep,
     settings: SettingsDep,
     publisher: PublisherDep,
@@ -278,7 +281,7 @@ async def _on_cron(
         outcome = DrainOutcome()
         if settings.outbox_uri:
             try:
-                outcome = await _drain_outbox(repository, settings, opts, publisher)
+                outcome = await _drain_outbox(request, repository, settings, opts, publisher)
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
         report = summarize_sweep(await _sweep(repository, settings, opts))
@@ -289,7 +292,9 @@ async def _on_cron(
     return report.model_dump()
 
 
-async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], publisher: object | None = None) -> DrainOutcome:
+async def _drain_outbox(
+    request: Request, repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], publisher: object | None = None
+) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
     An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is ingested
@@ -363,6 +368,23 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
             continue
         try:
+            # THE FOURTH INGEST PATH, and it was the only one that authorized nothing. The HTTP door runs
+            # `enforce_author` + `enforce_output_authz`, the bus runs `authorize`, the DLQ replay door runs
+            # `enforce_output_authz` ("a caller may only replay a run they were authorized to write in the
+            # first place") — and this one ingested whatever was staged.
+            #
+            # THE BYPASS IS BETWEEN SERVICES, not from outside. `enforce_bus_authz` names the threat it
+            # closes: the bus is authenticated by the sidecar's shared credential and reads the author off
+            # the payload, so a producer holding that token could record any provenance about any dataset.
+            # The outbox is writable by exactly those producers (the vended outbox credential, stagers
+            # only) while lineage holds `s3:DeleteObject` on the prefix and nothing more — so a stager
+            # refused at the bus could stage instead and the relay would ingest it. Not a weaker gate: no
+            # gate.
+            #
+            # THE SAME FUNCTION, never a second copy: it authorizes AS the subject the producer stamped,
+            # which is the only principal a cron tick has. Two implementations of "may you record this" is
+            # how the doors drifted apart in the first place.
+            await enforce_bus_authz(event, request, settings)
             # Graph AND durable feed, in one transaction — see `ingest_event`. The drained run reaching
             # /runs + /producers while SILENTLY absent from /events was the shape this relay exists to
             # prevent, and it is no longer expressible: there is one write.
@@ -395,6 +417,21 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
                     data_content_type="application/json",
                 )
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+        except PermissionDeniedError as exc:
+            # STRANDED, NEVER DROPPED, and under its own name. A refusal is not poison (malformed, wedges
+            # the drain forever, so dropped) and not a transient failure (retried next tick): it is a
+            # governance answer about a well-formed event, and destroying the only durable copy of a
+            # committed write's provenance is the wrong response to "you may not record this".
+            #
+            # Its own log line because the fact is worth reading: a staged event the graph refuses means a
+            # producer is staging provenance it is not authorized to record, which the generic stranded
+            # line — shared with credential expiry and store outages — would bury.
+            stranded += 1
+            log.warning(
+                "lineage_outbox_event_unauthorized",
+                extra={"outbox_key": key, "run_id": event.run.run_id, "author": author_sub_from_payload(payload), "reason": str(exc)},
+            )
+            continue
         except Exception as exc:
             # LEFT STAGED on purpose — see "STRANDED IS NOT POISON" above. Named with both the object key
             # and the run it is about, because the two differ and only one of them finds the run in the graph.

@@ -412,7 +412,7 @@ def test_the_outbox_DRAINS_BEFORE_the_storage_sweep(tmp_path: Any, monkeypatch: 
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
 
     repo = _OrderRepo()
-    asyncio.run(_on_cron(cast(Any, repo), _settings(outbox_uri=uri), None, None))
+    asyncio.run(_on_cron(_cron_request(), cast(Any, repo), _settings(outbox_uri=uri), None, None))
 
     assert repo.order[:2] == ["drain", "sweep"], (
         f"the tick touched the repository in the order {repo.order[:2]} — the bounded drain must run before the "
@@ -423,7 +423,7 @@ def test_the_outbox_DRAINS_BEFORE_the_storage_sweep(tmp_path: Any, monkeypatch: 
 def test_cron_skips_when_another_sweep_holds_the_lock() -> None:
     repo = _LockRepo(acquired=False)
 
-    result = asyncio.run(_on_cron(cast(Any, repo), _settings(), None, None))
+    result = asyncio.run(_on_cron(_cron_request(), cast(Any, repo), _settings(), None, None))
 
     assert result["skipped"] is True  # single-flight: a busy tick returns skipped
     assert repo.swept is False  # and never touches the graph (no double-driven back-fill)
@@ -432,7 +432,7 @@ def test_cron_skips_when_another_sweep_holds_the_lock() -> None:
 def test_cron_runs_the_sweep_when_it_acquires_the_lock() -> None:
     repo = _LockRepo(acquired=True)
 
-    result = asyncio.run(_on_cron(cast(Any, repo), _settings(), None, None))
+    result = asyncio.run(_on_cron(_cron_request(), cast(Any, repo), _settings(), None, None))
 
     assert repo.swept is True  # acquired → the sweep ran
     assert "checked" in result and "skipped" not in result
@@ -614,3 +614,15 @@ def test_an_unreadable_dataset_is_excluded_from_storage_loss() -> None:
     """The signal an operator acts on must not count what it could not look at."""
     assert ReconcileState.UNREADABLE not in STORAGE_LOSS_STATES
     assert ReconcileState.UNREADABLE not in BACKFILLABLE_STATES
+
+
+def _cron_request() -> Any:
+    """A Request stand-in for `_on_cron`, which threads one to the drain's authorization gate.
+
+    FGA is off in these `_settings()` doubles, so `enforce_bus_authz` returns before touching it — these
+    tests keep pinning the tick's REPORT shape, which is what they were written for. The gate's own
+    behaviour is pinned by `test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`.
+    """
+    from types import SimpleNamespace
+
+    return cast(Any, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))

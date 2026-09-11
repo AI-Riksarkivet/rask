@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -133,6 +134,13 @@ class _Settings:
         self.dapr_pubsub = "lineage-pubsub"
         self.dapr_topic = "lineage.events.v1"
         self.dapr_publish_timeout_seconds = 5.0
+        # The relay authorizes a staged event before ingesting it (`enforce_bus_authz`), which reads this
+        # first and returns immediately when it is false. OFF here on purpose: these tests pin the drain's
+        # INGEST/PUBLISH/DROP mechanics, and the gate's own behaviour is pinned by
+        # `test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`. Absent rather than false, it would
+        # have failed as an AttributeError the tick's error boundary swallows into `stranded` — the exact
+        # failure this class's comment above warns about, met on the first change that read a new field.
+        self.fga_enabled = False
 
 
 def test_relay_drain_reingests_valid_and_drops_poison(tmp_path: Any) -> None:
@@ -157,7 +165,7 @@ def test_relay_drain_reingests_valid_and_drops_poison(tmp_path: Any) -> None:
     outbox.stage_event(uri, {}, "poison-run", "{ not valid json")
 
     repo = _Repo()
-    outcome = asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}))
+    outcome = asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {}))
 
     assert outcome.drained == 1  # the valid event ingested; the poison was dropped, not ingested
     assert repo.ingested == [run_id]  # graph AND the durable /events row, in one transaction
@@ -208,7 +216,7 @@ def test_ONE_ungraphable_event_does_not_strand_every_other_staged_event(tmp_path
             await super().ingest_event(event)
 
     repo = _RefusingRepo()
-    outcome = asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}))
+    outcome = asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {}))
 
     assert outcome.drained == 1, "the healthy event was not drained — one refused event stranded the whole outbox"
     assert outcome.stranded == 1, "the refused event was not counted as stranded, so nothing reports the wedge"
@@ -235,10 +243,10 @@ def test_relay_drain_is_idempotent_on_reingest(tmp_path: Any) -> None:
     )
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
     repo = _Repo()
-    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
+    assert asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
     # re-stage + drain again → still fine (the ingest is idempotent on run_id)
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
-    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
+    assert asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
     assert repo.ingested.count(event["run"]["runId"]) == 2  # called twice; the GRAPH MERGE makes it a no-op
 
 
@@ -387,7 +395,7 @@ def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascad
 
     monkeypatch.setattr(reconcile_cron.dapr_publish, "publish_event", _fake_publish)
 
-    outcome = asyncio.run(reconcile_cron._drain_outbox(cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
+    outcome = asyncio.run(reconcile_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
 
     assert outcome.drained == 1
     assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"
@@ -421,5 +429,16 @@ def test_the_drain_without_a_publisher_still_ingests(tmp_path: Any) -> None:
     outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
 
     repo = _Repo()
-    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}, None)).drained == 1
+    assert asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {}, None)).drained == 1
     assert repo.ingested == [event["run"]["runId"]]
+
+
+def _authorized_request() -> Any:
+    """A Request stand-in for the drain's authorization gate, with FGA OFF.
+
+    `enforce_bus_authz` returns immediately when `settings.fga_enabled` is false, and these `_Settings`
+    doubles do not enable it — so the gate is a no-op here and every assertion below still pins what it
+    always pinned: the drain's INGEST/PUBLISH/DROP behaviour. The authorization behaviour itself is
+    pinned by `test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`, which is where it belongs.
+    """
+    return cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))

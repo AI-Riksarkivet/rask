@@ -6,8 +6,13 @@ into the graph (the ``outbox_drained`` counter increments only on a successful i
 object. Combined with the unit test that proves the stage runner leaves the event staged on a publish failure,
 this closes the commit→publish loss window end to end.
 
-Skipped unless ``LANCE_E2E_LINEAGE_URL`` + ``LANCE_E2E_DAPR_TOKEN`` are set. Run via ``make e2e-outbox``
+Skipped unless ``LANCE_E2E_LINEAGE_URL`` + ``LANCE_E2E_DAPR_TOKEN`` are set. Run via ``make e2e-live``,
+which discovers both from the cluster, or ``make e2e-ci``, whose own help calls this suite #4 of five
 (needs the stack deployed with ``services.lineage.outbox.enabled=true`` + ``reconcile.enabled=true``).
+
+BOTH NAMED TARGETS EXIST, and that is the point of naming two: a per-suite ``e2e-outbox`` target does
+not, so an invocation invented from this file's own name fails with ``No rule to make target`` and reads
+as "the check cannot be run" rather than "the command was wrong".
 """
 
 from __future__ import annotations
