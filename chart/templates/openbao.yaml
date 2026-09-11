@@ -165,7 +165,8 @@ spec:
             - -c
             - |
               until bao status >/dev/null 2>&1; do echo wait-openbao; sleep 3; done
-              bao kv put secret/lance minio-secret-key={{ .Values.minio.secretKey }} postgres-password={{ .Values.age.password }} \
+              bao kv put secret/lance minio-secret-key={{ .Values.minio.secretKey }} \
+                minio-access-key={{ .Values.minio.accessKey }} postgres-password={{ .Values.age.password }} \
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
                 publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
                 dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable" \
