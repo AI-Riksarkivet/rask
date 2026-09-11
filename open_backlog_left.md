@@ -994,6 +994,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   removes nothing — because nothing needs compacting. So the 404/403 populations are a correctness
   defect worth fixing on their own terms, not the reason the estate is uncompacted. It is not.
 
+- **(b) LARGELY CLOSED BY THE DEPLOY, observed 2026-09-11.** On `main-b641103f`,
+  `compaction_plane_unavailable_falling_back` fell from hundreds per window to **6 in five minutes**, and
+  the composition is now pure:
+
+      3x 404 lakehouse$bronze$events     (the stale 3-segment stamp — [[LH-141]])
+      3x 404 lakehouse-bronze$events     (correct spelling, absent from the catalog)
+      0x 403
+
+  **The AUTHORIZATION half is gone** — the 403s were the credential path failing ([[LH-142]]), and with
+  vending working those datasets either vend or refuse cleanly via `maintenance_vend_denied` (27 in the
+  window) instead of silently falling back. The distributed plane now reports
+  `compaction_distributed_nothing_to_do` (400 in four minutes), i.e. it runs and finds nothing to
+  compact — which is the `fragments_removed = 0` picture, not a broken door.
+- *What remains of (b) is two ids and nothing else,* both already tracked: a stamp only a write repairs,
+  and a table the catalog does not hold under that name.
 - **(b) ROOT-CAUSED 2026-09-11 FROM THE SAME SOURCE, and it is TWO causes rather than one — the row's
   framing is wrong.** `compaction_plane_unavailable_falling_back` carries `uri`, `table_id` and
   `reason`; sampling 40 from the live estate:
@@ -1935,6 +1950,11 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Both halves the row prescribes have landed — `incomplete`/`excluded` are defined and the depth-limit inflation is fixed, and flag 16 no longer blanket-refuses because the gate now parses `BasePath.is_dataset_root`; what is left is only the narrower `is_protected` containment question.
   **Evidence:** The definitions the row says to establish FIRST are stated in code: services/maintenance/src/maintenance/services/reconcile.py:236-244 — `excluded_datasets` is 'datasets the unreferenced-file method does not APPLY to … Deliberately not in `incomplete`, which gates the purge', and `incomplete` is fed from reconcile.py:546/569/582/642/834/841/848/859 (the `storage:lance-catalog` entries the row asks to trace come from `_read_registry` at 559-569 and the bucket walk at 841-848). The `incomplete=65` cause is closed by LH-100's fix, present at HEAD: services/maintenance/src/maintenance/services/optimize.py:143-170 `_may_hide_a_dataset` plus its call at optimize.py:236 — a truncation is now recorded only where a subdirectory actually exists below the bound. The flag-16 half of the 'original plan' has landed too: services/maintenance/src/maintenance/services/optimize.py:602-620 records that refusing on flag 16 alone was over-broad and that the gate now 'asks about the BASES, not about the FLAG', wired at optimize.py:626-640 via `gather_compaction_bases(ds, dataset_root_probe(uri, storage_options))`, which reads `BasePath.is_dataset_root` (packages/service-kit/src/service_kit/lakehouse/features.py:384,404,508). The residue: NO per-base `managed`/`reference-only` field exists — packages/service-kit/src/service_kit/lakehouse/base_refs.py:84-89 `BaseRefs` carries only `protected: set[str]` and `unreadable`, and the refusal at optimize.py:651-653 is driven by `is_protected`'s two-way containment rule (base_refs.py:96-110), which refuses a branch at `<dataset>/tree/<name>` because it lies UNDER a protected root. The smaller true fix is: decide whether `is_protected` should exempt an `is_dataset_root=False` (reference-only) base, and record that distinction on the base — not a new warehouse-record schema plus scoped cleanup credentials.
+  **DISCOVERY TRUNCATION IS RESOLVED BY THE DEPLOY, observed 2026-09-11:**
+  `maintenance_discovery_truncated` is **0** in a five-minute window on `main-b641103f`, against 47 WARN
+  lines / 64 prefixes per tick before. The evidence-based `_may_hide_a_dataset` narrowing was written
+  2026-09-10 and simply had not shipped — so the 64 "incomplete units" this row family tracks were
+  pre-fix residue rather than a live coverage gap.
   **VOLUME RE-MEASURED 2026-09-11, and it is half the estate's warnings.** This row records
   `maintenance_refused_protected_base` at "286 in one sweep window" and rightly calls the refusal the
   shallow-clone rule working as designed. Measured over one hour on the live estate: **10,461**
