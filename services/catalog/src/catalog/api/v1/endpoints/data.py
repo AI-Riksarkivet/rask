@@ -643,8 +643,15 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
     """
     segments = parse_identifier(id, settings.delimiter)
-    predicate = changes.change_filter(begin_version=body.begin_version, end_version=body.end_version, kind=body.kind)
-    data = dataplane.read_changes(ns, so, segments, predicate=predicate, columns=body.columns, branch=body.branch)
+    if body.kind == "deleted":
+        # A DIFFERENT QUESTION, NOT A DIFFERENT FILTER. The version columns describe rows the table
+        # still has, so a deleted row is absent from every scan and `change_filter` refuses to compose
+        # a predicate for it; Lance answers from the transaction range instead. Audited identically —
+        # learning which rows a table LOST is as disclosing as learning which it gained.
+        data = dataplane.read_deleted_row_ids(ns, so, segments, begin_version=body.begin_version, end_version=body.end_version, branch=body.branch)
+    else:
+        predicate = changes.change_filter(begin_version=body.begin_version, end_version=body.end_version, kind=body.kind)
+        data = dataplane.read_changes(ns, so, segments, predicate=predicate, columns=body.columns, branch=body.branch)
     audit_read(subject=_reader(token), resource=id, version=body.end_version, columns=body.columns, change_kind=body.kind)
     return Response(content=data, media_type=ARROW_FILE)
 

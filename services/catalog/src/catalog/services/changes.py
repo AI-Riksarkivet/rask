@@ -32,7 +32,15 @@ from typing import Final, Literal
 from lance_namespace import InvalidInputError
 
 
-ChangeKind = Literal["inserted", "updated"]
+#: The three questions a consumer can ask of a version window.
+#:
+#: `deleted` IS NOT LIKE THE OTHER TWO, and the asymmetry is the whole reason it is called out here.
+#: The version columns describe rows the table STILL HAS, so `inserted` and `updated` are scan
+#: predicates over them — while a deleted row is gone from the scan entirely and no predicate can name
+#: it. Lance answers that question from the TRANSACTION range instead
+#: (`DatasetDelta.get_deleted_row_ids()`, which streams a single `_rowid` column), so the door branches
+#: on the kind rather than composing one filter for all three.
+ChangeKind = Literal["inserted", "updated", "deleted"]
 
 #: The two version columns Lance maintains per row. Named once: a typo in either is not an error, it is
 #: an unresolved column at scan time, and the message names the column rather than the feature.
@@ -67,6 +75,15 @@ def change_filter(*, begin_version: int, end_version: int | None, kind: ChangeKi
         raise InvalidInputError(
             f"begin_version {begin_version} is after end_version {end_version} — an inverted window answers no rows, "
             "which is indistinguishable from 'nothing changed'"
+        )
+    if kind == "deleted":
+        # NOT A PREDICATE, AND SAYING SO IS THE POINT. The version columns describe rows the table still
+        # has; a deleted row is absent from the scan, so any filter composed here would answer the wrong
+        # rows with a 200 — the exact failure this module's header names ("it answers rows, just the
+        # wrong ones, and the consumer cannot tell"). The door reads the transaction range instead.
+        raise InvalidInputError(
+            "a 'deleted' feed is not a scan predicate: the row is gone from the table, so no filter over "
+            "the version columns can name it — the door serves it from the transaction range instead"
         )
     if kind == "inserted":
         clauses = [f"{_CREATED} > {begin_version}"]

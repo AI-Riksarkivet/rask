@@ -1416,6 +1416,55 @@ def read_changes(
     return cast("bytes", sink.getvalue().to_pybytes())
 
 
+def read_deleted_row_ids(
+    ns: LanceNamespace,
+    so: StorageOptions,
+    table_id: list[str],
+    *,
+    begin_version: int,
+    end_version: int | None = None,
+    branch: str | None = None,
+) -> bytes:
+    """The `_rowid`s deleted in ``(begin_version, end_version]``, Arrow FILE-framed (§ J4, LH-008).
+
+    ITS OWN DOOR BECAUSE IT IS ITS OWN QUESTION. `read_changes` scans the table with a predicate over
+    the version columns, and those columns describe rows the table STILL HAS — a deleted row is absent
+    from every scan, so no filter can name it. Lance answers from the TRANSACTION range instead:
+    `DatasetDelta.get_deleted_row_ids()` streams a single `_rowid` column (verified against the
+    installed pylance; the method documents "Requires stable row ids", which the catalog's creation
+    contract already enforces on every governed dataset).
+
+    WHY THE FEED NEEDS IT AT ALL: the publication delta is insert-only while the cascade's writer
+    hard-deletes with `when_not_matched_by_source_delete`, so a retracted row left the tier without a
+    trace any consumer could follow and silver and gold served it indefinitely.
+
+    SERVED ON DEMAND rather than stamped into the publish event (owner decision, 2026-09-11): a
+    deleted-row set is unbounded, so stamping it turns a large delete into a large message on the bus.
+    Publishing a version range and letting the consumer pull is what every change-data system of this
+    shape does.
+
+    ONLY `_rowid`, and that is Lance's answer rather than a projection choice — the rows are gone, so
+    there is nothing else left to return. A consumer resolves them against whatever it stored when it
+    read the row.
+
+    THE WINDOW IS ALWAYS CLOSED, because `delta()` refuses an open one — measured against the installed
+    pylance: `end_version=None` raises "Must specify both with_begin_version and with_end_version"
+    (`lance/src/dataset/delta.rs`). The scan doors accept "everything since", so an omitted
+    `end_version` is closed HERE at the version of the dataset this call opened.
+    That is exact rather than a separately-read bound: it is the same handle the delta is read from, so
+    there is no moment between the two in which a write could land — which is the hazard
+    `changes.change_filter` refuses to take by defaulting a bound it would have to read separately.
+    """
+    dataset = open_dataset(ns, so, table_id, branch=branch)
+    with _user_sql("invalid deleted-row window"):
+        reader = dataset.delta(begin_version=begin_version, end_version=end_version if end_version is not None else dataset.version).get_deleted_row_ids()
+        table = reader.read_all()
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    return cast("bytes", sink.getvalue().to_pybytes())
+
+
 def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
     """The table's schema-level metadata as ``{str: str}`` — the read twin of ``schema_metadata/update``.
 
