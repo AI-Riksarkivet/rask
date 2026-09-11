@@ -394,6 +394,14 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   that before treating this as a monitoring-only row.
 - *Why it went unseen:* it is a WARN line in a channel that is 91% two permanent, designed refusals (see
   the audit's warning-composition section), so a 19-per-tick signal is 0.1% of the volume.
+- **THE BLAST RADIUS IS NOT ANSWERABLE FROM LOGS, and that is a finding of its own.** Checked: the
+  lineage service emits NO warning for the refusals it issues — its only WARN-or-worse bodies in the
+  window are the three reconcile classes. So a 403 is visible ONLY from the caller that chose to log its
+  own failure. Any other consumer hitting the same missing rung would fail quietly, and the gap would be
+  invisible from both ends.
+  That is defensible per-request — a door refusing a read is doing its job, not reporting an incident —
+  but it means "how far does this grant gap reach" cannot be answered by reading more logs. It needs the
+  tuples. Recorded so the next step is an FGA check rather than another query.
 - *Closes when:* the monitor reads that project's producers — by granting the rung if the tuple is
   missing, or by naming why that project differs — and a blind edge is reported as a distinct state
   rather than only as an unreadable-edge warning, so "not measured" cannot look like "not lagging".
