@@ -659,6 +659,27 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   and the guard is working exactly as designed: `transform.py:667` already says the composed layout is
   "a path no catalog-written table has ever occupied". The fix belongs where `location` is STAMPED on the
   publish control event, not in the confinement check.
+- **THE WRITER IS IDENTIFIED, and it is tenant-specific rather than structural.** The same day's
+  SUCCESSFUL stage moves, read from the same table:
+
+      acme          to_uri = s3://acme-bucket/e41135a5_acme-silver$features      (vended uuid8)
+      lakehouse-wh  to_uri = s3://lakehouse-wh/a76d1ca5_silver-media$features    (vended uuid8)
+      acme gold     to_uri = s3://acme-bucket/3c099c25_acme-gold$catalog         (vended uuid8)
+      bind86        to_uri = s3://bind86-wh/medallion/silver                     (COMPOSED)
+
+  So the write half is NOT generally broken — every other tenant's stage writes to the catalog-vended
+  location. bind86's bronze→silver stage alone fell back to the composed path, wrote its silver there,
+  and published that path as the location; the gold stage then resolved the vended location and
+  correctly refused the composed one. `_resolve_roots` composes first and lets
+  `describe_table_location` override, so the fall-back means the override found nothing for THIS tenant
+  at THAT moment — the likeliest reading being that `bind86-silver$features` did not yet exist in the
+  catalog on the first hop. That is consistent with `catalog_register` logging
+  `written_dataset_already_registered` with `location: medallion/<tier>` for the older tenants, whose
+  writer and registration agree because `_require_same_location` checked them.
+- *So the remaining question is narrow and tenant-shaped:* why the vended override was empty for
+  bind86's silver on its first bronze→silver hop, and whether a stage that cannot resolve a vended
+  WRITE location should compose one at all — composing is what makes the next hop unreachable, and the
+  read side already refuses to do it.
 - *What a drive is still needed for:* which writer stamped the composed location — whether the silver
   stage registered its output at its own composed write path (`to_uri = {root}/medallion/{to_namespace}`,
   `transform.py:601`, the write half the read-side I2 fix deliberately left alone), or the table was
