@@ -31,8 +31,18 @@ from pathlib import Path
 BACKLOG = Path(__file__).resolve().parents[2] / "open_backlog_left.md"
 
 #: A rendered item: `**<PHASE>-<n> · <title>**` at the start of a line. The id is stable for the life
-#: of the item — see the module docstring on why it is not positional.
+#: of the item — see the module docstring on why it is not positional. Counts EVERY row, closed ones
+#: included, because two rows answering to one id is a problem whatever their state.
 _ITEM = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
+
+#: An item that is still OPEN, and the metadata line under it. A closed row stays rendered — its
+#: measurements are why the row was worth keeping — and is struck through, so `~~` right after the
+#: separator is the file's own marker for "done".
+#:
+#: THE SIZE OF THE FILE IS NOT THE SIZE OF THE WORK, and conflating them is how the header came to
+#: overstate by 42 rows (273 claimed, 231 open, measured 2026-09-11). The number here is the one the
+#: owner reads to decide what is left, so it counts what is left.
+_OPEN_ITEM = re.compile(r"^\*\*[A-Z]+-\d+ · (?!~~)[^\n]*\n([^\n]*)$", re.MULTILINE)
 #: A phase section heading, e.g. `## PHASE 1 · LAKEHOUSE — the priority`.
 _SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^\n]*)$", re.MULTILINE)
 #: A row of the counts table: `| **1 · Lakehouse** (…) | 120 | 26 |`.
@@ -61,8 +71,10 @@ def test_the_header_total_matches_the_rows() -> None:
     stated = _TOTAL.search(text)
     assert stated, "the header states no total — `**N open items**` is how this file reports its size"
 
-    counted = len(_ITEM.findall(text))
-    assert int(stated.group(1)) == counted, f"header says {stated.group(1)} open items; {counted} are rendered below"
+    counted = len(_OPEN_ITEM.findall(text))
+    assert int(stated.group(1)) == counted, (
+        f"header says {stated.group(1)} open items; {counted} are still open below (closed rows stay rendered, struck through)"
+    )
 
 
 def test_every_phase_row_matches_the_items_under_its_heading() -> None:
@@ -73,19 +85,22 @@ def test_every_phase_row_matches_the_items_under_its_heading() -> None:
     bounds = [(m.start(), m.group(1)) for m in _SECTION.finditer(text)] + [(len(text), None)]
     per_section = {}
     for i, (start, name) in enumerate(bounds[:-1]):
-        per_section[name] = len(_ITEM.findall(text[start : bounds[i + 1][0]]))
+        per_section[name] = _OPEN_ITEM.findall(text[start : bounds[i + 1][0]])
 
     rows = _TABLE_ROW.findall(text)
     assert len(rows) == len(_LABEL_TO_SECTION), f"the counts table has {len(rows)} rows, expected {len(_LABEL_TO_SECTION)}"
 
-    for label, stated, _high in rows:
+    for label, stated, stated_high in rows:
         prefix = _LABEL_TO_SECTION.get(label.strip())
         assert prefix, f"counts table row {label!r} names no known phase — rename the row or update this gate"
         matched = [name for name in per_section if name and name.startswith(prefix)]
         assert len(matched) == 1, f"{prefix} matches {matched} section headings, expected exactly one"
-        assert int(stated) == per_section[matched[0]], (
-            f"the counts table says {label.strip()} has {stated} items; {per_section[matched[0]]} are rendered under {matched[0]!r}"
-        )
+        rendered = per_section[matched[0]]
+        assert int(stated) == len(rendered), f"the counts table says {label.strip()} has {stated} items; {len(rendered)} are still open under {matched[0]!r}"
+        # The HIGH column was parsed and never checked, so it could drift freely while the row beside it
+        # stayed honest — and it is the column that decides what gets worked next.
+        high = sum(1 for metadata in rendered if "**HIGH**" in metadata)
+        assert int(stated_high) == high, f"the counts table says {label.strip()} has {stated_high} HIGH; {high} open rows are marked **HIGH**"
 
 
 def test_item_ids_are_unique() -> None:

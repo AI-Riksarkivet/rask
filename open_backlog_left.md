@@ -61,19 +61,21 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**272 open items**, deduped from 325 raw rows mined out of the seven files above.
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 42 rows
+are CLOSED and still rendered — struck through, keeping the measurements that made them worth
+opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 125 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
 | **Low priority** (flows, search, viewer, annotator) | 28 | 1 |
 
-Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, so the table cannot drift from
-the rows below. Items are numbered continuously; the ids in brackets are the source rows they came
+Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
+checks the HIGH column too, so neither can drift from the rows below. Items are numbered continuously; the ids in brackets are the source rows they came
 from, kept so an old citation still resolves.
 
 
@@ -614,24 +616,25 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `/compaction_plan` with a medallion tier id and fixing whichever of the id resolution or the route is
   wrong.
 
-**LH-138 · The reconcile TIP axis still stamps a `reconcile` edge on a maintenance version**
-`lineage` · low · residue of LH-136's fix
+**LH-138 · ~~The reconcile TIP axis still stamps a `reconcile` edge on a maintenance version~~ — CLOSED 2026-09-11**
+`lineage` · was low
 
-- *Why open:* `_recover_holes` classifies holes with `MAINTENANCE_OPERATIONS` (a compaction/index/config
-  version is not a provenance hole), but the TIP comparison in `reconcile()` does not: when the newest
-  on-disk version is a `Rewrite`, storage is AHEAD of the graph, the dataset is classified
-  `storage_ahead`, and the back-fill writes a `WROTE` edge saying a run wrote it. Nothing was lost and
-  nothing is written twice — `backfill_write` MERGEs on a deterministic run id — so this overstates
-  rather than loses, which is why it is low.
-- *Why it is NOT simply "apply the classifier at the tip":* the tip back-fill exists to realign the two
-  maxima so the drift classification converges. Withhold it and a compacted dataset stays
-  `storage_ahead` on every tick forever — the permanently-red failure the one-directional rule in
-  `test_the_reconcile_sweep_sees_provenance_holes_below_the_tip.py` is written against. The coherent
-  fix is to compare the graph's tip against the highest DATA version on disk, which costs one
-  transaction read on the drift path only.
-- *Closes when:* `reconcile()` resolves the storage tip to the newest non-maintenance version (reusing
-  `read_version_operations`), so a compaction at the tip is not drift at all; pin that a `Rewrite` tip
-  leaves the dataset `in_sync` with no back-fill, and that a data tip still classifies `storage_ahead`.
+- *Closed by:* `5eb73751`. The tip resolves DOWNWARD to the newest version that wrote data
+  (`_newest_data_version`), so a compaction at the tip is not drift at all: the comparison converges on
+  the graph's own tip and classifies `in_sync` with no back-fill. Paid only when the two maxima disagree,
+  bounded by `MAX_TIP_PROBE_VERSIONS`, falling back to the raw tip rather than to a guess. That is the
+  coherent fix this row asked for, and it avoids the permanently-red failure withholding the back-fill
+  would have caused.
+- *THE ROW WAS THE SMALLER HALF, found by MEASURING a compaction instead of enumerating operation names.*
+  One `compact_files()` commits TWO versions, not one: an unmodelled one whose counters are identical to
+  the version below it, then the `Rewrite`. `MAINTENANCE_OPERATIONS` excluded the `Rewrite` and not the
+  other, so `_recover_holes` — the axis this row assumed was already correct — back-filled a phantom
+  `WROTE` edge on every compaction in the estate, below the tip as well as at it.
+- *WHY IT HID:* `type(op).__name__` returns `BaseOperation` for an operation pylance models no subclass
+  for — the ABC's own name, which is the word "unknown" wearing an operation's clothes. The module's
+  comment already reasoned that unknown must be REPORTED, and was right; but reporting and back-filling
+  were one list, so that reasoning silently authorised a fabrication it never argued for. The two are now
+  separate: every unknown is reported, and only a NAMED data operation is recovered.
 
 **LH-014 · The DIY provenance recipe (`stamp_stage`, `source_rowid`, the tier contract) is written down nowhere**
 `medallion, lineage` · low
@@ -1270,6 +1273,42 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - *Why open:* Q7 was decided 2026-09-02 (support both spec identity headers; keys minted, scoped and revoked by the management API as FGA principals with an expiry) — but A6 later measured that the spec's `security` block is a DISJUNCTION, that bearer alone is conformant (155 of 160 ops declare it; 401 with no credential and 401 with `x-api-key` alone), and struck the work as a second credential plane against the secret-store-only rule. Meanwhile no key store or rotation model exists.
 - *Closes when:* Owner rules whether Q7's api-key principal is withdrawn in favour of A6's bearer-only position or the management API mints scoped, expiring keys after all; edit the losing row out rather than leaving both, and if it survives, write the key-store and rotation design into the management API RFC.
+
+**LH-139 · A catalog boot REWRITES the estate's authorization model from its own bundled copy, so an older image silently REMOVES relations and breaks every door that uses them**
+`catalog, service-kit, chart` · **HIGH** · found and measured 2026-09-11 while a helm upgrade was blocked by it
+
+- *Why open:* `fga.provision` (`service_kit/governed/fga.py:319-348`) writes `load_model()` — the IMAGE's
+  bundled `model.json` — on every boot where `RASK_FGA_STORE_ID`/`RASK_FGA_MODEL_ID` are unset, and the
+  catalog is the one service that calls it with `provision=True` (`catalog/main.py:140`). The write is
+  unconditional: nothing compares the model being written against the one the store already has, so a
+  catalog on an OLDER image does not fail, it wins, and the store's newest model is the oldest pod's.
+- *MEASURED ON THE LIVE ESTATE 2026-09-11, not argued.* The store's three most recent models:
+  `01M28RPM2P8T9QXRBS0DRT4GVC` (latest) has neither `warehouse#event_stager` nor `warehouse#can_stage_events`;
+  `01M28Q0X3KAQ6Z701486F6DG42` and `01M28PDH89FKX676KYZRQXSFWY` before it have both. The running catalog
+  pod's own bundled copy was read in place and reports `event_stager: False`, so the regression is the
+  image's, not a write that went wrong. One `Check` call states the cost twice:
+
+      latest model      -> {"code":"validation_error","message":"object relation does not exist"}
+      01M28Q0X… (good)  -> {"allowed":true,"resolution":""}
+
+  for `user:service-ingest # can_stage_events @ warehouse:lance_catalog` — the relation gating the
+  outbox staging door. It does not DENY, it ERRORS, which the fail-closed wrapper turns into
+  "authorization service unavailable" for every caller of that door.
+- *How it got there, because the trigger is mundane and will recur:* `chart/values-live-pins.yaml` is a
+  snapshot of what the cluster was running ("GENERATED … not what anyone intended. Regenerate after
+  every build+roll"), it was not regenerated after the day's builds, and `make k3s-up` layers it OVER
+  the live values — so a routine upgrade rolled the catalog from `main-6fc3748c` back to
+  `main-8c229296` and the rollback took the authorization model with it. The visible symptom is
+  `rask-bootstrap-admin` crash-looping on `Invalid tuple … relation 'warehouse#event_stager' not found`,
+  which blocks `helm upgrade --wait-for-jobs` and has now cost two sessions; nothing names the cause.
+- *Why the docstring's answer is not sufficient:* it says "for dev / e2e; in production pin
+  `RASK_FGA_STORE_ID` + `RASK_FGA_MODEL_ID`", and that is right for production. It leaves dev with a
+  mechanism where deploying an older image silently rewrites who may do what — the estate's own
+  signature failure, a control that is not wrong so much as pointed at the wrong authority.
+- *Closes when:* `provision` refuses to write a model that REMOVES a type or relation the store's
+  current model defines (compare before writing; log and keep the existing model id, since a narrower
+  model is a rollback rather than an edit), and the chart pins the pair in any deployment that is not a
+  throwaway. A RED test writing a relation-removing model against a store that already has it.
 
 **LH-080 · ~~`can_promote` buys nothing on `table` because `validator ⊇ owner`~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
