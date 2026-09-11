@@ -13,7 +13,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Final, Protocol
 
 import lance
 
@@ -108,21 +108,56 @@ def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int
         return None
 
 
+#: What a version reports when this binding cannot name its operation but the version provably changed
+#: nothing. Spelled so it can never be mistaken for a Lance class name, because inventing one is the
+#: mistake this whole classifier exists to stop making.
+INERT_UNKNOWN: Final = "<inert>"
+
+#: The per-version counters ``dataset.versions()`` already carries. Read from the call
+#: :func:`read_storage_versions` makes anyway, so proving a version inert costs no extra I/O.
+_COUNTER_KEYS: Final = ("total_rows", "total_data_files", "total_deletion_files", "total_deletion_file_rows")
+
+
+def _version_counters(entry: dict[str, object]) -> tuple[str, ...] | None:
+    """This version's data counters, or ``None`` when the manifest does not carry them."""
+    metadata = entry.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    present = tuple(str(metadata[key]) for key in _COUNTER_KEYS if key in metadata)
+    return present if len(present) == len(_COUNTER_KEYS) else None
+
+
 def read_version_operations(uri: str, storage_options: dict[str, str], versions: list[int]) -> dict[int, str | None]:
-    """The Lance transaction OPERATION behind each of ``versions`` — ``None`` where it cannot be read.
+    """The Lance transaction OPERATION behind each of ``versions`` — ``None`` where it cannot be named.
 
     Read only for versions already found to be provenance holes, which on a healthy dataset is none: the
     cost is one transaction-file read per anomaly, never one per version per tick. One dataset open serves
     every hole, the same shape ``dataplane.table_history`` uses to answer the catalog's commit log.
 
-    A version whose transaction is unreadable — written before transaction files existed, or reclaimed —
-    maps to ``None``, which :data:`MAINTENANCE_OPERATIONS` treats as unknown and therefore reportable.
+    TWO THINGS READ AS UNNAMED, and neither may be branched on as though it were an operation.
+    ``LanceOperation.BaseOperation`` is the ABC the twelve modelled operations inherit, so a concrete
+    instance OF it means the Rust side committed something none of them covers — ``type(op).__name__``
+    then yields the ABC's own name, which is the word "unknown" wearing an operation's clothes. An
+    unreadable transaction (written before transaction files existed, or reclaimed) is unknown too. Both
+    answer ``None``.
+
+    EXCEPT WHEN THE VERSION IS PROVABLY INERT. Measured 2026-09-11, one ``compact_files()`` commits TWO
+    versions — an unmodelled one whose counters are identical to its predecessor's, then the ``Rewrite``
+    — so treating every unnamed version as reportable makes each compaction a permanent finding. A
+    version whose ``total_rows``, data files and deletion counters all match the version below it wrote
+    no data whatever its operation is called, and answers :data:`INERT_UNKNOWN`. Any counter moving, or a
+    predecessor whose manifest is gone, keeps the honest ``None``.
     """
     try:
         dataset = lance.dataset(uri, storage_options=storage_options)
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return dict.fromkeys(versions)
+    try:
+        counters = {int(entry["version"]): _version_counters(entry) for entry in dataset.versions()}
+    except BaseException as exc:
+        _swallow_dataset_error(exc)
+        counters = {}
     operations: dict[int, str | None] = {}
     for version in versions:
         try:
@@ -132,7 +167,11 @@ def read_version_operations(uri: str, storage_options: dict[str, str], versions:
             operations[version] = None
             continue
         op = getattr(txn, "operation", None)
-        operations[version] = type(op).__name__ if op is not None else None
+        if op is None or type(op) is lance.LanceOperation.BaseOperation:
+            here, below = counters.get(version), counters.get(version - 1)
+            operations[version] = INERT_UNKNOWN if here is not None and here == below else None
+            continue
+        operations[version] = type(op).__name__
     return operations
 
 
@@ -245,15 +284,31 @@ STORAGE_LOSS_STATES = (ReconcileState.GRAPH_AHEAD, ReconcileState.MISSING_ON_STO
 #: A DENYLIST RATHER THAN AN ALLOWLIST, and the direction is the whole point. An operation this estate has
 #: never seen reads as a hole and gets REPORTED; an allowlist would drop it silently, and for a control
 #: whose only job is finding missing provenance, failing silent is the one mode that cannot be tolerated.
-#: That also settles the two non-operations a transaction read can yield: ``BaseOperation`` is
-#: ``type(op).__name__`` for an op pylance has no subclass for, and an unreadable transaction reads as
-#: ``None``. Both are unknown, and unknown is reported.
+#: An unnameable operation stays REPORTED — :func:`read_version_operations` answers ``None`` for it, and
+#: ``None`` is not in this set. :data:`INERT_UNKNOWN` is the one narrowing of that: a version whose
+#: counters match the version below it changed nothing, so it is not unknown in the sense that matters.
+#: Without it every ``compact_files()`` is a permanent finding, because a compaction commits an
+#: unmodelled version before its ``Rewrite``.
 #:
 #: WITHOUT THIS THE AXIS IS 20% NOISE, measured on the live estate 2026-09-11: of the 10 holes it found,
 #: 8 were real data writes and 2 were a ``CreateIndex`` and a maintenance version on
 #: ``transcripts_v2$annotations`` that never had provenance and never should. A finding an operator learns
 #: to skim past is the failure mode this module already guards against elsewhere.
-MAINTENANCE_OPERATIONS = frozenset({"Rewrite", "CreateIndex", "UpdateConfig"})
+MAINTENANCE_OPERATIONS = frozenset({"Rewrite", "CreateIndex", "UpdateConfig", INERT_UNKNOWN})
+
+#: The operations that WROTE data, and so the only ones a recovered edge may claim a run performed.
+#:
+#: REPORTING AND BACK-FILLING ARE DIFFERENT QUESTIONS, and collapsing them is what let a compaction plant
+#: provenance. Reporting an unnameable version is honest and cheap to be wrong about — an operator looks
+#: and moves on. Back-filling one writes ``(:Run)-[:WROTE]->(:Dataset)`` asserting a run wrote it, and
+#: afterwards nothing in the graph distinguishes that fabrication from a real producer's event. So the
+#: report keeps every unknown and the recovery takes only what can be NAMED as a data operation.
+#:
+#: Listed rather than derived from ``BaseOperation.__subclasses__()``: a Lance release adding an operation
+#: should be a decision someone makes here, not something a dynamic lookup absorbs silently. A new data
+#: operation is meanwhile reported and not recovered, which is the safe direction — a visible gap rather
+#: than an invented run.
+DATA_OPERATIONS = frozenset({"Append", "Overwrite", "Update", "Delete", "Merge", "Restore", "Project", "DataReplacement", "DataOverlay"})
 
 #: How many provenance holes one dataset may have recovered in a single tick.
 #:
@@ -321,6 +376,24 @@ async def reconcile_all(
             storage_version = await read_version(uri)
         except StorageUnreadable as exc:
             storage_unreadable = str(exc)
+        # THE TIP IS THE NEWEST DATA VERSION, not the newest version. A compaction commits versions on
+        # top of the last write, so the raw maximum reads as drift the graph could never close: the
+        # back-fill below would stamp a `WROTE` edge on a `Rewrite`, and the next tick would find the
+        # same gap again. Resolved only when the two maxima actually disagree, so a healthy dataset pays
+        # nothing and a drifting one pays one transaction read.
+        if (
+            storage_version is not None
+            and (graph_version is None or storage_version > graph_version)
+            and read_versions is not None
+            and read_operations is not None
+        ):
+            storage_version = await _newest_data_version(
+                uri,
+                tip=storage_version,
+                floor=graph_version,
+                read_versions=read_versions,
+                read_operations=read_operations,
+            )
         status = reconcile(
             dataset=summary.name,
             graph_version=graph_version,
@@ -368,6 +441,45 @@ async def reconcile_all(
     return results
 
 
+#: How far below the tip the drift path will look for the newest version that wrote data.
+#:
+#: A compaction commits two versions, so a small window covers several stacked maintenance passes. The
+#: bound exists because the walk is unbounded in principle and this is a per-dataset, per-tick cost;
+#: exhausting it keeps the raw tip, which is exactly the behaviour that shipped before this, so the
+#: degradation is to the status quo rather than to something new.
+MAX_TIP_PROBE_VERSIONS = 8
+
+
+async def _newest_data_version(
+    uri: str,
+    *,
+    tip: int,
+    floor: int | None,
+    read_versions: Callable[[str], Awaitable[list[int] | None]],
+    read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]],
+) -> int:
+    """The newest version at or below ``tip`` that WROTE data, walking down from the tip.
+
+    ``floor`` is the graph's own tip and bounds the search: a version the graph already has an edge for
+    is where the comparison converges, so returning it classifies the dataset in_sync — which is the
+    point. Every version above the floor being maintenance means storage is not ahead at all.
+
+    Falls back to ``tip`` when nothing can be resolved, never to a guess: an unreadable listing, an empty
+    candidate window, or a probe that finds no data operation all leave the comparison exactly as it was.
+    """
+    on_disk = await read_versions(uri)
+    if on_disk is None:
+        return tip
+    candidates = sorted((v for v in on_disk if v <= tip and (floor is None or v > floor)), reverse=True)[:MAX_TIP_PROBE_VERSIONS]
+    if not candidates:
+        return tip
+    operations = await read_operations(uri, candidates)
+    for version in candidates:
+        if operations.get(version) in DATA_OPERATIONS:
+            return version
+    return floor if floor is not None else tip
+
+
 async def _recover_holes(
     repository: _ReconcileRepo,
     name: str,
@@ -402,14 +514,18 @@ async def _recover_holes(
         holes = [v for v in holes if operations.get(v) not in MAINTENANCE_OPERATIONS]
     if not holes or not backfill:
         return holes
-    for version in holes[:MAX_HOLES_BACKFILLED_PER_TICK]:
+    # Every hole is REPORTED above; only a NAMED data operation is recovered. An unnameable version is a
+    # gap the sweep can see and cannot explain, and a back-filled edge would answer it with a run that
+    # never existed — indistinguishable from a real event once written.
+    recoverable = [v for v in holes if operations.get(v) in DATA_OPERATIONS] if read_operations is not None else holes
+    for version in recoverable[:MAX_HOLES_BACKFILLED_PER_TICK]:
         schema = await read_schema(uri, version) if read_schema is not None else None
         await repository.backfill_write(name, version, schema=schema)
-    if len(holes) > MAX_HOLES_BACKFILLED_PER_TICK:
+    if len(recoverable) > MAX_HOLES_BACKFILLED_PER_TICK:
         # NAMED, never silent: a truncated recovery that logged nothing would report the full finding
         # while fixing part of it, and the next tick's smaller finding would read as progress nobody made.
         log.warning(
             "lineage_reconcile_holes_truncated",
-            extra={"dataset": name, "holes": len(holes), "recovered": MAX_HOLES_BACKFILLED_PER_TICK},
+            extra={"dataset": name, "holes": len(holes), "recoverable": len(recoverable), "recovered": MAX_HOLES_BACKFILLED_PER_TICK},
         )
     return holes
