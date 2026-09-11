@@ -18,6 +18,7 @@ from lance_namespace import (
     CreateTableVersionResponse,
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
+    InvalidInputError,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
     ServiceUnavailableError,
@@ -120,6 +121,11 @@ async def batch_create_table_versions(
     #3-A: this batch route has no ``{id}`` to route by, so it runs against the default root — reject a body
     that names a warehouse-bound namespace rather than writing its version metadata to the wrong bucket."""
     await assert_no_warehouse_bound_namespace(request, settings, [getattr(e, "id", None) for e in (body.entries or [])])
+    # Every entry carries its own `manifest_path`, on the same terms as the single-table door. This
+    # operation answers 406 on the dir backend today, which is not a reason to let the field through
+    # unchecked: the guard belongs with the route, not with whichever backend happens to be mounted.
+    for entry in body.entries or []:
+        _refuse_a_manifest_this_table_does_not_own(getattr(entry, "manifest_path", None))
     return await run_in_threadpool(native.call, ns, "batch_create_table_versions", body)
 
 
@@ -217,9 +223,52 @@ def list_table_versions(
     return native.call(ns, "list_table_versions", req)
 
 
+def _refuse_a_manifest_this_table_does_not_own(manifest_path: str | None) -> None:
+    """Refuse a ``manifest_path`` that can name a file outside the table it is being created for.
+
+    ``create_table_version`` MOVES the file at this path into the table's version slot — it is not a
+    copy. Driven against a real ``dir`` namespace 2026-09-11 with no privileged access: a caller holding
+    ``can_write_data`` on one table named a manifest inside another table's ``_versions/`` directory and
+    both destroyed that version and grafted its rows into their own table (victim [1, 2, 3] -> [1, 3];
+    attacker [1] -> [1, 2]). The FGA gate above is sound and does not reach this: it authorises the table
+    in ``id``, while the reach came from a field nothing inspected.
+
+    THE VERSION CAS IS NOT THIS GUARD, which is why the door looked safe. The backend refuses any version
+    but ``latest + 1``, so an arbitrary slot cannot be written — but aimed at the version the CAS demands,
+    the cross-table move succeeds.
+
+    RELATIVE IS THE SPEC'S OWN SHAPE, so this confines rather than restricts: ``namespace.md``'s "Table
+    Version Metadata Schema" defines the field as "Path to the manifest file for this version" and its
+    worked example is ``"_versions/9223372036854775806.manifest"``. Both relative spellings the backend
+    accepts — a bare filename and ``_versions/<name>`` — were driven and reach its CAS.
+
+    CONFINEMENT BY CONSTRUCTION rather than by comparison: a relative path with no ``..`` is resolved by
+    the backend inside the table's own directory, so there is no base to resolve here, nothing to compare,
+    and no second ``describe_table`` round-trip whose answer could disagree with the one the backend uses.
+    """
+    if manifest_path is None:
+        return
+    escapes = (
+        not manifest_path
+        or manifest_path.startswith("/")
+        or "://" in manifest_path
+        or "\\" in manifest_path
+        or ".." in manifest_path.split("/")
+        or any(character.isspace() or ord(character) < 0x20 for character in manifest_path)
+    )
+    if escapes:
+        raise InvalidInputError(
+            f"manifest_path must be relative to this table's own directory, as the spec's own example "
+            f"(`_versions/<n>.manifest`) is — {manifest_path!r} can name a file this table does not own, "
+            f"and creating a version MOVES that file"
+        )
+
+
 @router.post("/{id}/version/create", response_model_exclude_none=True)
 def create_table_version(id: str, body: CreateTableVersionRequest, ns: NamespaceDep, settings: SettingsDep) -> CreateTableVersionResponse:
+    """Create one version entry for this table, from a manifest the table itself owns."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    _refuse_a_manifest_this_table_does_not_own(body.manifest_path)
     return native.call(ns, "create_table_version", body)
 
 

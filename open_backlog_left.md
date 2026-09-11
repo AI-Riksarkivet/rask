@@ -677,6 +677,18 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   the caller using namespace version ops "instead of relying on Lance's native version management" —
   advertising it invites clients onto a catalog-mediated commit pointer, which is the Iceberg shape
   CLAUDE.md's permanent LANCE-ONLY ruling exists to avoid.
+- **A DIFFERENT DEFECT ON THE SAME DOOR, FOUND AND FIXED 2026-09-11 while re-measuring this row.**
+  `create_table_version` MOVES the file at `manifest_path` into the table's version slot — not a copy —
+  and nothing checked that the path belonged to the table. Driven against a real `dir` namespace with no
+  privileged access: a holder of `can_write_data` on ONE table named a manifest inside ANOTHER table's
+  `_versions/` and both destroyed that version and grafted its rows into their own table
+  (victim `[1, 2, 3]` -> `[1, 3]`; attacker `[1]` -> `[1, 2]`). The FGA gate is sound and never reached
+  it: it authorises the table in `id`, and the reach came from a field nothing inspected. The version CAS
+  (`latest + 1` only) is a real guard and is not this one — aimed at the version it demands, the move
+  succeeds. Fixed by requiring the spec's own relative shape (`namespace.md`, "Table Version Metadata
+  Schema", example `_versions/<n>.manifest`), which is confined by construction; pinned by
+  `services/catalog/tests/test_a_version_entry_cannot_adopt_another_tables_manifest.py`, and the same
+  guard is applied to `batch_create_table_versions`, whose entries carry the identical field.
 - *Why open:* Version routes at `endpoints/versions.py` are mounted and FGA-gated (`_BATCH_PATHS`, `_action_relation` → `can_write_data`) but nothing else runs on them, and `managed_versioning` is never advertised in `DescribeTable`, so a stock Lance client's commit bypasses the whole governance chain. `batch_commit_tables` is `UnsupportedOperationError` on the dir backend and always will be.
 - *Closes when:* Owner acknowledges R1 (the governed commit path IS the spec's managed-versioning path); then attach lineage emit, the quality gate, the replay marker and protection to `CreateTableVersion` in `endpoints/versions.py`, advertise `managed_versioning=true` in `DescribeTable`, alias then remove `/commit` (data.py:326-364, dataplane.py:556-637), and back `batch_commit_tables` with rask's own staged-manifest KV.
 
