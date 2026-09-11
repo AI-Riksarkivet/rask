@@ -106,11 +106,31 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* Retention (30d) and `prune_orphan_datasets` landed and the graph is converging (79→2 unreadable, 37→32 storage_loss), but both warnings still fire on every 5-minute tick over 1,163 Dataset nodes, so a real storage loss would arrive indistinguishable from the noise. The 19 genuinely-dead nodes have runs dated 2026-08-31..09-07 and the one-off purge was refused as a destructive graph write.
 - *Closes when:* Let 30-day retention reach the 2026-08-31 runs (2026-09-30), then re-measure the reconcile warnings and confirm `datasets=[...]` names only live datasets.
 
-**LH-003 · The `parent`, `processingEngine` and engine-version run facets are neither emitted nor stored, and the graph has no version/branch/tag/clone/base nodes**
-`lineage, medallion, catalog, ingest, service-kit` · **HIGH** · **blocked:** the clone-edge clause waits on the clone→(source, version) registry
+**LH-003 · The `parent`, `processingEngine` and engine-version run facets are neither emitted nor stored, and the graph has no version/branch/tag/clone nodes**
+`lineage, catalog` · low · **THE CONDITION-1 HALF IS CLOSED 2026-09-11; the rest is struck as not blocking**
 
-- *Why open:* `services/lineage` contains no `parent` handling at all and 0 of 3,181 durable feed events and 0 `(:Run)` nodes carry one, even though `lineage_kit` can stamp it — fixing one side alone is unobservable. `_RESERVED_RUN_FACETS`'s `parent` has only a rejection test as its consumer and `lineage_emit.py:240`'s docstring overstates it; versions remain WROTE-edge properties, column lineage is latest-only and a rename strands history on the old vertex.
-- *Closes when:* One change covering both halves: stamp `run.facets.parent` (plus `processingEngine` and the engine-version facet) on the cascade's stage runs AND ingest+persist it in `services/lineage` (a `PARENT_OF` edge or `r.parent_run_id` in `cypher.py::MERGE_RUN`), gated by a test driving a REAL cascade; then add Version and Branch nodes, a clone edge, carry history on rename, fix the line-240 docstring, update `LINEAGE.md`'s captured-facets table and record the RunEvent-only scope in `docs/DECISIONS.md`.
+- *CLOSED AND OBSERVED — the branch-ref drop, which this row did not name and which was the only part
+  blocking condition 1.* `d5f1f19c`. The catalog has LIVE branch writes and `emit_measured_write`
+  already read the version back off the right ref (its docstring explains why) and then dropped the ref,
+  so the WROTE edge recorded a number that names two snapshots. Reproduced on the installed pylance:
+  main v2, a branch write gives branch v3, a later main write gives main v3, different contents.
+  Observed on the deployed services: a branch write's `lance` facet carries `ref: feat`, a main write
+  carries none, `SET_WROTE_REF` is present, and both `LATEST_WRITE_VERSION` and `SCHEMA_LATEST` filter
+  `w.ref IS NULL` so a branch version can no longer be reported as main's to `core/reconcile.py`.
+- *THE REST OF THE ROW IS MEASURED STILL-TRUE AND STRUCK ANYWAY, because it blocks nothing live:*
+  * `parent` — the emitter CAN stamp it (`lineage_kit/schemas.py` carries `ParentRunFacet`) and no
+    producer does, but the CONSUMER side was deleted by owner ruling and is pinned deleted
+    (`tests/unit/test_lineage.py::test_the_run_hierarchy_consumer_side_stays_deleted`). Emitting into a
+    consumer that is required to ignore it is work with no reader. `cascade_id` already answers "which
+    runs belong to this batch" and is threaded end to end.
+  * `processingEngine` — absent estate-wide; the events are spec-valid without it.
+  * Version nodes — contradicts a recorded decision (`endpoints/versions.py`): version history comes
+    from the FORMAT, who-did-it from the lineage store, joined on the number; "a third that merged them
+    would just be a copy of one of them, free to drift".
+  * Clone edges — no rask door creates a clone; `shallow_clone` appears only as a shape the sweep must
+    DETECT. There is nothing to record.
+- *One residual worth a separate row if anyone wants it:* a rename strands history — `Dataset` MERGEs on
+  `name` and no re-link statement exists.
 
 **LH-004 · Four OpenLineage emit kernels and three `RunEvent` builders, all swallowing transport failures, with no outbox**
 `lineage, catalog, maintenance, medallion, service-kit` · **HIGH** · **blocked:** owner acknowledgement of R10
