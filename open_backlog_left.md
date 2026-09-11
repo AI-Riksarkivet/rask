@@ -593,6 +593,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   read off the graph), which is the shape most likely to expose the third. The log line DOES carry
   `supplied` and `root` in `extra` — the deployed text formatter drops `extra`, which is why the
   branch cannot be named from the logs and a drive is needed.
+- *HALF OF (b) NARROWED BY MEASUREMENT 2026-09-11, and it is an identifier crossing rather than the
+  route.* `/compaction_plan` resolves its `{id}` with `parse_identifier` + `describe_table`, so a 404
+  means the id names no table. The id maintenance sends is `declared_table_id(ds)` — the
+  `lineage.dataset_id` a producer STAMPED IN THE SCHEMA (`stage_stamp.py:50`), which is an
+  OpenLineage dataset name; nothing asserts it is also a catalog identifier. The function that
+  exists to produce a catalog identifier answers `None` for the nested medallion layout, measured by
+  calling it: `table_id_from_location('s3://lakehouse/medallion/bronze')` -> `None`, likewise
+  `medallion/silver-media`, while `4750a5b9_acme-bronze$events` -> `acme-bronze$events` and
+  `medallion/bronze$bind86` -> `bronze$bind86`. That is deliberate — its docstring calls `None` a
+  first-class answer for "a nested layout whose namespace is a parent directory rather than part of
+  the leaf" — so for a tier laid out that way NO code path yields a catalog-valid id, and the
+  stamped lineage name is the only thing left to send. Which is a 404 for exactly the medallion
+  datasets and for nothing else, matching what was observed.
+  STILL UNMEASURED, and it decides the fix: whether the stamped id resolves for the tiers that DO
+  carry a `$` leaf. That needs the live catalog's table list beside what the sweep sends, so the
+  drive below still stands.
 - *Closes when:* Drive one `bind86` silver→gold hop (owner-authorised 2026-09-11), print `supplied` vs
   `read_root` at the refusal, and fix whichever of the three the values name; reproduce (b) by calling
   `/compaction_plan` with a medallion tier id and fixing whichever of the id resolution or the route is
