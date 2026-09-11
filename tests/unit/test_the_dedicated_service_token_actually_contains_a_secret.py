@@ -46,11 +46,14 @@ _VALUES = REPO / "chart/values.yaml"
 #: Enough of a render to reach the Secret; the chart refuses half-governed combinations outright.
 _RENDER = ("--set", "image.localImages=true", "--set", "auth.enabled=false", "--set", "frontend.oidc.enabled=false")
 _TOKEN = re.compile(r'service-token-service-trainer:\s*"?([a-f0-9]{40})"?')
+#: The seeder writes the same credential as a shell argument rather than as YAML, so it needs its own
+#: shape. Both spellings are anchored on the 40-hex digest, never on the surrounding punctuation.
+_SEEDED = re.compile(r"service-token-service-trainer=([a-f0-9]{40})")
 
 
-def _render(*extra: str) -> str:
+def _render(*extra: str, template: str = "templates/infra-credentials.yaml") -> str:
     result = subprocess.run(  # noqa: S603 — helm from PATH, fixed arguments
-        ["helm", "template", "rask", str(REPO / "chart"), *_RENDER, *extra, "--show-only", "templates/infra-credentials.yaml"],  # noqa: S607
+        ["helm", "template", "rask", str(REPO / "chart"), *_RENDER, *extra, "--show-only", template],  # noqa: S607
         capture_output=True,
         text=True,
         timeout=180,
@@ -103,3 +106,24 @@ def test_the_token_is_not_a_hash_of_public_strings_alone() -> None:
         assert rendered.group(1) != hashlib.sha256(guessable).hexdigest()[:40], (
             f"the credential equals sha256({guessable!r})[:40] — a public identity name and nothing else"
         )
+
+
+def test_the_seeder_and_the_secret_derive_the_same_credential() -> None:
+    """TWO PRODUCERS, ONE VALUE, and a divergence would 401 the whole estate at once.
+
+    The seeder (`openbao.yaml`) writes the token into OpenBao, which is what a service with a Dapr
+    sidecar reads to decide whether a caller may claim a privileged identity; the Secret
+    (`infra-credentials.yaml`, or ESO syncing the same keys) is what the sidecar-less pods PRESENT.
+    The two agree today only because both call `lance.dedicatedServiceToken` — the helper's own header
+    says a second shape for the same job is how one of them ends up drifting, and this makes that
+    advice enforceable. A drift is invisible in either render alone and costs every privileged call.
+    """
+    presented = _TOKEN.search(_render())
+    expected = _SEEDED.search(_render(template="templates/openbao.yaml"))
+
+    assert presented, "the Secret rendered no trainer token — this gate would pass vacuously"
+    assert expected, "the seeder rendered no trainer token — this gate would pass vacuously"
+    assert presented.group(1) == expected.group(1), (
+        "the credential a pod PRESENTS and the credential the store EXPECTS are derived differently, so "
+        "every privileged service call fails closed the moment both are deployed"
+    )
