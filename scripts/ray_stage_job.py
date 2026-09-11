@@ -121,6 +121,12 @@ def _reset_if_legacy(to_uri: str, so: StorageOptions) -> None:
         _reset_dataset(to_uri, so)
 
 
+#: Lance's reserved row-identity metacolumn, as the cascade head's join key (`_retract_deleted`).
+#: Read, never written — the value advances on the next overwrite, so persisting it records an id that
+#: will not be true.
+_ROWID = "_rowid"
+
+
 def _stamp_stage(table: pa.Table, stage: str, lineage: str = "", dataset_id: str = "") -> pa.Table:
     """The per-stage provenance stamp — delegated to the ONE implementation both drivers share.
 
@@ -593,6 +599,70 @@ def _drop_staged(staged_uri: str, so: StorageOptions) -> None:
         print(f"RAY-STAGE WARN staging set left behind at {staged_uri}: {type(exc).__name__}: {exc}")
 
 
+class UpstreamVanishedError(RuntimeError):
+    """The upstream's key column read back EMPTY, which a retraction would read as "delete the tier"."""
+
+
+#: How many dead keys go into one `IN (...)` delete predicate.
+#:
+#: The retraction deletes the SMALL side — the keys that disappeared — rather than filtering on
+#: `NOT IN (every live key)`, because the live set is the size of the tier and the dead set is the size
+#: of the change. It is still unbounded in principle (a caller may delete a million rows in one
+#: version), so the predicate is chunked rather than built from whatever the difference happens to be.
+_RETRACT_CHUNK = 1000
+
+
+def _retract_deleted(upstream: lance.LanceDataset, to_uri: str, so: StorageOptions) -> int:
+    """Drop tier rows whose upstream row is gone, and answer how many. The delta lane's other half.
+
+    WHY THE DELTA LANE NEEDS THIS AT ALL: a full run converges with
+    `when_not_matched_by_source_delete`, so the run's output IS the whole tier and a row it no longer
+    produces is retracted. A delta's source is by construction only what changed, so the same clause
+    would delete everything the delta did not carry. The two lanes therefore answered a deletion
+    differently — measured 2026-09-11, deleting bronze `id=1` left silver holding `[0, 1, 2]` on a
+    delta run and `[0, 2]` on a full one — and which one ran was the scheduler's choice.
+
+    THE JOIN IS ROOT PROVENANCE, which is what lets one rule reach every hop.
+    `stage_stamp.carry_source_rowid` KEEPS `source_rowid` rather than re-minting it per hop, so
+    measured over a real three-tier chain `gold.source_rowid == silver.source_rowid == bronze._rowid`.
+    The tier below is therefore always joined on `source_rowid`, and the upstream side is
+    `source_rowid` where it exists and the reserved `_rowid` at the cascade head — the same
+    head-detection the stamp itself uses, for the same reason.
+
+    EXACT for a `1:1` lane at every hop and for `1:N` at the head. Its one imprecision is `1:N` deeper
+    in: siblings share a root key, so deleting one of several children upstream leaves the key present
+    and the tier below keeps its rows. That is an UNDER-deletion — a stale row rather than a lost one.
+
+    A NULL `source_rowid` is left alone rather than treated as dead: it names no upstream row, so the
+    join cannot speak about it, and "unjoinable" must not read as "orphaned".
+
+    IT COSTS ONE KEY-COLUMN SCAN PER SIDE, every delta run, and that is the honest price of the
+    guarantee — a deletion is invisible to the version columns, so nothing cheaper than reading the
+    keys can find one. It is an int64 column with no payload behind it, against a lane whose whole
+    purpose is to avoid re-deriving those payloads.
+
+    Raises:
+        UpstreamVanishedError: if the upstream's key column reads back empty. Every downstream row
+            would then be an orphan and the tier would be emptied by a single unreadable scan — the
+            refusal `StagedOutputEmptyError` makes for the same shape on the landing path.
+    """
+    destination = lance.dataset(to_uri, storage_options=so)
+    if SOURCE_ROWID_COLUMN not in destination.schema.names:
+        return 0
+
+    upstream_key = SOURCE_ROWID_COLUMN if SOURCE_ROWID_COLUMN in upstream.schema.names else _ROWID
+    live = set(upstream.to_table(columns=[upstream_key]).column(upstream_key).to_pylist())
+    if not live:
+        raise UpstreamVanishedError(f"{upstream.uri} reports no rows under `{upstream_key}` — retracting against it would empty {to_uri}")
+
+    held = destination.to_table(columns=[SOURCE_ROWID_COLUMN]).column(SOURCE_ROWID_COLUMN).to_pylist()
+    dead = sorted({key for key in held if key is not None and key not in live})
+    for start in range(0, len(dead), _RETRACT_CHUNK):
+        keys = ", ".join(str(key) for key in dead[start : start + _RETRACT_CHUNK])
+        destination.delete(f"{SOURCE_ROWID_COLUMN} IN ({keys})")
+    return len(dead)
+
+
 class StagedOutputMissingError(RuntimeError):
     """The distributed write left nothing at the staging path — not the same as producing no rows."""
 
@@ -667,6 +737,11 @@ def _run_stage(
     # one property an operator cannot confirm from the logs. Measured live before adding it:
     # a gold hop with BASE_VERSION=104 was indistinguishable from a full rescan.
     lane = "full"
+    # A retraction DELETES from a governed tier, so it is said out loud on every completion line for
+    # the same reason the lane is: a destructive step an operator cannot see in the logs is one nobody
+    # can attribute a missing row to. Only the delta lane retracts — the others converge with
+    # `when_not_matched_by_source_delete`, where the drop is already part of the merge.
+    retracted = 0
 
     if blob_field_names(upstream.schema):
         # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
@@ -676,13 +751,18 @@ def _run_stage(
         # — the same argument the cascade head below already makes for handling the bronze root
         # natively rather than distributing it.
         lane = "delta"
+        # RETRACTION FIRST, because a deletion-only change IS an empty delta: the version columns
+        # describe rows the table still has, so nothing the predicate selects can name a row that is
+        # gone. Run after the early return below and a delete would leave through the `delta_empty`
+        # door reporting that nothing changed.
+        retracted = _retract_deleted(upstream, to_uri, so)
         source = upstream.to_table(with_row_id=True, filter=delta)
         rows_in = source.num_rows
         if rows_in == 0:
             # A legitimate no-op, not a failure: a redelivered event whose rows this stage already
             # processed lands here. Writing an empty version would fire a publication event for data
             # nobody added.
-            print(f"RAY-STAGE OK stage={stage} lane=delta rows=0 delta_empty=1 base_version={base_version}")
+            print(f"RAY-STAGE OK stage={stage} lane=delta rows=0 delta_empty=1 retracted={retracted} base_version={base_version}")
             return
         produced = _stamp_stage(source, stage, lineage, dataset_id)
         rows_out = produced.num_rows
@@ -788,8 +868,8 @@ def _run_stage(
 
     out = lance.dataset(to_uri, storage_options=so)
     print(
-        f"RAY-STAGE OK stage={stage} lane={lane} rows={out.count_rows()} rows_in={rows_in} version={out.version} "
-        f"dsv={out.data_storage_version} stable_row_ids={out.has_stable_row_ids} cols={out.schema.names}"
+        f"RAY-STAGE OK stage={stage} lane={lane} rows={out.count_rows()} rows_in={rows_in} retracted={retracted} "
+        f"version={out.version} dsv={out.data_storage_version} stable_row_ids={out.has_stable_row_ids} cols={out.schema.names}"
     )
     if not out.has_stable_row_ids:
         raise SystemExit("stage transform lost stable row ids")

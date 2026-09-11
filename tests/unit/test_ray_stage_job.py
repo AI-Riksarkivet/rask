@@ -1135,3 +1135,62 @@ def test_a_row_untouched_since_the_boundary_is_NOT_re_derived(tmp_path: Path) ->
     delta = lance.dataset(bronze).to_table(columns=["id"], filter=job._delta_filter(boundary)).to_pydict()["id"]
 
     assert sorted(delta) == [1], "the delta carried rows nothing had changed — the lane is rescanning"
+
+
+# RETRACTION (LH-132). The delta lane and the full lane disagreed about a deleted upstream row: a full
+# run drops it (`when_not_matched_by_source_delete`), a delta run left it standing and logged
+# `delta_empty=1` — "nothing changed" about a retraction. Whether a delete propagated therefore depended
+# on which lane the scheduler picked.
+
+
+def test_a_row_DELETED_upstream_is_retracted_from_the_tier_below(tmp_path: Path) -> None:
+    """The lane's own measurement: a deletion-only change IS an empty delta, so this runs ahead of it."""
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=3)
+    silver = str(tmp_path / "silver_retract")
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
+
+    boundary = lance.dataset(bronze).version
+    lance.dataset(bronze).delete("id = 1")
+
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
+
+    held = lance.dataset(silver).to_table(columns=["id"]).to_pydict()["id"]
+    assert sorted(held) == [0, 2], "the delta lane kept a row the upstream had retracted"
+
+
+def test_the_two_lanes_AGREE_about_a_deleted_row(tmp_path: Path) -> None:
+    """The defect was a divergence, so the pin is the agreement rather than either lane's answer."""
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=4)
+    delta_dst, full_dst = str(tmp_path / "silver_by_delta"), str(tmp_path / "silver_by_full")
+    for dst in (delta_dst, full_dst):
+        job._run_stage(bronze, dst, "silver", {}, lineage='{"run_id": "r-full"}')
+
+    boundary = lance.dataset(bronze).version
+    lance.dataset(bronze).delete("id = 2")
+
+    job._run_stage(bronze, delta_dst, "silver", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
+    job._run_stage(bronze, full_dst, "silver", {}, lineage='{"run_id": "r-rescan"}')
+
+    by_delta = sorted(lance.dataset(delta_dst).to_table(columns=["id"]).to_pydict()["id"])
+    by_full = sorted(lance.dataset(full_dst).to_table(columns=["id"]).to_pydict()["id"])
+    assert by_delta == by_full, "which lane ran still decides whether a delete propagates"
+
+
+def test_an_upstream_that_reads_back_EMPTY_refuses_rather_than_emptying_the_tier(tmp_path: Path) -> None:
+    """One unreadable scan must not delete a governed tier — the `StagedOutputEmptyError` guard shape."""
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=3)
+    silver = str(tmp_path / "silver_guard")
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
+
+    lance.dataset(bronze).delete("id >= 0")
+
+    with pytest.raises(job.UpstreamVanishedError):
+        job._retract_deleted(lance.dataset(bronze), silver, {})
+
+    assert lance.dataset(silver).count_rows() == 3, "the tier was emptied by a refusal that did not hold"
