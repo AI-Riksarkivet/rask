@@ -1998,11 +1998,17 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Why open:* 22 candidates produced 53 verdicts (40 real) but the critic never ran, so the remaining rows are candidates, not a finished list. The stated reset (2026-09-04 06:00) has passed.
 - *Closes when:* Re-run the sweep's completeness critic and the 16 failed verify calls, then re-state the remaining rows as measured rather than candidate.
 
-**LH-120 · Both medallion entrypoints read settings at import time — `producer.py:170`, `producer.py:202` and `stage_runner.py:46`**
+**LH-120 · Both medallion entrypoints read settings at import time — `producer.py:170-171`, `producer.py:201` and `stage_runner.py:46`**
 `medallion` · low
 
 - *Why open:* Re-measured at HEAD 2026-09-09: the LOGGING half is false (neither entrypoint configures logging at module level), but the SETTINGS half stands at three sites, which is the half that matters — a config error fails at import rather than in the lifespan.
-- *Closes when:* Move the `get_settings()` calls at `producer.py:170`/`:202` and the `_settings = get_settings()` bind at `stage_runner.py:46` into the lifespan/factory.
+- *RE-MEASURED 2026-09-11 — still true, and the citation drifted.* The module-level reads are
+  `producer.py:170` and `:171` (`docs_enabled`, `audit_enabled` — the row named one of the pair) and
+  `producer.py:201` (`mount_lag_cron(app, get_settings().cascade_lag_binding_name)`), not `:202`,
+  which is one past the end of a 201-line file. `stage_runner.py:46` is unchanged. So four sites,
+  not three.
+- *Closes when:* Move the `get_settings()` reads at `producer.py:170-171` and `:201` and the
+  `_settings = get_settings()` bind at `stage_runner.py:46` into the lifespan/factory.
 
 
 ---
