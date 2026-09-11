@@ -241,6 +241,7 @@ spec:
                        raises rather than degrading. */}}
                 {{- if $.Values.minio.medallionAccessKey }}
                 medallion-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.medallionAccessKey $.Values.minio.medallionSecretKey) }} \
+                catalog-s3-secret-key={{ include "lance.scopedStorageSecret" (list $ $.Values.minio.catalogAccessKey $.Values.minio.catalogSecretKey) }} \
                 {{- end }}
                 {{- /* THE LINEAGE PLANE'S SCOPED S3 SECRET, on the same terms as the two above: its own
                        field rather than a second value on `minio-secret-key`, which IS the tenant root's

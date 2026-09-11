@@ -2071,6 +2071,24 @@ minio:
   # a different user; the secret is still derived unless supplied (`lance.scopedStorageSecret`).
   maintenanceAccessKey: rask-maintenance
   maintenanceSecretKey: ""
+  # THE CATALOG'S OWN IDENTITY — the last service that presented the store's ROOT account (LH-051).
+  #
+  # It could not be scoped before the store swap, and that was measured rather than assumed: RustFS
+  # gates STS `AssumeRole` to root and its policy engine refuses an `sts:AssumeRole` statement
+  # outright, so under `vending.mode: sts` the root key was a REQUIREMENT of the mode. On MinIO a
+  # policy-attached user both assumes and has its session policy enforced (measured 2026-09-11:
+  # in-scope GET allowed, cross-tenant GET and read-tier PUT both AccessDenied), which is what makes
+  # this row closable at all.
+  #
+  # Its policy is WIDE on data and holds no admin rights — see the long note in
+  # `minio-scoped-users.yaml`. Warehouse buckets are minted at runtime, so a bucket list here would be
+  # stale by construction; what the scoping removes is the ability to mint identities and rewrite the
+  # policies that govern every other plane.
+  #
+  # The access key is the whole setting; the secret derives (`lance.scopedStorageSecret`) unless one
+  # is supplied.
+  catalogAccessKey: rask-catalog
+  catalogSecretKey: ""
   # THE MEDALLION PLANE'S SCOPED IDENTITY — the producer and all three stage runners share one, because
   # `medallion.yaml` renders their S3 env from one pair and they do one class of work. The access key
   # is the whole setting; the secret is derived unless supplied (`lance.scopedStorageSecret`).

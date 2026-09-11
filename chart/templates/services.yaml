@@ -97,16 +97,17 @@ spec:
             # fragments across (?data_base=... per request, validated against this list). Empty = feature off.
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
+            {{- $catalogScoped := .Values.minio.catalogAccessKey }}
+            - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.catalogAccessKey .Values.minio.accessKey (not (not $catalogScoped)) | quote }} }
             # NAMED HERE rather than left to the service's own default, which is what every sibling
             # already does (lineage, medallion, maintenance each render their own field). The catalog
             # was the one that did not, so the FIELD NAME lived only in its image — and when the seed
             # started writing a differently-named property, a running pod asked OpenBao for a field
             # that no longer existed and failed closed at startup on an estate whose store was
             # otherwise healthy. A name the chart writes and the chart seeds cannot drift apart.
-            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: "minio-secret-key" }
+            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ ternary "catalog-s3-secret-key" "minio-secret-key" (not (not $catalogScoped)) | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
-            - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.minio.secretKey | quote }} }
+            - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.catalogAccessKey .Values.minio.catalogSecretKey)) .Values.minio.secretKey (not (not $catalogScoped)) | quote }} }
             {{- else }}
             # OpenBao on → the S3 secret comes ONLY from the Dapr secret store at boot; it is deliberately
             # NOT in pod env (the audit's 'plaintext still ships' fix). The catalog fails closed if the

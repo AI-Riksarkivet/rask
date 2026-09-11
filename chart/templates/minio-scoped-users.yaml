@@ -3,6 +3,7 @@
 {{- $medallion := .Values.minio.medallionAccessKey }}
 {{- $lineage := .Values.minio.lineageAccessKey }}
 {{- $viewer := .Values.minio.viewerAccessKey }}
+{{- $catalog := .Values.minio.catalogAccessKey }}
 {{- if and .Values.minio.enabled (or $ray $maint $medallion $lineage $viewer) }}
 # SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
 #
@@ -117,6 +118,10 @@ spec:
             {{- if $lineage }}
             - name: LINEAGE_SECRET_KEY
               value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.lineageAccessKey .Values.minio.lineageSecretKey) | quote }}
+            {{- end }}
+            {{- if $catalog }}
+            - name: CATALOG_SECRET_KEY
+              value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.catalogAccessKey .Values.minio.catalogSecretKey) | quote }}
             {{- end }}
             {{- if $viewer }}
             - name: VIEWER_SECRET_KEY
@@ -451,6 +456,64 @@ spec:
               mc admin user add rfs {{ .Values.minio.lineageAccessKey }} "$LINEAGE_SECRET_KEY" || true
               mc admin policy attach rfs rask-lineage --user {{ .Values.minio.lineageAccessKey }} || true
               echo "provisioned scoped user {{ .Values.minio.lineageAccessKey }} (rask-lineage)"
+              {{- end }}
+
+              {{- if $catalog }}
+              cat >/tmp/catalog.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "TheWholeDataPlaneItGoverns",
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets",
+                      "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload",
+                      "s3:CreateBucket", "s3:DeleteBucket"
+                    ],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  },
+                  {
+                    "Sid": "NeverTheObservabilityStore",
+                    "Effect": "Deny",
+                    "Action": ["s3:*"],
+                    "Resource": [
+                      "arn:aws:s3:::{{ .Values.observability.bucket }}",
+                      "arn:aws:s3:::{{ .Values.observability.bucket }}/*"
+                    ]
+                  }
+                ]
+              }
+              POLICY
+              {{- /*
+                WIDE ON DATA, AND THAT IS THE POINT — what it drops is ADMIN.
+
+                This identity exists to stop the catalog presenting the store's ROOT account, which it
+                did until LH-133 made a scoped vend possible at all: measured 2026-09-11, RustFS gates
+                `AssumeRole` to root and cannot grant the right, so the root key was a REQUIREMENT of
+                `vending.mode: sts` rather than an oversight. On MinIO a policy-attached user both
+                assumes AND has the session policy enforced, so the requirement is gone.
+
+                The DATA grant cannot be narrowed by bucket the way maintenance's or medallion's can:
+                warehouse buckets are minted at RUNTIME by `POST /v1/warehouses`, so a render-time list
+                is stale by construction — the same reason recorded above for the ray and lineage
+                policies. `s3:CreateBucket`/`s3:DeleteBucket` are here because provisioning and purge
+                are this service's own doors, and no other identity in the estate holds them.
+
+                WHAT ROOT HAD AND THIS DOES NOT: the admin API. No `mc admin user`, no
+                `mc admin policy`, no service-account minting — so a compromised catalog cannot create
+                an identity, cannot widen its OWN policy, and cannot read the policies governing every
+                other plane. That is the blast-radius change; a credential that can rewrite the policy
+                that governs it is root wearing another name, which is exactly what
+                `minio-scoped-users`' own header warns about.
+
+                The observability store stays denied for the reason every sibling denies it: it is
+                platform telemetry, not tenant data, and nothing in the catalog reads or writes it.
+              */}}
+              mc admin policy create rfs rask-catalog /tmp/catalog.json
+              mc admin user add rfs {{ .Values.minio.catalogAccessKey }} "$CATALOG_SECRET_KEY" || true
+              mc admin policy attach rfs rask-catalog --user {{ .Values.minio.catalogAccessKey }} || true
+              echo "provisioned scoped user {{ .Values.minio.catalogAccessKey }} (rask-catalog)"
               {{- end }}
 
               {{- if $viewer }}
