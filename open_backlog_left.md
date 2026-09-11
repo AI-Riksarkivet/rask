@@ -103,6 +103,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
 `lineage, maintenance` · **HIGH**
 
+  **RE-MEASURED 2026-09-11 — THE SYMPTOM IS REAL, THE DIAGNOSIS IS WRONG, AND THE REMEDY CLOSES
+  NOTHING.** Both WARN lines do fire on every 300 s tick at exactly `storage_loss=32, unreadable=2`.
+  But the 32 are NOT dead test residue whose storage is gone: **29 of the 32** — every one alice's
+  bearer can see — are LIVE, catalog-registered, readable tables. The catalog describes them 200 with
+  a location, `count_rows` on `tracka$brdel_a9bf2fbf` answers 3, and `/history` shows main at v1. So
+  the sweep is reporting live data as storage loss, which is the opposite of the row's story and a
+  worse defect than the noise it complains about. The remedy fails too: on 2026-09-30 `prune_runs`
+  deletes the 08-31 runs, but `prune_orphan_datasets` leaves 31 of the 34 nodes in place because they
+  carry a CREATED edge (`cypher.py:276-284` requires `nc = 0`), so the next sweep warns identically.
+  Waiting for retention cannot close this row.
 - *Why open:* Retention (30d) and `prune_orphan_datasets` landed and the graph is converging (79→2 unreadable, 37→32 storage_loss), but both warnings still fire on every 5-minute tick over 1,163 Dataset nodes, so a real storage loss would arrive indistinguishable from the noise. The 19 genuinely-dead nodes have runs dated 2026-08-31..09-07 and the one-off purge was refused as a destructive graph write.
 - *Closes when:* Let 30-day retention reach the 2026-08-31 runs (2026-09-30), then re-measure the reconcile warnings and confirm `datasets=[...]` names only live datasets.
 
@@ -394,6 +404,13 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   called out in `minio-scoped-users.yaml` with their dates and the store they were taken on. A
   condition a store silently drops turns a Deny into a hole rather than a hard failure, so these are
   re-drives, not formalities.
+  **RE-MEASURED 2026-09-11 — ALREADY FIXED, the same day, by `2afdda03`.** The distributed tabular
+  branch no longer overwrites: it stages under `<dst>/_staging/<idempotency-key>`
+  (`ray_stage_job.py:832-848`), `_land_staged` runs ONE
+  `merge_insert("id").when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete()`
+  (:710-712) and `_drop_staged` cleans up (:852-854). Measured through `_run_stage`'s REAL distributed
+  branch: identity survives a re-derivation. The row's framing ("scratch+merge confirmed, needs three
+  guards") is the `1feb3a00` state that `2afdda03`/`f791af95`/`4546b0f2` superseded hours later.
 - *Closes when:* the chart deploys MinIO in place of RustFS, every bucket and scoped user is
   provisioned by the ported hooks, the credential-isolation e2e passes against it, and the estate is
   observed serving the lakehouse from it end to end.
@@ -565,18 +582,47 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 **LH-018 · The governed commit door is the non-spec `/commit`; `CreateTableVersion`/`BatchCommitTables` carry no lineage, gate, protection or replay marker**
 `catalog` · **HIGH** · **blocked:** owner acknowledgement of R1
 
+  **RE-MEASURED 2026-09-11 — EVERY CLAUSE IS TRUE AND THE ASK IS STILL WRONG.** Measured by hand
+  against the deployed catalog as well as by audit: of the three ops the title names, **two answer 406
+  `UnsupportedOperationError` on the dir backend** — `batch_commit_tables` and
+  `batch_create_table_versions` — so they carry no lineage because they do nothing, and attaching
+  governance to them is decoration. Only `create_table_version` is live, and it is FGA-gated at
+  `can_write_data`, **the identical rung the governed `/commit` door uses** (bob, a non-owner, cleared
+  both and was refused 403 at `protection` and `deregister`). "Protection" applies to NEITHER: it is a
+  DELETION control (`require_not_protected` is called only from drop/deregister/rename/warehouse/project
+  delete). So the real gap is ONE op missing a lineage emit and a replay marker, not a governance
+  chain bypassed. **The `managed_versioning=true` clause is the dangerous one:** the spec defines it as
+  the caller using namespace version ops "instead of relying on Lance's native version management" —
+  advertising it invites clients onto a catalog-mediated commit pointer, which is the Iceberg shape
+  CLAUDE.md's permanent LANCE-ONLY ruling exists to avoid.
 - *Why open:* Version routes at `endpoints/versions.py` are mounted and FGA-gated (`_BATCH_PATHS`, `_action_relation` → `can_write_data`) but nothing else runs on them, and `managed_versioning` is never advertised in `DescribeTable`, so a stock Lance client's commit bypasses the whole governance chain. `batch_commit_tables` is `UnsupportedOperationError` on the dir backend and always will be.
 - *Closes when:* Owner acknowledges R1 (the governed commit path IS the spec's managed-versioning path); then attach lineage emit, the quality gate, the replay marker and protection to `CreateTableVersion` in `endpoints/versions.py`, advertise `managed_versioning=true` in `DescribeTable`, alias then remove `/commit` (data.py:326-364, dataplane.py:556-637), and back `batch_commit_tables` with rask's own staged-manifest KV.
 
 **LH-019 · rask-only governance side effects still run inside spec handlers (warehouse-scoped namespace refusal, trash soft-delete, protection 409, lineage keys in schema metadata, implicit BTREE, insert pre-coercion, maintenance 503 on POST reads)**
 `catalog` · **HIGH** · **blocked:** the management-API carve, plus an owner ruling on the protection error code
 
+  **RE-MEASURED 2026-09-11 — SIX of the seven side effects confirmed, and the remedy is aimed past
+  its doors.** Confirmed executing inside spec handlers: the warehouse-scoped namespace refusal
+  (`fga_deps.py:877` via `namespaces.py:132`), trash soft-delete (`tables.py:508-516`,
+  `namespaces.py:481`), protection refusals inside drop/deregister/rename (`tables.py:476,597,899`),
+  and the rest. The "Closes when" is partly aimed at doors that already answer and partly at a
+  mechanism that does not do what it claims; its first clause is LH-021/R2 — a whole-surface carve
+  needing owner acknowledgement — not work this row can do. The protection-code question (3 vs 19)
+  remains an undecided owner tie.
 - *Why open:* Only the `branch`-honouring clause closed; eight ops still refuse `branch` and the side effects change what a spec client observes — 7 of the 8 conformance blockers. Four refusals were measured as typed spec errors, but the protection refusal mints `NamespaceNotEmptyError` code 3 for a protected TABLE, so a generated client empties-and-retries forever; the recorded reason for not using code 19 was measured false and the 19-vs-3 split is an undecided tie.
 - *Closes when:* Move the rask-only side effects behind the management API, re-express each remaining refusal with the spec's own code, decide the protection code (3 vs `InvalidTableStateError` 19) for all four protected object kinds, and honour `branch` on the eight refusing ops via the plumbing at `dataplane.py:1085`.
 
 **LH-020 · Two of the three stock Lance clients still do not drive the deployed catalog: lancedb cannot address a nested namespace, lance-ray is untested**
 `catalog` · **HIGH** · **blocked:** lancedb upstream fix; the lance-ray leg waits for the compute pass
 
+  **RE-MEASURED 2026-09-11 — THE REMEDY'S PREMISE IS MEASURED FALSE.** Clause (a) holds: the
+  conformance suite imports only `lance_namespace`, drives 10 read ops plus one write round trip, and
+  nothing in `tests/e2e-py` imports lancedb or lance_ray. But step 1 of "Closes when" — *file the
+  lancedb upstream issue (no way to express a multi-segment identifier via `open_table`)* — **would
+  close nothing, because the premise is false in the locked version**: `namespace.py:573-577` and
+  `lance_sdk.md:286` express it, and it was driven LIVE against the deployed catalog, reading 36 rows
+  through lancedb. Filing that issue would spend an upstream ask on a bug that does not exist. What is
+  genuinely open is the lance-ray leg and extending the suite across all three clients.
 - *Why open:* Spec-verbatim REST is proven only for pylance's `RestNamespace` (10 read ops plus a full create/insert/tag/untag/drop round trip). lancedb 0.34.0 connects and lists the root but `open_table("acme-bronze$agnostic")` is refused 400 because it passes a single unsplit string in both path and body; relaxing `reconcile_body_id` is refused as an outer-layer workaround, so the fix is upstream and unfiled.
 - *Closes when:* File the lancedb upstream issue (no way to express a multi-segment identifier via `open_table`); drive `read_lance(table_id=[...], namespace_impl="rest")` against the catalog with vended creds and `ray.init(address="local", _temp_dir=...)`; extend `tests/e2e-py/test_the_stock_lance_client_drives_the_catalog.py` / `make e2e-spec-conformance` across all three clients.
 
@@ -971,6 +1017,15 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 **LH-056 · Branch-scoped governance is missing: no FGA `branch` type, vending/protection/trash are branch-blind, and branch/tag creation emits no control event**
 `catalog, lineage, notifications` · **HIGH** · **blocked:** owner acknowledgement of R5, plus an owner decision on who is TARGETED by a tag/branch control event (rask-notifications: an event naming nobody is undeliverable); the stats/index body clause waits on A1
 
+  **RE-MEASURED 2026-09-11 — NARROWER ON THE ASK, WIDER ON THE DEFECT; both blockers are stale.**
+  Confirmed: `model.fga:41-508` declares ten types and no `type branch`; the only branch rung is
+  `define can_create_branch: owner` (:412 — the row's `:349,357` are stale refs), and `model.fga.yaml`
+  asserts that rung alone. **But the ask aims at the wrong seam:** `canonical_object_id` is a string
+  join over PATH segments, and the object is chosen in `authorize` (`fga_deps.py:709-710`), which
+  never reads `branch` from the request — so making that function branch-aware changes nothing. A
+  separately-verified consequence belongs here: **`branches/delete` resolves to the WRITER rung while
+  `branches/create` is owner-tier**, so the door that destroys a branch clears a lower bar than the one
+  that creates it.
 - *Why open:* The nine data doors were fixed and pinned; the governance half is untouched. `model.fga:349,357` has only `can_create_branch: owner`, so branch writes fall through to the table's `can_write_data`, and `canonical_object_id` joins the table's path segments only — the FGA object is `table:<ns>$<table>` whatever branch a request names, so a `can_write_data` holder writes ANY branch and no grant can cover main alone. Vending is not scoped to `tree/<b>/`, protection and trash have no per-branch records, `parent_branch`/`parent_version` facets are absent, and driven against the deployed catalog `tags/create` and `branches/create` both answered 200 with zero control events because `ControlAction` is a 38-value `Literal` with no tag or branch action. The branch refusal on `stats`, `index/list` and `index/{n}/stats` was added as a QUERY parameter while those routes declare no body, so the spec's `{"branch": …}` body is still dropped.
 - *Closes when:* Add `type branch { parent:[table]; reader/writer; can_write_data }` to `model.fga` with `.fga.yaml` cases; make `canonical_object_id` branch-aware; scope vended STS prefixes to `tree/<b>/` via `vending.build_session_policy`; add per-branch protection and trash records; emit `parent_branch`/`parent_version` facets; add tag/branch values to `ControlAction` in `control_events.py` and regenerate `docs/catalog-openapi.json` + the TS client; land A1 so stats/index read `branch` from a declared body.
 
@@ -987,6 +1042,15 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 **LH-058 · No column-level classification or policy exists: `columns.py` has no FGA check and `pii` survives only as a key in seed data**
 `catalog, lineage, openfga` · **HIGH** · **blocked:** the FGA model-shape decision (the `column` relation is part of it)
 
+  **RE-MEASURED 2026-09-11 — THE CORE CLAUSE IS EXACTLY TRUE AND THE REMEDY WOULD NOT CLOSE IT.**
+  Confirmed in code and against the LIVE store (`01KYPGG8F8MAZTJANME4K077DE`, model
+  `01M288WT5QQRB5TC6S9VBZGFS0`): ten types, zero relations naming column/classification/mask, and no
+  `classification`/`sensitivity` field anywhere. But "apply masking on `query`" is a control aimed at
+  one of at least five read doors, and **the traffic that matters does not reach it**: `credentials`
+  is a data-read action (`fga_deps.py:86`) that vends a whole-prefix READ session, so a caller holding
+  the reader rung reads the raw columns from object storage without passing any door that could mask
+  them. Column masking cannot be enforced at a query door while credential vending hands out the
+  bytes.
 - *Why open:* Section I names it 'the lever the estate cannot express' — governed tables carry no per-column sensitivity, so a GDPR/secrecy classification cannot be recorded, checked or enforced, masking/deny per column is unexpressible, and only column LINEAGE exists.
 - *Closes when:* Put a classification field on the dataset/column metadata and the dataset node, add a `column` relation to `model.fga`, apply masking on `query` and on descriptor-first reads in `columns.py`, and add a door to set and read the classification.
 
@@ -1399,6 +1463,14 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `RASK_WRITE_MODE=merge_insert` (read off the Ray job list 2026-09-10) and the job never consults
   it, so the submitter's declared write semantics have no effect on what the job does. The chart has
   `test_no_dead_chart_env_vars` for exactly this failure; the work order has no equivalent.
+  **RE-MEASURED 2026-09-11 — THE CORE DEFECT STANDS AND THIS IS THE ONE ROW WHOSE REMEDY WORKS.**
+  Confirmed: `ray_stage_job.py:86-88`, `ray_train_job.py:64-65` and `ray_lance_job.py:45-46` all read
+  `S3_KEY`/`S3_SECRET` from process env — the delivery the owner's secrets rule forbids outright — and
+  six work-order env vars still have zero consumers. The STS half is feasible with what exists: the
+  catalog runs `LANCE_VENDING_MODE=sts` and a read-tier vend returns a 900 s prefix-scoped credential.
+  One live blocker first: the head is a HAND-APPLIED Deployment from `deploy/ray-lance-demo.yaml`
+  (`kubectl get rayservice,raycluster` is empty and the chart renders 0 RayServices), so a chart-only
+  fix cannot reach it. **Phase 2 — do not work ahead of the lakehouse.**
 - *Closes when:* the Ray job vends its storage credential (the catalog's STS door, the same one
   `POST /v1/outbox/credentials` was added to) keyed on `RASK_CREDENTIAL_REF`, and `S3_KEY`/`S3_SECRET`
   leave the pod env; plus a gate over `work_order.to_env` asserting every emitted name has a consumer,
