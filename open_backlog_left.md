@@ -399,6 +399,13 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   A relative URI opens as nothing, so each of those 60 classifies MISSING_ON_STORAGE and is reported as
   storage loss every tick. One of them is named `acme-bronze$zzprobe8926` pointing at
   `probe-relative-loc` — someone probed exactly this and it was never carried further.
+- *THE OTHER EMITTERS WERE CHECKED AND ARE FINE,* so the sweep for producers of relative URIs is
+  bounded rather than open. The shared write-door trailer (`api/lineage_deps.py:73`) takes its location
+  from `dataplane.read_version_and_schema`, which returns `str(dataset.uri)` off the OPENED dataset —
+  necessarily absolute. `declare_table` mints its location absolute. The medallion emitters pass composed
+  `{root}/medallion/{tier}` URIs, absolute whenever the root is. Of the 60 relative nodes, the remaining
+  shapes (`transcripts_v2.lance/chunks.lance`, `silver/loop-1785786423_…`) are media-plane and older
+  stage residue, not a live producer in scope.
 - *The fix is FORWARD-ONLY, which is what makes it this row's problem too:* `cf040fff` stops new ones,
   and the 60 keep their URI because nothing rewrites a Dataset node's `source_uri` after the fact. Same
   shape as the stale stamp above — a wrong value repaired only by a write that may never come — with the
