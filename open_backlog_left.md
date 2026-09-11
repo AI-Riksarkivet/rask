@@ -128,6 +128,15 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   back-fillable) is re-pinned against the REPORT rather than against a tuple, which is what an operator
   reads. Pinned by `tests/unit/test_a_readable_dataset_is_not_reported_as_storage_loss.py`.
   UNDEPLOYED: the numbers above are from the running estate, which predates this.
+- *HOW NOT TO MEASURE THIS, learned by doing it wrong 2026-09-11:* classifying the 32 by opening their
+  graph URIs from a `kubectl exec` subprocess inside the lineage pod does NOT work and does not fail
+  loudly. A fresh `LineageSettings()` there carries `aws_secret_access_key` of length **0** — the running
+  app hydrates it from the Dapr secret store at boot, and a subprocess does not — so every open fails on
+  authentication and reads as UNREADABLE. The attempt returned 32/32 unreadable against a sweep
+  reporting `storage_loss=32, unreadable=2`, and the contradiction is the only reason it was caught.
+  Classifying these requires the sweep's own process, i.e. the deployed split.
+  (Worth noting as a positive: the secret being absent from a fresh settings object is the estate's
+  "never secret through envs" rule observably holding — the value exists only after the store fetch.)
 - *What is still open here:* the residue itself. The split makes the question answerable — once deployed,
   `graph_ahead` vs `storage_loss` says how many of the 32 are recreated tables and how many are real —
   but it prunes nothing and this row's `prune_orphan_datasets` remedy is still measured not to work.
