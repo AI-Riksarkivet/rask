@@ -277,6 +277,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   it, and the symptom is indistinguishable from a hung store. The estate ran for days one restart away
   from an object store that could not come back, and the only reason it surfaced is that a migration
   restarted the pod on purpose.
+- **RATE AND SOURCE MEASURED 2026-09-11, and the rate makes this urgent rather than tidy.** Sampled
+  over 60 s on the live store: **280 new entries per minute — 16,800/hour**. The previous store became
+  unrestartable at 107,485, which at this rate is reached in **about six hours**. The earlier "867
+  after twenty minutes" reading understated it.
+- *THE SOURCE IS THE SWEEP, and the waste is structural rather than a busy estate:* the audit trail
+  names `service-maintenance` vending `tier=write` per TABLE, and `sweep._maintain_one`'s dispatch
+  calls `credentials.write_options_for` for every PLANNED dataset — before anything has decided the
+  dataset needs a rewrite. The estate's own history is that almost nothing is ever rewritten
+  (`fragments_removed_total=0` across 785 ticks), so nearly every one of those 900-second credentials
+  is minted for a unit that writes nothing.
+- *`credentials.py` argues "NO CACHE, deliberately — maintenance vends once per WORK ITEM", and the
+  argument is sound while the premise holds.* It does not: the vend is per PLANNED item, not per item
+  that writes. The fix that keeps the design is to vend LAZILY — decide with the read credential
+  whether this unit will write, and only then ask for a write credential — which leaves the
+  no-cache reasoning intact and removes the ~130 wasted vends per tick.
 - *Closes when:* the entry count is BOUNDED — observed falling, or pruned — and something reports it.
   A vend TTL of 900 s means every record older than that is garbage by construction, so the check is
   cheap: count the prefix, alert on growth that does not fall. Do not close it on documentation.
@@ -393,7 +408,18 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* #88 closed witnessed end-to-end 2026-08-05 but its residuals were folded here at `open_htr_governance.md`'s retirement and none have landed: the owner-directed P7b re-cut, the geometry stage runners, and the in-dataset `lineage` column that rides when the stage runner supplies the LineageDoc.
 - *Closes when:* Re-cut the runner's stage job to read bronze Lance and emit gold rows directly (reusing the lane's parser/register/facet seams), add the bronze→silver geometry stage runners, and populate the in-dataset `lineage` column from the stage runner's LineageDoc.
 
-**LH-011 · `runRetentionDays: 0`, `compaction.lineageEmit: false` and `freshnessBudgetHours: 0` ship in the prod render**
+**LH-011 · ~~three lineage knobs ship off in the prod render~~ — TWO WERE ALREADY RIGHT; the third needs a NUMBER**
+`lineage` · was med · **blocked:** owner — what freshness budget?
+
+- *RE-MEASURED 2026-09-11, confirming the 09-10 reading:* `runRetentionDays: 30` (values.yaml:497) and
+  `compaction.lineageEmit: true` (:1660) are correct in the values the prod render inherits, and
+  `values-prod.yaml` overrides neither. Two thirds of this row describe a defect that is not there.
+- *WHAT IS ACTUALLY OPEN is one value, and it is a POLICY choice rather than a fix:* `freshnessBudgetHours`
+  is 0 (off). Turning it on makes the reconcile sweep and the per-dataset GET flag `stale: true` for any
+  dataset whose newest commit is older than the budget, and WARN `lineage_reconcile_stale` every tick
+  for each one. So the number IS the contract — too low and every tick warns about data that is fine,
+  too high and the clause asserts nothing. There is no defensible default to infer from the code, which
+  is why this is marked blocked rather than picked.
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Two of the three named knobs are already correct in the values the prod render inherits — `runRetentionDays: 30` and `compaction.lineageEmit: true` ship in `chart/values.yaml` and `values-prod.yaml` overrides neither — so only `freshnessBudgetHours: 0` is genuinely unset; the smaller true fix is one line plus the live confirmation that the pruner deletes.
   **Evidence:** chart/values.yaml:497 (`runRetentionDays: 30`, with the 2026-09-08 owner ruling recorded at :488-496 — "30 BY OWNER RULING 2026-09-08, and 0 (keep everything) is what it replaced"); chart/values.yaml:1655 (`lineageEmit: true`, "ON since 2026-08-16"); chart/values.yaml:434 (`freshnessBudgetHours: 0` — the one still off). chart/values-prod.yaml sets none of the three (grep across the file returns zero hits), and its `services.lineage` block at :37-45 overrides only `replicas`, `demoData`, `outbox.enabled`, `reconcile.enabled`, so Helm's map merge leaves 30/true/0 standing.
