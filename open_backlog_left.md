@@ -137,6 +137,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
 - *Why open:* Measured at HEAD 2026-09-09: builders are `lineage_kit/runs.py`, `medallion/schemas/events.py`, `lineage/seed.py`; kernels are `lineage_kit/{emitter,runs}.py`, `service_kit/lancekit/lineage_emit.py`, `catalog/core/lineage_emit.py`, `maintenance/core/lineage_emit.py`. Only the producer-URI defect was fixed. The bronze-write emit is the cascade head, so a swallowed emit means the whole bronze→silver→gold run never happens and nothing reports it.
   **WHAT SWALLOWING COSTS, measured 2026-09-10 rather than argued:** ingest is the estate's only HTTP lineage producer, and `POST /api/v1/lineage` had served TWO requests in lineage's retained log and refused both — a 100% failure rate — while 806 events reached the graph over the Dapr topic from producers that never take that path. Every ingest run landed its rows with no provenance and reported COMPLETE. Two distinct causes, both now fixed (`d5cd2af1`, `06302b7f`): the emitter could present only the shared bearer at a door that refuses it from a privileged name, and the run's external INPUT was authorized as a governed table. Neither was visible from the suite; both came from driving the lane.
+  **RE-MEASURED 2026-09-11 — THE DATA-LOSS HALF IS ALREADY CLOSED, and this row asks for a
+  27-importer refactor to fix it.** The claim was that `lineage_kit/emitter.py` swallows a transport
+  failure and stages nothing, "so every HTTP producer that is not ingest loses the event outright".
+  That set is EMPTY. Measured at HEAD: the only SERVICE importing `lineage_kit.emitter` is ingest —
+  the other five importers are modules inside lineage-kit itself — and ingest carries the backstop.
+  Every other producer publishes through `service_kit.lakehouse.outbox::publish_lineage_with_outbox`,
+  whose `_publish_staged` writes the event to the outbox BEFORE the publish and lets a publish failure
+  propagate, leaving the staged copy for the relay. catalog, maintenance, medallion and lineage all
+  route through it.
+  **WHAT IS GENUINELY LEFT is two things, neither of them data loss on transport:** (1) the
+  CONSOLIDATION — four kernels and three builders, which is duplication rather than a defect, and
+  (2) a narrower residual the catalog's own header already names: it has no TRANSACTIONAL outbox, so a
+  crash between the Lance write and the publish still loses the event. That one is not fixable by
+  consolidation — it needs a durable producer, and the architecture has no DB to give it.
   **THE CP-007 BLOCKER IS CLEARED (2026-09-11).** This said staging was worth nothing until ingest could write the outbox at all; it can now — the credential is vended through the catalog's outbox door and the whole path was observed end to end (`lineage_outbox_drained drained=1 stranded=0`). Re-measured the same day, what remains is the CONSOLIDATION, which is what the R10 block is actually about: `lineage_kit/emitter.py` swallows a transport failure with `log.warning("lineage_emit_failed")` and stages nothing, so every HTTP producer that is not ingest loses the event outright. Ingest survives only because it carries its OWN `_stage_undelivered` backstop — one copy, in one service, which is precisely the duplication R10 exists to end.
 - *Closes when:* Delete `service_kit.lancekit.openlineage`/`lineage_emit` and the per-service `lineage_emit.py` copies, route every producer through `packages/lineage-kit`'s emitter and one `RunEvent` builder, and stage each event in an outbox before transport so a failed emit is retried rather than dropped.
 
