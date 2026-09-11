@@ -333,11 +333,26 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *What it costs, per tick, forever:* those datasets 404 the compaction plane so they are never
   compacted distributively, and every maintenance lineage event they produce files against a Dataset
   node that names another table — a condition-1 defect on live data that no re-run will clear.
-- *Closes when:* A stamp repair exists that does not require a data write — the reconcile sweep is the
-  natural owner, since it already opens every dataset and already holds the catalog identity; or the
-  maintenance sweep repairs the stamp when `declared_table_id` 404s against the catalog and
-  `table_id_from_location` can supply the real one. Pin that a dataset carrying a stale id is corrected
-  without its `_rowid`s moving (`update_schema_metadata` is metadata-only, so this is provable).
+- *THE REPAIR SOURCE IS AN OPEN QUESTION, and the obvious answer is measured NOT to work.* This row
+  first proposed repairing from `table_id_from_location`. Driven against the two affected URIs, it
+  cannot supply the value:
+
+      s3://lance-catalog/medallion/lakehouse$bronze  ->  'lakehouse$bronze'   (missing the table half)
+      s3://lakehouse-wh/medallion/bronze             ->  None
+
+  Neither is the correct `lakehouse-bronze$events`, so a repair built on that crossing would be a
+  control that cannot fire. Naming it here so the next reader does not implement it.
+- *AND THE TWO 404 IDS ARE TWO DIFFERENT DEFECTS, which the aggregate hid.* `lakehouse$bronze$events`
+  (134) is a stale STAMP — the old `f"{project}${dataset}"` spelling, three segments, resolving to
+  nothing. `lakehouse-bronze$events` (94) is the CORRECT spelling and 404s anyway, which is not a stamp
+  problem at all but a table the catalog does not hold under that id. Only the first belongs to this
+  row.
+- *Closes when:* A stamp repair exists that does not require a data write, sourced from something that
+  can actually name the table — the catalog's own location→id answer is the only authoritative one, and
+  whether that means a reverse lookup, a registry read, or carrying the id on the registration is the
+  design question this row opens. Pin that a corrected dataset keeps its `_rowid`s
+  (`update_schema_metadata` is metadata-only, so that is provable), and pin separately that the
+  94-count id's absence from the catalog is diagnosed rather than folded in here.
 
 **LH-134 · ~~Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart~~ — CLOSED AND OBSERVED 2026-09-11**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
