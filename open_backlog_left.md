@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
+**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -602,6 +602,53 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   missing, or by naming why that project differs — and a blind edge is reported as a distinct state
   rather than only as an unreadable-edge warning, so "not measured" cannot look like "not lagging".
 
+**LH-146 · Run retention and the provenance back-fill undo each other — every real author and EVERY input edge becomes a synthetic `author='reconcile'` record, starting 2026-09-16**
+`lineage` · **HIGH** · found 2026-09-11 by reading the two halves together; both are deployed and running
+
+- *The mechanism, each step read out of the code rather than inferred:*
+  1. `PRUNE_OLD_RUNS_TEMPLATE` is `MATCH (r:Run) WHERE r.event_time < $cutoff … DETACH DELETE r` —
+     by AGE alone, with no guard for a run that is a dataset's only provenance. `DETACH` takes the
+     run's `WROTE` **and `READ`** edges with it.
+  2. A dataset that loses every run has no versioned write, so `latest_write_version` answers `None`
+     while storage still has a version — which `classify` calls **UNTRACKED**.
+  3. `BACKFILLABLE_STATES = (STORAGE_AHEAD, UNTRACKED)`, so the sweep back-fills it, and
+     `_recover_holes` then back-fills every version below the tip, 25 per dataset per tick.
+  4. `backfill_write` MERGEs `reconcile-<name>-v<version>` with `author='reconcile'` and — its own
+     docstring — "no inputs".
+- **SO THE GRAPH DOES NOT SHRINK; IT IS REWRITTEN.** The run id is deterministic per (name, version),
+  so the synthetic run is recreated identically each time, and it carries a fresh `event_time`, so it
+  ages out and is re-created on the next cycle. Retention deletes real runs once and they never return;
+  what persists is a skeleton that says THAT each version was written and nothing about who or from
+  what.
+- *Measured on the live graph 2026-09-11:* **1294 READ edges** — the entire input/derivation half —
+  against 6139 WROTE edges over 6153 Run nodes. **685 runs (11%) already carry `author='reconcile'`**
+  from the outbox-gap back-fills, so the mechanism is not hypothetical; retention takes it to 100%.
+- *And it has DATES, because nothing has been pruned yet.* The oldest run is 2026-08-15 (27 days) and
+  `pruned_runs` is 0, so the pruner is idle rather than broken — which also answers the half [[LH-011]]
+  left open ("confirm the pruner actually deletes Run nodes — I did not query the live graph").
+  Taking each swept dataset's newest run + 30 days:
+
+  | date | datasets with NO real provenance left |
+  |---|---|
+  | 2026-09-16 | 1 of 333 |
+  | 2026-09-30 | **180 of 333** |
+  | 2026-10-07 | 290 of 333 |
+  | 2026-10-11 | **333 of 333** |
+
+- **WHAT IS INTENDED AND WHAT IS NOT, because the first is an owner ruling and only the second is the
+  defect.** Retention aging out old lineage IS intended — 30 days, owner, 2026-09-08. What is not is
+  the sweep then REFILLING the gap with edges that look like provenance: a deliberate 30-day forget
+  becomes an estate whose every dataset reports a complete write history authored by the reconciler.
+  The loss is invisible precisely because the back-fill is good at its job.
+- *This is condition 1 of the goal — "a write's provenance survives it" — and it is the one that stops
+  holding on a known date.* The fact of the write survives; the actor and the derivation do not.
+- *Closes when:* an owner ruling on which of the two yields, and the code matches it. The shapes are:
+  exempt a dataset's last surviving run from retention; or stop treating UNTRACKED as back-fillable
+  when the runs were deliberately pruned (the two are indistinguishable today — a lost event and an
+  aged-out one both leave no edge); or keep retention as-is and accept a synthetic graph, in which case
+  say so in `docs/DECISIONS.md` so nobody reads `author='reconcile'` as a defect later. Pin whichever
+  lands, because the current pair is a cycle no test covers.
+
 **LH-145 · The lag tick's `unknown` count names no cell and reaches no metric — a store disagreement is counted, unactionable and unpageable**
 `medallion` · low · found 2026-09-11 while fixing [[LH-143]]
 
@@ -855,6 +902,14 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   shape as the stale stamp above — a wrong value repaired only by a write that may never come — with the
   same authoritative source available (the catalog resolves the location) and the same open question
   about where the repair belongs.
+- **THE REPAIR'S REACH IS MEASURED, 2026-09-11: 58 of the 60 are still GOVERNED.** "The catalog is the
+  authoritative source" is a design statement until someone checks the catalog can still answer, and for
+  58 of them it can — they carry live FGA tuples, so `describe_table` resolves a location for each. That
+  turns the closes-when from an open question into a bounded job. The other TWO hold no tuple at all, so
+  no door will answer for them and no repair can source a location: they are removals, not repairs, and
+  a fix that assumes the catalog answers for all 60 will stall on exactly those two.
+  *And 36 of the 60 are already dropped*, so they never reach the sweep — the live cost is the 24 that
+  do, which is most of the `unreadable` line rather than all of it (the sweep reports 26).
 - *Closes when:* A stamp repair exists that does not require a data write, sourced from something that
   can actually name the table — the catalog's own location→id answer is the only authoritative one, and
   whether that means a reverse lookup, a registry read, or carrying the id on the registration is the
