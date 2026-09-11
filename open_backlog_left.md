@@ -259,8 +259,27 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   A vend TTL of 900 s means every record older than that is garbage by construction, so the check is
   cheap: count the prefix, alert on growth that does not fall. Do not close it on documentation.
 
-**LH-133 · Swap the object store from RustFS to MinIO, so a non-root identity can vend**
-`chart, storage, catalog` · **HIGH** · owner decision 2026-09-11 · unblocks LH-051
+**LH-133 · ~~Swap the object store from RustFS to MinIO~~ — DONE AND OBSERVED 2026-09-11**
+`chart, storage, catalog` · was HIGH · unblocks LH-051, which is now the open half
+
+- *OBSERVED ON THE LIVE ESTATE, not inferred from a successful rollout:* the store serves **109
+  buckets / 24,147 objects / 7.2 GiB**, `lance-catalog` matches the source object-for-object (2,180),
+  the fleet is 48/48 healthy with nothing unready, maintenance sweeps datasets against it, the
+  lineage plane writes without a denial, and ZERO rustfs objects remain. The four old PVCs are KEPT
+  as the rollback and deliberately not reclaimed.
+- *The StatefulSet adopted the pre-seeded volumes by name*, so the data was in place before the store
+  first started — no second copy and no empty-store window, as the corrected cutover plan below says.
+- **FOUR CHART DEFECTS THIS FOUND, each of which failed a deploy rather than a test**, and all now
+  fixed: a hand-edited `Chart.lock` whose digest no longer described `Chart.yaml`; a `pre-upgrade`
+  hook consuming an ESO-delivered key the same upgrade introduces (a deadlock by construction —
+  seeding OpenBao does not break it and a hand-patched Secret is reverted by ESO within seconds);
+  dropping that phase producing the OPPOSITE deadlock, since the fleet cannot become ready without
+  its scoped users and post-upgrade hooks only run after readiness; and ESO publishing only the
+  SECRET half of the root pair because the access key was added to the ESO-OFF render alone.
+- *Two failures that were already there and are not this row's:* the deployed catalog image predated
+  the `warehouse#event_stager` relation the chart grants, so `bootstrap-admin` failed on every
+  upgrade until the estate was moved onto current main; and the old store could not restart at all
+  (LH-134).
 
 - *WHY, in one measurement:* RustFS gates `AssumeRole` to root and the right cannot be granted — a
   policy-attached scoped user gets HTTP 403 while root gets a session token, and `mc admin policy
