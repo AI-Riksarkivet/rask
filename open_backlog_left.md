@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**227 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
+**228 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 81 | 12 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 82 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -283,6 +283,34 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *What remains is a REAL gap this exposed, filed on its own terms:* nothing detects that the deployed
   catalog's model is older than the chart's grants. The failure was visible only as a job that failed
   on every upgrade and was never chased.
+
+**LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
+`catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
+
+- *Why open:* `build_session_policy` appends a READ grant for every base path the table's manifest
+  declares, and a base may legitimately live in its own bucket — so the grant is not confined to the
+  caller's tenancy by anything. The input is writer-chosen: bases come off the table's own manifest
+  (`_dataset_facts` → `manifest_base_path_refs`), and a write-tier vend grants `PutObject` on
+  `<prefix>/*`, which covers `_versions/` and is enough to commit a manifest client-side. So a writer on
+  ONE table can declare a base naming another tenant's table prefix and read it with their next
+  credential.
+- *What is already closed (`803171d8`+):* the bucket-root case. A base with no prefix collapsed the
+  statement to `arn:aws:s3:::<bucket>/*` — measured 2026-09-11, `s3://lakehouse` granted READ on the
+  whole lakehouse bucket and `s3://rask-observability` on a bucket the table has nothing to do with.
+  That is refused now, and refusing it cannot narrow a real table because a base points at a dataset
+  root or a file directory, never at a bucket (`file_format.md`, Base Path System).
+- *Why the rest could not be closed in the same change:* a base naming a specific prefix is
+  indistinguishable here from a legitimate cross-bucket base. Telling them apart needs the base resolved
+  to a catalog object and the SAME read authorization the caller would need to read that object
+  directly — a per-base FGA check on the vend path, not a shape rule.
+- *Closes when:* Each declared base is resolved to a table id and authorized at the caller's own read
+  rung before it is added to the session policy; a base that resolves to nothing, or that the caller may
+  not read, is dropped from the policy rather than failing the vend (a poisoned manifest must not make a
+  table permanently un-vendable). Pin with a test that a base inside another subject's warehouse is
+  absent from the rendered policy.
+- *Note while this is open:* a refused base currently propagates a `ValueError` out of the vend rather
+  than a typed refusal, the same shape `_reject_iam_metacharacters` already had. Fail-closed and
+  consistent, but an operator sees an opaque error for a poisoned manifest.
 
 **LH-134 · ~~Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart~~ — CLOSED AND OBSERVED 2026-09-11**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review

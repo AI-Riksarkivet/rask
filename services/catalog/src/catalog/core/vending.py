@@ -126,6 +126,37 @@ def _reject_iam_metacharacters(what: str, value: str) -> None:
         raise ValueError(f"{what} {value!r} contains an IAM wildcard metacharacter ('*'/'?'); it would widen the vended policy to sibling objects")
 
 
+def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
+    """A base must name a place INSIDE a bucket, never the bucket itself.
+
+    With no prefix the base's object statement collapses to ``arn:aws:s3:::<bucket>/*`` — measured
+    2026-09-11, a base of ``s3://lakehouse`` grants READ on the whole lakehouse bucket and a base of
+    ``s3://rask-observability`` grants READ on a bucket the table has nothing to do with. One declared
+    base would turn a credential scoped to a single table prefix into a bucket-wide reader.
+
+    THE INPUT IS CHOSEN BY A WRITER, which is why depth has to be checked rather than assumed. Bases are
+    read from the table's own manifest, and a write-tier vend grants ``PutObject`` on ``<prefix>/*``,
+    which covers ``_versions/`` — enough to commit a manifest client-side. So the value here is one a
+    writer on ONE table can pick, used to widen that same writer's next credential.
+    :func:`_reject_iam_metacharacters` already treats this field as untrusted for wildcards; this is the
+    other half of the same distrust.
+
+    REFUSING A BUCKET ROOT CANNOT NARROW A REAL TABLE: the spec's base path points at a dataset root or
+    a file directory (``file_format.md``, Base Path System), never at a bucket. A base in its OWN bucket
+    stays legitimate — containment here is about DEPTH, not about the bucket matching the table's.
+
+    ``..`` is refused on the reasoning ``uri_within`` already records: no location the catalog vends
+    contains one, so its presence is evidence the value was not vended.
+    """
+    if not base_prefix:
+        raise ValueError(
+            f"base path {base!r} names a bucket root, so granting it would widen this credential to the whole bucket; "
+            f"a base points at a dataset root or a file directory, never at a bucket"
+        )
+    if ".." in base_prefix.split("/"):
+        raise ValueError(f"base path {base!r} contains a '..' segment; no location the catalog vends contains one")
+
+
 def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[str] = ()) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
@@ -154,7 +185,9 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
 
     Raises:
         ValueError: if ``prefix`` or any base carries an IAM wildcard metachar (``*``/``?``) — see
-            :func:`_reject_iam_metacharacters`.
+            :func:`_reject_iam_metacharacters` — or if a base names a bucket root rather than a location
+            inside one, which would widen the credential to that whole bucket
+            (:func:`_reject_a_base_that_is_not_a_location`).
     """
     _reject_iam_metacharacters("prefix", prefix)
     prefix = prefix.rstrip("/")
@@ -180,6 +213,7 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
         _reject_iam_metacharacters("base path", base)
         base_bucket, base_prefix = split_s3_location(base)
         base_prefix = base_prefix.rstrip("/")
+        _reject_a_base_that_is_not_a_location(base, base_prefix)
         # A base may live in another BUCKET, so it needs its own pair of statements rather than another
         # resource on the table's: the ListBucket resource IS the bucket ARN.
         statements.append(
