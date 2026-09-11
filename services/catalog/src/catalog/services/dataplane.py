@@ -1590,9 +1590,10 @@ def update_field_metadata(
 #:   Project    schema                            (drop_columns)
 #:   Merge      fragments, schema                 (add_columns)
 #:
-#: Anything not listed still gets its operation NAME, so a Merge/Compact/CreateIndex commit appears in the
-#: log as itself rather than vanishing — an unknown operation is a gap in this table, never a gap in the
-#: history.
+#: Anything not listed but MODELLED still gets its operation NAME, so a Merge/Compact/CreateIndex commit
+#: appears in the log as itself rather than vanishing — an operation missing from this table is a gap in
+#: the table, never a gap in the history. An operation pylance models no subclass for cannot be named at
+#: all and reports a null operation, like a transaction that cannot be read.
 #:
 #: Verified against pylance 8.0.0 by reading ``__dataclass_fields__`` off each ``lance.LanceOperation``
 #: class rather than trusting the docs, because the whole value of this endpoint is reporting what Lance
@@ -1660,7 +1661,13 @@ def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], l
             out.append(row)
             continue
         op = getattr(txn, "operation", None)
-        if op is None:
+        # An operation this binding models no subclass for reaches here as the ABC itself, so
+        # `type(op).__name__` would answer `BaseOperation` — the name of an abstract base class, not of
+        # anything Lance recorded. One `compact_files()` commits such a version before its `Rewrite`
+        # (measured 2026-09-11), so every compacted table would carry a row naming an operation no Lance
+        # release defines. Null is the same answer the unreadable-transaction branch above already gives
+        # to the same question, and needs no vocabulary a client must learn.
+        if op is None or type(op) is lance.LanceOperation.BaseOperation:
             out.append(row)
             continue
         row["operation"] = type(op).__name__

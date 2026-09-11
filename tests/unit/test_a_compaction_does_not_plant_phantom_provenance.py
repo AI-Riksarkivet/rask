@@ -13,9 +13,13 @@ a `WROTE` edge saying a run wrote it. Every compaction in the estate plants one 
 WHY `BaseOperation` IS NOT AN OPERATION NAME. It is the ABC that every modelled operation inherits
 (`lance/dataset.py:5905`); pylance models twelve concrete subclasses, and `type(op).__name__` returns
 the ABC's own name when the Rust side commits an operation none of them covers. So the classifier was
-not reading an operation called "BaseOperation" — it was reading the word "unknown" and treating it as
-a data write. That is the estate's classify-by-spelling shape: deciding a version's nature from the
-text of a class name rather than from what the version did.
+not reading an operation called "BaseOperation" — it was reading the word "unknown" wearing an
+operation's clothes.
+
+THE ORIGINAL REASONING WAS RIGHT AND THE COLLAPSE WAS THE DEFECT. `MAINTENANCE_OPERATIONS`' own comment
+already named `BaseOperation` and concluded that unknown must be REPORTED, which is correct and is
+preserved here. What it never argued for was back-filling one — but reporting and recovery were a single
+list, so the conclusion about the first silently authorised the second.
 
 THE FIX IS A DIRECTION, NOT A LONGER LIST. Adding `"BaseOperation"` to the maintenance set would be
 the same mistake once more, and worse: it would silently swallow a genuine future Lance data operation

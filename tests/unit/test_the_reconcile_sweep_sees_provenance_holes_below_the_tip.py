@@ -224,10 +224,15 @@ def test_a_maintenance_version_is_not_a_provenance_hole(tmp_path: Path) -> None:
 def test_an_unknown_operation_is_reported_rather_than_skipped(tmp_path: Path) -> None:
     """The denylist's DIRECTION, which is the property that matters more than its contents.
 
-    `BaseOperation` is what `type(op).__name__` yields for an operation pylance has no subclass for, and a
-    transaction that cannot be read at all yields None. Neither is evidence the version was maintenance.
-    An allowlist would drop both silently; for a control whose only job is finding missing provenance,
-    failing silent is the one mode that cannot be tolerated, so unknown is reported.
+    A transaction that cannot be read, and one whose operation this binding models no subclass for, both
+    answer None from `read_version_operations`. Neither is evidence the version was maintenance. An
+    allowlist would drop both silently; for a control whose only job is finding missing provenance,
+    failing silent is the one mode that cannot be tolerated, so unknown is REPORTED.
+
+    Reported is where it stops: `DATA_OPERATIONS` governs recovery separately, so neither version below
+    is back-filled. Claiming a run wrote a version the sweep could not identify is a fabrication the graph
+    cannot tell from a real event afterwards, and that is pinned in
+    `test_a_compaction_does_not_plant_phantom_provenance.py`.
     """
     uri = _four_version_dataset(tmp_path)
     repo = _HoledRepo(graph_versions={1, 4}, uri=uri)
@@ -239,11 +244,16 @@ def test_an_unknown_operation_is_reported_rather_than_skipped(tmp_path: Path) ->
         return [1, 2, 3, 4]
 
     async def read_operations(_uri: str, versions: list[int]) -> dict[int, str | None]:
-        return {2: "BaseOperation", 3: None}
+        # Both spellings the real reader can answer for "unknown": version 2 stands for an operation no
+        # subclass models, version 3 for a transaction that could not be read. The double returned the
+        # literal "BaseOperation" until the reader stopped emitting it, which made this double model a
+        # value nothing could produce.
+        return {2: None, 3: None}
 
     statuses = asyncio.run(reconcile_all(cast(Any, repo), read_version, backfill=True, read_versions=read_versions, read_operations=read_operations))
 
     assert statuses[0].versions_without_lineage == [2, 3]
+    assert repo.backfilled == [], "unknown is reported, never recovered — a recovered edge would assert a run that was never identified"
 
 
 def test_the_classifier_is_asked_only_about_holes(tmp_path: Path) -> None:
