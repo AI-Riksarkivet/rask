@@ -265,17 +265,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   its features have been moving to the commercial AIStor — it runs as a separate server so it does not
   reach rask's own Apache-2.0 licensing, but the direction is worth knowing. And Ceph RGW is the other
   STS-complete option the vending module already names, at considerably more operational weight.
-- *THE CUTOVER IS SAFE IN THIS ORDER, and the order is what makes it safe.* Measured on the live
-  estate 2026-09-11: the store holds **109 buckets / 24,132 objects / 7.1 GiB**, its four 15 GiB PVCs
-  carry `app.kubernetes.io/component: rustfs` and are Bound, and the Tenant CR carries **no
-  finalizers** — so removing its operator in the same upgrade cannot wedge the delete. Helm's
-  keep-PVC posture means the deploy DELETES THE SERVER AND KEEPS THE BYTES:
-    1. deploy the swap — MinIO comes up on new, empty PVCs; the old four are orphaned, not reclaimed;
-    2. bring up a throwaway pod mounting those four and `mc mirror` them into MinIO (7.1 GiB is
-       minutes, not hours);
-    3. verify the lakehouse end to end, THEN delete the old PVCs — never before.
-  The lakehouse is unavailable for the length of step 2, which on this estate is acceptable and on a
-  real one would want the mirror run first against a store standing beside the old one.
+- *THE CUTOVER MIRRORS FROM A LIVE SOURCE, and that is what makes it safe.* Measured on the live
+  estate 2026-09-11: the store holds **109 buckets / 24,132 objects / 7.1 GiB**, and the RustFS
+  StatefulSet is OWNED by the Tenant CR (`controller: true`), so the upgrade garbage-collects the
+  server while its four PVCs survive. The obvious order — upgrade first, then resurrect a reader over
+  the orphaned volumes — makes the source a thing that has to be rebuilt before it can be read, and
+  the recorded plan said exactly that. It is the weaker order. Instead:
+    1. pre-create the four PVCs the chart's StatefulSet will claim by name
+       (`data-{0..3}-rask-minio-0`) and run a temporary MinIO on them with the root credential the
+       chart renders;
+    2. `mc mirror` bucket by bucket from the RUNNING RustFS into it — source healthy throughout,
+       nothing to reconstruct if it goes wrong, and the old PVCs untouched as the rollback;
+    3. delete the temporary pod and upgrade. A StatefulSet claims PVCs BY NAME, so the chart's store
+       adopts the seeded volumes and comes up holding the data — no second copy of 7.1 GiB and no
+       window where the estate has an empty store.
+  The lakehouse is unavailable only for the upgrade itself.
 - *TWO BEHAVIOURS THE HOOKS DEPEND ON WERE MEASURED AGAINST RUSTFS AND ARE NOT YET RE-DRIVEN:* that
   `mc admin policy create` OVERWRITES (the `post-upgrade` pass is only sound because it does), and
   that a `StringNotLike s3:prefix` condition on a Deny is ENFORCED rather than dropped. Both are
