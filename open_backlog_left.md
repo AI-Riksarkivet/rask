@@ -486,7 +486,16 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog` · **HIGH** · **blocked:** owner decision (destructive on real tables) plus a human bearer — no service identity holds `can_administer` on `project:lakehouse`
 
 - *Why open:* The unbind door landed and deployed (`DELETE /v1/warehouses/{id}/namespaces/{ns}`, 0280adfb) and `gold` unbound 200, but `bronze-media` answered 409 NamespaceNotEmptyError ('still holds 1 table(s): objects') and `silver-media` holds `features` at `s3://lakehouse-wh/a76d1ca5_silver-media$features`. The plan claimed both prefixes were empty (a pyarrow FileSelector returning 0 entries); the catalog disagreed.
-- *Closes when:* Owner decides drop-or-relocate for `bronze-media$objects` and `silver-media$features`, then calls the unbind door for both namespaces with a human bearer holding `project:lakehouse#can_administer`.
+- *RE-MEASURED 2026-09-11 — IT IS ONE NAMESPACE NOW, NOT TWO.* Listed `lakehouse-wh` on the live store
+  (post-migration): `a76d1ca5_silver-media$features/` is still there, and so is a second spelling,
+  `fa8bff0d_lakehouse$silver-media$features/`. **`bronze-media$objects` is not in that bucket at all**,
+  so the half of this row that needed a drop-or-relocate decision for bronze no longer has an object to
+  decide about. The decision that remains is silver's alone.
+- *Still genuinely BLOCKED, and correctly so:* the remaining action is destructive on a real table, and
+  no service identity holds `can_administer` on `project:lakehouse` — by design, since a service that
+  could unbind a tenant's namespace is a service that could unbind any of them.
+- *Closes when:* Owner decides drop-or-relocate for `silver-media$features` (both spellings), then
+  calls the unbind door for that namespace. with a human bearer holding `project:lakehouse#can_administer`.
 
 **LH-018 · The governed commit door is the non-spec `/commit`; `CreateTableVersion`/`BatchCommitTables` carry no lineage, gate, protection or replay marker**
 `catalog` · **HIGH** · **blocked:** owner acknowledgement of R1
@@ -1261,6 +1270,13 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 **LH-131 · The INGEST stream leaks one durable consumer per run — 3,090 bound, ~100/day, and the health surface documents the opposite**
 `ingest, service-kit, chart` · **HIGH** · phase 2 (ingest), but the resource it exhausts is the lakehouse's own NATS
+
+- *RE-MEASURED 2026-09-11 — THE LEAK IS REAL AND IS NOT CURRENTLY GROWING.* Read off the live
+  JetStream monitoring endpoint: `INGEST` holds **3,090 consumers for 32 messages**, against 5 / 8 / 2
+  / 5 on MEDALLION, DLQ, TRAINING and LINEAGE. So the shape is confirmed and it is this stream alone.
+  The count is EXACTLY the 3,090 the row was filed with, which refines its "~100/day": the leak accrues
+  per RUN, and ingest has not run since. It is a defect that resumes the moment the lane does, not an
+  active fire — unlike LH-134, which was measured still climbing at 280/min.
 
 - *MEASURED on the live estate 2026-09-11* via `nats consumer ls INGEST`:
   **3,090 consumers**, named `ingest-<run_id>` (`services/ingest/src/ingest/queue.py:404`). The stream
