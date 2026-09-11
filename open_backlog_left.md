@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**264 open items**, deduped from 325 raw rows mined out of the seven files above.
+**265 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 117 | 18 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 118 | 18 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -834,6 +834,30 @@ _Nothing has ever been reclaimed on the live estate, the sweep is unleased and u
   An operator told "no" at one door and something else at the other cannot tell whether they met one
   policy or two.
 - *Found by the backlog re-measure while checking a different row.* It was in no backlog row at all.
+
+**LH-131 · The INGEST stream leaks one durable consumer per run — 3,090 bound, ~100/day, and the health surface documents the opposite**
+`ingest, service-kit, chart` · **HIGH** · phase 2 (ingest), but the resource it exhausts is the lakehouse's own NATS
+
+- *MEASURED on the live estate 2026-09-11* via `nats consumer ls INGEST`:
+  **3,090 consumers**, named `ingest-<run_id>` (`services/ingest/src/ingest/queue.py:404`). The stream
+  is `Retention: WorkQueue, Maximum Age: unlimited, Maximum Consumers: unlimited`, first sequence
+  2026-08-11 — so ~100 new consumers a day for a month, and nothing removes them. MESSAGES are fine (32
+  live; WorkQueue deletes on ack). It is the CONSUMER state that grows without bound, replicated across
+  3 NATS replicas.
+- *THE HEALTH SURFACE ASSERTS THE OPPOSITE, which is why nobody has seen it.*
+  `services/ingest/src/ingest/queue_health.py:55` documents the `consumers` field as: "Zero is the
+  normal IDLE state, not a fault: the drain creates one durable per run (`ingest-<run_id>`) and it goes
+  away with the run, so between runs there is nothing bound." Measured, 3,090 are bound between runs.
+  An operator reading that number against that sentence concludes 3,090 runs are in flight.
+- *Blast radius is NOT confined to ingest.* This is the same NATS the lineage feed, the control-plane
+  broadcast and the medallion cascade ride on. Unbounded consumer state on a shared JetStream is a
+  condition-5 (resilient) problem for the lakehouse whoever owns the fix.
+- *Closes when:* the per-run durable is deleted when its run ends (or the drain uses an EPHEMERAL
+  consumer, which is what a per-run subscription actually wants — it has no cross-restart state to
+  keep), the 3,090 existing ones are reaped, and `queue_health`'s docstring is rewritten to say what
+  the field means. A bound on `Maximum Consumers` would turn the silent leak into a loud refusal and is
+  worth considering alongside.
+- *Found while re-measuring LH-127*, which is about a different consumer on a different stream.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
