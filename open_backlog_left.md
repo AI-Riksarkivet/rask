@@ -617,8 +617,26 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 
 _Multi-tenancy is the product claim; every item here is a place where one tenant's data, credentials or grants are protected by convention rather than by an enforced check._
 
-**LH-051 · `rask-catalog` is the last service presenting the RustFS root key `rustfsadmin` as its S3 identity**
-`catalog, storage, chart` · **HIGH** · **blocked:** owner decision — narrowed to TWO options by measurement
+**LH-051 · ~~the catalog presents the store's ROOT account~~ — CLOSED AND OBSERVED 2026-09-11**
+`catalog, storage, chart` · was HIGH
+
+- *OBSERVED on the live estate from inside the running pod, using the credential the way the app gets
+  it* (the Dapr secret store, never env): reads the governed bucket, writes and deletes under the
+  control root, **still vends** (`AssumeRole` → a 498-char session token), and is DENIED on the
+  observability store. The vend is the row's whole point: on the previous store a policy-attached
+  scoped caller got HTTP 403 and the right could not be granted at all, which is why the root key was
+  a REQUIREMENT of `vending.mode: sts` rather than an oversight.
+- *AND IT GENUINELY LOST ADMIN, which is the blast-radius change rather than the cosmetic one:* driven
+  with the same credential — create-user DENIED, write-policy DENIED, list-policies DENIED, data
+  unaffected. A compromised catalog can no longer mint an identity, widen its own policy, or read the
+  policies governing every other plane.
+- *The data grant stays WIDE and that is deliberate:* warehouse buckets are minted at runtime by
+  `POST /v1/warehouses`, so a render-time bucket list is stale by construction — the same reason the
+  ray and lineage policies already record. `CreateBucket`/`DeleteBucket` are held because provisioning
+  and purge are this service's own doors.
+- *Residual:* the identity is a static scoped key rather than a per-request one. That is the correct
+  rung for a service that must vend for buckets which do not exist yet, and the narrowing the caller
+  actually receives is the per-vend session policy on top of it.
 
 - *Why open:* Re-measured on the running pods 2026-09-10: maintenance, medallion, lineage, viewer and
   ingest each hold their own scoped identity, and only `LANCE_S3_ACCESS_KEY_ID=rustfsadmin` remains
