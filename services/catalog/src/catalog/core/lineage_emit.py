@@ -44,6 +44,7 @@ from catalog.core.identifiers import parse_identifier
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.schema import SchemaFields
+from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
@@ -173,21 +174,11 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
 #: ANONYMOUS_SUBJECT (`service_kit.governed.deps`): with OIDC off every verified-subject dependency
 #: resolves to it, so without this entry a dev or auth-off estate would address one shared inbox
 #: actor literally named `anon` on behalf of everybody.
-_NOT_A_PERSON = frozenset({"", "*", "user:*", "anon", "system", "service", "ray", "data_eng", "analyst"})
 
 
-def is_person_subject(value: str | None) -> bool:
-    """Is this value an ADDRESS for one person — the only thing `lance.originator` may carry?
-
-    One definition, used by the run-event builder and by the door that accepts the claim, because the
-    two disagreeing is the whole failure mode: a value the door lets through and the builder drops is
-    a silent miss, and one the builder keeps but the door never sanitized is a row in an inbox actor
-    named after a role, a team, or `*`. Wildcards and usersets are statements about everyone, which
-    address no one; a `user:`-prefixed value is an FGA object id, not a subject.
-    """
-    return bool(value) and value not in _NOT_A_PERSON and "#" not in str(value) and not str(value).startswith("user:")
-
-
+#: `is_person_subject` is imported from service-kit rather than defined here: it has more than one
+#: producer, and the medallion — whose authors ARE chart role literals — cannot depend on the catalog,
+#: so a rule written here could only ever be applied here. See that module for why that matters.
 def build_write_event(
     *,
     table_id: str,

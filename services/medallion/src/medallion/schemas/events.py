@@ -33,6 +33,7 @@ from typing import Any
 from lineage_kit.runs import run_id_for
 from lineage_kit.schemas import Dataset, Job, OutputDataset, Run, RunEvent, RunFacets, RunState
 from service_kit.lakehouse.schema import SchemaFields
+from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
@@ -257,7 +258,10 @@ def build_run_event(
     # The HUMAN this run is running for, when `author` is a service. A stage runner authors with a chart role
     # literal, which is true and unaddressable; the notifications plane reads this to reach the person
     # whose cascade it is. Carried, never substituted for `author` — see `NotificationReason.ORIGINATOR`.
-    if originator:
+    # THE SAME RULE THE CATALOG APPLIES, from the one place it lives. This wrote `if originator:` and
+    # kept every value it was handed — in the service whose authors ARE chart role literals — so a value
+    # that addresses nobody became an inbox address and the delivery was acked SUCCESS.
+    if is_person_subject(originator):
         lance_fields["originator"] = originator
     # WHY a promotion did not advance — HELD (a validator may approve), BLOCKED (a failed assertion,
     # which no approval waives) or REFUSED (the catalog's own gate declined). The event type stays
