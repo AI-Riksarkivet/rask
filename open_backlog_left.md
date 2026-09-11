@@ -292,7 +292,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   that writes. The fix that keeps the design is to vend LAZILY — decide with the read credential
   whether this unit will write, and only then ask for a write credential — which leaves the
   no-cache reasoning intact and removes the ~130 wasted vends per tick.
-- *Closes when:* the entry count is BOUNDED — observed falling, or pruned — and something reports it.
+- **CLOSED AND OBSERVED 2026-09-11.** The sweep now asks, with a READ and before any credential, whether
+  the unit can write anything at all; a dataset that cannot is maintained under the ambient read
+  credential and never vends. Measured on the live estate across the deploy:
+
+      before   3,913 records   growing 280/min (16,800/hour)
+      after    2,232 records   growing     0/min
+
+  The count FELL, which answers the open question about MinIO's purge: it does run, and it was simply
+  being outpaced roughly fifty to one. The sweep is unaffected — policies loaded, 95 registry buckets
+  discovered, datasets walked, no errors.
+- *The probe is conservative and says so in one direction only:* more than one fragment, any superseded
+  version with cleanup on, any real index with optimize on, and every unreadable or unanswerable case
+  all count as "may write", because skipping a dataset that WOULD have been maintained is the failure
+  this service exists to prevent while a spare credential is only a cost.
   A vend TTL of 900 s means every record older than that is garbage by construction, so the check is
   cheap: count the prefix, alert on growth that does not fall. Do not close it on documentation.
 
