@@ -124,6 +124,21 @@ _datasets_swept = _meter.create_counter(
 )
 
 
+#: WHICH credential signed each rewrite. Measured 2026-09-11, 600 records in one window: 300 vends
+#: answered 401 and 300 rewrites took the ambient fallback, with zero scoped — a state that had gone
+#: unnoticed long enough to be quoted in a closed row as evidence a different fix was working, because
+#: the only signal was an `info` line per dataset.
+#:
+#: ONE series with a `tier` attribute rather than two counters: the number an operator wants is the
+#: RATIO. "8 ambient of 285" is a posture; "8 ambient" alone is not, and it is the ratio reaching 1
+#: that names the failure this exists to catch.
+_credential_tier = _meter.create_counter(
+    "compaction.credential.tier",
+    unit="{rewrite}",
+    description="Rewrites by how their storage credential was obtained (table-scoped vend vs the ambient process credential).",
+)
+
+
 def record_run_started() -> None:
     _runs_started.add(1)
 
@@ -208,3 +223,12 @@ def record_failed(errors_by_type: dict[str, int]) -> None:
     """
     for error_type, count in errors_by_type.items():
         _failed.add(count, {"error.type": error_type})
+
+
+def record_credential_tier(*, tier: str) -> None:
+    """Record that one rewrite was signed by a ``scoped`` or ``ambient`` credential.
+
+    Keyword-only because the argument is a vocabulary, not a value: a positional string here would
+    accept a table id as readily as a tier and the series would be unreadable before anyone noticed.
+    """
+    _credential_tier.add(1, {"tier": tier})

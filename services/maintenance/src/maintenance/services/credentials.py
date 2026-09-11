@@ -37,6 +37,7 @@ from service_kit.lakehouse.table_locations import table_id_from_location
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
+from maintenance.core.metrics import record_credential_tier
 from maintenance.services.catalog_identity import service_headers
 from maintenance.services.compaction_executor import MaintenanceDenied
 
@@ -93,8 +94,13 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
             table_id,
             settings.s3_access_key_id or "<ambient environment>",
         )
+        # ON THE SERIES as well as the log. Per-dataset `info` was the only signal, and an estate where
+        # EVERY rewrite took this branch read as routine traffic for long enough to be cited as evidence
+        # that something else was working.
+        record_credential_tier(tier="ambient")
         return fallback
     logger.info("write credential SCOPED for %s — this rewrite is signed by a table-scoped credential", table_id)
+    record_credential_tier(tier="scoped")
     return vended
 
 
