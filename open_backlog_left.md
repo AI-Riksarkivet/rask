@@ -489,7 +489,23 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Evidence:* Doors: services/catalog/src/catalog/api/v1/endpoints/columns.py:54 (`/{id}/add_columns`), :85 (`/{id}/alter_columns`), :116 (`/{id}/drop_columns`), :150 (`/{id}/backfill_column`), plus `update_field_metadata` and `schema_metadata/update`; each awaits `lineage_deps.emit_measured_write` with ADD_COLUMNS/ALTER_COLUMNS/DROP_COLUMNS (columns.py:69-79, 100-110), and `branch` is honoured (columns.py:10-12). Authz is router-wide (api/v1/router.py:47 → fga_deps.authorize). Errors are typed, not raw pylance: dataplane.py:1300-1364 wraps every op in `_column_op`, which maps a missing column to `TableColumnNotFoundError` and a lost race to `ConcurrentModificationError` (dataplane.py:1075-1095), and refuses unsupported spec shapes with `UnsupportedOperationError` 501 (dataplane.py:1307-1325). Schema history: lineage's services/lineage/src/lineage/api/v1/endpoints/datasets.py:87-95 serves the per-version schema off the WROTE edge, and the catalog's own commit log is versions.py:57 `GET /{id}/history`. WHAT IS TRUE: no compatibility check anywhere in columns.py/dataplane.py, and `_action_relation` (fga_deps.py:292) leaves these suffixes at the writer rung — no owner gate for a breaking drop/retype.
 - *What would reopen it:* Showing that `POST /v1/table/{id}/drop_columns` 404s on the deployed catalog, or that a caller receives an unmapped pylance exception from a column op, would restore the row as written.
 
-**LH-027 · `register_table`'s door enforces neither location containment nor stable row ids — both live only below it**
+**LH-027 · ~~`register_table`'s door enforces no location containment~~ — THE RESERVED-BUCKET HALF CLOSED 2026-09-11**
+
+- *CLOSED:* the register door now refuses a location whose bucket is reserved platform storage — the
+  same refusal `warehouses.py` already made, at the door that had none. A warehouse claiming platform
+  storage is refused because it makes that project the bucket's owner and a later project-policy set
+  then governs every tenant's data inside it (the 2026-07-23 Mallory audit); `register_table` attaches
+  a CALLER-SUPPLIED location and never looked at it, so the same takeover was reachable through the
+  other door — and it leaves less behind to notice, since a warehouse claim writes a registry record
+  an operator can see while this writes one manifest row.
+- *It runs in the SHAPE phase, ahead of the parent check, and that placement is the fix's second half.*
+  Written after `require_parent_exists` it answered 404 for a request that is malformed whether the
+  parent exists or not — telling the caller to create a namespace that would not have helped. The
+  estate's order is identity → shape (400) → parent (404) → authz → conflict → write, and a
+  reserved-bucket location is a shape fact about the request.
+- *STILL OPEN — root containment,* and deliberately not closed with it: an external location is what
+  register is FOR (`deregister` keeps the bytes precisely because they are not ours), so a containment
+  rule needs its own decision about what "outside" may mean rather than riding along with this one.
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Only the location-containment half is still open: the stable-row-id refusal the row asks for at the register door is already enforced at the publish gate, deliberately and with a recorded reason for not putting it on `register_table`.
   **Evidence:** Still missing: the register door — services/catalog/src/catalog/api/v1/endpoints/tables.py:629-691 — runs idempotency, format rejection, parent existence, trash check, `reconcile_body_id`, then `native.call(ns, "register_table", body)` and ownership seeding; it never inspects `body.location` and there is no `reserved_bucket_set`/root containment check of the kind warehouses.py:174 and :756 already apply. Already covered elsewhere: services/catalog/src/catalog/services/publication.py:189-213 `refuse_a_tier_without_provenance` (400 when a table claims tier columns without honest provenance), called from `gate` at publication.py:309,352-353 and reached by the publish door (endpoints/publication.py:272-288); pinned by services/catalog/tests/test_a_tier_that_cannot_carry_provenance_is_refused.py:9-18, whose docstring states outright WHY THE CHECK BELONGS HERE AND NOT AT `register_table`. The row's supporting claim about the stale comment still holds: services/ingest/src/ingest/lander.py:68 says "gate A14 makes the catalog refuse" while A14 is enforced in services/ingest/src/ingest/catalog.py:201,218-262 — the ingest plane, not the catalog.
