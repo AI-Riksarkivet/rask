@@ -1360,8 +1360,12 @@ series for `medallion_cascade_lag` to fire on. The detector's own `lag_for_edge`
 (`if not consumed: lag = published`) that cannot be reached in production.
 
 The discriminator is the SOURCE side, which is read from the catalog and answers for itself. Both
-stores refusing means the project does not run that lane — on the live estate, 252 of 267 cells,
-correctly silent. A cell whose source HAS published is a lane that is running, and the detector owes it
+stores refusing usually means the project does not run that lane — on the live estate, 252 of 267 cells,
+correctly silent. Usually, not always: an UNGOVERNED source refuses identically. Eight of
+those 267 have one, and after excluding three whose source was dropped and three never written, TWO are
+lanes that ARE running and read as lanes nobody runs. Nothing in this module can separate them, because
+neither door offers an existence oracle by design; the repair is to govern the table, and the price of
+leaving it is that the lane has no series at all. A cell whose source HAS published is a lane that is running, and the detector owes it
 an answer; when it cannot give one the cell is BLIND, carried with its reason and published as
 `medallion.cascade.lag_blind{reason}`, paged by `MedallionCascadeLagBlind` after 30m.
 

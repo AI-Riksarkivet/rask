@@ -85,6 +85,13 @@ def test_both_stores_refusing_is_still_unmeasurable() -> None:
 
     A project that does not run a lane has neither a source nor a destination. Nothing about it is
     wrong, and the tick must stay silent about it.
+
+    This is also the honest limit of the discriminator, recorded rather than glossed: an UNGOVERNED
+    source refuses exactly as an absent one does, so a lane that IS running reads as one that is not.
+    Measured 2026-09-11: eight cells have an ungoverned source, of which three were dropped and three
+    were never written — two are genuinely running and unseen. No reading of the two refusals separates them —
+    lineage and the catalog both answer one status for "absent" and "not yours" on purpose — so the
+    repair is to govern the table, and the cost of not doing so is that its lane has no series.
     """
 
     def _invisible_source(edge: str, project: str) -> int | None:

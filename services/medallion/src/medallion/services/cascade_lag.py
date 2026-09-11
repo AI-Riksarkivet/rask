@@ -242,9 +242,12 @@ class LagTickReport(BaseModel):
 
     ``failed``, ``unmeasurable`` and ``blind`` are three separate states and
     each hides a different thing when folded. FAILED means a store could not be read at all, and a rising
-    count is an outage; UNMEASURABLE means the SOURCE is not visible, so this project does not run this
-    lane — a steady state rather than an event, which an estate holding abandoned projects reports
-    hundreds of every tick, and letting those land in ``failed`` buries a real outage in them.
+    count is an outage; UNMEASURABLE means the SOURCE is not visible — usually a project that does not
+    run this lane, a steady state rather than an event, which an estate holding abandoned projects
+    reports hundreds of every tick, and letting those land in ``failed`` buries a real outage in them.
+    It also silently covers an UNGOVERNED source, which refuses identically while its lane really is
+    running — two such cells, measured 2026-09-11. That one is repaired by governing the table, not by
+    anything this module can do.
 
     ``blind`` IS THE ONE THAT CARRIES A FINDING. A lane whose source has PUBLISHED is running, so a
     detector that cannot state its lag has found a hop it cannot account for — the case this module
@@ -374,9 +377,18 @@ def run_lag_tick(
         try:
             published_version = published(edge, project)
         except EdgeNotMeasurable:
-            # The SOURCE is not visible, so there is no lane here to be behind. No log line: this is a
-            # steady state, not an event, and one line per invisible edge per tick is the shape that
-            # buried every other service's errors once already.
+            # The SOURCE is not visible, so this detector has no lane to measure. That is USUALLY a
+            # project that does not run this lane — but not always, and the difference is invisible
+            # here: an UNGOVERNED source table refuses identically. Measured 2026-09-11, eight declared
+            # cells have an ungoverned source; three of those sources were dropped and three were never
+            # written, which leaves TWO — `research-bronze$events` and `bind86-bronze$events`, both
+            # actively compacted — that are running lanes this tick reads as lanes nobody runs. It
+            # cannot be fixed from here, because neither door offers an existence oracle, so it is
+            # fixed by governing the table and named here so the silence is not mistaken for a
+            # measurement.
+            #
+            # No log line: this is a steady state, not an event, and one line per invisible edge per
+            # tick is the shape that buried every other service's errors once already.
             report.unmeasurable += 1
             if memo is not None:
                 memo.record_absent(cell)

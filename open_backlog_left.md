@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -560,9 +560,79 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   passing `unknown=`, each of which would otherwise have asserted against a silently dropped kwarg.
 - *Closes when:* an operator can name which edge disagreed and be paged when the disagreement persists.
 
-**LH-144 · Three gold tables exist in the lineage graph with ZERO authorization tuples — created, ungoverned, and unreachable**
-`catalog` · **HIGH** · found 2026-09-11 by reading OpenFGA directly
+**LH-144 · Three live tables are ungoverned — but 47 of the 58 were simply DROPPED, and the row said otherwise**
+`catalog` · medium · found 2026-09-11 by reading OpenFGA directly, RE-MEASURED the same day
 
+- **RE-MEASURED 2026-09-11, and the headline above was two-thirds wrong.** The count survives: paging
+  OpenFGA's whole tuple set and subtracting it from the graph's datasets carrying a `source_uri` gives
+  **exactly 58 of 1162** — the same number by a different method, so the sweep is sound. What the sweep
+  could not see is WHY a table has no tuples. `drop_table` REVOKES a table's tuples (`tables.py:460`,
+  "then revoke its FGA tuples") while its lineage node persists, because provenance has to outlive the
+  table it describes. So a dataset node with zero tuples is the EXPECTED state of a dropped table, and
+  reading it as "created, ungoverned and unreachable" reads a working mechanism as a defect.
+  Classifying all 58 by their latest COMPLETE run — which is exactly how `repository.dropped_at`
+  derives a drop, rather than a flag anyone stamped:
+
+  | latest completed operation | count |
+  |---|---|
+  | `drop_table` — tuples correctly revoked, nothing wrong | **47** |
+  | something else (compaction, aggregate_gold, insert, update, create_table, deregister_table) | 7 |
+  | no completed run at all | 4 |
+
+- **TWO OF THE THREE GOLD TABLES THIS ROW IS NAMED AFTER WERE DROPPED**, both on 2026-08-23:
+  `durproof-gold$catalog` and `gateprobe-gold$catalog`, alongside their silver siblings. They are not
+  stranded; they are deleted. Only `uiproof-gold$catalog` survives the check — last written by
+  `aggregate_gold` at 2026-08-23T18:02, never dropped, zero tuples — while its own silver WAS dropped
+  23 minutes later. That one is real.
+- **THE REAL POPULATION IS 11, AND THREE OF THEM MATTER.** `uiproof-gold$catalog` above, plus
+  `research-bronze$events` (last op `compaction`, 2026-08-30) and `bind86-bronze$events` (`compaction`,
+  2026-09-02). Both are CASCADE-HEAD tables — `bronze$events` is the `bronze` lane's declared source —
+  in projects whose other tiers ARE governed (`research-silver$features`, `research-gold$catalog`, and
+  nine bind86 tables including seven other bronze ones). So this is not "a project nobody governed"; it
+  is one table per project, at the head of the cascade, missing.
+- **AND IT COSTS A MEASUREMENT, which is how the two rows connect.** An ungoverned source refuses
+  exactly as an absent one does, so the cascade-lag detector reads those lanes as lanes nobody runs.
+  Eight declared cells have an ungoverned source — but three of those sources were DROPPED (silence is
+  correct there) and three were never written, so the true cost is **two cells**: `research` and
+  `bind86`, whose bronze heads are actively compacted and which appear nowhere in the
+  `medallion_cascade_lag` series. Counting all eight would have been this row's own mistake repeated.
+  [[LH-143]]'s fix cannot recover them — no reading of a 403 separates "ungoverned" from "absent" — so
+  governing these tables is what restores the measurement.
+- **THE MECHANISM, narrowed by elimination rather than guessed — and none of the row's three original
+  candidates survives.** Each step is a read of the code or the graph:
+  1. *Not a failed create.* `register_written_dataset` runs BEFORE the write and before the emit — the
+     producer's own comment is "nothing has been written and nothing has been emitted at this point".
+     So a lineage node's existence PROVES the registration succeeded. These tables were governed.
+  2. *Not a drop that was seen.* Neither `drop_table` nor `deregister_table` appears anywhere in their
+     run history: `research-bronze$events` has `lance_ray_ingest` x2 then `compaction`;
+     `bind86-bronze$events` the same; `uiproof-gold$catalog` has `aggregate_gold` x2.
+  3. *So the tuples were revoked AFTER the fact*, and the only paths that revoke are the drop's two
+     branches — graceful (trash) and purge. Both revoke, and both emit `DROP_TABLE` from OUTSIDE the
+     `if not trashed:` branch, so a drop normally leaves a run behind.
+  4. *And that emit is explicitly BEST-EFFORT* — "so it never fails the drop" (`tables.py`). A drop
+     whose emit does not land revokes the tuples and records no run.
+  **Leading explanation: these are DROPPED tables whose drop event was lost.** It predicts all three
+  observed symptoms at once — no tuples, no `drop_table` run, and a lineage node that `dropped_at`
+  cannot recognise, which is also why the reconcile sweep and the lag detector both still treat them as
+  live. And it makes this an EVENTS-correctness defect, not a governance-seeding one.
+  *Unproven, and the test is named:* a `lineage_emit_failed` record carrying `operation=drop_table` for
+  one of these ids. `catalog_lineage_emit_failed_total` does not exist as a series at all (its sibling
+  `catalog_control_emit_failed_total` does), so no lineage emit has failed inside the retained window —
+  but these drops predate it, so absence there proves nothing either way.
+  *Consistent with the compaction:* a graceful drop keeps the bytes, and the maintenance sweep
+  "discovers datasets by walking storage for a `_versions/` marker, not by reading the registry", so a
+  dropped-but-retained table is still compacted afterwards — which is exactly what both bronze heads show.
+- **"They predate the compensation" is REFUTED.** `seed_ownership_or_compensate` landed 2026-08-15
+  (`8c947640`). Dating each of the 58 by its earliest producing run: **zero** predate it, 55 were first
+  written after it, and the newest is `bronze$lh018probe` from 2026-09-11T13:15 — hours before this was
+  written. Whatever leaves a table ungoverned is still doing it. (The proxy is "first written", not
+  "created"; for probe tables created and written in one test the gap is negligible.)
+- **AND THE SWEEP IS CHEAP, which the cost argument below gets wrong.** Its premise is verbatim correct
+  — a `Read` carrying a `tuple_key` with an empty object id is refused, "the object type field is
+  required and both the object id and user cannot be empty", reproduced live. But omitting `tuple_key`
+  ENTIRELY is a different call, and it pages the whole store: measured, **51 pages, 5027 tuples, 0.1
+  seconds**. A periodic sweep costs 51 reads, not 1162, so "the kind of price that gets an axis
+  switched off" does not apply and a sweep is a live option again.
 - *Measured.* Of 14 gold datasets carrying a `source_uri` in the live graph, **3 have no FGA tuples at
   all** — `durproof-gold$catalog`, `gateprobe-gold$catalog`, `uiproof-gold$catalog`. Not a missing
   grant: no owner, no parent, nothing. Their healthy siblings carry both
@@ -604,10 +674,12 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   that door; or the caller passed `undo=None`, which the docstring describes as a deliberate choice
   where a native delete is unsafe. Answering that needs per-table create history, and it decides whether
   anything needs building at all.
-- *Closes when:* The 58 are either governed (seeded to their real owner) or removed, and a seed that
-  did not land is DETECTED at the seam rather than discovered by an audit — today nothing reports it and
-  the estate cannot tell. Pin that a create whose seed silently fails leaves no table behind, which is
-  what `seed_ownership_or_compensate`'s compensation already promises and these 58 are evidence against.
+- *Closes when:* the THREE live ones are resolved — each either governed to its real owner or, if the
+  drop-event explanation holds, recorded as dropped so `dropped_at` can see it — and a drop whose
+  lineage emit does not land stops being invisible. The 47 dropped ones need nothing; naming them as a
+  defect was this row's own error. The seed-compensation pin the row originally asked for is NOT the
+  work: `seed_ownership_or_compensate` is measured here to be doing its job, and the 58 are not evidence
+  against it.
 
 **LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
 `catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
