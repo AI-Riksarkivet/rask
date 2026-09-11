@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 47 rows
+**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -1748,9 +1748,24 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   attempt before the tooling half is treated as blocking anything.
 - *Closes when:* Either extend `endpoints/transactions.py`'s `alter` route to authorize per state-action (making `can_set_property`/`can_cancel` real doors), or delete both lines from `model.fga` with `fga model test` green — noting that deleting the `editor` rung is a second decision, since `viewer` inherits from it and it carries its own direct-grant slot.
 
-**LH-078 · 8 credential vends per tick still 403, so 8 rewrites sign with the ambient root key, and no counter or alert surfaces it**
+**LH-078 · ~~8 credential vends per tick still 403, so 8 rewrites sign with the ambient root key, and no counter or alert surfaces it~~ — CLOSED AND OBSERVED 2026-09-11**
 `maintenance, catalog` · low
 
+- **CLOSED BY THE DEPLOY, both halves, observed on `main-b641103f`.** Sampling every
+  `maintenance.services.credentials` record in a six-minute window post-deploy:
+
+      356 of 356 SCOPED        0 AMBIENT        0 x 401
+
+  Against 300 x 401 / 300 x AMBIENT / 0 SCOPED before. So no rewrite signs with the ambient credential
+  any more — the row's first half. A vend that IS refused now stops the dataset through
+  `maintenance_vend_denied` (27 in the window) rather than falling through, which is exactly the
+  behaviour this row asked for instead of the ambient fallback.
+- *And the second half landed separately* (`eb564cd6` + `4fcba209`): the split is a series
+  (`compaction_credential_tier_total`, one counter with a `tier` attribute) plus an alert proven to fire
+  on an all-ambient series and proven not to on this row's own healthy posture.
+- *The cause was never "8 unregistered tables":* it was the dedicated service token being derived from a
+  value no values file defined, so every privileged claim was refused ([[LH-142]]). Fixing the derivation
+  fixed the population.
 - *Why open:* The headline is fixed (207 AMBIENT → 8, 277 SCOPED, via `_ALTERNATIVE_RUNGS` giving the `credentials` action a second rung), but the remaining 8 are a different population: the 92 per-warehouse `maintainer` tuples cover every warehouse in the registry, so these are tables the registry does not account for. The ambient fallback is loud in the pod log and reaches no report field, counter or alert.
 - **THE SECOND HALF LANDED 2026-09-11** (`eb564cd6` + `4fcba209`): the AMBIENT-vs-SCOPED split is a
   series (`compaction_credential_tier_total`, one counter with a `tier` attribute so the number is the
