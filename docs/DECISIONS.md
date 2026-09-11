@@ -1351,6 +1351,28 @@ neither redelivers nor dead-letters and `medallion_stage_refused_total` is the o
 structurally blind to a hop that never happened. `medallion_cascade_lag` measures the other side: how
 many source versions a destination has not consumed, which rises whether or not anything was refused.
 
+**C3 NEEDED A THIRD SIGNAL, and the gap was found by measuring it rather than by reading it
+(2026-09-11).** A lag is arithmetic over two reads, and the second is lineage's
+`/datasets/{name}/producers` — gated router-level by `require_metadata_access`, which runs BEFORE
+existence resolution. A destination that was never written therefore answers 403 exactly as a
+forbidden one does, so the case C3 most exists for — a first-ever hop that never ran — produces no
+series for `medallion_cascade_lag` to fire on. The detector's own `lag_for_edge` has a branch for it
+(`if not consumed: lag = published`) that cannot be reached in production.
+
+The discriminator is the SOURCE side, which is read from the catalog and answers for itself. Both
+stores refusing means the project does not run that lane — on the live estate, 251 of 252 such cells,
+correctly silent. A source that HAS published into a destination the subject cannot read is a lane that
+is running and unmeasured: `medallion.cascade.lag_destination_invisible`, and
+`MedallionCascadeDestinationInvisible` after 30m. It publishes no lag VALUE, deliberately — absent and
+forbidden are indistinguishable at that door, and the estate holds gold tables that exist with zero
+tuples, so a guessed first-hop lag could be a confident number for a hop that had in fact run. The
+alert tells the operator to ask the graph, which can tell the two apart.
+
+*The lesson worth keeping is about the prose, not the metric.* `MedallionCascadeLag` described itself
+as firing "for a hop that NEVER ARRIVED — which no counter can see". Read as a specification that was
+a promise the rule could not keep, and it is what made the gap invisible for a week: the rule looked
+like it already covered the case.
+
 **The re-run verb: `POST /api/stage-runners/stages/rerun`.** Edge-addressed, so it re-drives ONE hop.
 
 *The token is OPTIONAL.* It is the `table_published` event id, which the control outbox drops on ack

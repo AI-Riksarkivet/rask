@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -467,6 +467,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   thing — `403 Forbidden` on `GET http://rask-lineage:8000/datasets/advref31-gold$catalog/producers`,
   `project=advref31`, `edge=silver->gold`. 8 of 8 sampled, one project, one edge. Not estate-wide: every
   other project's edges read fine.
+- **FIXED IN CODE 2026-09-11, not yet observed in the cluster.** The two reads are now separate calls,
+  because which store refused is the whole discriminator: both refusing means the project does not run
+  that lane (251 of 252 cells — correct, and silent); a source that HAS published into a destination
+  this subject cannot read is a lane that is running and unmeasured, and is reported as its own state.
+  It publishes no fabricated lag — absent and forbidden answer alike, and this estate holds gold tables
+  that exist with zero tuples ([[LH-144]]), so a guessed first-hop lag could be a confident number for
+  a hop that had in fact run. The cell is deliberately NOT memoized into silence: it is the estate's
+  only evidence of that lost hop, so it pays one audit record a tick and stays in the population.
+  `medallion.cascade.lag_destination_invisible` carries it and `MedallionCascadeDestinationInvisible`
+  pages on it after 30m. Gated by `test_a_running_lane_is_not_dismissed_as_unmeasurable.py` (5 tests,
+  RED first) and two promtool cases, one of which pins that `MedallionCascadeLag` stays SILENT on the
+  same input — an operator must not be able to silence one and believe the other covers it.
+- **AND THE ALERT'S OWN PROSE WAS FALSE, which is how this stayed invisible.** `MedallionCascadeLag`
+  described itself as firing "for a hop that NEVER ARRIVED — which no counter can see". It cannot: a lag
+  is arithmetic over two reads, and a hop that never arrived usually has no destination to read. The
+  description now says what the rule does and names the sibling that covers the rest.
 - *What it costs:* the silver→gold lag for that project is not measured. The cascade may be healthy or
   stalled and the monitor cannot say, which is the failure mode a lag monitor exists to prevent.
 - **THE CAUSE IS NOT A MISSING GRANT — the dataset does not exist.** Read from OpenFGA and the graph:
@@ -496,6 +512,26 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Closes when:* the monitor reads that project's producers — by granting the rung if the tuple is
   missing, or by naming why that project differs — and a blind edge is reported as a distinct state
   rather than only as an unreadable-edge warning, so "not measured" cannot look like "not lagging".
+
+**LH-145 · The lag tick's `unknown` count names no cell and reaches no metric — a store disagreement is counted, unactionable and unpageable**
+`medallion` · low · found 2026-09-11 while fixing [[LH-143]]
+
+- *Measured:* the post-deploy tick reports `unknown: 1` — one declared cell where both stores answered
+  and DISAGREED. `lag_for_edge` returns `known=False` for exactly two shapes, and both are real
+  inconsistencies rather than absences: a frontier AHEAD of the source's published version (a tag moved
+  backwards, or a lineage run outlived the table it names), and a source reporting nothing published
+  while the destination has consumed something.
+- *What it costs:* `record_edge_lag` publishes NO point for an unknown lag, which is correct — every
+  sentinel a gauge could carry is also a real lag. But the consequence is that the cell has no series,
+  `MedallionCascadeLag` fires on `> 0` and so cannot see it, no other rule mentions `unknown`, and the
+  tick's log line carries the COUNT without the identity. So an estate where every edge disagreed would
+  publish nothing, page nobody, and look exactly like a cascade with no lag.
+- *This is the same class as [[LH-143]] one notch milder,* and worth fixing the same way: the state is
+  real and named internally, and the gap is that it stops at the report. The fix is symmetric with
+  `destination_invisible` — carry the identities, export a series, alert on persistence.
+- *Not folded into [[LH-143]]'s fix deliberately:* that change earns its scope from a measured live
+  loss; this one is a hole found by reading the same code, and should be sized on its own evidence.
+- *Closes when:* an operator can name which edge disagreed and be paged when the disagreement persists.
 
 **LH-144 · Three gold tables exist in the lineage graph with ZERO authorization tuples — created, ungoverned, and unreachable**
 `catalog` · **HIGH** · found 2026-09-11 by reading OpenFGA directly

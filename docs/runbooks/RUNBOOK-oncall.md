@@ -106,7 +106,20 @@ target (`medallion_stage_denied` rises); re-seed with `scripts/seed_medallion_fg
 blocked a bad batch (`medallion_stage_quality_blocked`) — by design, the bad batch does not promote; the
 failed run is in the lineage graph. (3) With Ray on, the stage Ray job failed/timed out — check
 `ray job list` on `ray-lance-head`. (4) The delivery exhausted retries and parked — see
-[DLQ parking](#dlq-parking--a-delivery-gave-up).
+[DLQ parking](#dlq-parking--a-delivery-gave-up). (5) **`MedallionCascadeDestinationInvisible`** — the lane's
+source publishes but its destination cannot be read, so no lag exists to page on. Two conditions answer
+alike at lineage's door, because its metadata gate runs before existence resolution, and telling them
+apart is the first diagnostic step:
+
+```bash
+kubectl exec rask-age-0 -- psql -U lance -d lineage -tAc "LOAD 'age'; SET search_path = ag_catalog, \"\$user\", public;
+  SELECT name::text FROM cypher('lineage', \$q\$ MATCH (d:Dataset) RETURN d.name \$q\$) as (name agtype)
+  WHERE name::text LIKE '%<project>%';"
+```
+
+No node for the destination means the hop has **never run** — replay it. A node that IS present means the
+dataset exists without a tuple for the medallion identity, which is a governance gap: re-seed with
+`scripts/seed_medallion_fga.sh`.
 
 **Diagnose.** Stage runner logs (`kubectl logs -l app.kubernetes.io/component=bronze-to-silver`); grep
 `medallion_stage_denied` / `medallion_quality_blocked` / `ray_stage_job`.

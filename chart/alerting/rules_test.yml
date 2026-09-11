@@ -578,7 +578,7 @@ tests:
             exp_annotations:
               summary: "Cascade edge silver->gold is behind its source"
               description: >-
-                A destination tier has not consumed versions its source has published, and has stayed behind for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost trigger, a publish that did not land, a stage runner that was down — which no counter can see. The repair is edge-addressed: POST /api/stage-runners/stages/rerun with the published table, the range, and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+                A destination tier has not consumed versions its source has published, and has stayed behind for 30 minutes. Unlike the refusal counters this fires for a hop that NEVER ARRIVED — a lost trigger, a publish that did not land, a stage runner that was down — PROVIDED the destination can be read; a lost hop whose destination was never created at all is invisible here and pages as MedallionCascadeDestinationInvisible instead. The repair is edge-addressed: POST /api/stage-runners/stages/rerun with the published table, the range, and the token from the DLQ line if you have it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # C3 b. A tier that CATCHES UP inside the window must not page. Lag is normal mid-cascade; only a
   # lag that persists is a lost hop, which is the entire reason this rule carries a `for:`.
@@ -589,6 +589,59 @@ tests:
     alert_rule_test:
       - eval_time: 35m
         alertname: MedallionCascadeLag
+        exp_alerts: []
+
+  # C3 a', the half MedallionCascadeLag cannot cover. A lane whose source publishes into a destination
+  # the detector cannot read publishes NO lag at all — there is nothing for the rule above to fire on,
+  # which is exactly how a lost first hop stayed invisible for as long as it did.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_cascade_lag_destination_invisible{lance_medallion_edge="silver->gold",lance_medallion_project="advref31"}'
+        values: "1x39"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MedallionCascadeDestinationInvisible
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "medallion"
+              lance_medallion_edge: "silver->gold"
+              lance_medallion_project: "advref31"
+            exp_annotations:
+              summary: "Cascade edge silver->gold publishes into a destination the detector cannot read"
+              description: >-
+                This lane's source has published, so the lane is running, but its destination could not be read for 30 minutes — so no lag can be computed and MedallionCascadeLag is structurally blind to it. Two causes answer alike at the door: the destination was NEVER CREATED, meaning the hop has never run, or it exists with no authorization tuple for the medallion identity. Check the graph first — a dataset absent from lineage means a lost first hop; a dataset present means a governance gap. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+      # AND THE LAG RULE STAYS SILENT on the same input, which is the point of the pair: an operator
+      # must not be able to silence one and believe the other covers it.
+      - eval_time: 35m
+        alertname: MedallionCascadeLag
+        exp_alerts: []
+
+  # The series going STALE is how this resolves — a destination that becomes readable simply stops
+  # receiving points, the same way an unknown lag publishes nothing. Pinned so a future change to a
+  # zero-publishing gauge has to argue with a test rather than quietly leave the alert latched.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_cascade_lag_destination_invisible{lance_medallion_edge="bronze->silver",lance_medallion_project="acme"}'
+        values: "1x34 _x14"
+    alert_rule_test:
+      # FIRING FIRST, so the resolution below is a transition rather than a rule that never fired.
+      - eval_time: 33m
+        alertname: MedallionCascadeDestinationInvisible
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "medallion"
+              lance_medallion_edge: "bronze->silver"
+              lance_medallion_project: "acme"
+            exp_annotations:
+              summary: "Cascade edge bronze->silver publishes into a destination the detector cannot read"
+              description: >-
+                This lane's source has published, so the lane is running, but its destination could not be read for 30 minutes — so no lag can be computed and MedallionCascadeLag is structurally blind to it. Two causes answer alike at the door: the destination was NEVER CREATED, meaning the hop has never run, or it exists with no authorization tuple for the medallion identity. Check the graph first — a dataset absent from lineage means a lost first hop; a dataset present means a governance gap. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+      # Then the destination becomes readable and the cell simply stops receiving points. Eleven minutes
+      # past the last sample is well beyond the 5m lookback, so the series is gone and the alert clears.
+      - eval_time: 45m
+        alertname: MedallionCascadeDestinationInvisible
         exp_alerts: []
 
   # M24 e. A stage runner denied its grant stalls the cascade at that stage → fires on the first denial.

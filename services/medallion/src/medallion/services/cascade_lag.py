@@ -38,7 +38,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 log = logging.getLogger(__name__)
@@ -196,11 +196,18 @@ def record_edge_lag(lag: EdgeLag, *, gauge: LagGauge) -> None:
 class LagTickReport(BaseModel):
     """What one tick measured. ``edges`` is the denominator every other field is read against.
 
-    ``unknown``, ``failed`` and ``unmeasurable`` are three separate counts and each hides a different
-    thing when folded. UNKNOWN means both stores answered and DISAGREED; FAILED means one could not be
-    read at all, and a rising count is an outage; UNMEASURABLE means this subject cannot see the
-    source table, which is a steady state rather than an event — an estate holding abandoned projects
-    reports hundreds every tick, and letting those land in ``failed`` buries a real outage in them.
+    ``unknown``, ``failed``, ``unmeasurable`` and ``destination_invisible`` are four separate states and
+    each hides a different thing when folded. UNKNOWN means both stores answered and DISAGREED; FAILED
+    means one could not be read at all, and a rising count is an outage; UNMEASURABLE means the SOURCE
+    is not visible, so this project does not run this lane — a steady state rather than an event, which
+    an estate holding abandoned projects reports hundreds of every tick, and letting those land in
+    ``failed`` buries a real outage in them.
+
+    DESTINATION_INVISIBLE IS THE ONE THAT CARRIES A FINDING. A lane whose source has PUBLISHED is
+    running; if its destination cannot be read, the detector has found a hop it cannot account for —
+    the case this module exists for. Measured on the live estate 2026-09-11: of 267 declared cells, 252
+    answer "not visible", and exactly one of those has a published source. Folded into ``unmeasurable``
+    it is one part in 252 and says nothing, which is indistinguishable from a healthy lane.
     """
 
     edges: int
@@ -208,6 +215,11 @@ class LagTickReport(BaseModel):
     unknown: int
     failed: int
     unmeasurable: int = 0
+    #: Cells whose SOURCE has published and whose DESTINATION this subject cannot read — carried as
+    #: identities rather than a count because one of them is actionable and the caller must be able to
+    #: name it. Bounded by construction: a cell reaches this list only when the source answered with a
+    #: version, which on the live estate 2026-09-11 was 14 of 267 cells, one of them invisible.
+    destination_invisible: list[tuple[str, str]] = Field(default_factory=list)
     #: Cells NOT asked about this tick because :class:`AbsentEdgeMemo` has seen them refuse
     #: repeatedly. Counted rather than silent for the same reason `unmeasurable` is separate from
     #: `failed`: a detector that quietly stops asking looks exactly like one with nothing to report.
@@ -311,11 +323,16 @@ def run_lag_tick(
             # that removes the record. Counted, never silent — the memo re-probes on its own schedule.
             report.skipped += 1
             continue
+        # THE TWO READS ARE SEPARATE CALLS, and that is the whole discriminator rather than a style
+        # preference. Evaluated as one expression, a refusal from EITHER store yields one
+        # `EdgeNotMeasurable` and the tick cannot tell "this project does not run this lane" from "this
+        # lane is publishing into a destination I cannot read" — which is a lost hop.
         try:
-            lag = lag_for_edge(edge=edge, project=project, published=published(edge, project), consumed=consumed(edge, project))
+            published_version = published(edge, project)
         except EdgeNotMeasurable:
-            # No log line: this is a steady state, not an event, and one line per invisible edge per
-            # tick is the shape that buried every other service's errors once already.
+            # The SOURCE is not visible, so there is no lane here to be behind. No log line: this is a
+            # steady state, not an event, and one line per invisible edge per tick is the shape that
+            # buried every other service's errors once already.
             report.unmeasurable += 1
             if memo is not None:
                 memo.record_absent(cell)
@@ -324,6 +341,36 @@ def run_lag_tick(
             log.warning("cascade_lag_edge_unreadable", extra={"edge": edge, "project": project, "error": str(exc)})
             report.failed += 1
             continue
+
+        try:
+            consumed_ranges = consumed(edge, project)
+        except EdgeNotMeasurable:
+            if published_version is None:
+                # A source that exists and has never published has nothing to fall behind, so its
+                # destination's absence is the expected shape of a lane nobody has run yet.
+                report.unmeasurable += 1
+                if memo is not None:
+                    memo.record_absent(cell)
+                continue
+            # A PUBLISHED SOURCE AND AN UNREADABLE DESTINATION. The lane is running and the detector
+            # cannot see where it lands — the loss this module exists for, and the one cell of 267 that
+            # is not like the other 251. It publishes NO lag: `require_metadata_access` runs before
+            # existence resolution, so absent and forbidden answer alike, and this estate holds gold
+            # tables that exist with zero tuples. Guessing would publish a confident level for a hop
+            # that had in fact run.
+            #
+            # DELIBERATELY NOT MEMOIZED. `AbsentEdgeMemo` exists to stop probing cells that name
+            # nothing, and each probe costs an `access_denied` audit record; this cell is the estate's
+            # only evidence of that lost hop, so it pays one record a tick and stays in the population.
+            report.destination_invisible.append(cell)
+            log.warning("cascade_lag_destination_unreadable", extra={"edge": edge, "project": project, "published": published_version})
+            continue
+        except Exception as exc:  # noqa: BLE001 — one edge's read must never end the tick
+            log.warning("cascade_lag_edge_unreadable", extra={"edge": edge, "project": project, "error": str(exc)})
+            report.failed += 1
+            continue
+
+        lag = lag_for_edge(edge=edge, project=project, published=published_version, consumed=consumed_ranges)
         if not lag.known:
             report.unknown += 1
             continue
@@ -340,6 +387,7 @@ def run_lag_tick(
             "failed": report.failed,
             "unmeasurable": report.unmeasurable,
             "skipped": report.skipped,
+            "destination_invisible": len(report.destination_invisible),
         },
     )
     return report

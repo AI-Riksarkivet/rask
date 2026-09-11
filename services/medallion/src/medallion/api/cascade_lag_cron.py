@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from starlette.concurrency import run_in_threadpool
 
 from medallion.api.dependencies import SettingsDep
-from medallion.core.metrics import cascade_lag_gauge
+from medallion.core.metrics import cascade_lag_gauge, record_destination_invisible
 from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, run_lag_tick
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -56,7 +56,7 @@ async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dap
     # `declared_edges` and the two reader FACTORIES are called out here rather than inside the
     # thread on purpose: they only assemble closures over settings, and keeping them at this level
     # leaves the threadpool holding exactly the blocking work.
-    return await run_in_threadpool(
+    report = await run_in_threadpool(
         partial(
             run_lag_tick,
             edges=declared_edges(settings),
@@ -66,6 +66,13 @@ async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dap
             memo=memo,
         )
     )
+    # PUBLISHED HERE rather than inside the tick, which is the one asymmetry with the lag gauge and is
+    # deliberate: the lag's publish-or-stay-silent decision belongs with the arithmetic that knows
+    # whether the value is known, while this is a fact the report already carries. `_tick` returns the
+    # report to the sidecar, so the identities are on the wire either way; the series is what an alert
+    # can reach. Pinned by `test_the_lag_cron_publishes_the_blind_lanes_it_found`.
+    record_destination_invisible(report.destination_invisible)
+    return report
 
 
 async def _ack_binding() -> dict[str, str]:
