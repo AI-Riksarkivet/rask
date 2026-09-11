@@ -343,3 +343,36 @@ naming the blocking dependent, which is the half worth keeping.
 than a correctness one: keep the per-dataset detail at DEBUG and emit one WARNING per sweep carrying the
 count. That is the shape `log_sweep` already uses for the reconcile classes, and it would return the
 warning channel to reporting things that changed.
+
+
+## The deploy happened — what the four checklist numbers actually did
+
+Deployed `main-b641103f` on 2026-09-11. The checklist above named four numbers and what each would mean;
+here is what they did.
+
+| # | number | before | after |
+| --- | --- | --- | --- |
+| 1 | maintenance credential vends | 300 × 401, 300 × AMBIENT, 0 scoped | **0 × 401, 41 × SCOPED** |
+| 2 | `compaction_credential_tier_total` | series did not exist | emitting; the ambient alert is unsatisfiable |
+| 3 | `lineage_reconcile_storage_loss` | 32 | **3** (+ `graph_ahead` 31, `unreadable` 26) |
+| 4 | `provenance_holes` | field absent | **0** |
+
+**LH-142 closed by the deploy**, exactly as the row predicted it might. The credential defect found this
+morning was not only a secrecy problem — it was silently disabling the estate's scoped-credential path,
+and correcting the derivation restored it.
+
+**LH-002's composition question answered:** of the 32 datasets its alarm named, three are genuine loss.
+Thirty-one are readable tables below the graph's version.
+
+**LH-139 fired and was fixed, in that order.** A chart-only upgrade stalled because the stale catalog
+image rewrites the FGA model without `event_stager`; rebuilding the catalog restored the relation (30
+warehouse relations, verified at the type level) and `rask-bootstrap-admin` then completed. The ROW stays
+open: a boot-time model write that can REMOVE relations is still the design, and image order is still
+load-bearing for the estate's authorization.
+
+**Two things were left undone and are not failures of the fixes.** `rask-kueue-setup` crash-loops on a
+webhook CA mismatch — the re-applied CRD's `caBundle` does not match the 45-day-old controller's serving
+cert, which needs a controller restart; it blocks the helm release MARKER, not the lakehouse, and the
+release is `failed` at rev 152 with every manifest applied and every image correct. And the ESO-served
+identities (web zones, Ray head) still hold pre-rotation tokens until the hourly sync plus a restart —
+measured as causing no failures, because those lanes are idle.
