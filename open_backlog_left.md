@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**228 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
+**229 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 82 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 83 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -311,6 +311,33 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Note while this is open:* a refused base currently propagates a `ValueError` out of the vend rather
   than a typed refusal, the same shape `_reject_iam_metacharacters` already had. Fail-closed and
   consistent, but an operator sees an opaque error for a poisoned manifest.
+
+**LH-141 · A wrong `lineage.dataset_id` stamp is repaired only by a WRITE, so a dataset that stopped being written keeps a false name forever**
+`medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-11 · measured on the live estate
+
+- *Why open:* `ensure_declared_dataset_id` self-heals a stale stamp — its docstring is explicit that a
+  `merge_insert` does not carry schema metadata, so the tier above would otherwise keep its parent's
+  name — but all five call sites are inside `compute.py`'s WRITE paths. Nothing outside a write ever
+  re-stamps, so a dataset no longer being written keeps whatever name it was last given. The reconcile
+  sweep repairs missing lineage EDGES and never touches this.
+- *Measured, and it is live rather than theoretical:* the maintenance sweep sends
+  `declared_table_id(ds)` to `/compaction_plan`, and in one 400-row sample the two ids that 404 are
+  `lakehouse$bronze$events` (134, bucket `lance-catalog`) and `lakehouse-bronze$events` (94,
+  `lakehouse-wh`). The first is the `f"{project}${dataset}"` spelling that
+  `warehouse_registry.project_namespace`'s own docstring records as the ingest plane's old composition —
+  three segments, which the catalog parses as namespace/namespace/table and resolves to nothing.
+- *The code that produced it is FIXED and that is exactly the point.* Ingest imports `project_namespace`
+  now, and the deployed ingest image (`main-141f6199`) carries that fix — verified by ancestry against
+  `14db0444`. The bad name survives in the DATASET, not in the code, and no code change repairs it
+  because repair is write-triggered.
+- *What it costs, per tick, forever:* those datasets 404 the compaction plane so they are never
+  compacted distributively, and every maintenance lineage event they produce files against a Dataset
+  node that names another table — a condition-1 defect on live data that no re-run will clear.
+- *Closes when:* A stamp repair exists that does not require a data write — the reconcile sweep is the
+  natural owner, since it already opens every dataset and already holds the catalog identity; or the
+  maintenance sweep repairs the stamp when `declared_table_id` 404s against the catalog and
+  `table_id_from_location` can supply the real one. Pin that a dataset carrying a stale id is corrected
+  without its `_rowid`s moving (`update_schema_metadata` is metadata-only, so this is provable).
 
 **LH-134 · ~~Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart~~ — CLOSED AND OBSERVED 2026-09-11**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
