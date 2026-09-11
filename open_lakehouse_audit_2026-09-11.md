@@ -278,3 +278,35 @@ fallback needs no annotation support at all: the target uses `creationPolicy: Ow
 synced Secret has the operator recreate it from the store. Confirm afterwards that
 `rask-infra-credentials` actually changed before restarting anything — that check is the whole point of
 the sequence above.
+
+
+## What the deploy should change, verified by inspecting the running pods
+
+Four live symptoms were investigated today and turned out to be PRE-FIX residue rather than open
+defects. Each was checked by reading the deployed module inside the pod, not by reasoning from dates —
+the estate runs `main-8c229296` (2026-09-09) while 67 fixes touching the four lakehouse services sit
+unshipped. Listed so none of them is re-investigated, and so the deploy has a checklist to verify
+against rather than a hope.
+
+| live symptom | why it is not an open defect | verified how |
+| --- | --- | --- |
+| STS records stopped accumulating, credited to LH-134's lazy vend | that fix is NOT deployed; the halt is vends FAILING (LH-142) | deployed `sweep.py` has no `_may_write_anything` |
+| 64 discovery prefixes reported truncated every tick | the evidence-based `_may_hide_a_dataset` narrowing is not deployed | deployed `optimize.py` has no `_may_hide_a_dataset` |
+| `_staging` directories walked as candidate datasets | `_staging` was added to `_CONTROL_PREFIXES` after this image | deployed tuple lacks it |
+| three medallion tiers sharing one `lineage.dataset_id` | the stamp fix is at HEAD and the ingest image carries `project_namespace` | ancestry: `14db0444` is an ancestor of `main-141f6199` |
+
+**After the deploy, re-measure in this order.** Each is a number that should MOVE, and one that does not
+is a real finding rather than a repeat of today's:
+
+1. `maintenance.services.credentials` — the 300/300 split of 401s and ambient fallbacks. If vending
+   still 401s, LH-142's authentication half is genuinely open and the deploy has eliminated the
+   likeliest cause.
+2. `compaction_credential_tier_total{tier=...}` — the new series should exist at all, and the alert
+   `CompactionSigningWithAmbientCredential` should stop being satisfiable.
+3. `maintenance_discovery_truncated` — 64 prefixes should fall toward zero.
+4. `lineage_reconcile_storage_loss` vs the new `lineage_reconcile_graph_ahead` — the 32 should split,
+   and that split is the number LH-002's residue question has been waiting on.
+
+**One thing NOT verified:** whether the deployed Ray head image carries the `RASK_DEST_TABLE` stamp fix.
+The Ray head is not chart-owned, so its image moves independently and the tier-stamp symptom may persist
+after a chart deploy. Check it separately rather than reading a stale stamp as a new defect.
