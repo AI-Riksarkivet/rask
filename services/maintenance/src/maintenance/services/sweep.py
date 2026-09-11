@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 
+import lance
 import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
@@ -351,6 +352,14 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     # unit — and the work stream is `workqueue` retention, so a unit can sit for up to the stream's
     # max-age before a worker takes it. That is the same staleness argument the protection re-check
     # above this makes, applied to the thing that expires by design.
+    # ASK BEFORE PAYING. A vend mints a 900-second STS identity record on the store and nothing prunes
+    # them — measured 2026-09-11 at 280/minute, against a previous store that became unable to restart
+    # at 107,485 — so a credential minted for a unit that writes nothing is not merely waste, it is the
+    # thing that takes the object store down. The probe is conservative: anything it cannot answer, or
+    # cannot read, counts as "may write", because skipping a dataset that WOULD have been maintained is
+    # the failure this service exists to prevent while a spare credential is only a cost.
+    if not _may_write_anything(item.uri, options, cleanup_enabled=item.plan.cleanup_enabled, optimize_indices_enabled=item.plan.optimize_indices_enabled):
+        return _maintain_one(item.uri, item.plan, settings=settings, options=options, protected=protected)
     try:
         write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=item.table_id)
     except compaction_executor.MaintenanceDenied as exc:
@@ -514,6 +523,47 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
         return outcome
 
     return _rewrite
+
+
+def _may_write_anything(uri: str, options: dict[str, str], *, cleanup_enabled: bool, optimize_indices_enabled: bool) -> bool:
+    """Could this unit write anything at all? Answered with a READ, before any credential is asked for.
+
+    THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and
+    prunes none — 280 per minute on this estate — and the previous store became unable to restart at
+    107,485 of them, its IAM bootstrap walking the whole prefix inside a 5-second disk timeout and then
+    giving up permanently. The sweep vended `tier=write` for every PLANNED dataset before anything had
+    decided the dataset needed rewriting, against an estate whose own history is that almost nothing is
+    ever rewritten (`fragments_removed_total=0` across 785 ticks).
+
+    IT RESTORES `credentials.py`'s PREMISE rather than contradicting it. That module argues NO CACHE
+    because maintenance "vends once per WORK ITEM"; the argument is sound and the premise was not true,
+    because the vend was per PLANNED item. A unit that will not write is not a work item.
+
+    CONSERVATIVE BY CONSTRUCTION, and that direction is the entire safety argument: answering "no" for
+    a dataset that WOULD have been maintained means a dataset silently stops being maintained, which is
+    the failure this service exists to prevent. A wasted credential is only a cost. So every uncertain
+    answer — an unreadable dataset above all — is `True`.
+    """
+    try:
+        ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
+        if len(ds.get_fragments()) > 1:
+            return True  # compaction can merge them
+        if cleanup_enabled and len(ds.versions()) > 1:
+            return True  # a superseded version is something to reclaim
+        if optimize_indices_enabled and any(not str(ix.name).startswith("__") for ix in ds.describe_indices()):
+            return True  # an index optimize commits
+    except Exception as exc:
+        # Unreadable, absent, or a pylance refusal: cannot tell, so do not decide. `compact_one` runs
+        # its own refusal ladder over exactly these cases and reports them honestly; short-circuiting
+        # here would turn a reported refusal into silence.
+        #
+        # LOGGED, never silent. The conservative answer makes every failure here look like a healthy
+        # estate paying for one extra credential, so a real fault would never surface — and it already
+        # hid one: `lance` was not imported in this module, so the probe raised NameError on every
+        # dataset and the whole check reported "may write" while appearing to work.
+        log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
+        return True
+    return False
 
 
 def _maintain_one(
