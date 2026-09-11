@@ -467,10 +467,25 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   records AssumeRole as "MEASURED" working from the Ray head on 2026-08-30 — true, but that head held
   the ROOT key at the time (`cc75585d` corrected it), so what the measurement proved is narrower than
   it reads: that root can assume, not that the flow is caller-agnostic.
+- **VENDOR-CONFIRMED 2026-09-11** (`github.com/orgs/rustfs/discussions/1125`): *"temporary accounts
+  currently inherit user permissions and cannot yet specify policies using ARN; this will be implemented
+  soon."* That is exactly what the probe above measured, so the limit is RustFS's roadmap rather than a
+  quirk of this build — and it means the answer must not depend on ARN policy resolution.
+- **AND OPTION 1 DOES NOT DEPEND ON IT, which changes this row's shape.** If temporary credentials
+  inherit the USER's permissions, then a catalog user whose POLICY the warehouse registry maintains is
+  inherited by every vend, with the session policy narrowing from there. Per-user policy attachment is
+  not hypothetical on this backend: `chart/templates/rustfs-scoped-users.yaml` already runs
+  `mc admin policy create` + `mc admin policy attach --user` for FIVE identities in production. So the
+  bounded shape is reachable TODAY, without waiting for ARN support and without changing backend.
+  (The estate is deliberately storage-agnostic — endpoint-swappable, never a code change — so MinIO or
+  AWS would additionally offer per-ROLE policies; that would be a nicer implementation of the same
+  design, not a different decision.)
 - *So the decision is between TWO options, not three:*
-  1. **A role policy the warehouse registry MAINTAINS** — the mint path updates the vending identity's
-     policy as warehouses are created. Keeps the identity genuinely bounded; costs a write to the
-     storage backend's policy on every warehouse mint, and a reconciler for when that write is lost.
+  1. **A USER policy the warehouse registry MAINTAINS** — the mint path updates the vending identity's
+     policy as warehouses are created, and every vended session inherits it. Keeps the identity
+     genuinely bounded and removes root. Costs a policy write to the storage backend on every warehouse
+     mint plus a reconciler for when that write is lost, which is a new failure mode on the create path.
+     Reachable on RustFS today via the `mc admin policy` pair the chart already uses.
   2. **Accept the widest role, bounded by network + audit + rotation** — what runs today, made
      deliberate instead of accidental, with the compensating controls named and tested.
 - *Closes when:* the owner picks one; then provision `rask-catalog` the way
