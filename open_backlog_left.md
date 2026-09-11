@@ -543,12 +543,40 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   currently inherit user permissions and cannot yet specify policies using ARN; this will be implemented
   soon."* That is exactly what the probe above measured, so the limit is RustFS's roadmap rather than a
   quirk of this build — and it means the answer must not depend on ARN policy resolution.
-- **AND OPTION 1 DOES NOT DEPEND ON IT, which changes this row's shape.** If temporary credentials
-  inherit the USER's permissions, then a catalog user whose POLICY the warehouse registry maintains is
-  inherited by every vend, with the session policy narrowing from there. Per-user policy attachment is
-  not hypothetical on this backend: `chart/templates/rustfs-scoped-users.yaml` already runs
-  `mc admin policy create` + `mc admin policy attach --user` for FIVE identities in production. So the
-  bounded shape is reachable TODAY, without waiting for ARN support and without changing backend.
+- **MEASURED 2026-09-11 — OPTION 1 IS NOT REACHABLE ON RUSTFS AT ALL, and this row previously
+  concluded the opposite.** The hope was that a catalog USER whose policy the warehouse registry
+  maintains would be inherited by every vend. It cannot be, because the scoped user cannot make the
+  call. Same request shape, same pod, same endpoint, one run:
+
+      RustFS   scoped user (policy attached)  -> HTTP 403
+      RustFS   root (rustfsadmin)             -> ACCEPTED (487-char session token)
+
+  And the right cannot be granted: `mc admin policy create` REFUSES a statement carrying
+  `sts:AssumeRole` outright — *"invalid resource, type: 'unknown', pattern: '*'"* — so RustFS's policy
+  engine has no vocabulary for the STS action. **AssumeRole is root-only on this build and is not
+  policy-grantable.** That is why `rask-catalog` holds `rustfsadmin`: under `vending.mode: sts` it is a
+  REQUIREMENT of the mode, not an oversight, and no amount of policy work removes it.
+- **THE SAME PROBE ON MINIO PASSES, including the part that matters.** A real MinIO stood up in the
+  cluster, the identical scoped user and policy, the identical call:
+
+      MinIO    scoped user (policy attached)  -> ACCEPTED (484-char session token)
+      MinIO    root (minioadmin)              -> ACCEPTED
+
+  and the narrowing is ENFORCED rather than merely issued — vending as the scoped user with a session
+  policy bound to one prefix: in-scope GET allowed, CROSS-TENANT GET `AccessDenied`, read-tier PUT
+  `AccessDenied`. MinIO's own documentation states the rule this rests on — *"AssumeRole requires
+  authorization credentials for an existing user"* and *"the permissions of the returned credentials
+  are inherited from the policies attached to the built-in user"*.
+- *So the backend choice, not the policy design, is what gates this row.* The capability LH-051 needs
+  exists on MinIO today and does not exist on RustFS today. Waiting for RustFS's ARN work is not the
+  only blocker either — ARN-bound roles are a DIFFERENT feature from letting a non-root user assume at
+  all, and it is the latter this row needs.
+- *One shape avoids the whole question and is worth weighing against a migration:* `web_identity`
+  (`AssumeRoleWithWebIdentity`) needs NO SigV4 credential at the catalog, so the catalog would hold no
+  storage identity whatsoever — strictly better than a scoped one. `WebIdentityVendor` is already
+  implemented and RustFS supports the flow, but `rustfs.oidc.enabled` is `false` (confirmed: the
+  running pod carries no OIDC env), and the mode cannot serve the CASCADE, whose stage runners
+  authenticate with `dapr-api-token` + `x-lance-service-identity` and hold no bearer.
   (The estate is deliberately storage-agnostic — endpoint-swappable, never a code change — so MinIO or
   AWS would additionally offer per-ROLE policies; that would be a nicer implementation of the same
   design, not a different decision.)
