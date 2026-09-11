@@ -16,6 +16,12 @@ IT IS ALSO WHAT THE PUBLISH EVENT CARRIES. `medallion.services.catalog_register`
 `location: medallion/bronze` on the live estate — the relative form — and that value rides
 `extra["location"]` to consumers that resolve an upstream by it.
 
+ONLY THIS DOOR, checked rather than assumed. `tables.py` emits a `source_uri` at exactly two sites, and
+the sibling is fine: `declare_table` MINTS the location instead of echoing one, so the backend composes
+it absolute — measured, it answers `file:///<root>/35ceadc6_d$t`. Register differs because the CALLER
+supplies the location and the backend hands it straight back. Resolving declare too would be a guard
+added by analogy against a value that is already correct.
+
 THE ABSOLUTE FORM IS ALREADY AVAILABLE and costs one metadata call: `describe_table` resolves the
 location against whatever root the table actually belongs to, including a warehouse-bound one, which is
 the part a caller-side join against a configured root would get wrong for exactly the tables that
