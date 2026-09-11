@@ -815,6 +815,14 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   outside the catalog's connection root and names both in the error. That is the containment Lakekeeper
   describes, applied at the producer seam rather than re-derived at the door from a bucket string the
   door does not receive.
+- *THE CLOSURE RE-VERIFIED AGAINST THE BACKEND 2026-09-11, because this row's argument is the one most
+  worth being sure of — it closed a security row by reasoning that the guard belongs elsewhere.* Driven
+  on a real `dir` namespace: `register_table` refuses an absolute location ("Absolute paths are not
+  allowed for register_table") and refuses traversal ("Path traversal is not allowed"). The closure
+  stands. Worth recording beside it: the backend does NOT apply the same containment to
+  `create_table_version`'s `manifest_path`, which is a separate defect fixed in `803171d8` — so "the
+  backend validates paths" is true of this door and false of that one, and the two must not be reasoned
+  about together.
 - *What remains is a test rather than a guard* (`tests/integration/test_register_refuses_reserved_platform_storage.py`,
   rewritten in place): the platform's own bucket stays registrable, and locations are root-relative by
   construction.

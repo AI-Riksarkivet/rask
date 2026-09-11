@@ -22,6 +22,13 @@ defines `manifest_path` as "Path to the manifest file for this version" and its 
 into a sibling table is outside what the spec contemplates, so refusing it is conformance rather than a
 local restriction.
 
+THE BACKEND GUARDS THE OTHER PATH FIELD AND NOT THIS ONE, which is the reason this guard belongs here
+and the reason it must not be removed as redundant. Measured 2026-09-11 against the same `dir` namespace:
+`register_table` refuses an absolute location ("Absolute paths are not allowed for register_table") and
+refuses traversal ("Path traversal is not allowed"). `create_table_version` refuses neither for
+`manifest_path` — the cross-table move above went through it. Anyone reasoning "the backend validates
+paths" from the first door would be right about that door and wrong about this one.
+
 CONFINEMENT BY CONSTRUCTION, not by comparison. A relative path with no `..` is resolved by the backend
 inside the table's own directory, so there is nothing left to compare against and no second round-trip
 to `describe_table` to get wrong. Both relative spellings the backend accepts — bare filename and
