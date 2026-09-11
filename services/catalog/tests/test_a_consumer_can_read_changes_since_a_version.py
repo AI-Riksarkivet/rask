@@ -8,9 +8,10 @@ and `lance_docs/file_format.md:4270-4300` gives the predicates verbatim:
                AND _row_last_updated_at_version > begin
                AND _row_last_updated_at_version <= end
 
-THE ESTATE ALREADY USES HALF OF IT AND KEEPS IT PRIVATE. `ray_stage_job._delta_filter` builds the
-INSERTED predicate to drive the cascade, so the mechanism is proven on this data — what is missing is a
-door, and the UPDATED half, which no consumer can express without it.
+THE ESTATE ALREADY ASKS THIS QUESTION AND KEPT IT PRIVATE. `ray_stage_job._delta_filter` drives the
+cascade off `_row_last_updated_at_version`, so the mechanism is proven on this data — what it cannot
+express is the two kinds SEPARATELY, which is what a consumer outside the cascade needs and what this
+door serves.
 
 `file_format.md:4015` is the precondition: the version columns exist only when row-level version
 tracking is on. This estate requires it already (`enable_stable_row_ids`, gate A14, which the catalog

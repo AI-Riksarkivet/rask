@@ -20,8 +20,11 @@ created without it), so the feed is available wherever the catalog governs — b
 from outside that rule would answer an unresolved-column error rather than an empty feed, which is the
 honest failure and is left to surface.
 
-Half of this already runs in production: `scripts/ray_stage_job._delta_filter` builds the INSERTED
-predicate to drive the cascade. What was missing is a door and the UPDATED half.
+THE CASCADE ASKS THE SAME QUESTION WITH ONE COLUMN, and the difference is deliberate.
+`scripts/ray_stage_job._delta_filter` filters on `_row_last_updated_at_version` alone, which selects
+the inserted and the updated rows together — a never-updated row carries its creation version there
+(measured 2026-09-11). It may collapse them because it merge-inserts whatever it selects; this module
+may not, because a consumer applying both streams double-counts an insert reported as both.
 """
 
 from __future__ import annotations

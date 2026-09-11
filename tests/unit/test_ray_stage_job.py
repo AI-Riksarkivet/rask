@@ -1066,3 +1066,72 @@ def test_a_staging_set_that_cannot_be_dropped_SAYS_SO(capsys) -> None:
     printed = capsys.readouterr().out
     assert "staging" in printed.lower(), f"an undroppable staging set left no trace: {printed!r}"
     assert "_staging/run-1" in printed, printed
+
+
+# THE DELTA BOUNDARY'S SECOND HALF (LH-008). The backfill lane asked `_row_created_at_version > N`,
+# which is the change feed's INSERTED predicate (`lance_docs/file_format.md:4277-4285`) — so a row the
+# upstream corrected in place after the boundary was never re-derived and the tier below kept a stale
+# payload with nothing reporting it. The three cases below are the whole boundary: changed-by-insert,
+# changed-by-update, and unchanged. Bugs cluster at a predicate, so all three are pinned, not just the
+# one that fired.
+
+
+def _delta_run(bronze: str, silver: str, tmp_path: Path) -> dict[int, str]:
+    """Seed the tier with a full run, then hand back a reader for the id → payload the tier holds."""
+    import lance
+
+    landed = lance.dataset(silver).to_table(columns=["id", "payload"]).to_pydict()
+    return dict(zip(landed["id"], landed["payload"], strict=True))
+
+
+def test_an_in_place_UPDATE_since_the_boundary_reaches_the_tier_below(tmp_path: Path) -> None:
+    """A corrected upstream row must re-derive; the insert-only predicate silently kept the old one."""
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=3)
+    silver = str(tmp_path / "silver_updated")
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
+    assert _delta_run(bronze, silver, tmp_path)[1] == "event-1"
+
+    boundary = lance.dataset(bronze).version
+    lance.dataset(bronze).update({"payload": "'corrected'"}, where="id = 1")
+
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
+
+    assert _delta_run(bronze, silver, tmp_path)[1] == "corrected", "an in-place update never reached the tier below"
+
+
+def test_an_INSERT_since_the_boundary_still_reaches_the_tier_below(tmp_path: Path) -> None:
+    """The half that already worked, held: a predicate that covers updates must not lose inserts."""
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=3)
+    silver = str(tmp_path / "silver_inserted")
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
+
+    boundary = lance.dataset(bronze).version
+    lance.write_dataset(
+        pa.table({"id": pa.array([9], pa.int64()), "payload": pa.array(["event-9"]), "stage": pa.array(["bronze"])}),
+        bronze,
+        mode="append",
+    )
+
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
+
+    assert _delta_run(bronze, silver, tmp_path)[9] == "event-9"
+
+
+def test_a_row_untouched_since_the_boundary_is_NOT_re_derived(tmp_path: Path) -> None:
+    """What makes the lane a delta at all: widening the predicate must not turn it into a full rescan."""
+    import lance
+
+    bronze = _bronze_tabular(tmp_path, rows=3)
+    silver = str(tmp_path / "silver_untouched")
+    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
+
+    boundary = lance.dataset(bronze).version
+    lance.dataset(bronze).update({"payload": "'corrected'"}, where="id = 1")
+
+    delta = lance.dataset(bronze).to_table(columns=["id"], filter=job._delta_filter(boundary)).to_pydict()["id"]
+
+    assert sorted(delta) == [1], "the delta carried rows nothing had changed — the lane is rescanning"

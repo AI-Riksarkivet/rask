@@ -494,12 +494,29 @@ def _assert_stage_contract(*, rows_in: int, rows_out: int, cardinality: str, par
 def _delta_filter(base_version: int | None) -> str | None:
     """The change-data-feed predicate for a backfill, or `None` for a full run.
 
-    ``_row_created_at_version`` requires ``enable_stable_row_ids`` AT CREATION — setting it later is a
-    silent no-op — which is why the catalog's creation contract enforces it and why every write in
-    this file passes it. `None` means "everything": a first run has no boundary to be incremental
-    against, and filtering against version 0 would be the same answer at more cost.
+    ONE COLUMN ANSWERS BOTH HALVES of "what changed since N", and that is a measured property of
+    Lance rather than a simplification: a row that has never been updated carries
+    ``_row_last_updated_at_version`` equal to its CREATION version (measured 2026-09-11 on a real
+    dataset — three rows created at v1, one appended at v2, one updated at v3, whose last-updated
+    values read `[1, 1, 2, 3]`). So `> N` selects the inserted and the updated rows together, and
+    asking `_row_created_at_version` alone — which is the feed's INSERTED predicate,
+    `lance_docs/file_format.md:4277-4285` — silently drops every in-place correction.
+
+    The catalog's feed keeps the two kinds APART (`catalog.services.changes.change_filter`) because a
+    consumer applies an insert and an update differently. This lane does not: it hands whatever it
+    selects to one `merge_insert` on `id`, which inserts or updates per row, so splitting the window
+    here would be a branch with a single body.
+
+    A SWEEP DOES NOT WIDEN IT. Compaction rewrites files, and if it restamped the column every delta
+    run after a maintenance pass would re-derive the whole tier; measured 2026-09-11, `compact_files`
+    (4 fragments → 1) and `cleanup_old_versions` leave both version columns byte-identical.
+
+    Both columns require ``enable_stable_row_ids`` AT CREATION — setting it later is a silent no-op —
+    which is why the catalog's creation contract enforces it and why every write in this file passes
+    it. `None` means "everything": a first run has no boundary to be incremental against, and
+    filtering against version 0 would be the same answer at more cost.
     """
-    return None if base_version is None else f"_row_created_at_version > {base_version}"
+    return None if base_version is None else f"_row_last_updated_at_version > {base_version}"
 
 
 def _mergeable(to_uri: str, so: StorageOptions) -> bool:
