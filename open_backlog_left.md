@@ -169,7 +169,35 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   carry a CREATED edge (`cypher.py:276-284` requires `nc = 0`), so the next sweep warns identically.
   Waiting for retention cannot close this row.
 - *Why open:* Retention (30d) and `prune_orphan_datasets` landed and the graph is converging (79→2 unreadable, 37→32 storage_loss), but both warnings still fire on every 5-minute tick over 1,163 Dataset nodes, so a real storage loss would arrive indistinguishable from the noise. The 19 genuinely-dead nodes have runs dated 2026-08-31..09-07 and the one-off purge was refused as a destructive graph write.
-- *Closes when:* Let 30-day retention reach the 2026-08-31 runs (2026-09-30), then re-measure the reconcile warnings and confirm `datasets=[...]` names only live datasets.
+- **THE REMAINING THREE ARE ALL UNGOVERNED, measured 2026-09-11 — so the wait for retention is not the
+  answer and this row has a mechanism instead.** The sweep's `storage_loss` line now names exactly
+  `aud1ns$sub3$tt`, `e2e-ns$t178b2dda` and `probe$nonexistent`, and asking OpenFGA about each one
+  DIRECTLY (not by set difference) returns **zero tuples**, against a control `acme-bronze$events` that
+  returns 2. All three carry ABSOLUTE `s3://` URIs, so they are correctly in the loss path and not the
+  relative-URI class [[LH-141]] owns — the bytes really are gone. What is wrong is the NAME: the class
+  means "a bad restore, a wipe... the data is gone; only a human can answer for it", and a table nobody
+  holds a single tuple on is not a governed table whose data was lost. After the `graph_ahead` split
+  fixed 29 of 32, the remaining 3 are a SECOND miscategorisation of the same kind.
+- *The fix, specified and costed rather than sketched:* a dataset carrying no authorization tuple is not
+  a live governed table, and the sweep should say so in its own words.
+  1. `service_kit.governed.fga` has `check`, `batch_check`, `list_objects` and **no tuple read**, so it
+     needs one guarded helper that pages `Read` with NO `tuple_key`. Measured against the live store:
+     **51 pages, 5027 tuples, 0.1 s** for the whole estate — so this is one call per SWEEP, not the 356
+     per-dataset checks the naive shape would cost. (A `tuple_key` with an empty object id is refused,
+     which is what makes the no-`tuple_key` form the one that works.)
+  2. `ReconcileState.UNGOVERNED`, beside `UNREADABLE` and for the same stated reason: neither loss nor
+     health, and collapsing it into loss is what sends an operator after data nobody lost.
+  3. `reconcile_all(..., governed: set[str] | None = None)` — it is already pure over injected
+     callables, so this needs no new repository method; a dataset absent from the set classifies
+     UNGOVERNED and skips the downstream axes exactly as the `dropped` stamp does.
+  4. Its OWN report field and WARN line, never folded into `storage_loss` — the [[LH-143]] lesson, which
+     this row is otherwise about to repeat.
+  *The id mapping is exact and was checked:* `canonical_object_id` joins segments with the delimiter, so
+  a graph dataset name and its `table:` object id agree byte-for-byte — which is the property that
+  docstring insists on, and the reason the measurement above matched at all.
+- *Closes when:* the sweep stops naming ungoverned residue as storage loss — which the tuple check
+  settles NOW rather than on 2026-09-30 — and a real `storage_loss` line names only datasets that are
+  both governed and gone. Retention may still tidy the nodes; it was never what made the warning wrong.
 
 **LH-003 · ~~The `parent`, `processingEngine` and engine-version run facets are neither emitted nor stored, and the graph has no version/branch/tag/clone nodes~~ — THE CONDITION-1 HALF CLOSED 2026-09-11, THE REST STRUCK**
 `lineage, catalog` · low · **THE CONDITION-1 HALF IS CLOSED 2026-09-11; the rest is struck as not blocking**
@@ -576,15 +604,18 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   | latest completed operation | count |
   |---|---|
   | `drop_table` — tuples correctly revoked, nothing wrong | **47** |
-  | something else (compaction, aggregate_gold, insert, update, create_table, deregister_table) | 7 |
+  | `deregister_table` — which ALSO "revoke[s] its FGA ownership", so equally expected | **1** |
+  | something else (compaction x2, aggregate_gold, insert, update, create_table) | 6 |
   | no completed run at all | 4 |
+
+  So 48 of the 58 are a mechanism working, and the defect population is **10**.
 
 - **TWO OF THE THREE GOLD TABLES THIS ROW IS NAMED AFTER WERE DROPPED**, both on 2026-08-23:
   `durproof-gold$catalog` and `gateprobe-gold$catalog`, alongside their silver siblings. They are not
   stranded; they are deleted. Only `uiproof-gold$catalog` survives the check — last written by
   `aggregate_gold` at 2026-08-23T18:02, never dropped, zero tuples — while its own silver WAS dropped
   23 minutes later. That one is real.
-- **THE REAL POPULATION IS 11, AND THREE OF THEM MATTER.** `uiproof-gold$catalog` above, plus
+- **THE REAL POPULATION IS 10, AND THREE OF THEM MATTER.** `uiproof-gold$catalog` above, plus
   `research-bronze$events` (last op `compaction`, 2026-08-30) and `bind86-bronze$events` (`compaction`,
   2026-09-02). Both are CASCADE-HEAD tables — `bronze$events` is the `bronze` lane's declared source —
   in projects whose other tiers ARE governed (`research-silver$features`, `research-gold$catalog`, and
@@ -622,6 +653,15 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   *Consistent with the compaction:* a graceful drop keeps the bytes, and the maintenance sweep
   "discovers datasets by walking storage for a `_versions/` marker, not by reading the registry", so a
   dropped-but-retained table is still compacted afterwards — which is exactly what both bronze heads show.
+- **AND THE LOSS WINDOW HAS A DATE, which makes the explanation testable rather than merely tidy.**
+  The staged-then-published transactional outbox is inert until a deployment sets
+  `LANCE_LINEAGE_OUTBOX_URI`, and the chart began setting it on **2026-08-31** (`d58ffaff`). Before
+  that the drop's lineage emit was a plain best-effort publish — exactly the window a lost drop event
+  needs. Two of the three that matter fit it completely: `uiproof-gold$catalog` last did anything on
+  2026-08-23 and `research-bronze$events` on 2026-08-30, both before the outbox. The third does not —
+  `bind86-bronze$events` was compacted 2026-09-02 — so its drop is not bounded by that window and the
+  explanation is temporally consistent for two of three, not all. Said plainly rather than rounded up,
+  because a prediction that only mostly holds is the kind that gets quoted later as if it held.
 - **"They predate the compensation" is REFUTED.** `seed_ownership_or_compensate` landed 2026-08-15
   (`8c947640`). Dating each of the 58 by its earliest producing run: **zero** predate it, 55 were first
   written after it, and the newest is `bronze$lh018probe` from 2026-09-11T13:15 — hours before this was
