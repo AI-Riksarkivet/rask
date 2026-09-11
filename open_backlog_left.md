@@ -181,8 +181,8 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   that window leaves the set discoverable, compactable and counted as governed — proven by a RED test
   that reported it as governed before the fix.
 
-**LH-008 · Publication deltas are insert-only: neither in-place updates nor deletions reach a consumer**
-`medallion, catalog` · med · **HALF CLOSED 2026-09-11**
+**LH-008 · ~~Publication deltas are insert-only~~ — BOTH HALVES CLOSED 2026-09-11**
+`medallion, catalog` · was med · the cascade's own handling of a DELETE is now LH-132
 
 - *THE DELETION HALF IS CLOSED AND OBSERVED.* `6f58b07c` adds a `deleted` kind to the change feed,
   served on demand from `POST /v1/table/{id}/changes`. Driven on live storage 2026-09-11: three rows
@@ -200,10 +200,18 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   the door closes an omitted end at the version of the dataset it opened — exact, because it is the
   same handle the delta is read from. And `get_deleted_row_ids()` returns ONLY `_rowid`, which is
   Lance's answer rather than a projection choice: the rows are gone.
-- *WHAT IS STILL OPEN — the UPDATE half.* `scripts/ray_stage_job._delta_filter` is still
-  `_row_created_at_version > N`, i.e. insert-only, so a row UPDATED since the boundary does not
-  propagate down the cascade. The predicate exists unused (`changes._UPDATED`); what is missing is the
-  publication delta using it. Condition 4 is not fully claimable until it does.
+- *THE UPDATE HALF IS CLOSED.* `ca5d6141` moves `scripts/ray_stage_job._delta_filter` to
+  `_row_last_updated_at_version > N`. ONE column answers both kinds, which is measured rather than
+  assumed: a never-updated row carries that column equal to its CREATION version (three rows at v1, an
+  append at v2, an update at v3 read `[1, 1, 2, 3]`), so `> N` selects inserted and updated together.
+  The catalog's feed still keeps the kinds apart — a consumer applying both streams double-counts an
+  insert reported as both — while this lane hands whatever it selects to one `merge_insert` on `id`.
+- *A SWEEP DOES NOT TURN THE DELTA INTO A FULL RESCAN,* which was the reason to check before shipping
+  it: measured 2026-09-11, `compact_files` (4 fragments → 1) and `cleanup_old_versions` leave both
+  version columns byte-identical, so a maintenance pass re-derives nothing.
+- *Pinned as the whole boundary rather than the case that fired* (`tests/unit/test_ray_stage_job.py`):
+  changed-by-update, changed-by-insert, and untouched — the last asserting the delta carries exactly
+  the changed row, so a future widening that quietly restores a full rescan fails here.
 
 **LH-009 · ~~branch-blind reconcile~~ — THE CORRUPTING HALF CLOSED 2026-09-11; a coverage gap remains**
 `lineage` · was med
@@ -226,6 +234,30 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   the safe direction and arguably correct — the reconciler exists to answer "does the graph agree with
   the table" — but it should be a deliberate scope statement rather than an accident, and reporting
   branch coverage as EXCLUDED (the way the sweep reports its other exclusions) would make it visible.
+
+**LH-132 · The cascade's delta lane and its full lane DISAGREE about a deleted row**
+`medallion` · med · filed 2026-09-11
+
+- *MEASURED, not inferred.* Bronze `{0,1,2}` derived to silver; delete bronze `id=1`; a DELTA run
+  (`base_version` set) leaves silver holding `[0, 1, 2]` and logs `RAY-STAGE OK … lane=delta rows=0
+  delta_empty=1` — it reports "nothing changed" about a retraction. A FULL run over the same upstream
+  answers `[0, 2]`. So whether a delete propagates depends on which lane the scheduler happened to
+  pick, and the lane that skips it is the one an operator reads as the cheap, correct path.
+- *This is LH-008's title's second half, one layer down.* The catalog door serves deletions on demand
+  (`6f58b07c`) and that is closed; the estate's OWN consumer — the cascade — still does not apply them.
+- *THE OBVIOUS JOIN DOES NOT WORK PAST THE FIRST HOP, and that is deliberate design, not an oversight.*
+  `DatasetDelta.get_deleted_row_ids()` yields the upstream `_rowid`s that vanished, and silver's
+  `source_rowid` IS bronze's `_rowid` — so the head hop joins exactly. Deeper it does not:
+  `service_kit.lakehouse.stage_stamp.carry_source_rowid` deliberately KEEPS root provenance rather than
+  re-minting per hop ("re-minting from the immediate parent would silently reroot the provenance
+  chain"), so gold's `source_rowid` names a BRONZE row, not the silver row that was deleted.
+- *Two candidate mechanisms, both with a cost worth stating before either is built:* (a) time-travel the
+  upstream to `base_version` to map the dead `_rowid`s back to `id` — exact at every hop, but it makes
+  the delta lane depend on a version `cleanup_old_versions` is entitled to reclaim; (b) full-sync the
+  KEY column only — one cheap scan, exact for `1:1`, and WRONG for `1:N`, where a downstream id is a
+  child id that appears in no upstream, so "delete what the upstream no longer has" would delete the
+  whole tier. Whichever is chosen must branch on `cardinality`, which is why this is its own row and
+  not a follow-on line to the update half.
 
 **LH-010 · HTR-lane cascade residuals: the P7b re-cut, the bronze→silver geometry stage runners, and populating the in-dataset `lineage` column**
 
