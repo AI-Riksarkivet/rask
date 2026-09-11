@@ -121,6 +121,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `lineage_reconcile_storage_loss` WARN carries the full list, and it is e2e residue by name —
   `probe$nonexistent`, `e2e-ns$t178b2dda`, `tracka$…`, `trackansd…`, `cli07837ns$t2`. Measured stable at
   `storage_loss=32, unreadable=2, stale=268, checked=356` across every tick sampled.
+- **DEPLOYED AND OBSERVED 2026-09-11 — the alarm was 91% false and the real number is THREE.** The
+  split shipped in `main-b641103f`; the first sweep on the new image reports:
+
+      before (old image)   storage_loss=32   unreadable=2                     (no graph_ahead field)
+      after  (deployed)    storage_loss=3    unreadable=26   graph_ahead=31   provenance_holes=0
+
+  So of the 32 datasets this row is named for, **3 are genuine loss**. 31 are `graph_ahead` — readable
+  tables at a version below the graph's, which is what a drop-and-recreate leaves and is not loss at all.
+  `unreadable` rising 2 -> 26 is the malformed-URI fix (`4b3bfa64`) doing its job: a relative
+  `source_uri` now reads as "cannot say" instead of "destroyed".
+- *And `provenance_holes=0` on the same tick* is the compaction fix (`5eb73751`) observed — no phantom
+  `WROTE` edge planted for either version a compaction commits.
+- *What this row still owns:* the 3 real losses, and the residue itself — which [[LH-144]] now explains
+  cannot be pruned, because an ungoverned table cannot be dropped by anyone.
 - **THE SPLIT LANDED 2026-09-11.** `storage_loss` now means MISSING_ON_STORAGE alone; `graph_ahead` is
   its own report field and its own `lineage_reconcile_graph_ahead` WARN body, so an operator can filter
   the benign class without silencing real loss. `STORAGE_LOSS_STATES` is deleted — it had exactly one
