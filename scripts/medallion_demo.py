@@ -288,11 +288,13 @@ def write_gold() -> None:
     sv = lance.dataset(_SILVER, storage_options=opts).to_table()
     provenance = _gold_provenance()
     lineage_json = [json.dumps(provenance)] * sv.num_rows
-    try:
-        lineage_col = pa.array(lineage_json, type=pa.json_())
-    except (AttributeError, pa.ArrowNotImplementedError, TypeError):  # pragma: no cover - older arrow build
-        # AttributeError: a pre-JSON pyarrow has no pa.json_ at all (the other two cover present-but-unbuilt).
-        lineage_col = pa.array(lineage_json, type=pa.string())
+    # NO FALLBACK TO pa.string(). A plain string column looks identical in a schema print and is
+    # SILENTLY UNQUERYABLE as provenance: every JSON function raises a coercion error on it, and the
+    # JSON scalar index refuses it outright ("can only be created on a Binary or LargeBinary field").
+    # So the fallback did not degrade the column, it produced one that cannot answer the question the
+    # column exists for — and reported success. pyarrow is pinned where `pa.json_()` works, which is
+    # exactly why nobody would notice the day it stops working.
+    lineage_col = pa.array(lineage_json, type=pa.json_())
     # Carry the keys forward (id, payload_src) so column lineage is visible through to gold; add the
     # embedded provenance JSONB. Only the raw `payload` blob was dropped (at silver, becoming embedding).
     table = pa.table(

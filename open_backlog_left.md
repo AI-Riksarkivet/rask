@@ -403,8 +403,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* Recorded as a NICE gap and never flipped: prod has the reconcile pruner deployed with the retention knob off, so Run nodes grow forever, and the compaction FAILURE lineage surface stays dark.
 - *Closes when:* Set `runRetentionDays`, `compaction.lineageEmit: true` and a real `freshnessBudgetHours` in `chart/values-prod.yaml`, then confirm the reconcile pruner actually deletes Run nodes past the window.
 
-**LH-012 · `scripts/medallion_demo.py::write_gold` silently falls back to a `pa.string()` lineage column when `pa.json_()` raises**
-`medallion` · low
+**LH-012 · ~~`write_gold` silently falls back to a `pa.string()` lineage column~~ — CLOSED 2026-09-11**
+`medallion` · was low
+
+- *The fallback is deleted, so a `pa.json_()` failure raises.* It never degraded the column: a string
+  column looks identical in a schema print and is silently unqueryable as provenance — every JSON
+  function raises a coercion error on it and the JSON scalar index refuses it outright — so what it
+  produced was a column that cannot answer the question the column exists for, reported as success.
+- *Pinned by the PREMISE rather than the absence* (`tests/unit/test_the_gold_lineage_column_is_really_json.py`):
+  deleting a fallback is only safe while `pa.json_()` actually works in the pinned pyarrow, so the
+  test asserts that, and that a string column is not an interchangeable substitute. A test asserting
+  "the except clause is gone" would pin the edit; this pins the reason.
 
 - *Why open:* On a plain `pa.string()` column every JSON function and the JSON scalar index fail (`json_get_string` coercion error; 'A JSON index can only be created on a Binary or LargeBinary field') — a silently unqueryable provenance column. pyarrow is pinned to 24.0.0 where `pa.json_()` works, so the fallback is dead code today, which is exactly why nobody will notice when it stops being dead.
 - *Closes when:* Delete the `except (AttributeError, ArrowNotImplementedError, TypeError)` fallback in `scripts/medallion_demo.py::write_gold` so a `pa.json_()` failure raises loudly.
