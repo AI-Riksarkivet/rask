@@ -1785,6 +1785,20 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Both halves the row prescribes have landed — `incomplete`/`excluded` are defined and the depth-limit inflation is fixed, and flag 16 no longer blanket-refuses because the gate now parses `BasePath.is_dataset_root`; what is left is only the narrower `is_protected` containment question.
   **Evidence:** The definitions the row says to establish FIRST are stated in code: services/maintenance/src/maintenance/services/reconcile.py:236-244 — `excluded_datasets` is 'datasets the unreferenced-file method does not APPLY to … Deliberately not in `incomplete`, which gates the purge', and `incomplete` is fed from reconcile.py:546/569/582/642/834/841/848/859 (the `storage:lance-catalog` entries the row asks to trace come from `_read_registry` at 559-569 and the bucket walk at 841-848). The `incomplete=65` cause is closed by LH-100's fix, present at HEAD: services/maintenance/src/maintenance/services/optimize.py:143-170 `_may_hide_a_dataset` plus its call at optimize.py:236 — a truncation is now recorded only where a subdirectory actually exists below the bound. The flag-16 half of the 'original plan' has landed too: services/maintenance/src/maintenance/services/optimize.py:602-620 records that refusing on flag 16 alone was over-broad and that the gate now 'asks about the BASES, not about the FLAG', wired at optimize.py:626-640 via `gather_compaction_bases(ds, dataset_root_probe(uri, storage_options))`, which reads `BasePath.is_dataset_root` (packages/service-kit/src/service_kit/lakehouse/features.py:384,404,508). The residue: NO per-base `managed`/`reference-only` field exists — packages/service-kit/src/service_kit/lakehouse/base_refs.py:84-89 `BaseRefs` carries only `protected: set[str]` and `unreadable`, and the refusal at optimize.py:651-653 is driven by `is_protected`'s two-way containment rule (base_refs.py:96-110), which refuses a branch at `<dataset>/tree/<name>` because it lies UNDER a protected root. The smaller true fix is: decide whether `is_protected` should exempt an `is_dataset_root=False` (reference-only) base, and record that distinction on the base — not a new warehouse-record schema plus scoped cleanup credentials.
+  **VOLUME RE-MEASURED 2026-09-11, and it is half the estate's warnings.** This row records
+  `maintenance_refused_protected_base` at "286 in one sweep window" and rightly calls the refusal the
+  shallow-clone rule working as designed. Measured over one hour on the live estate: **10,461**
+  occurrences against **20,740** WARN-or-worse records in total — **~50% of every warning the estate
+  emits** is this one correct, structural, permanent refusal. A base stays a base for as long as its
+  clone exists, so the condition never clears and the line fires again every tick, forever.
+  *Why that is worth a line rather than a shrug:* the number is already carried by
+  `compaction_datasets_refused_total` (the `#64` counter covers exactly `base_paths / shallow clone`),
+  so the WARNING adds volume rather than information — while the per-dataset REASON, which names the
+  dependent blocking the compaction, is the part with diagnostic value. The proportionate change is the
+  one this estate already makes elsewhere: keep the per-dataset detail at DEBUG and emit one WARNING per
+  sweep carrying the count, so a genuinely new refusal is visible instead of being the 10,461st line.
+  Not done here — the row holds a considered position and a log level is an operator-experience call —
+  but the 50% is new information the position was taken without.
   **Reopen if:** A live reconcile tick whose `incomplete` is non-zero for a reason other than a genuinely unreadable prefix, or a `maintenance_refused_protected_base` log line naming a dataset whose only referrer resolves through an `is_dataset_root=False` external blob base — that would prove the reference-only field is still load-bearing. (The row's live numbers — 13/65/442 — are estate claims I could not verify from the tree.)
 `maintenance, catalog, ingest` · **HIGH**
 
