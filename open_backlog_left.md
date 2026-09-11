@@ -428,9 +428,19 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   maintained, dropped or re-created by anyone, including the identity that made it. Every door gated on
   any relation refuses, and the refusals are invisible — the lineage service logs none of the 403s it
   issues, so nothing reports the condition from either end.
-- *What is NOT yet known:* whether the compensation failed or was never reached, and whether the
-  population is larger than gold — this sampled only the 14 gold datasets that carry a `source_uri`.
-  A full sweep needs each catalog table id checked against a `Read`, which is one call per table.
+- **THE POPULATION IS MEASURED: 58 of 1162, 5.0%, and it is not gold-specific.** Every dataset name in
+  the live graph carrying a `$` was checked against an OpenFGA `Read` — 1162 calls, zero read errors, so
+  this is a complete sweep rather than a sample. By tier segment: `ns` 33, `bronze` 10, `silver` 6,
+  `gold` 3, plus a handful of others. Examples are dominated by probe and e2e names
+  (`acme-bronze$lance_s3_probe`, `acme-bronze$zzprobe8926`, `acme-bronze$should_refuse`), and one is
+  `aud1ns$sub3$tt` — a THREE-segment id, the malformed shape [[LH-137]] traces separately.
+- **AND THIS IS WHY THE RESIDUE CANNOT BE PRUNED, which [[LH-002]] has been stuck on.** Its remedy is
+  measured to "close nothing" because `prune_orphan_datasets` leaves most nodes in place. A table with
+  no tuples cannot be dropped BY ANYONE — that is the F3 state `tables.py` describes — so the estate's
+  test residue is undroppable by construction, not by oversight. Cleaning it requires either seeding
+  ownership first or a path that does not authorize against the table being removed.
+- *What is still NOT known:* whether compensation failed or was never reached for each of the 58. That
+  needs the create/register history per table, not another sweep.
 - *Closes when:* The three are either governed (seeded to their real owner) or removed, the population
   is measured across all tiers rather than gold alone, and a table with no tuples is DETECTED —
   a sweep that reports ungoverned tables, since today nothing does and the estate cannot tell.
