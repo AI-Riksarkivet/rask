@@ -61,15 +61,15 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 42 rows
+**227 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 81 | 12 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
-| **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
+| **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
 | **Low priority** (flows, search, viewer, annotator) | 28 | 1 |
@@ -118,7 +118,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* Retention (30d) and `prune_orphan_datasets` landed and the graph is converging (79→2 unreadable, 37→32 storage_loss), but both warnings still fire on every 5-minute tick over 1,163 Dataset nodes, so a real storage loss would arrive indistinguishable from the noise. The 19 genuinely-dead nodes have runs dated 2026-08-31..09-07 and the one-off purge was refused as a destructive graph write.
 - *Closes when:* Let 30-day retention reach the 2026-08-31 runs (2026-09-30), then re-measure the reconcile warnings and confirm `datasets=[...]` names only live datasets.
 
-**LH-003 · The `parent`, `processingEngine` and engine-version run facets are neither emitted nor stored, and the graph has no version/branch/tag/clone nodes**
+**LH-003 · ~~The `parent`, `processingEngine` and engine-version run facets are neither emitted nor stored, and the graph has no version/branch/tag/clone nodes~~ — THE CONDITION-1 HALF CLOSED 2026-09-11, THE REST STRUCK**
 `lineage, catalog` · low · **THE CONDITION-1 HALF IS CLOSED 2026-09-11; the rest is struck as not blocking**
 
 - *CLOSED AND OBSERVED — the branch-ref drop, which this row did not name and which was the only part
@@ -284,7 +284,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   catalog's model is older than the chart's grants. The failure was visible only as a job that failed
   on every upgrade and was never chased.
 
-**LH-134 · Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart**
+**LH-134 · ~~Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart~~ — CLOSED AND OBSERVED 2026-09-11**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
 
 - *WHAT HAPPENED.* The object store was restarted during the LH-133 cutover and never came back. It
@@ -1342,7 +1342,7 @@ _The platform claims to run any workload on any engine, and today the deployed s
 - *Why open:* Corrected with `ast` rather than grep: exactly one in-scope bypass remains, `workflow.py:495` (`submit_stage_job`, the deployed stage lane) — `train.py:280` is the TRAIN lane and `ray_submit.py:318,425` are the adapter's own calls. The load-bearing half is the opposite error: nothing resolves an engine through the port, `transform.py:778` constructs `InProcessExecutor` by hand and `RayJobExecutor` is constructed by nothing. Migrating `transform.py` would be cosmetic; `workflow.py:495` is the site that CHOOSES an engine.
 - *Closes when:* Route `workflow.py:495`'s stage submission through `engine_registry.executor_for(...)` once the Ray adapter's fate is decided, then drop `ray-kit` from `services/medallion/pyproject.toml`.
 
-**LH-084 · `BAKED_JOBS_DIR`/`BAKED_CLUSTER_JOBS` live in the shared library and the catalog enforces them, so a non-Ray lane cannot be declared and the word 'Ray' reaches every API client via the published OpenAPI**
+**LH-084 · ~~`BAKED_JOBS_DIR`/`BAKED_CLUSTER_JOBS` live in the shared library and the catalog enforces them, so a non-Ray lane cannot be declared and the word 'Ray' reaches every API client via the published OpenAPI~~ — CLOSED BY MEASUREMENT 2026-09-11**
 `catalog, service-kit, medallion` · was HIGH · **closed by measurement 2026-09-11**
 
 - **RE-MEASURED 2026-09-11 — BOTH HALVES ARE ANSWERED, and one of them was never ours.**
@@ -2119,7 +2119,7 @@ _Ingest is the estate's only door for external bytes; each row here is a way a r
 - *Why open:* The register's headline is stale in its load-bearing claim: `RASK_INGEST_MAX_RUN_HOURS` and `RASK_INGEST_MAX_UNITS` are both read (`ingest/config.py:102-103`), carried into `RunLimits` and enforced in `ingest/workflow.py` — `max_units` refuses at enumeration before the fan-out and `max_run_hours` is a real run deadline (the module comment names it "A15's other half, which nothing enforced", past tense) — and `chart/values.yaml:265,281` sets both. Gate A15 therefore asserts a relation whose other side IS enforced. What genuinely does not exist is a byte ceiling: `grep max_bytes services/ingest/src` returns nothing, so one enormous object still enters unbounded.
 - *Closes when:* Add a `max_bytes` limit to `RunLimits` in `services/ingest/src/ingest/workflow.py` + `config.py` (env `RASK_INGEST_MAX_BYTES`, chart default), refused at enumeration alongside `max_units`; then strike the run-hours half of this register row.
 
-**CP-009 · CLOSED IN CODE: `runs.py`'s outcome-status promotion now accepts terminal FAILED and TERMINATED**
+**CP-009 · ~~CLOSED IN CODE: `runs.py`'s outcome-status promotion now accepts terminal FAILED and TERMINATED~~ — CLOSED IN CODE, re-verified 2026-09-11**
 `ingest` · low
 
 - *Why open:* Not open. Verified today at `services/ingest/src/ingest/runs.py:361`: the promotion set is `("COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED", "TERMINATED")`, with a comment naming this exact defect ("THE ALLOWED SET INCLUDES 'FAILED', and leaving it out was a latent defect that the run DEADLINE made reachable") and `_RUNTIME_STATUS` itself mapping `FAILED -> FAILED`. It is pinned by `services/ingest/tests/test_terminated_is_not_a_failure.py`. It is listed here only so the register row it blocks is not left waiting on it.

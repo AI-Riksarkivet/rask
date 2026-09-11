@@ -121,3 +121,37 @@ def test_the_focus_block_exists_and_stays_small() -> None:
     body = focus.group(1).strip()
     assert len(body) <= 4000, f"the FOCUS block is {len(body)} characters; it is injected on every stop and the cap is 4,000"
     assert "LAKEHOUSE" in body, "the FOCUS block does not name the current priority, so injecting it tells a reader nothing"
+
+
+#: How a row DECLARES itself finished. Deliberately narrow, and CASE-SENSITIVE on purpose: this file's
+#: convention is that a closure verdict is shouted or emphasised, while ordinary prose about progress is
+#: not. Matching case-insensitively flagged LH-075, an open row whose bullet says its doors are "done and
+#: observed" while the half it tracks is still missing — a gate that cries wolf on open rows gets the
+#: striking convention abandoned rather than followed.
+#:
+#: `Closes when:` is the OPEN-row convention and must never match here.
+_DECLARES_CLOSED = re.compile(r"\*\*CLOSED|\*\*closed by measurement|\*Closed by:\*|CLOSED AND OBSERVED|DONE AND OBSERVED")
+
+
+def _rows(text: str) -> list[str]:
+    """Each item's full block: its title line through to the next item."""
+    parts = re.split(r"^(\*\*[A-Z]+-\d+ · )", text, flags=re.MULTILINE)
+    return [parts[i] + parts[i + 1] for i in range(1, len(parts) - 1, 2)]
+
+
+def test_a_row_that_declares_itself_closed_is_struck_through() -> None:
+    """The two ways a row says "done" have to agree, or the count believes the wrong one.
+
+    Striking the title is what the counter reads; the body is what a human reads. Four rows had written
+    the verdict in the body and left the title standing (LH-003, LH-084, LH-134, CP-009, found
+    2026-09-11), so the file said 231 open while 227 were — and one of them, CP-009, had `Closes when:
+    Strike the row` as its own instruction, unfollowed. A closed row still belongs in the file; what it
+    must not do is keep counting.
+    """
+    offenders: list[str] = []
+    for row in _rows(_text()):
+        identifier = re.match(r"\*\*([A-Z]+-\d+) · ", row)
+        heading = row.split("\n", 1)[0]
+        if identifier and _DECLARES_CLOSED.search(row) and "~~" not in heading:
+            offenders.append(identifier.group(1))
+    assert not offenders, f"these rows declare themselves closed in the body but their titles are not struck, so they still count as open work: {offenders}"
