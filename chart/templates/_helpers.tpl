@@ -1310,5 +1310,8 @@ Usage: {{ include "lance.dedicatedServiceToken" (list . "service-trainer") }}
 */}}
 {{- define "lance.dedicatedServiceToken" -}}
 {{- $root := index . 0 -}}{{- $identity := index . 1 -}}
-{{- printf "%s-%s" $identity $root.Values.dapr.appApiToken | sha256sum | trunc 40 -}}
+{{- /* `required` INSIDE the pipeline, never on its own line: it EMITS the value it checks, so a bare
+       statement would print the raw app token into the rendered Secret instead of the hash of it. */ -}}
+{{- $secret := required "dapr.appToken must be set — it is the SECRET half of every dedicated service token, and without it the credential is a hash of a public identity name that anyone reading the chart can compute" $root.Values.dapr.appToken -}}
+{{- printf "%s-%s" $identity $secret | sha256sum | trunc 40 -}}
 {{- end -}}
