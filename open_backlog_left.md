@@ -61,11 +61,11 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**270 open items**, deduped from 325 raw rows mined out of the seven files above.
+**272 open items**, deduped from 325 raw rows mined out of the seven files above.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 123 | 21 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 125 | 21 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 31 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -553,6 +553,57 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   Recovery is capped at `MAX_HOLES_BACKFILLED_PER_TICK` (25) per dataset per tick and the remainder is
   logged — an UNTRACKED dataset has every retained version as a hole, and an uncapped tick would make
   its cost a function of the largest history in the estate. The REPORT is never truncated.
+
+**LH-137 · Two live faults block real cascade work and appear in no backlog row: `unconfined_uri` refuses every `bind86` silver→gold hop, and `/compaction_plan` answers 404 for medallion tier ids**
+`medallion, catalog` · **HIGH** · found by the 2026-09-11 audit, observed but NOT root-caused
+
+- *Why open:* Both were seen on the live estate and neither is tracked. (a) Every one of the 8
+  silver→gold triggers for project `bind86` on 2026-09-10 was DROPped with
+  `medallion_stage_from_uri_refused` and parked on `dlq.silver-to-gold` within a second of publish —
+  `medallion_dlq_parked_total` steps in lockstep with `medallion_stage_refused_total{reason=unconfined_uri}`.
+  So a whole project's cascade is stopped by a confinement check nobody has diagnosed. (b)
+  `/compaction_plan` answers 404 for medallion tier ids, so the distributed compaction door cannot be
+  driven for exactly the datasets the cascade writes (0 distributed commits against 24 in-pod fallbacks
+  in 24 h).
+- *NOT REPRODUCED 2026-09-11:* the stage-runner pods were recreated at 11:17 and the text log format
+  renders no `extra`, so the specific `_preflight`/`_confine_from_uri` branch could not be named;
+  GreptimeDB's `opentelemetry_logs` was not queried, and no new silver→gold traffic has run since.
+  The refusal count in the current pod's window is 0 — absence of traffic, not evidence of a fix.
+- *NARROWED BY READING 2026-09-11, and the narrowing is why a live drive is still required.* The
+  refusal is `uri_within(read_root, trigger.from_uri)` at `transform.py:682`. BOTH sides are supposed
+  to be catalog-sourced: `publication_trigger.py:147` carries `extra["location"]` ("the catalog's
+  VENDED location … instead of composing a path of its own (I2)"), and `_resolve_roots`
+  (`transform.py:614-628`) asks `describe_table_location(from_dataset)` LAST so it overrides every
+  composed answer. Two catalog answers for one table should be equal, so the refusal means one of
+  exactly three things: the publication's `location` extra is absent or stale, `from_dataset` resolves
+  to a different id than the publication's object, or the tenant path composes a root the vend does
+  not share. bind86's tables are in a per-project warehouse (`s3://bind86-wh/<hash>_bind86-<tier>$<t>`,
+  read off the graph), which is the shape most likely to expose the third. The log line DOES carry
+  `supplied` and `root` in `extra` — the deployed text formatter drops `extra`, which is why the
+  branch cannot be named from the logs and a drive is needed.
+- *Closes when:* Drive one `bind86` silver→gold hop (owner-authorised 2026-09-11), print `supplied` vs
+  `read_root` at the refusal, and fix whichever of the three the values name; reproduce (b) by calling
+  `/compaction_plan` with a medallion tier id and fixing whichever of the id resolution or the route is
+  wrong.
+
+**LH-138 · The reconcile TIP axis still stamps a `reconcile` edge on a maintenance version**
+`lineage` · low · residue of LH-136's fix
+
+- *Why open:* `_recover_holes` classifies holes with `MAINTENANCE_OPERATIONS` (a compaction/index/config
+  version is not a provenance hole), but the TIP comparison in `reconcile()` does not: when the newest
+  on-disk version is a `Rewrite`, storage is AHEAD of the graph, the dataset is classified
+  `storage_ahead`, and the back-fill writes a `WROTE` edge saying a run wrote it. Nothing was lost and
+  nothing is written twice — `backfill_write` MERGEs on a deterministic run id — so this overstates
+  rather than loses, which is why it is low.
+- *Why it is NOT simply "apply the classifier at the tip":* the tip back-fill exists to realign the two
+  maxima so the drift classification converges. Withhold it and a compacted dataset stays
+  `storage_ahead` on every tick forever — the permanently-red failure the one-directional rule in
+  `test_the_reconcile_sweep_sees_provenance_holes_below_the_tip.py` is written against. The coherent
+  fix is to compare the graph's tip against the highest DATA version on disk, which costs one
+  transaction read on the drift path only.
+- *Closes when:* `reconcile()` resolves the storage tip to the newest non-maintenance version (reusing
+  `read_version_operations`), so a compaction at the tip is not drift at all; pin that a `Rewrite` tip
+  leaves the dataset `in_sync` with no back-fill, and that a data tip still classifies `storage_ahead`.
 
 **LH-014 · The DIY provenance recipe (`stamp_stage`, `source_rowid`, the tier contract) is written down nowhere**
 `medallion, lineage` · low

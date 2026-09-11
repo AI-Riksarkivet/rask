@@ -431,7 +431,12 @@ services:
     # Freshness budget in HOURS (data-contract gap #2): >0 makes the reconcile sweep + per-dataset
     # GET flag `stale: true` for any dataset whose newest version commit is older — arrival cadence
     # becomes an ASSERTED contract clause (WARN `lineage_reconcile_stale` on the tick). 0 = off.
-    freshnessBudgetHours: 0
+    #
+    # 48 IS THE OWNER'S NUMBER (2026-09-11), and it is a policy rather than a measurement: a lane that
+    # has landed nothing in two days has stopped, while a quiet weekend day has not. It was 0 — the axis
+    # OFF estate-wide — so no dataset had ever been reported stale and the clause the reconciler
+    # advertises was asserted against nothing.
+    freshnessBudgetHours: 48
     # Safe to scale: the app's own pubsub component carries queueGroupName=lineage, so replicas form a
     # competing-consumer group (single delivery per event); ingest is idempotent anyway (MERGE on run_id).
     replicas: 1
