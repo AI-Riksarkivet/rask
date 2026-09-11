@@ -204,6 +204,7 @@ def build_write_event(
     extra_run_facets: dict[str, Any] | None = None,
     project: str | None = None,
     originator: str | None = None,
+    branch: str | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -223,6 +224,19 @@ def build_write_event(
     lance_fields: dict[str, Any] = {"operation": operation}
     if version is not None:
         lance_fields["version"] = version
+    # THE REF THE WRITE LANDED ON, because the version alone does not identify a snapshot. A branch is a
+    # whole parallel dataset under `tree/<name>/` with its OWN version sequence
+    # (`core/namespace.py::open_dataset`), so one number names two different states. Measured on the
+    # installed pylance: main at v2, a branch write gives branch v3, a later main write gives main v3 —
+    # same dataset, same number, different contents. The graph's `LATEST_WRITE_VERSION` orders by
+    # `event_time DESC` alone, so without this the most recent write wins whichever ref it landed on,
+    # and the reconciler then compares that number against MAIN's on-disk version.
+    #
+    # ABSENT for main rather than the literal "main": every historical write carries no ref, so a literal
+    # would make them all look like a different one, and a consumer asking "was this a branch write?" by
+    # testing presence would get yes for everything.
+    if branch:
+        lance_fields["ref"] = branch
     # THE TENANT, and it is WATCH targeting's only key. `notifications` reads
     # `run.facets.lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
     # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,
@@ -422,6 +436,10 @@ class EmitFields(TypedDict, total=False):
     project: str | None
     #: The person a SERVICE made this write for, when ``author`` is the service.
     originator: str | None
+    #: The Lance REF the write committed to (``None`` = main). Absent for main rather than the literal
+    #: "main": every historical write carries none, so a literal would make them all read as a different
+    #: ref, and a consumer testing PRESENCE would answer "was this a branch write?" with yes for every one.
+    branch: str | None
 
 
 @runtime_checkable
@@ -611,6 +629,7 @@ class _BaseLineageEmitter:
             extra_run_facets=fields.get("extra_run_facets"),
             project=resolved_project,
             originator=fields.get("originator"),
+            branch=fields.get("branch"),
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
 
@@ -745,6 +764,7 @@ async def emit_write_event(
     version: int | None,
     operation: str,
     authorization: str | None,
+    branch: str | None = None,
     schema_fields: SchemaFields | None = None,
     source_uri: str | None = None,
     inputs: list[InputPin] | None = None,
@@ -790,4 +810,5 @@ async def emit_write_event(
         inputs=refs or None,
         extra_run_facets=extra_run_facets,
         project=project,
+        branch=branch,
     )

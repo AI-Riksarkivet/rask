@@ -426,6 +426,24 @@ class RunEvent(BaseModel):
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
+    def write_ref(self) -> str | None:
+        """The Lance REF this run wrote to, from the ``lance`` run facet (``ref``); ``None`` = main.
+
+        The version number alone does not identify a snapshot: a branch is a whole parallel dataset with
+        its OWN version sequence, so one number names two different states. Measured on pylance 11.0.0 —
+        main at v2, a branch write gives branch v3, a later main write gives main v3, different contents.
+        Stored on the WROTE edge so `(dataset, version)` is disambiguated, and so the reads that answer
+        "what is this table's current version" can exclude writes that landed on a branch.
+
+        ``None`` for main rather than the literal ``"main"``, matching what the catalog emits: every write
+        recorded before the ref existed carries none, and a literal would make them all read as some other
+        ref.
+        """
+        lance = (self.run.facets or {}).get("lance")
+        ref = lance.get("ref") if isinstance(lance, dict) else None
+        return str(ref) if ref else None
+
+    @property
     def cascade_id(self) -> str | None:
         """The BATCH this run belongs to, from the ``lance`` run facet (``cascade_id``).
 

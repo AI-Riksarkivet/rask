@@ -71,6 +71,12 @@ async def emit_measured_write(
         # omitting it here withheld the URI from ALL of them — the facet was plumbed end to end and
         # reachable from nothing, the same shape `test_originator_reaches_the_event.py` pins.
         source_uri=location,
+        # THE REF FOLLOWS THE WRITE, not just the READ. The version was already read off the right ref
+        # above — for the reason this function's own docstring gives — and then the ref was dropped, so
+        # the event recorded a number that names two different snapshots (a branch and main keep
+        # independent version sequences). Measured on the installed pylance: main v2, a branch write
+        # gives branch v3, a later main write gives main v3, different contents.
+        branch=branch,
         inputs=inputs,
         extra_run_facets=extra_run_facets,
     )

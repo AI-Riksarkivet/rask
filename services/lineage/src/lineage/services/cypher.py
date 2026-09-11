@@ -226,6 +226,10 @@ LINK_WROTE: Final = "MATCH (r:Run {run_id:$rid}), (d:Dataset {name:$name}) MERGE
 # follows ``MERGE`` on an edge in the *same* statement (verified on AGE 1.5.0/PG16), so the version
 # is written in its own statement — mirroring how dataSource/tags are set on the Dataset node.
 SET_WROTE_VERSION: Final = "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.version=$ver RETURN 1"
+# The REF the write landed on (absent = main). Its OWN statement for the same AGE reason as the version
+# above, and separate from it because a write can carry a ref with no version (a failed run keeps the edge
+# and drops the version) — fusing them would make the ref conditional on success.
+SET_WROTE_REF: Final = "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.ref=$ref RETURN 1"
 # Storage->graph reconciliation back-fill (B4) — a synthetic 'reconcile' run recording a Lance write whose
 # lineage event was lost (the outbox gap). Idempotent (MERGE on the reconcile run id), so re-running the
 # reconcile never duplicates; the WROTE version is stamped in its own statement (the AGE MERGE+SET quirk).
@@ -378,14 +382,20 @@ def producers_page(limit: int) -> LiteralString:
 # Reconcile (#23): the version the graph believes is current = the version on the most-recent
 # *successful* WROTE edge (failed runs carry a WROTE edge with no version, so the IS NOT NULL guard
 # skips them). Most-recent by run event_time, since Lance versions are monotonic per dataset.
+# MAIN ONLY — `w.ref IS NULL`. A branch keeps its own version sequence, so without this filter the most
+# recent write wins whichever ref it landed on and a branch's version is reported as the table's current
+# one; `core/reconcile.py` then compares that number against MAIN's on-disk version and classifies drift
+# from it. Writes recorded before the ref existed carry no property, so they read as main — which is what
+# they were.
 LATEST_WRITE_VERSION: Final = (
-    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL RETURN w.version ORDER BY r.event_time DESC LIMIT 1"
+    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN w.version ORDER BY r.event_time DESC LIMIT 1"
 )
 SOURCE_URI: Final = "MATCH (d:Dataset {name:$name}) RETURN d.source_uri LIMIT 1"
 # Per-version schema lookup (#24). Latest = the most-recent successful WROTE edge that carries a schema;
 # at-version pins the edge whose version matches. Both return the schema JSON string + its version.
 SCHEMA_LATEST: Final = (
-    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.schema IS NOT NULL RETURN w.schema, w.version ORDER BY r.event_time DESC LIMIT 1"
+    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.schema IS NOT NULL AND w.ref IS NULL "
+    "RETURN w.schema, w.version ORDER BY r.event_time DESC LIMIT 1"
 )
 SCHEMA_AT_VERSION: Final = (
     "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version=$ver AND w.schema IS NOT NULL "

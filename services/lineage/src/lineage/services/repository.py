@@ -294,6 +294,18 @@ class LineageRepository:
                 # A failed run keeps a WROTE edge (so producers() shows the attempt) but no version —
                 # it produced no data, so it must not claim to have written a Lance version.
                 await run_cypher(conn, self._graph, cy.LINK_WROTE, {"rid": event.run.run_id, "name": ds.vertex_name})
+                # THE REF BEFORE THE VERSION, and unconditionally on success or failure: a failed run
+                # keeps its WROTE edge and drops the version, and "which ref did the attempt target" is
+                # still the answer to a real question. Stamped only when the event names one, so a main
+                # write leaves the property absent — which is what every write recorded before the ref
+                # existed also looks like, and correctly so.
+                if event.write_ref:
+                    await run_cypher(
+                        conn,
+                        self._graph,
+                        cy.SET_WROTE_REF,
+                        {"rid": event.run.run_id, "name": ds.vertex_name, "ref": event.write_ref},
+                    )
                 version = event.output_version(ds.name) if event.is_success else None
                 if version:
                     await run_cypher(
