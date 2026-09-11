@@ -945,6 +945,17 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   needing owner acknowledgement — not work this row can do. The protection-code question (3 vs 19)
   remains an undecided owner tie.
 - *Why open:* Only the `branch`-honouring clause closed; eight ops still refuse `branch` and the side effects change what a spec client observes — 7 of the 8 conformance blockers. Four refusals were measured as typed spec errors, but the protection refusal mints `NamespaceNotEmptyError` code 3 for a protected TABLE, so a generated client empties-and-retries forever; the recorded reason for not using code 19 was measured false and the 19-vs-3 split is an undecided tie.
+- **THE TIE'S FACTUAL HALF IS SETTLED 2026-09-11 — the stated reason for code 3 is false.**
+  `require_not_protected` (`fga_deps.py:1006`) raises `NamespaceNotEmptyError` for EVERY `kind`,
+  including `table`, and its docstring justifies that as "reused rather than minting a status the client
+  SDKs do not map". Checked against the installed `lance_namespace`: `InvalidTableStateError` IS
+  exported and carries code 19. The SDK maps it. So what remains is a preference between two mappable
+  codes, not a constraint — and one of the two is a NAMESPACE error minted for a TABLE.
+- *Why the direction matters more than the number:* a generated client that receives "namespace not
+  empty" on a protected table is being told to empty it. For a table, emptying means deleting rows — so
+  the error invites a destructive retry against exactly the object protection exists to keep. That is a
+  stronger argument than code tidiness and it is what makes this worth an owner minute rather than a
+  backlog entry.
 - *Closes when:* Move the rask-only side effects behind the management API, re-express each remaining refusal with the spec's own code, decide the protection code (3 vs `InvalidTableStateError` 19) for all four protected object kinds, and honour `branch` on the eight refusing ops via the plumbing at `dataplane.py:1085`.
 
 **LH-020 · Two of the three stock Lance clients still do not drive the deployed catalog: lancedb cannot address a nested namespace, lance-ray is untested**
