@@ -1727,6 +1727,25 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 **LH-139 · A catalog boot REWRITES the estate's authorization model from its own bundled copy, so an older image silently REMOVES relations and breaks every door that uses them**
 `catalog, service-kit, chart` · **HIGH** · found and measured 2026-09-11 while a helm upgrade was blocked by it
+- **CONFIRMED LIVE 2026-09-11 — this row is not a hazard, it is currently blocking a deploy.** Ran
+  `make k3s-up`; the upgrade stalled at rev 151 with `rask-bootstrap-admin` crash-looping on
+  `Invalid tuple 'warehouse:lance_catalog#event_stager@user:service-ingest'. Reason: relation
+  'warehouse#event_stager' not found`. Measured both copies of the model:
+
+      model.fga at HEAD                : event_stager present (2 occurrences)
+      deployed catalog's bundled copy  : 0
+
+  So the running catalog (`main-8c229296`) rewrote the store's model WITHOUT `event_stager` at boot, and
+  the bootstrap job then cannot write a tuple that needs it. Exactly the mechanism this row describes,
+  observed rather than reasoned.
+- *AND IT MAKES A CHART-ONLY DEPLOY STRUCTURALLY IMPOSSIBLE, which this row does not yet say.*
+  `make k3s-up` reuses the live/pinned image tags, so the stale catalog boots again and reverts the model
+  again — the upgrade cannot converge no matter how many times the chart is applied. Recovering needs a
+  catalog IMAGE carrying the newer model, which is what the 2026-09-10 recovery did and why it read as a
+  one-off rather than as this row firing.
+- *Which is the sharpest argument for the row's own fix:* a boot-time model write that can REMOVE
+  relations makes image order load-bearing for the whole estate's authorization, and the failure surfaces
+  as an unrelated job crash-looping rather than as anything naming the model.
 
 - *Why open:* `fga.provision` (`service_kit/governed/fga.py:319-348`) writes `load_model()` — the IMAGE's
   bundled `model.json` — on every boot where `RASK_FGA_STORE_ID`/`RASK_FGA_MODEL_ID` are unset, and the
