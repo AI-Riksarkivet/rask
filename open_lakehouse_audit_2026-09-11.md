@@ -89,7 +89,7 @@ Ranked by severity. Nothing HIGH survived.
 
 **LOW**
 
-11. **`lance.dedicatedServiceToken` hashes an undeclared value** — Condition 2 (distinct from the refuted claim). `chart/templates/_helpers.tpl:1313` reads `.Values.dapr.appApiToken` (declared nowhere; the knob is `dapr.appToken`), so every seeded "dedicated" token is `sha256('<identity>-%!s(<nil>)')[:40]` — measured live: `service-token-service-trainer = f51a606d…`; `--set dapr.appToken=X` changes nothing. Harmless in devMode; unaffected with ESO on; but `values-prod.yaml` (devMode off, ESO commented out) renders five privileged subjects' mounted credentials as public constants against a hand-seeded door — either the door secret is public or every trainer emit and web-BFF lineage read 401s. Fix: `appApiToken → appToken` plus a render test.
+11. **`lance.dedicatedServiceToken` hashes an undeclared value** — Condition 2 (distinct from the refuted claim). `chart/templates/_helpers.tpl:1313` reads `.Values.dapr.appApiToken` (declared nowhere; the knob is `dapr.appToken`), so every seeded "dedicated" token is `sha256('<identity>-%!s(<nil>)')[:40]` — measured live: `service-token-service-trainer = f51a606d…`; `--set dapr.appToken=X` changes nothing. **"Unaffected with ESO on" was wrong, and this estate is the counter-example** — ESO syncs the Secret FROM OpenBao, and OpenBao is seeded by `openbao.yaml:224` calling the SAME helper, so the operator faithfully distributes the nil-derived value. Measured on the live cluster, which runs `externalSecrets.enabled: true`: `rask-infra-credentials/service-token-service-trainer` held exactly `sha256('service-trainer-%!s(<nil>)')[:40]`. Nor is it harmless in devMode or confined to prod: it is every deployment, because no values file anywhere defines `appApiToken`. `prod-credentials.yaml`'s `fail` guards do not catch it either — they read `dapr.appToken`, which this derivation never touched. FIXED `344e9763`: `required` bound INSIDE the pipeline (a bare `required` statement emits the value it checks, which would print the raw app token into the Secret), plus a rotation test asserting DEPENDENCE rather than spelling, plus a chart-wide gate against undefined `.Values` paths (`d58d9008`).
 
 12. **The "compact now" button's in-process lane emits no lineage event** — Condition 1. The deployed lane (`maintenance.workTopic: ""`) commits a Rewrite (`catalog/services/maintenance.py:328`) and emits nothing, while the sweep, this door's queue lane and the sibling `/compaction_commit` door all emit. No docstring, decision or commit records the silence as intended. Bounded: no row changes, the presser is audited at the FGA gate, the version is in the commit log, and the estate is converged (LH-098). The fix is already shaped by the sibling door (`emit_measured_write(..., operation=COMPACT_TABLE, pin_version=…)`). The CONTROL-event half is NOT a defect of this door (see refuted list).
 
@@ -156,7 +156,22 @@ Ranked by severity. Nothing HIGH survived.
 5. **Relay authorization: run `enforce_bus_authz` in `_drain_outbox` before `ingest_event`** (`reconcile_cron.py:369`), and make `_is_replay` require the feed row to predate the relay's own ingest (or skip the re-publish after a relay ingest) — closes Condition 5's live defect and restores E2's gate. Check `_on_cron` has a `Request` in scope first (not verified).
 6. **Register-marker URI: emit the absolute location from the register door** (`tables.py:672-681`, resolve against the project warehouse), or resolve it lineage-side; add ABSENT to the sweep's reported classes — closes Condition 1's coverage gap for externally-written data.
 7. **DROP vs DLQ: either remove the DLT from subscriptions whose DROPs are deterministic refusals, or annotate/route DROPs separately from exhaustion, then rewrite `transform.py`, `draining.py:20`, `DECISIONS.md:1349-1350` and the three test docstrings to say what Dapr 1.18.1 actually does** — closes the rest of Condition 4. Larger than 1-2 because the fix touches prose in five places and a metric contract.
-8. **Chart typo `appApiToken → appToken`** (`_helpers.tpl:1313`) with a render test — Condition 2, LOW, trivial.
+8. **`appApiToken` was not a typo and not LOW — it is the most serious finding in this audit, and this
+   rating was wrong.** DONE (`344e9763`), and the severity is recorded here because the rating is what
+   nearly buried it: the item was filed as cosmetic, found incidentally while REFUTING a different
+   claim, and only re-measuring it showed what it was. `.Values.dapr.appApiToken` is defined by no
+   values file, and Go renders an undefined value as the literal `%!s(<nil>)` rather than as an empty
+   string, so EVERY privileged service credential was `sha256("<identity>-%!s(<nil>)")[:40]` — a pure
+   function of a public identity name, computable by anyone who can read the chart, and unchanged by
+   rotating `dapr.appToken`. These are the credentials `service_principal` compares with
+   `secrets.compare_digest` to decide whether a caller may CLAIM a privileged identity, issued to the
+   pods that hold no Dapr sidecar and so cannot read the secret store. The `fail` guards in
+   `prod-credentials.yaml` did not help: they protect the shared app token's OTHER use and never read
+   the path the derivation used, so production was affected on the same terms as dev.
+   Fixed by binding `required` INSIDE the pipeline — a bare `required` statement EMITS the value it
+   checks and would have printed the raw app token into the Secret. Gated twice: a rotation test that
+   asserts DEPENDENCE rather than spelling, and `test_every_chart_value_a_template_names_actually
+   _exists.py`, which refuses any bare `.Values` path the chart does not define (`d58d9008`).
 9. **Reconciler tip axis: apply `MAINTENANCE_OPERATIONS` in `reconcile()`** (`reconcile.py:167-189`) — Condition 1, LOW. Fold into the regression fix already in flight for 95e6adb4/5ac935a2, since both live in the same function family.
 10. **Task registry: add an in-process registrant** so a transform declaration has an executor without Ray — Condition 3. Last because Condition 3 already holds in substance.
 11. Root-cause `unconfined_uri` on `bind86` and `/compaction_plan` 404 on medallion tier ids — both un-tracked, both blocking real work, neither verified beyond the symptom.
