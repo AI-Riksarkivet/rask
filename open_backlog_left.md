@@ -453,8 +453,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Why open:* #88 closed witnessed end-to-end 2026-08-05 but its residuals were folded here at `open_htr_governance.md`'s retirement and none have landed: the owner-directed P7b re-cut, the geometry stage runners, and the in-dataset `lineage` column that rides when the stage runner supplies the LineageDoc.
 - *Closes when:* Re-cut the runner's stage job to read bronze Lance and emit gold rows directly (reusing the lane's parser/register/facet seams), add the bronze→silver geometry stage runners, and populate the in-dataset `lineage` column from the stage runner's LineageDoc.
 
-**LH-011 · ~~three lineage knobs ship off in the prod render~~ — TWO WERE ALREADY RIGHT; the third needs a NUMBER**
-`lineage` · was med · **blocked:** owner — what freshness budget?
+**LH-011 · ~~three lineage knobs ship off in the prod render~~ — CLOSED 2026-09-11: the owner's number is 48**
+`lineage` · was med
+
+- *THE NUMBER IS 48 HOURS (owner, 2026-09-11)*, shipped as `services.lineage.freshnessBudgetHours` and
+  observed live as `LINEAGE_FRESHNESS_BUDGET_HOURS=48`. A lane that has landed nothing in two days has
+  stopped; a quiet weekend day has not.
+- *WHAT TURNING IT ON REVEALED, and it belongs to [[LH-002]] rather than here.* The first sweep with the
+  axis armed reported **`stale=268` of `checked=356`**. The number is not wrong — those datasets really
+  have not been written in 48 h — but the population is dominated by the same e2e residue LH-002
+  describes, so ~75% of the finding is dead test data nobody will write again. Raising the budget to
+  quiet it would hide a stalled lane to avoid naming dead data, which is the wrong trade: the budget is
+  a policy about LIVE lanes and the residue is a retention problem with its own row and its own date
+  (2026-09-30). Recorded here so the first operator to see 268 knows it was measured, expected, and
+  whose row it is.
 
 - *RE-MEASURED 2026-09-11, confirming the 09-10 reading:* `runRetentionDays: 30` (values.yaml:497) and
   `compaction.lineageEmit: true` (:1660) are correct in the values the prod render inherits, and

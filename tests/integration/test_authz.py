@@ -169,7 +169,12 @@ def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: Ma
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 403
-    assert captured == [{"user": "alice", "relation": "can_read_data", "obj": "table:db1$users"}]
+    # The OBJECT check is the contract; asserting it as the WHOLE list made position incidental to
+    # meaning. A denied read now also asks whether the caller holds the parent's read rung, because an
+    # absent object under a readable parent answers 404 rather than 403 — that second check is a
+    # different question and must not be able to change what this one pins.
+    assert {"user": "alice", "relation": "can_read_data", "obj": "table:db1$users"} in captured
+    assert captured[0] == {"user": "alice", "relation": "can_read_data", "obj": "table:db1$users"}
 
 
 def test_generic_mutation_checks_writer(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

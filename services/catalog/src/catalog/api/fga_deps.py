@@ -40,6 +40,7 @@ from lance_namespace import (
     PermissionDeniedError,
     ServiceUnavailableError,
     TableAlreadyExistsError,
+    TableExistsRequest,
     TableNotFoundError,
     UnauthenticatedError,
     UnsupportedOperationError,
@@ -94,6 +95,11 @@ _DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "
 # bar. Measured on the estate 2026-09-09: one GET logged `can_write_data ALLOW` then
 # `can_get_metadata ALLOW`, in that order.
 _META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version", "tasks", "history"})
+
+#: The rungs that mean "this door only READS". Keyed on the relation `_action_relation` resolved, so a
+#: door is classified by what it DOES rather than by how its path happens to be spelled — `access/list`
+#: is owner-tier and its trailing segment is the word "list".
+_READ_RELATIONS: Final = frozenset({"can_get_metadata", "can_read_data", "can_read"})
 
 #: A SECOND door for one action, checked through :func:`_require_any` only when the primary denies.
 #:
@@ -711,7 +717,82 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     if (alternative := _ALTERNATIVE_RUNGS.get((fga_type, suffix))) is not None:
         await _require_any(client, user=token.sub, doors=[(relation, obj), (alternative, obj)])
         return
-    await _require(client, user=token.sub, relation=relation, obj=obj)
+    try:
+        await _require(client, user=token.sub, relation=relation, obj=obj)
+    except PermissionDeniedError:
+        # A READ door refusing an object that is not there answers the spec's 404 instead, but only to
+        # a caller who already holds the parent's read rung. Owner ruling 2026-09-11.
+        await _absent_to_a_reader_of_the_parent(request, client, settings, token=token, fga_type=fga_type, denied=relation, segments=segments)
+        raise
+
+
+async def _absent_to_a_reader_of_the_parent(
+    request: Request,
+    client: OpenFgaClient,
+    settings: Settings,
+    *,
+    token: IDToken,
+    fga_type: str,
+    denied: str,
+    segments: list[str],
+) -> None:
+    """Raise the spec's NOT-FOUND when a denied READ names an object that does not exist.
+
+    Returns — never raises — in every other case, so the caller's `raise` re-throws the 403 unchanged.
+
+    THE SPEC ASKS FOR 404 AND THIS DOOR ANSWERED 403 FOR EVERYTHING. `authorize` runs before any
+    endpoint, so an object with no tuples is refused identically whether it is forbidden or absent.
+    Measured on the deployed catalog 2026-09-11: an absent table under a namespace alice holds
+    `can_get_metadata`, `can_create_table` AND `can_delete` on answered 403 code 15, so a generated
+    client cannot tell "ask for access" from "you typed the wrong name".
+
+    THREE CONDITIONS, and each one is load-bearing:
+
+    * THE DENIED RUNG MUST BE A READ RUNG, and it is keyed on the relation `_action_relation` actually
+      resolved — never re-derived from the suffix. Deriving it again from the trailing path segment
+      classified `access/list` (owner-tier: it lists who holds what) as a read, because the segment is
+      the word "list"; `tests/integration/test_authz.py` caught it. The rung the door resolved to is the
+      only thing that knows what the door DOES. The estate's no-existence-oracle rule is deliberate on
+      the destructive doors — `delete_warehouse`, `delete_project` and `_set_warehouse_status` collapse
+      PermissionDenied into NotFound precisely so a delete cannot enumerate ids — and keying on the rung
+      keeps every one of them out of this path by construction.
+    * THE CALLER MUST HOLD THE PARENT'S READ RUNG. Someone who can read the parent can already LIST
+      it, so "does this child exist" is not information the 403 was protecting. Without the parent
+      rung the answer is today's 403 and no probe runs — so this cannot be used to walk the id space
+      from outside the hierarchy, and the common denial pays no extra round trip.
+    * ONLY AN ABSENCE CONVERTS. An object that EXISTS and is forbidden still answers 403. Converting
+      that would tell an unauthorized caller which names are real — the oracle this estate refuses —
+      and it is the property worth more than the feature.
+
+    The request never reaches the endpoint either way: this raises, and its caller re-raises. Nothing
+    is read, and no grant is implied by the 404.
+    """
+    if denied not in _READ_RELATIONS:
+        return
+    parent = segments[:-1]
+    if not parent:
+        return
+    parent_obj = f"namespace:{fga.canonical_object_id(parent, delimiter=settings.delimiter)}"
+    try:
+        if not await fga.check(client, user=token.sub, relation="can_get_metadata", obj=parent_obj):
+            return
+    except ServiceUnavailableError:
+        return  # the authz layer is down; the 403 the caller already has is the fail-closed answer
+
+    # Imported HERE rather than at module scope: `dependencies` imports this module for its guards, so
+    # a top-level import would close the cycle.
+    from catalog.api.dependencies import get_namespace
+
+    ns = await get_namespace(request, settings)
+    probe, absent = ("table_exists", TableNotFoundError) if fga_type == "table" else ("namespace_exists", NamespaceNotFoundError)
+    request_model = TableExistsRequest(id=segments) if fga_type == "table" else NamespaceExistsRequest(id=segments)
+    try:
+        await run_in_threadpool(native.call, ns, probe, request_model)
+    except (TableNotFoundError, NamespaceNotFoundError) as exc:
+        ident = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+        raise absent(f"{fga_type} {ident!r} does not exist") from exc
+    except Exception:  # noqa: BLE001 — an unanswerable probe leaves the 403 exactly as it was
+        return
 
 
 # --------------------------------------------------------------------------- #
