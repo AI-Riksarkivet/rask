@@ -1048,3 +1048,21 @@ def test_an_ABSENT_staged_dataset_is_not_read_as_an_empty_one(tmp_path: Path) ->
 
     assert sorted(_rowids(to_uri)) == ["1", "2", "3"], "an absent staged dataset emptied the tier"
     assert "staged" in str(caught.value).lower() or "absent" in str(caught.value).lower(), caught.value
+
+
+def test_a_staging_set_that_cannot_be_dropped_SAYS_SO(capsys) -> None:
+    """CONTRACT: cleanup never raises, and never fails silently either.
+
+    `_drop_staged` runs after the landing has already committed, so a propagating error would turn a
+    completed, correctly-landed stage into a reported failure and invite a re-run of finished work. It
+    therefore swallows — and swallowing without a word leaves an orphaned Lance dataset under the
+    destination that nothing reports and nobody looks for, which is the silent-failure half of the same
+    anti-pattern.
+    """
+    job = _load_job()
+
+    job._drop_staged("s3://nowhere/never-written/_staging/run-1", {"endpoint": "http://127.0.0.1:1"})
+
+    printed = capsys.readouterr().out
+    assert "staging" in printed.lower(), f"an undroppable staging set left no trace: {printed!r}"
+    assert "_staging/run-1" in printed, printed

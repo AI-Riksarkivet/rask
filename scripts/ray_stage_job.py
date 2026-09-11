@@ -560,13 +560,20 @@ _STAGING_DIR = "_staging"
 def _drop_staged(staged_uri: str, so: StorageOptions) -> None:
     """Remove a staging set, best-effort — the landing has already happened when this runs.
 
-    NEVER RAISES. A staging set that outlives its run is reclaimable garbage under a control prefix; a
-    cleanup failure that propagated would turn a completed, correctly-landed stage into a reported
-    failure and invite a re-run of work that is already done.
+    NEVER RAISES. This runs after the landing has already committed, so a propagating error would turn a
+    completed, correctly-landed stage into a reported failure and invite a re-run of finished work.
+
+    NEVER SILENT EITHER. Swallowing without a word leaves an orphaned Lance dataset under the
+    destination that nothing reports and nobody goes looking for — the `_staging` control prefix keeps
+    the maintenance walk off it, which is right for a live run and means an abandoned one is invisible.
+    The line names the path so an operator can remove it.
     """
-    with contextlib.suppress(Exception):
+    try:
         fs, base = fs_and_base(staged_uri, so)
         fs.delete_dir(base)
+    # Broad on purpose: the landing already succeeded, so no failure shape here may undo it.
+    except Exception as exc:
+        print(f"RAY-STAGE WARN staging set left behind at {staged_uri}: {type(exc).__name__}: {exc}")
 
 
 class StagedOutputMissingError(RuntimeError):
