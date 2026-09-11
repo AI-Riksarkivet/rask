@@ -488,6 +488,21 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
      Reachable on RustFS today via the `mc admin policy` pair the chart already uses.
   2. **Accept the widest role, bounded by network + audit + rotation** — what runs today, made
      deliberate instead of accidental, with the compensating controls named and tested.
+  3. **PER-WAREHOUSE CREDENTIAL ON THE WAREHOUSE RECORD — the prior art, and probably the right answer.**
+     Lakekeeper (`docs.lakekeeper.io/docs/latest/storage/`) solves this exact problem — a catalog vending
+     for warehouses created at runtime — by putting the credential in the warehouse's STORAGE PROFILE
+     rather than on the catalog: an `assume-role-arn` "assumed for every IO Operation", a SEPARATE
+     `sts-role-arn` that mints the downscoped vended token, and an external ID so a system identity
+     cannot be tricked across accounts. The catalog then needs no wide identity at all; it uses THAT
+     warehouse's credential to vend for THAT warehouse, downscoped to the table's location.
+     **The ROLE form of this needs a backend that resolves a RoleArn, which RustFS does not (above), but
+     the CREDENTIAL form works here today**: the warehouse mint already creates the bucket, and the chart
+     already creates scoped users with `mc admin policy create` + `attach --user`, so a per-warehouse
+     scoped credential stored on the warehouse record is reachable with the pieces in hand. It also
+     removes ROOT specifically, which matters beyond blast radius: root can create users, rewrite
+     policies and delete buckets — a per-warehouse data credential can do none of those.
+     Note [[LH-067]] already carries "endpoint/credential field on the warehouse record" as its residual,
+     so this is one change serving two rows.
 - *Closes when:* the owner picks one; then provision `rask-catalog` the way
   `rustfs.medallionAccessKey`/`maintenanceAccessKey` are (chart provisioning hook, key defaulted to the
   provisioned user) and extend `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py`.
