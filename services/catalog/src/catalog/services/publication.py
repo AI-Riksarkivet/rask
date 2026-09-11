@@ -42,6 +42,7 @@ from lance_namespace import (
     GetTableTagVersionRequest,
     InvalidInputError,
     InvalidTableStateError,
+    TableTagAlreadyExistsError,
     TableTagNotFoundError,
     TableVersionNotFoundError,
     UpdateTableTagRequest,
@@ -299,11 +300,26 @@ def _set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], ta
     The spec splits create and update into two operations and refuses the wrong one, so which to call
     depends on state the caller cannot assume — the first publication of every dataset needs create,
     every later one needs update.
+
+    THE READ IS A HINT, NOT THE DECISION, because reading then branching is a TOCTOU: two concurrent
+    FIRST publications of one dataset both see an absent tag, both call create, and the loser took a 409
+    for a publish that should simply have moved the tag to the version it asked for.
+
+    THE ARBITRATION IS THE FORMAT'S AND IT ALREADY EXISTS. Measured on the installed pylance:
+    `tags.create` against an existing tag raises "Ref conflict error: tag <name> already exists", while
+    `tags.update` offers NO conditional form at all — so the create's refusal is the only compare-and-set
+    Lance gives for a tag, and a conditional put on `_refs/tags/<name>.json` would mean writing the
+    format's internals by hand. Reading that refusal as "someone else won the race, now move it" is the
+    same shape `records.create_json` uses for the registry, where a 409 means someone else won rather
+    than that this failed.
     """
     if _tag_version(ns, so, table_id, tag) is None:
-        dataplane.create_tag(ns, so, CreateTableTagRequest(id=list(table_id), tag=tag, version=version))
-    else:
-        dataplane.update_tag(ns, so, UpdateTableTagRequest(id=list(table_id), tag=tag, version=version))
+        try:
+            dataplane.create_tag(ns, so, CreateTableTagRequest(id=list(table_id), tag=tag, version=version))
+            return
+        except TableTagAlreadyExistsError:
+            pass  # the racer created it between the read and here — converge below
+    dataplane.update_tag(ns, so, UpdateTableTagRequest(id=list(table_id), tag=tag, version=version))
 
 
 def gate(
