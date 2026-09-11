@@ -76,6 +76,7 @@ from catalog.services.vend_probe import SCOPE_CHECK, ProbeCheck, ProbeReport, su
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 from storage import s3_client, split_s3_uri
 
@@ -878,7 +879,7 @@ async def delete_warehouse(
         revoked += await _revoke_tuples(client, settings, token, f"warehouse:{warehouse_id}")
         await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
         purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so) if purge_bucket else 0
-    except Exception:
+    except Exception as exc:
         # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
         # namespace drop lands, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
         # blip) — and the caller then gets a problem body that says nothing about the namespaces already
@@ -896,7 +897,28 @@ async def delete_warehouse(
             },
             exc_info=True,
         )
-        raise
+        # AND TELL THE CALLER, not only the log. The log records what landed for an operator; the
+        # caller got a problem body that said nothing, so it could not tell a delete that did nothing
+        # from one that destroyed three namespaces and then failed — and those need different next
+        # actions. The outcome rides as RFC 9457 extension members, which is what lets a 5xx say
+        # something true about the caller's own objects while `detail` stays redacted.
+        #
+        # ServiceUnavailable rather than the original error, and that is the honest code: every
+        # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
+        # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
+        # in the traceback and the log.
+        raise PartiallyApplied(
+            f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(dropped)} namespace(s) dropped and "
+            f"{revoked} tuple(s) revoked before the failure. Every step is idempotent — re-issue this "
+            "call to finish it.",
+            problem_extra={
+                "warehouse": warehouse_id,
+                "namespaces_dropped": dropped,
+                "tuples_revoked": revoked,
+                "bucket_purged": False,
+                "partial": True,
+            },
+        ) from exc
 
     log.info(
         "warehouse_deleted",

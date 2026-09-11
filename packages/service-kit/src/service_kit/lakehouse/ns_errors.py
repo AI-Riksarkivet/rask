@@ -13,7 +13,7 @@ import logging
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
-from lance_namespace import ErrorCode, LanceNamespaceError, UnsupportedOperationError
+from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
 from service_kit.problem import PROBLEM_JSON, problem_body
 
@@ -106,6 +106,29 @@ def as_unsupported_if_stub(exc: Exception) -> Exception:
 _UNREDACTED_5XX: frozenset[int] = frozenset()
 
 
+class PartiallyApplied(ServiceUnavailableError):
+    """A destructive operation that landed some of its steps and then failed.
+
+    A DECLARED carrier rather than an attribute stapled onto a base error: `problem_extra` has to be
+    part of a type for the raising code to typecheck, and the shape is worth naming anyway — "partly
+    done" is a distinct outcome from "refused" and from "done", and it is the one the caller can least
+    afford to guess at.
+
+    ``ServiceUnavailable`` is the honest code for it here: the steps are idempotent, so the recovery is
+    to re-issue the SAME call, which is exactly what a 503 asks of a client. Chain the real failure
+    (``raise … from exc``) so the cause survives in the log and the traceback while the response stays
+    redacted.
+    """
+
+    #: RFC 9457 extension members describing what DID land — merged into the problem body by
+    #: :func:`problem_detail`, which refuses to let them redefine a reserved field.
+    problem_extra: dict[str, object]
+
+    def __init__(self, message: str, *, problem_extra: dict[str, object]) -> None:
+        super().__init__(message)
+        self.problem_extra = problem_extra
+
+
 def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
     """Build (status, RFC 9457 problem+json body) for a domain error.
 
@@ -125,6 +148,18 @@ def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
         # alongside the RFC 9457 fields so both problem-details and spec clients can parse us.
         "error": detail,
     }
+    # EXTENSION MEMBERS (RFC 9457 §3.2), the one way a 5xx can tell the caller something true about
+    # THEIR OWN objects without breaking the redaction rule above. `detail` stays generic because it
+    # can carry paths, DSNs and driver text; an extension is assembled by the raising endpoint from
+    # what it already knows, so it leaks nothing the caller did not send or own.
+    #
+    # THE CASE IT EXISTS FOR is a partially-applied destructive operation: once the first step lands,
+    # a later one can still fail, and a bare problem body tells the caller nothing about what is
+    # already gone. Reserved names are not overwritable — an extension may ADD to the body, never
+    # redefine `status`, `detail` or `code`.
+    extra = getattr(exc, "problem_extra", None)
+    if isinstance(extra, dict):
+        body.update({key: value for key, value in extra.items() if key not in body})
     return status, body
 
 
