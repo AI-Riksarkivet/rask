@@ -441,9 +441,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   ownership first or a path that does not authorize against the table being removed.
 - *What is still NOT known:* whether compensation failed or was never reached for each of the 58. That
   needs the create/register history per table, not another sweep.
-- *Closes when:* The three are either governed (seeded to their real owner) or removed, the population
-  is measured across all tiers rather than gold alone, and a table with no tuples is DETECTED —
-  a sweep that reports ungoverned tables, since today nothing does and the estate cannot tell.
+- *DETECTION IS CHEAPER AT THE SEAM THAN AS A SWEEP, and that is measured rather than preferred.*
+  OpenFGA's `Read` cannot enumerate "every table carrying any tuple" in one pass: with an empty object
+  id it requires a `user` ("the object type field is required and both the object id and user cannot be
+  empty"), so enumeration is per-user or per-namespace. A periodic sweep therefore costs one call per
+  table — 1162 per tick on today's estate — which is the kind of price that gets an axis switched off.
+  The seam is where it is cheap: `seed_ownership_or_compensate` already knows whether it landed, so
+  asserting the tuple exists right after seeding costs one call on a path that already makes several.
+- *Closes when:* The 58 are either governed (seeded to their real owner) or removed, and a seed that
+  did not land is DETECTED at the seam rather than discovered by an audit — today nothing reports it and
+  the estate cannot tell. Pin that a create whose seed silently fails leaves no table behind, which is
+  what `seed_ownership_or_compensate`'s compensation already promises and these 58 are evidence against.
 
 **LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
 `catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
