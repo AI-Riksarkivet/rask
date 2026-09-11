@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
+**229 open items**, deduped from 325 raw rows mined out of the seven files above. A further 49 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 83 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -421,9 +421,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
   refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
 
-**LH-143 · The cascade-lag monitor is blind for one project's silver→gold edge — the lineage producers door 403s it**
+**LH-143 · ~~The cascade-lag monitor is blind for one project's silver→gold edge — the lineage producers door 403s it~~ — CLOSED AND OBSERVED 2026-09-11**
 `medallion, lineage` · low · found 2026-09-11 by reading the estate's own warnings
 
+- **CLOSED BY THE DEPLOY, observed on `main-b641103f`.** The cascade-lag cron has run since the
+  restart and its tick reports:
+
+      edges 267   failed 0   published 14   skipped 0   unknown 1   unmeasurable 252
+
+  `failed: 0` against 19 unreadable edges per tick before, with 267 edges actually evaluated — so this
+  is the monitor working, not the cron failing to run.
+- **AND THE CAUSE WAS THE CREDENTIAL DEFECT, not a missing grant — this row's diagnosis was wrong
+  twice.** Filed as a missing read rung; corrected to "the gold dataset does not exist"; the operative
+  cause was that the medallion presented the SHARED bearer because its dedicated token was derived from
+  a value no values file defined, and lineage refuses a privileged subject that cannot claim its own
+  identity. Same root as [[LH-142]] and [[LH-078]] — three rows, three different symptoms, one broken
+  `sha256("<identity>-%!s(<nil>)")`.
 - *Measured:* `cascade_lag_edge_unreadable` fires every tick, and every sampled record is the same
   thing — `403 Forbidden` on `GET http://rask-lineage:8000/datasets/advref31-gold$catalog/producers`,
   `project=advref31`, `edge=silver->gold`. 8 of 8 sampled, one project, one edge. Not estate-wide: every
