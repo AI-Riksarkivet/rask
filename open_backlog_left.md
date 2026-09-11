@@ -817,15 +817,32 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Why open:* `medallion/services/transform.py:970` guards the whole compute path on `settings.compute_enabled and from_uri and to_uri`; in the lane slice those URIs are unset and no project routing is configured, so the stage runner wakes, emits and writes nothing. Partly overtaken — `chart/templates/medallion.yaml:502-503` now renders both for the chart deploy path — so what remains is the lane proving bronze→silver→gold moves BYTES.
 - *Closes when:* Configure the tier URIs (or the per-project warehouse registry) in `scripts/ingest-lane.sh` and assert a committed silver and gold version with row counts, not just a `POST /medallion-event 200`.
 
-**LH-093 · The event actor is one `author.sub` string where it should be a closed union (Anonymous | Principal | Role)**
-`lineage, notifications, medallion, catalog` · low
+**LH-093 · ~~The event actor is one `author.sub` string where it should be a closed union~~ — THE LIVE DEFECT CLOSED 2026-09-11; the union is struck**
+`medallion, catalog, service-kit` · was low
 
-- *Why open:* Lakekeeper's CloudEvent actor is a sum type (`Anonymous | Principal(UserId) | Role { principal, assumed_role }`), so an assumed role records both the human behind it and the role assumed and neither can be spelled as the other; rask stamps one string. The consequence is a documented live failure mode: `rask-notifications` warns that a producer stamping a role literal in `author.sub` targets nobody and the event is still acked SUCCESS, so the miss is reported by nothing.
-- *Closes when:* Change the OpenLineage/control emit boundary to take a closed union (Anonymous / Principal(sub) / Role{principal, assumed_role}) instead of a bare `author.sub` string, making a role literal unrepresentable rather than merely warned about.
-
-### Resilience & maintenance
-
-_Nothing has ever been reclaimed on the live estate, the sweep is unleased and unbudgeted, and the Lance-serving processes are one shared handle away from an OOM — this is where the lakehouse fails quietly at scale._
+- *Closed by:* `a47baa01`. The row's stated CONSEQUENCE — "a producer stamping a role literal targets
+  nobody and the event is still acked SUCCESS" — had two parts, and re-measuring separated them.
+  * The TARGETING half was already solved and the row did not say so: `NotificationReason.ORIGINATOR`
+    exists precisely for it, wired end to end (producer stamps, `api/fanout.py` appends to the audience
+    and delivers under its own reason). Its docstring states the design: the role literal is "a truthful
+    statement about who ran the stage", so `originator` is a SEPARATE field rather than an overwrite —
+    "overwriting attribution to fix targeting would trade one wrong answer for another".
+  * The LIVE defect was that only ONE producer applied the rule. The catalog guarded with
+    `is_person_subject`; `medallion/schemas/events.py` wrote `if originator:` and kept every value — in
+    the service whose authors ARE the role literals. It could not have been shared where it lived: the
+    rule was inside the catalog and the medallion cannot depend on the catalog.
+  * Now `service_kit.lakehouse.subjects`, imported by both. OBSERVED on the deployed medallion:
+    `data_eng`/`analyst`/`ray`/`reconcile`/`*`/`team:eng#member`/`user:alice` all dropped, a dex subject
+    stamped. Before, all eight were kept.
+- *THE CLOSED-UNION ASK IS STRUCK.* Making a role literal unrepresentable would forbid a value the
+  estate deliberately keeps as truthful attribution, and contradicts the recorded reasoning above. The
+  defect was never that the literal exists; it was that one producer treated it as an address.
+- *Two things the RED test caught that reading would not have:* the catalog's own denylist was missing
+  `reconcile`, and a first draft added `htr` — a WORKLOAD name, which the platform is forbidden to know,
+  so a denylist entry for a modality would have been the defect rather than the fix.
+- *Residual, recorded honestly:* enumerating the chart's literals in a shared seam is itself a mild
+  coupling. The frozenset is documented as the FLOOR, not the design; the durable answer is for a
+  producer to mark its own non-person authors rather than for the platform to list them.
 
 **LH-094 · The reconcile scan reports 65 incomplete units and reclaims nothing, but its recorded numbers and stated cause are both STALE — re-measure before working it**
 
