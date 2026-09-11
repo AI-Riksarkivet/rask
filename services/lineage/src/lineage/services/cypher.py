@@ -379,17 +379,25 @@ def producers_page(limit: int) -> LiteralString:
     return cast("LiteralString", f"{PRODUCERS} LIMIT {limit}")
 
 
-# Reconcile (#23): the version the graph believes is current = the version on the most-recent
-# *successful* WROTE edge (failed runs carry a WROTE edge with no version, so the IS NOT NULL guard
-# skips them). Most-recent by run event_time, since Lance versions are monotonic per dataset.
+# Reconcile (#23): the version the graph believes is current = the HIGHEST version it holds a
+# *successful* WROTE edge for (failed runs carry a WROTE edge with no version, so the IS NOT NULL guard
+# skips them — `toInteger(null)` would otherwise poison the aggregate).
+#
+# A MAXIMUM, never event-time recency. Versions are monotonic per dataset, so the newest EVENT used to
+# be the highest version and the cheaper ordering was equivalent. The hole-recovery falsified that:
+# `backfill_write` stamps `now()` on the run it MERGEs, so recovering a hole at version 76 makes 76 the
+# newest event and a table sitting at 87 reports 76. Measured live 2026-09-11 — `bronze$events` v87
+# acquired a phantom `reconcile` producer beside its real `ray` one, and a tick reported `backfilled=52`
+# for datasets that had lost nothing.
+#
+# `max(toInteger(...))` rather than `ORDER BY w.version DESC`: the version is stored as a STRING on the
+# edge (`SET_WROTE_VERSION` writes `str(version)`), so a lexicographic sort puts "9" above "87".
 # MAIN ONLY — `w.ref IS NULL`. A branch keeps its own version sequence, so without this filter the most
 # recent write wins whichever ref it landed on and a branch's version is reported as the table's current
 # one; `core/reconcile.py` then compares that number against MAIN's on-disk version and classifies drift
 # from it. Writes recorded before the ref existed carry no property, so they read as main — which is what
 # they were.
-LATEST_WRITE_VERSION: Final = (
-    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN w.version ORDER BY r.event_time DESC LIMIT 1"
-)
+LATEST_WRITE_VERSION: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN max(toInteger(w.version))"
 SOURCE_URI: Final = "MATCH (d:Dataset {name:$name}) RETURN d.source_uri LIMIT 1"
 # EVERY main-ref version the graph holds a WROTE edge for — the SET the tip comparison above cannot see.
 # `w.ref IS NULL` is the same main-only filter LATEST_WRITE_VERSION applies, and it is load-bearing for the
