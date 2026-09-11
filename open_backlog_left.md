@@ -446,8 +446,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   id it requires a `user` ("the object type field is required and both the object id and user cannot be
   empty"), so enumeration is per-user or per-namespace. A periodic sweep therefore costs one call per
   table — 1162 per tick on today's estate — which is the kind of price that gets an axis switched off.
-  The seam is where it is cheap: `seed_ownership_or_compensate` already knows whether it landed, so
-  asserting the tuple exists right after seeding costs one call on a path that already makes several.
+  The seam is where it is cheap — but the seam ALREADY DOES THIS, which corrects the suggestion above.
+  `seed_ownership_or_compensate` undoes the native create when the seed fails, and its docstring names
+  precisely this failure: "the object exists on storage with no owner and no `parent` edge, so per-item
+  list filtering hides it from every caller including its creator, and the obvious retry hits native
+  `AlreadyExists` and never reaches the seed again." So a verification read-back would largely duplicate
+  a compensation that is already there and carefully argued.
+  *Which makes the real question narrower:* how did 58 tables get PAST it. Three candidates, none yet
+  distinguished — they predate the compensation; or they were created by a path that does not go through
+  that door; or the caller passed `undo=None`, which the docstring describes as a deliberate choice
+  where a native delete is unsafe. Answering that needs per-table create history, and it decides whether
+  anything needs building at all.
 - *Closes when:* The 58 are either governed (seeded to their real owner) or removed, and a seed that
   did not land is DETECTED at the seam rather than discovered by an audit — today nothing reports it and
   the estate cannot tell. Pin that a create whose seed silently fails leaves no table behind, which is
