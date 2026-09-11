@@ -67,7 +67,7 @@ from lance import blob_array, blob_field
 # `service-kit[media]` extra, which the ray-cluster image installs.
 from service_kit.lakehouse import media
 from service_kit.lakehouse.blobs import blob_field_names
-from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
+from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base, lance_storage_options, s3_filesystem
 from service_kit.lakehouse.stage_stamp import CARDINALITIES, LINEAGE_COLUMN, ONE_TO_ONE, SOURCE_ROWID_COLUMN, STAGE_COLUMN, ensure_declared_dataset_id
 
 
@@ -542,6 +542,83 @@ def _merge_into(to_uri: str, table: pa.Table, so: StorageOptions) -> None:
     lance.dataset(to_uri, storage_options=so).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(table)
 
 
+#: Where a distributed run stages its output before the merge that lands it.
+#:
+#: UNDER THE DESTINATION'S OWN PREFIX on purpose: the staging set inherits the credential and bucket
+#: policy that already reach the tier, where a sibling path would need its own grant and a shared
+#: scratch bucket would put one tenant's rows somewhere another tenant's credential reaches.
+#:
+#: NAMED IN the maintenance walk's `_CONTROL_PREFIXES`, because a staging set is a real Lance dataset
+#: while it exists and would otherwise be discovered, compacted and counted among the governed tables.
+#: Once the destination exists the set is already unreachable — the walk descends a dataset root's
+#: children only into `tree/` — but on the run that CREATES the destination the parent is still a plain
+#: directory, and a crash inside that window leaves it findable. The name carries one underscore, so the
+#: walk's `__`-prefix rule does not cover it and the explicit entry is what does.
+_STAGING_DIR = "_staging"
+
+
+def _drop_staged(staged_uri: str, so: StorageOptions) -> None:
+    """Remove a staging set, best-effort — the landing has already happened when this runs.
+
+    NEVER RAISES. A staging set that outlives its run is reclaimable garbage under a control prefix; a
+    cleanup failure that propagated would turn a completed, correctly-landed stage into a reported
+    failure and invite a re-run of work that is already done.
+    """
+    with contextlib.suppress(Exception):
+        fs, base = fs_and_base(staged_uri, so)
+        fs.delete_dir(base)
+
+
+class StagedOutputMissingError(RuntimeError):
+    """The distributed write left nothing at the staging path — not the same as producing no rows."""
+
+
+class StagedOutputEmptyError(RuntimeError):
+    """The distributed write produced ZERO rows, which a full-sync merge would read as "delete the tier"."""
+
+
+def _land_staged(to_uri: str, staged_uri: str, so: StorageOptions) -> int:
+    """Converge a STAGED distributed output into the destination, preserving the tier's row identity.
+
+    WHY A STAGING DATASET AT ALL. `lance_ray.write_lance` offers only create/append/overwrite — there is
+    no distributed merge — and `enable_stable_row_ids` is create-time-only, so the distributed fragments
+    have to land somewhere before anything can merge them. The previous shape wrote an EMPTY table with
+    `mode="overwrite"` and appended into it, which re-minted `_rowid` for the whole tier every run; the
+    tier above resolves its `source_rowid` against exactly those values. An append cannot be made to
+    preserve identity — `lance_docs/file_format.md:3998` assigns new rows ids "sequentially starting
+    from `next_row_id`", while only an update remaps one to the same id (`:4025`).
+
+    FULL SYNC, so the semantics the stage always had survive: the run's output IS the whole tier, and a
+    row it no longer produces is retracted (`when_not_matched_by_source_delete`).
+
+    THAT CLAUSE IS ALSO WHY THE TWO REFUSALS EXIST, and they are not defensive habit. Against a source
+    of zero rows it matches EVERY row in the destination and empties the tier — so a Ray stage that read
+    an empty upstream, filtered everything out, or half-failed would silently destroy the data it was
+    re-deriving. The estate already refuses this one lane over (the media retraction runs only
+    `if written and run`, "absent provenance must fail SAFE, not destructively"); the sibling merge in
+    `services/medallion/services/compute.py` carries no such guard, which is exactly how copying that
+    call site would import the hazard. The two cases are separate errors because they mean different
+    things to whoever is debugging a lost stage: nothing was WRITTEN, versus nothing was PRODUCED.
+
+    Returns the row count the destination holds afterwards.
+    """
+    if not _dataset_exists(staged_uri, so):
+        raise StagedOutputMissingError(
+            f"the distributed write left no dataset at {staged_uri!r} — refusing to land it, because an "
+            f"ABSENT staged output read as an empty one would retract every row of {to_uri!r}"
+        )
+    staged = lance.dataset(staged_uri, storage_options=so)
+    if staged.count_rows() == 0:
+        raise StagedOutputEmptyError(
+            f"the distributed write produced ZERO rows into {staged_uri!r} — refusing to land it, because a "
+            f"full-sync merge of an empty source retracts every row of {to_uri!r}"
+        )
+    lance.dataset(to_uri, storage_options=so).merge_insert(
+        "id"
+    ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(staged)
+    return lance.dataset(to_uri, storage_options=so).count_rows()
+
+
 def _run_stage(
     from_uri: str,
     to_uri: str,
@@ -638,10 +715,21 @@ def _run_stage(
         transformed = lr.read_lance(from_uri, storage_options=so).map_batches(
             lambda table: _stamp_stage(table, stage, lineage, dataset_id), batch_format="pyarrow"
         )
+        # THE DISTRIBUTED OUTPUT LANDS IN A STAGING DATASET, then ONE merge converges it — see
+        # `_land_staged` for why an append cannot preserve `_rowid` and why the merge's retraction
+        # clause makes an empty staged output catastrophic.
+        #
+        # The staging path sits UNDER the destination's own prefix, so it inherits whatever credential
+        # and bucket policy already reach the tier — a sibling path would need its own grant, and a
+        # shared scratch bucket would put one tenant's rows where another's credential reaches. It is
+        # keyed by the idempotency key so two concurrent runs of different work cannot land in one
+        # staging set; a redelivery of the SAME order reuses its own, which is the convergence the key
+        # exists to give.
+        staged_uri = f"{to_uri.rstrip('/')}/{_STAGING_DIR}/{os.environ.get('RASK_IDEMPOTENCY_KEY', '') or stage}"
         _reset_if_legacy(to_uri, so)
         lance.write_dataset(
             out_schema.empty_table(),
-            to_uri,
+            staged_uri,
             storage_options=so,
             mode="overwrite",
             data_storage_version="2.2",
@@ -649,12 +737,30 @@ def _run_stage(
         )
         lr.write_lance(
             transformed,
-            to_uri,
+            staged_uri,
             storage_options=so,
             mode="append",
             data_storage_version="2.2",
             concurrency=2,
         )
+        if _dataset_exists(to_uri, so):
+            try:
+                _land_staged(to_uri, staged_uri, so)
+            finally:
+                _drop_staged(staged_uri, so)
+        else:
+            # NOTHING TO PRESERVE YET. A destination that does not exist has no `_rowid` to keep, so the
+            # staged output becomes the tier directly — and it must be a CREATE with stable ids, since
+            # the property cannot be turned on later (`lance_docs/file_format.md`).
+            lance.write_dataset(
+                lance.dataset(staged_uri, storage_options=so).to_table(),
+                to_uri,
+                storage_options=so,
+                mode="create",
+                data_storage_version="2.2",
+                enable_stable_row_ids=True,
+            )
+            _drop_staged(staged_uri, so)
 
     out = lance.dataset(to_uri, storage_options=so)
     print(

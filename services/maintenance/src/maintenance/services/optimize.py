@@ -137,7 +137,14 @@ _BRANCH_CONTAINER = "tree"
 #:
 #: The outbox is also the one that is DRAINED continuously, so walking it races the drain — a depth-4
 #: walk died `FileNotFoundError` on an entry that was gone by the time it was opened.
-_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox")
+#: `_staging` is where a DISTRIBUTED stage run lands its output before the one merge that converges it
+#: into the tier (LH-007, `scripts/ray_stage_job.py::_land_staged`). It is a real Lance dataset while it
+#: exists, so without this it would be discovered, compacted and counted among the estate's governed
+#: tables. Once the destination exists the set is already unreachable — the walk descends a dataset
+#: root's children only into `tree/` — but on the run that CREATES the destination the parent is still a
+#: plain directory, and a crash inside that window leaves the set findable. One underscore, so the
+#: `__`-prefix rule above does not cover it.
+_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging")
 
 
 def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:

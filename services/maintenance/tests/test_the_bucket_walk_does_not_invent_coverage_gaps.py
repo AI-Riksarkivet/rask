@@ -264,3 +264,35 @@ def test_a_directory_of_DIRECTORIES_at_the_bound_is_STILL_a_gap(tmp_path: Path) 
 
     assert not result.uris
     assert result.truncated, "a subtree the walk did not enter must still be recorded"
+
+
+def test_a_distributed_runs_STAGING_set_is_not_discovered_as_a_governed_dataset(tmp_path: Path) -> None:
+    """CONTRACT: `_staging` is a control prefix — the walk never reports a run's scratch as a dataset.
+
+    A distributed stage lands its output in `<destination>/_staging/<idempotency-key>` before one merge
+    converges it (LH-007). Once the destination exists that set is already invisible, because the walk
+    descends a dataset root's children ONLY into `tree/`. But on the run that CREATES the destination
+    there is a window where the parent is a plain directory, and a crash inside it leaves a real Lance
+    dataset the walk would find, compact, and count among the estate's governed tables.
+
+    Named here rather than relied on by accident: the exclusion has to hold in both states, and
+    `_staging` carries ONE underscore so the `__`-prefix rule does not cover it.
+    """
+    import pyarrow.fs as pafs
+
+    from maintenance.services.optimize import discover_datasets
+
+    root = tmp_path / "bucket"
+    # The window: a destination that is not yet a dataset, holding a staged one.
+    staged = root / "silver" / "_staging" / "run-1"
+    staged.mkdir(parents=True)
+    (staged / "_versions").mkdir()
+    # A real governed sibling, so the walk is proven to still find what it should.
+    live = root / "gold"
+    live.mkdir(parents=True)
+    (live / "_versions").mkdir()
+
+    found = discover_datasets(pafs.LocalFileSystem(), str(root), max_depth=6)
+
+    assert any(uri.endswith("/gold") for uri in found.uris), f"the walk stopped finding live datasets: {found.uris}"
+    assert not [uri for uri in found.uris if "_staging" in uri], f"a run's staging set was reported as governed: {found.uris}"

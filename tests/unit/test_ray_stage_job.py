@@ -640,7 +640,11 @@ def test_the_distributed_branch_creates_its_destination_from_the_SAME_constructi
     real_write = lance.write_dataset
 
     def _capture_write(data, uri, **kw):  # noqa: ANN001, ANN003, ANN202
-        if str(uri) == dst and kw.get("mode") == "overwrite":
+        # THE DATASET `lance_ray` APPENDS INTO, which is the STAGING set: the distributed output lands
+        # there and one merge converges it into the destination (LH-007, `_land_staged`). The property
+        # under test is unchanged and belongs to whichever dataset takes the appends — lance_ray casts
+        # every block to it positionally, so its schema and the emitted block's must agree on ORDER.
+        if str(uri).startswith(dst) and kw.get("mode") == "overwrite":
             created["schema"] = data.schema
         return real_write(data, uri, **kw)
 
@@ -929,3 +933,118 @@ def test_the_job_READS_the_destination_name_the_order_already_puts_on_the_wire()
     import inspect
 
     assert 'os.environ.get("RASK_DEST_TABLE"' in inspect.getsource(job.main), "the job ignores the destination name the order ships"
+
+
+# --------------------------------------------------------------------------- #
+# LH-007: the distributed landing preserves tier row identity
+# --------------------------------------------------------------------------- #
+
+
+def _tier_table(ids: list[int]) -> pa.Table:
+    return pa.table({"id": [str(i) for i in ids], "payload": [f"v{i}" for i in ids]})
+
+
+def _seed_tier(uri: str, ids: list[int]) -> None:
+    import lance
+
+    lance.write_dataset(_tier_table(ids), uri, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+
+
+def _rowids(uri: str) -> dict[str, int]:
+    import lance
+
+    table = lance.dataset(uri).to_table(columns=["id"], with_row_id=True)
+    return dict(zip(table.column("id").to_pylist(), table.column("_rowid").to_pylist(), strict=True))
+
+
+def test_landing_a_staged_dataset_PRESERVES_the_tier_rowids(tmp_path: Path) -> None:
+    """CONTRACT (LH-007): a re-derivation keeps `_rowid` for every row that survives it.
+
+    The distributed branch wrote an EMPTY table with `mode="overwrite"` and then distributed-appended
+    the transform's output, so every run re-minted `_rowid` for the whole tier. The tier ABOVE resolves
+    its `source_rowid` against exactly those values, so the cascade's provenance chain was destroyed on
+    a schedule — measured on this estate as 8 of 8 silver references naming bronze rows that no longer
+    existed.
+
+    An append cannot be made to preserve identity: `lance_docs/file_format.md:3998` — "Writer assigns
+    row IDs sequentially starting from `next_row_id` for new rows" — while only an update remaps one
+    (`:4025`, "The new physical row is assigned the same `_rowid = R`"). So the landing has to be a
+    merge, and the distributed output has to reach a staging dataset first because `lance_ray` offers
+    no distributed merge and `enable_stable_row_ids` is create-time-only.
+    """
+    job = _load_job()
+    to_uri = str(tmp_path / "silver")
+    scratch = str(tmp_path / "scratch")
+    _seed_tier(to_uri, [1, 2, 3])
+    before = _rowids(to_uri)
+    # The staged output of a re-derivation: same keys, new payloads, plus one new row.
+    _seed_tier(scratch, [1, 2, 3, 4])
+
+    job._land_staged(to_uri, scratch, {})
+
+    after = _rowids(to_uri)
+    assert {k: after[k] for k in before} == before, f"a surviving row changed identity: {before} -> {after}"
+    assert "4" in after, "the new row never landed"
+
+
+def test_landing_DROPS_a_row_the_run_no_longer_produces(tmp_path: Path) -> None:
+    """Full-sync semantics survive the change: the run's output IS the whole tier.
+
+    `overwrite` removed a row the run stopped producing, and the merge has to keep doing that or the
+    tier silently accumulates rows no upstream backs. That is what `when_not_matched_by_source_delete`
+    is for — and it is also the clause that makes an empty source catastrophic, which the next test
+    pins.
+    """
+    job = _load_job()
+    to_uri = str(tmp_path / "silver")
+    scratch = str(tmp_path / "scratch")
+    _seed_tier(to_uri, [1, 2, 3])
+    _seed_tier(scratch, [1, 3])
+
+    job._land_staged(to_uri, scratch, {})
+
+    assert sorted(_rowids(to_uri)) == ["1", "3"], "a row the run no longer produces was not retracted"
+
+
+def test_an_EMPTY_staged_dataset_never_empties_the_tier(tmp_path: Path) -> None:
+    """THE CATASTROPHIC CASE, and the reason this landed as a named function rather than inline.
+
+    `when_not_matched_by_source_delete()` against a source with zero rows matches every row in the
+    destination and deletes the entire tier. A Ray stage that produced nothing — an upstream read that
+    came back empty, a transform that filtered everything, a partial failure — must not be read as
+    "the tier is now empty".
+
+    The estate already refuses exactly this one lane over: the media retraction runs only
+    `if written and run`, because "absent provenance must fail SAFE, not destructively". The sibling
+    merge in `compute.py` carries NO such guard, so copying that call site verbatim is how the hazard
+    would arrive here.
+    """
+    job = _load_job()
+    to_uri = str(tmp_path / "silver")
+    scratch = str(tmp_path / "scratch")
+    _seed_tier(to_uri, [1, 2, 3])
+    _seed_tier(scratch, [])
+
+    with pytest.raises(Exception) as caught:  # noqa: B017 — the TYPE is asserted below via the message
+        job._land_staged(to_uri, scratch, {})
+
+    assert sorted(_rowids(to_uri)) == ["1", "2", "3"], "an empty staged dataset emptied the tier"
+    assert "empt" in str(caught.value).lower(), f"the refusal does not say why: {caught.value}"
+
+
+def test_an_ABSENT_staged_dataset_is_not_read_as_an_empty_one(tmp_path: Path) -> None:
+    """A `write_lance` that returned without committing leaves NOTHING at the staging path.
+
+    Reading that as an empty source is the previous test's annihilation by another route, so it is
+    refused on its own and says which of the two happened — an operator debugging a lost stage needs to
+    know whether the transform produced nothing or never wrote at all.
+    """
+    job = _load_job()
+    to_uri = str(tmp_path / "silver")
+    _seed_tier(to_uri, [1, 2, 3])
+
+    with pytest.raises(Exception) as caught:  # noqa: B017
+        job._land_staged(to_uri, str(tmp_path / "never-written"), {})
+
+    assert sorted(_rowids(to_uri)) == ["1", "2", "3"], "an absent staged dataset emptied the tier"
+    assert "staged" in str(caught.value).lower() or "absent" in str(caught.value).lower(), caught.value
