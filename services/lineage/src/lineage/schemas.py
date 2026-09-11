@@ -22,6 +22,13 @@ class ReconcileState(StrEnum):
     # unreadable dataset is usually a reader/format mismatch (an unsupported manifest feature flag,
     # a bad endpoint, missing credentials). Collapsing them reported six live datasets as destroyed.
     UNREADABLE = "unreadable"
+    # The dataset carries no authorization tuple, so it is not a live governed table — neither loss nor
+    # health, exactly like UNREADABLE above and for the same reason. A table nobody holds a tuple on
+    # cannot be read, maintained, dropped or re-created by anyone including its creator, so its bytes
+    # being absent is not an incident a person can act on; reporting it as MISSING_ON_STORAGE sends an
+    # operator after data nobody lost. Measured 2026-09-11: all three datasets the live sweep called
+    # storage loss were this.
+    UNGOVERNED = "ungoverned"
 
 
 class ReconcileStatus(BaseModel):

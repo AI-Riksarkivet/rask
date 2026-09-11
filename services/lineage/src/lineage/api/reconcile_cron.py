@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
-from lineage.core.config import declared_columns_map, storage_options
+from lineage.core.config import LineageSettings, declared_columns_map, storage_options
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
     read_dangling_blob_columns,
@@ -37,6 +37,7 @@ from lineage.core.reconcile import (
 from lineage.models import RunEvent, author_sub_from_payload
 from lineage.schemas import ReconcileState, ReconcileStatus
 from service_kit import dapr_publish
+from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import outbox, outbox_metrics
 
@@ -47,7 +48,7 @@ log = logging.getLogger(__name__)
 class SweepReport(BaseModel):
     """One cron tick's findings — the tick's response body and the shape its log line counts.
 
-    A model rather than a hand-built ``dict[str, Any]``: the tick reports SEVEN independent finding classes
+    A model rather than a hand-built ``dict[str, Any]``: the tick reports EIGHT independent finding classes
     plus two counters, and the response was assembled twice in one function body (once as a log ``extra``,
     once as the return) from literal keys that could drift apart silently.
     """
@@ -55,6 +56,10 @@ class SweepReport(BaseModel):
     checked: int = 0
     backfilled: list[str] = Field(default_factory=list)
     storage_loss: list[str] = Field(default_factory=list)
+    #: Datasets carrying NO authorization tuple — not governed tables, so not data anyone lost. Its own
+    #: field rather than a share of `storage_loss` for the reason the `graph_ahead` split already
+    #: established here: an alarm that is mostly benign is one an operator learns to skim.
+    ungoverned: list[str] = Field(default_factory=list)
     graph_ahead: list[str] = Field(default_factory=list)
     unreadable: dict[str, str | None] = Field(default_factory=dict)
     dangling_blobs: dict[str, list[str]] = Field(default_factory=dict)
@@ -91,6 +96,7 @@ def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
         checked=len(statuses),
         backfilled=[s.dataset for s in statuses if s.status in BACKFILLABLE_STATES],
         storage_loss=[s.dataset for s in statuses if s.status is ReconcileState.MISSING_ON_STORAGE],
+        ungoverned=[s.dataset for s in statuses if s.status is ReconcileState.UNGOVERNED],
         graph_ahead=[s.dataset for s in statuses if s.status is ReconcileState.GRAPH_AHEAD],
         unreadable={s.dataset: s.unreadable_reason for s in statuses if s.status is ReconcileState.UNREADABLE},
         dangling_blobs={s.dataset: s.dangling_blob_columns for s in statuses if s.dangling_blob_columns},
@@ -110,6 +116,10 @@ def log_sweep(report: SweepReport) -> None:
       drop-and-recreate leaves this, so it is usually benign and is reported apart from real loss.
     * ``storage_loss`` — the graph claims data on-disk Lance no longer has (a bad restore, a wipe). The
       data is gone; only a human can answer for it.
+    * ``ungoverned`` — the dataset holds NO authorization tuple, so it is not a governed table at all.
+      Reported apart from loss because the two demand different responses: loss is an incident a person
+      answers for, while a table nobody can reach is residue or a lost grant. Measured 2026-09-11, all
+      three datasets ``storage_loss`` named were this, so the line was 100% miscategorised.
     * ``unreadable`` — datasets this reader could not OPEN, reported on their own line and deliberately
       NOT counted as loss: "we could not read it" and "it is gone" demand opposite responses. Before
       they were separated, six live datasets carrying an unsupported manifest feature flag were reported
@@ -128,6 +138,12 @@ def log_sweep(report: SweepReport) -> None:
     """
     if report.storage_loss:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": report.storage_loss, "count": len(report.storage_loss)})
+    if report.ungoverned:
+        # ITS OWN BODY, like `graph_ahead` beside it and for the same reason. A dataset here holds no
+        # authorization tuple, so nobody — including whoever created it — can read, maintain, drop or
+        # re-create it; its bytes being absent is not something a person can answer for. Measured
+        # 2026-09-11, all three datasets the loss line named were this.
+        log.warning("lineage_reconcile_ungoverned", extra={"datasets": report.ungoverned, "count": len(report.ungoverned)})
     if report.graph_ahead:
         # ITS OWN BODY, because the two findings differ in kind and an operator filters on the body. A
         # dataset here was READ successfully and sits at an older version than the graph — an e2e run
@@ -158,6 +174,7 @@ def log_sweep(report: SweepReport) -> None:
             "checked": report.checked,
             "backfilled": len(report.backfilled),
             "storage_loss": len(report.storage_loss),
+            "ungoverned": len(report.ungoverned),
             "graph_ahead": len(report.graph_ahead),
             "unreadable": len(report.unreadable),
             "dangling_blobs": len(report.dangling_blobs),
@@ -172,7 +189,33 @@ def log_sweep(report: SweepReport) -> None:
     )
 
 
-async def _sweep(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str]) -> list[ReconcileStatus]:
+async def governed_tables(request: Request, settings: LineageSettings) -> set[str] | None:
+    """The table ids carrying at least one authorization tuple, or ``None`` when the answer is unknown.
+
+    ``None`` IS THE LOAD-BEARING CASE and the reason this returns an optional rather than a set. An
+    empty set means "nothing in this estate is governed", which would classify every dataset UNGOVERNED
+    and erase the loss axis entirely — at exactly the moment something is wrong. FGA off, no client
+    wired, or a store that could not be enumerated are all "we did not ask", and a sweep that did not
+    ask must classify on what it does know.
+
+    ONE ENUMERATION PER SWEEP, not one check per dataset: OpenFGA refuses a Read whose ``tuple_key``
+    carries an empty object id, so the per-object shape is the only one most callers find — and it
+    costs N calls a tick. `fga.governed_objects` omits the filter instead and pages the store, measured
+    at 51 pages / 5,027 tuples / 0.1 s for this whole estate.
+    """
+    if not settings.fga_enabled:
+        return None
+    client = getattr(request.app.state, "fga", None)
+    if client is None:
+        return None
+    try:
+        return await fga.governed_objects(client, object_type=settings.fga_object_type)
+    except Exception as exc:  # noqa: BLE001 — an unreadable store must degrade the axis, never the sweep
+        log.warning("lineage_reconcile_governed_set_unreadable", extra={"error": str(exc)})
+        return None
+
+
+async def _sweep(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], governed: set[str] | None = None) -> list[ReconcileStatus]:
     """Reconcile every dataset against storage, back-filling any write whose lineage event was lost.
 
     The Lance reads all run in the threadpool so the object-store I/O never stalls the event loop.
@@ -203,6 +246,11 @@ async def _sweep(repository: RepositoryDep, settings: SettingsDep, opts: dict[st
         # Declared-columns patrol (Batch 23): re-check the gate's column_declared assertion
         # estate-wide — only declared datasets pay the schema read.
         declared=declared_columns_map(settings),
+        # WHICH TABLES ANYONE HOLDS A TUPLE ON. A dataset absent from this set is not a governed table,
+        # so every axis above would be reasoning about something nobody can reach — and reporting its
+        # missing bytes as loss sends an operator after data no person can answer for. `None` means the
+        # question was not asked; see `governed_tables`.
+        governed=governed,
     )
 
 
@@ -295,7 +343,7 @@ async def _on_cron(
                 outcome = await _drain_outbox(request, repository, settings, opts, publisher)
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
-        report = summarize_sweep(await _sweep(repository, settings, opts))
+        report = summarize_sweep(await _sweep(repository, settings, opts, await governed_tables(request, settings)))
         report.outbox_drained, report.outbox_stranded = outcome.drained, outcome.stranded
         report.pruned_runs = await _prune_old_runs(repository, settings)
         report.pruned_events = await _prune_old_events(repository, settings)

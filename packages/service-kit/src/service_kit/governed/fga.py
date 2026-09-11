@@ -646,6 +646,77 @@ async def list_objects(
     )
 
 
+#: Tuples per page when enumerating the whole store. The server caps a Read page at 100, and the call
+#: is issued once per SWEEP rather than per object, so a larger number would buy nothing.
+READ_PAGE_SIZE = 100
+
+#: Ceiling on pages, so a server that returns a non-advancing cursor cannot spin forever. 500 pages is
+#: 50,000 tuples — measured 2026-09-11, the whole estate is 5,027 across 51 pages, so this is an order
+#: of magnitude of headroom and still a bound.
+READ_MAX_PAGES = 500
+
+
+async def governed_objects(
+    client: OpenFgaClient,
+    *,
+    object_type: str,
+    page_size: int = READ_PAGE_SIZE,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+) -> set[str]:
+    """Every object id of ``object_type`` carrying AT LEAST ONE tuple — i.e. the governed population.
+
+    The question this answers is not "what may a subject reach" (that is :func:`list_objects`) but
+    "does anyone hold anything on this object at all". A resource with no tuple cannot be read,
+    maintained, dropped or re-created by anyone including its creator, so an auditor that cannot ask
+    this cannot tell governed data from residue.
+
+    NO ``tuple_key``, and that is the whole trick. A Read carrying a ``tuple_key`` whose object id is
+    empty is REFUSED — "the object type field is required and both the object id and user cannot be
+    empty" — which makes the obvious shape one call per object. Omitting the filter entirely is a
+    different call that pages the store: measured against the live estate 2026-09-11, **51 pages and
+    5,027 tuples in 0.1 s**, so a caller sweeping N resources pays one enumeration instead of N checks.
+
+    Ids come back BARE (``acme-bronze$events``, not ``table:acme-bronze$events``) because that is the
+    form callers hold — `canonical_object_id` joins segments with the delimiter and the type prefix is
+    added at the door — so the two agree byte-for-byte without the caller re-deriving anything.
+
+    Read-only and idempotent, so it takes the same bounded retry and fail-closed treatment as its
+    siblings: a store that cannot be enumerated raises rather than returning an empty set, because an
+    empty set here reads as "nothing is governed" and would condemn the whole estate.
+    """
+    prefix = f"{object_type}:"
+
+    async def _do_read() -> set[str]:
+        found: set[str] = set()
+        token = ""
+        for _ in range(READ_MAX_PAGES):
+            options: dict[str, int | str | dict[str, int | str]] = {"page_size": page_size}
+            if token:
+                options["continuation_token"] = token
+            response = await client.read(ReadRequestTupleKey(), options=options)
+            for record in response.tuples:
+                obj = str(record.key.object or "")
+                if obj.startswith(prefix):
+                    found.add(obj[len(prefix) :])
+            token = str(response.continuation_token or "")
+            if not token:
+                return found
+        # The cursor never emptied. Returning what we have would be a SHORT answer wearing a complete
+        # one's clothes, and this set's whole job is to say what is NOT in it.
+        raise RuntimeError(f"openfga read did not terminate within {READ_MAX_PAGES} pages")
+
+    return await _guarded(
+        _do_read,
+        event="openfga_read_unavailable",
+        extra={"object_type": object_type},
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
+
+
 #: OpenFGA's default ``listUsersMaxResults`` — ListUsers has no pagination, so a result this large
 #: is likely the server's silent truncation point, not the true grantee count.
 LIST_USERS_SERVER_CAP = 1000

@@ -102,7 +102,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **NOT the same shape as lineage's own consumer, which was filed beside this and STRUCK.** Lineage's is ephemeral BY DESIGN — the chart states it ("a durable cursor would defeat its replay-rebuilds-the-graph recovery story") and `_is_replay` accepts what the replay re-presents, logging at INFO. This one is the opposite: a DURABLE consumer with a queue group that nothing is attached to, so nothing accepts and nothing acks.
 - *Closes when:* Establish whether anything is meant to consume `lance-ray-durable` (the name suggests the Ray lane). If yes, fix the subscriber and drain it; if no, delete the consumer so retention can do its job. Then add the depth of every consumer on the estate's streams to whatever the maintenance sweep already reports, so a dead subscriber is visible without a NATS client.
 
-**LH-002 · The reconcile sweep warns every tick on 32 `storage_loss` + 2 `unreadable` datasets that are all test residue**
+**LH-002 · The sweep's whole `storage_loss` population is UNGOVERNED residue — 3 of 3, and the row's original 32 were two other things**
 `lineage, maintenance` · **HIGH**
 
 - **ROOT-CAUSED 2026-09-11: `storage_loss` IS TWO STATES, AND THE BENIGN ONE DOMINATES.**
@@ -178,6 +178,25 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   means "a bad restore, a wipe... the data is gone; only a human can answer for it", and a table nobody
   holds a single tuple on is not a governed table whose data was lost. After the `graph_ahead` split
   fixed 29 of 32, the remaining 3 are a SECOND miscategorisation of the same kind.
+- **IMPLEMENTED 2026-09-11, and the helper is verified against the LIVE store rather than a mock.**
+  `fga.governed_objects` run against the real OpenFGA returns **1232 governed tables in 0.31 s**, bare
+  ids, and classifies the probes exactly as predicted — `acme-bronze$events` governed,
+  `probe$nonexistent` and `research-bronze$events` not. `ReconcileState.UNGOVERNED`,
+  `SweepReport.ungoverned` with its own WARN line, `reconcile_all(governed=...)` and
+  `reconcile_cron.governed_tables` complete it; the check sits AHEAD of the storage read, so residue
+  now costs no object-store round-trips.
+  *The fail-safe is the part that matters:* a store that cannot be enumerated returns `None` (unknown),
+  never an empty set — an empty set would classify every dataset ungoverned and silence the loss axis at
+  exactly the moment authorization is in trouble. Pinned by its own test, as is the paging bound: a
+  cursor that never empties RAISES rather than answering short, because this set is asked what is ABSENT
+  from it and a partial read inverts that answer instead of degrading it.
+- **THE POST-DEPLOY PREDICTION, stated before the roll so it can falsify the change:** `storage_loss`
+  **3 -> 0**, `unreadable` **26 -> 24** (`acme-bronze$zzprobe8926` and `uiproof-gold$catalog` move),
+  `ungoverned` **0 -> 11**, `checked` unchanged at 356.
+  The 11, not the 58: the drop stamp is checked FIRST, so the 47 purge-dropped datasets never reach the
+  governed branch — which is correct, a deliberate drop is already handled. I had written 58 and the
+  arithmetic corrected it; the 11 that remain are exactly [[LH-144]]'s real population, which is the
+  convergence that makes both rows one finding.
 - *The fix, specified and costed rather than sketched:* a dataset carrying no authorization tuple is not
   a live governed table, and the sweep should say so in its own words.
   1. `service_kit.governed.fga` has `check`, `batch_check`, `list_objects` and **no tuple read**, so it
@@ -195,6 +214,33 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   *The id mapping is exact and was checked:* `canonical_object_id` joins segments with the delimiter, so
   a graph dataset name and its `table:` object id agree byte-for-byte — which is the property that
   docstring insists on, and the reason the measurement above matched at all.
+- **AND THE PRUNER CANNOT FIRE AT ALL — measured across the whole graph, not sampled.** This row says
+  `prune_orphan_datasets` "leaves 31 of the 34 nodes in place because they carry a CREATED edge". The
+  structural version is worse: asked of AGE directly, **`prune_orphan_datasets` matches 0 datasets
+  today**, and **1145 of 1247** Dataset nodes carry a CREATED edge, so they can never satisfy its
+  `nw = 0 AND nr = 0 AND nc = 0`.
+  *And it can never change*, which is the part no row states. Every one of the 1150 CREATED edges comes
+  from a **`User`** node, not a `Run` — asked directly, `MATCH (x)-[:CREATED]->(:Dataset) RETURN
+  labels(x)[0]` returns `User|1150`. `prune_runs` deletes Run nodes; nothing deletes a User's creation
+  record, nor should it, because that edge IS the creator provenance. So the coupling comment on the
+  prune — "a dataset becomes prunable exactly when its last run goes" — is false for 1145 of 1247
+  nodes, and waiting for retention prunes none of them on 2026-09-30 or ever.
+- *THE GUARD IS DELIBERATE, WHICH IS WHY THIS IS A SCOPE PROBLEM AND NOT A BUG.* `nc = 0` is pinned by
+  `test_a_DECLARED_table_is_not_residue` — "a declared-but-unwritten table would be pruned as residue"
+  — and for that case it is exactly right. What nobody measured is that a CREATED edge is written for
+  EVERY table a user makes and is never removed, so a guard meant for the narrow declared-but-unwritten
+  case permanently covers the whole user-created estate. The fix is a decision about how to tell
+  "declared and never written" from "written, then its runs aged out" once the runs are gone — which is
+  the owner's call, not a predicate to change unilaterally.
+- *AND IT LANDS ON [[LH-011]], which closed today deferring to exactly this.* That row records
+  `stale=268` of `checked=356` as "a retention problem with its own row and its own date
+  (2026-09-30)". Retention cannot reclaim those nodes, so the deferral points at a remedy that
+  structurally cannot fire. 265 of the 268 are properly GOVERNED catalog tables written once by a test,
+  so the ungoverned split above does not reach them either. Recorded here rather than reopening LH-011,
+  because the remedy belongs to this row.
+- *What that costs, measured on one tick:* 296 of the 356 swept datasets — **83%** — are named in at
+  least one WARN line every 300 s, `stale` alone carrying 268 names in a single ~6 KB record, and 29 of
+  the 31 `graph_ahead` datasets double-reported as stale as well.
 - *Closes when:* the sweep stops naming ungoverned residue as storage loss — which the tuple check
   settles NOW rather than on 2026-09-30 — and a real `storage_loss` line names only datasets that are
   both governed and gone. Retention may still tidy the nodes; it was never what made the warning wrong.

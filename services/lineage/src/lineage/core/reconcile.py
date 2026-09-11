@@ -349,6 +349,7 @@ async def reconcile_all(
     read_operations: Callable[[str, list[int]], Awaitable[dict[int, str | None]]] | None = None,
     freshness_budget_hours: float = 0,
     declared: dict[str, list[str]] | None = None,
+    governed: set[str] | None = None,
 ) -> list[ReconcileStatus]:
     """Reconcile every dataset the graph knows against storage; optionally back-fill dropped writes (B4).
 
@@ -362,6 +363,13 @@ async def reconcile_all(
     can actually read — the axis version comparison can't see (§9 P1 lifecycle) — and its findings ride
     ``dangling_blob_columns`` on the status; only run when a storage version exists (an unreadable dataset
     is already the version check's finding).
+
+    ``governed`` (optional) is the set of table ids anyone holds an authorization tuple on. A dataset
+    absent from it is classified UNGOVERNED and skips every axis below, because those axes all reason
+    about a table someone owns and this one nobody can read, maintain, drop or re-create — reporting its
+    missing bytes as loss pages a human about data no person can answer for. ``None`` means the question
+    was not asked (authorization off, or a store that could not be enumerated) and MUST leave the
+    classification exactly as it was: an empty set would condemn the whole estate.
     """
     results: list[ReconcileStatus] = []
     for summary in await repository.list_datasets():
@@ -381,6 +389,19 @@ async def reconcile_all(
             # Deliberately drop_table'd (terminal lifecycle stamp, 2026-07-11): absence on storage
             # is the EXPECTED state — sweeping it would WARN missing_on_storage forever on every
             # tick. A recreate clears the stamp on ingest and re-enters the sweep automatically.
+            continue
+        if governed is not None and summary.name not in governed:
+            # NOT A GOVERNED TABLE, so nothing below can say anything true about it: every axis here
+            # reasons about a table someone owns, and this one nobody can read, maintain, drop or
+            # re-create. Placed AHEAD of the storage read because the answer does not depend on it —
+            # which also means residue costs no object-store I/O at all.
+            #
+            # REPORTED rather than skipped, unlike the drop stamp above. A drop is a decision someone
+            # made; this is either residue nobody cleaned up or a live table that lost its grants, and
+            # an operator should be able to see which. `governed is None` means nobody asked OpenFGA —
+            # FGA off, or a store this sweep could not reach — and absent evidence must not become a
+            # verdict, so the classification is then left exactly as it was.
+            results.append(ReconcileStatus(dataset=summary.name, graph_version=graph_version, in_sync=False, status=ReconcileState.UNGOVERNED))
             continue
         # A dataset this reader cannot OPEN is classified UNREADABLE and skips every downstream axis
         # below: with no storage version there is nothing to compare, no blob pointer to probe, no
