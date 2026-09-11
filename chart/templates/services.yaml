@@ -98,6 +98,13 @@ spec:
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
+            # NAMED HERE rather than left to the service's own default, which is what every sibling
+            # already does (lineage, medallion, maintenance each render their own field). The catalog
+            # was the one that did not, so the FIELD NAME lived only in its image — and when the seed
+            # started writing a differently-named property, a running pod asked OpenBao for a field
+            # that no longer existed and failed closed at startup on an estate whose store was
+            # otherwise healthy. A name the chart writes and the chart seeds cannot drift apart.
+            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: "minio-secret-key" }
             {{- if not (include "lance.secretsViaDapr" .) }}
             - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.minio.secretKey | quote }} }
             {{- else }}
