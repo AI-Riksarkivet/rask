@@ -71,7 +71,6 @@ from catalog.services import dataplane, native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_policies, protection, trash
-from storage import split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -651,26 +650,6 @@ async def register_table(
 
     # LANCE-ONLY (2026-08-15 ruling) — same bypass as `declare_table`; `body` is required here.
     reject_unsupported_format(body.properties)
-    # RESERVED-BUCKET GUARD, the same refusal `warehouses.py` makes, at the door that had none. A
-    # warehouse claiming platform storage is refused because it makes that project the bucket's owner
-    # and a later project-policy set then governs every tenant's data inside it (the 2026-07-23 Mallory
-    # audit). `register_table` attaches a CALLER-SUPPLIED location and never looked at it, so the same
-    # takeover was reachable through the other door — and it leaves less behind to notice, since a
-    # warehouse claim writes a registry record an operator can see while this writes one manifest row.
-    #
-    # BEFORE the native call, not after: rejecting afterwards means compensating, and a compensation
-    # can fail. That is the estate's own check order — shape before the write.
-    #
-    # Only the RESERVED-bucket half. Refusing a location outside the namespace's own root is a
-    # different question and deliberately not answered here: an external location is what register is
-    # FOR (`deregister` keeps the bytes precisely because they are not ours).
-    if body.location:
-        bucket, _ = split_s3_uri(body.location)
-        if bucket in settings.reserved_bucket_set:
-            raise InvalidInputError(
-                f"location {body.location!r} is in bucket {bucket!r}, which is reserved platform storage "
-                "(catalog root/registry or a medallion zone bucket) and cannot be registered as a table"
-            )
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS

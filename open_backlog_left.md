@@ -552,31 +552,30 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Evidence:* Doors: services/catalog/src/catalog/api/v1/endpoints/columns.py:54 (`/{id}/add_columns`), :85 (`/{id}/alter_columns`), :116 (`/{id}/drop_columns`), :150 (`/{id}/backfill_column`), plus `update_field_metadata` and `schema_metadata/update`; each awaits `lineage_deps.emit_measured_write` with ADD_COLUMNS/ALTER_COLUMNS/DROP_COLUMNS (columns.py:69-79, 100-110), and `branch` is honoured (columns.py:10-12). Authz is router-wide (api/v1/router.py:47 → fga_deps.authorize). Errors are typed, not raw pylance: dataplane.py:1300-1364 wraps every op in `_column_op`, which maps a missing column to `TableColumnNotFoundError` and a lost race to `ConcurrentModificationError` (dataplane.py:1075-1095), and refuses unsupported spec shapes with `UnsupportedOperationError` 501 (dataplane.py:1307-1325). Schema history: lineage's services/lineage/src/lineage/api/v1/endpoints/datasets.py:87-95 serves the per-version schema off the WROTE edge, and the catalog's own commit log is versions.py:57 `GET /{id}/history`. WHAT IS TRUE: no compatibility check anywhere in columns.py/dataplane.py, and `_action_relation` (fga_deps.py:292) leaves these suffixes at the writer rung — no owner gate for a breaking drop/retype.
 - *What would reopen it:* Showing that `POST /v1/table/{id}/drop_columns` 404s on the deployed catalog, or that a caller receives an unmapped pylance exception from a column op, would restore the row as written.
 
-**LH-027 · ~~`register_table`'s door enforces no location containment~~ — THE RESERVED-BUCKET HALF CLOSED 2026-09-11**
+**LH-027 · ~~`register_table` enforces no location containment~~ — THE ROW IS THE CONFLATION IT ASKS FOR**
+`catalog` · was med · closed 2026-09-11 by measurement, not by code
 
-- *CLOSED:* the register door now refuses a location whose bucket is reserved platform storage — the
-  same refusal `warehouses.py` already made, at the door that had none. A warehouse claiming platform
-  storage is refused because it makes that project the bucket's owner and a later project-policy set
-  then governs every tenant's data inside it (the 2026-07-23 Mallory audit); `register_table` attaches
-  a CALLER-SUPPLIED location and never looked at it, so the same takeover was reachable through the
-  other door — and it leaves less behind to notice, since a warehouse claim writes a registry record
-  an operator can see while this writes one manifest row.
-- *It runs in the SHAPE phase, ahead of the parent check, and that placement is the fix's second half.*
-  Written after `require_parent_exists` it answered 404 for a request that is malformed whether the
-  parent exists or not — telling the caller to create a namespace that would not have helped. The
-  estate's order is identity → shape (400) → parent (404) → authz → conflict → write, and a
-  reserved-bucket location is a shape fact about the request.
-- *STILL OPEN — root containment,* and deliberately not closed with it: an external location is what
-  register is FOR (`deregister` keeps the bytes precisely because they are not ours), so a containment
-  rule needs its own decision about what "outside" may mean rather than riding along with this one.
-
-- *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Only the location-containment half is still open: the stable-row-id refusal the row asks for at the register door is already enforced at the publish gate, deliberately and with a recorded reason for not putting it on `register_table`.
-  **Evidence:** Still missing: the register door — services/catalog/src/catalog/api/v1/endpoints/tables.py:629-691 — runs idempotency, format rejection, parent existence, trash check, `reconcile_body_id`, then `native.call(ns, "register_table", body)` and ownership seeding; it never inspects `body.location` and there is no `reserved_bucket_set`/root containment check of the kind warehouses.py:174 and :756 already apply. Already covered elsewhere: services/catalog/src/catalog/services/publication.py:189-213 `refuse_a_tier_without_provenance` (400 when a table claims tier columns without honest provenance), called from `gate` at publication.py:309,352-353 and reached by the publish door (endpoints/publication.py:272-288); pinned by services/catalog/tests/test_a_tier_that_cannot_carry_provenance_is_refused.py:9-18, whose docstring states outright WHY THE CHECK BELONGS HERE AND NOT AT `register_table`. The row's supporting claim about the stale comment still holds: services/ingest/src/ingest/lander.py:68 says "gate A14 makes the catalog refuse" while A14 is enforced in services/ingest/src/ingest/catalog.py:201,218-262 — the ingest plane, not the catalog.
-  **Reopen if:** A containment check inside tables.py's register handler (rejecting an absolute/traversing/reserved-bucket location) with rask tests pinning it would close the remaining half; conversely, showing publication.gate is not on the path a registered governed tier must pass would re-open the row's second half.
-`catalog, ingest` · med · **blocked:** owner decision on the stable-row-id shape (refuse on register INTO a governed tier, per D1)
-
-- *Why open:* Driving the deployed door refutes the cross-tenant hole (absolute location 400s, traversal 400s, a relative path resolves inside the caller's own warehouse) but `endpoints/tables.py:514-536` has no check of its own and no rask test covers containment (re-measured TRUE 2026-09-10). Separately the catalog's own create sets the stable-row-id flag and ingest gate A14 refuses without it, but A14 guards the ingest path only — `ingest/lander.py:68` claims the catalog refuses and it does not, so `source_rowid` provenance can be dishonest beyond repair.
-- *Closes when:* Add the location check to `tables.py:514-536` (under the namespace's warehouse root, outside `reserved_bucket_set`, as `warehouses.py:164/641` does) and, in the same door, refuse a dataset lacking stable row ids when the target is a governed tier; pin absolute/traversal/reserved-bucket refusal with rask tests.
+- *THE ROW ASKED FOR A GUARD THAT CANNOT FIRE AND SHOULD NOT EXIST, and I shipped it before measuring
+  — then reverted it the same day.* It reasoned by analogy from `warehouses.py`, which refuses a
+  WAREHOUSE over a reserved bucket. The analogy does not hold, and `rask-lance-catalog` names the error
+  outright: the reserved bucket blocks the WAREHOUSE route — a tenant claiming platform storage, where
+  `provision_bucket` is idempotent so the claim silently succeeds, the project becomes the bucket's
+  owner, and a later project-policy set governs every tenant's data in it — while leaving the
+  REGISTRATION route open, which names one dataset and makes nobody an owner of anything.
+  *"Conflating them is how you conclude the cascade can never be governed"* — and the cascade head
+  registers its bronze seed into precisely that bucket.
+- *IT WAS ALSO INERT.* `register_table` addresses a location inside the root it is connected to and
+  nowhere else (`catalog_register.relative_location`'s own docstring); every caller sends a RELATIVE
+  path — undrop sends the final path segment alone — and the backend refuses an absolute URI outright.
+  So the guard read a field that never arrives: a control that cannot fire, whose only effect would
+  have arrived the day absolute URIs became valid, by closing a route the design deliberately opens.
+- *ROOT CONTAINMENT IS ALREADY ENFORCED, one layer up.* `relative_location` refuses a dataset URI
+  outside the catalog's connection root and names both in the error. That is the containment Lakekeeper
+  describes, applied at the producer seam rather than re-derived at the door from a bucket string the
+  door does not receive.
+- *What remains is a test rather than a guard* (`tests/integration/test_register_refuses_reserved_platform_storage.py`,
+  rewritten in place): the platform's own bucket stays registrable, and locations are root-relative by
+  construction.
 
 **LH-028 · Three container-tier deletion paths were never driven live: warehouse delete, project delete, cascade DETACH + plural undrop, and bucket-purge sole-ownership**
 `catalog` · med

@@ -1,19 +1,23 @@
-"""`register_table` must refuse a location in reserved platform storage (LH-027).
+"""`register_table` is ROOT-RELATIVE by construction, and the reserved bucket must stay reachable.
 
-THE DOOR IT MIRRORS. `warehouses.py` refuses a warehouse whose bucket is reserved — the catalog root,
-the registry, the medallion zone buckets — because claiming one makes that project the bucket's owner
-and a later project-policy set then governs every tenant's data inside it (the 2026-07-23 Mallory
-audit). `register_table` attaches a caller-supplied LOCATION and never looked at it, so the same
-takeover was available through the other door: register a table at `s3://<catalog-root>/...`, receive
-ownership tuples for it, and hold a governed handle on platform storage.
+THIS FILE ASSERTED THE OPPOSITE FOR HALF A DAY. It pinned a guard that refused a registration whose
+location bucket was reserved platform storage — reasoning by analogy from `warehouses.py`, which
+refuses a WAREHOUSE over a reserved bucket. The analogy is wrong, and `rask-lance-catalog` names the
+error exactly: the reserved bucket blocks the WAREHOUSE route (a tenant claiming platform storage,
+where `provision_bucket` is idempotent so the claim silently succeeds, the project becomes the
+bucket's owner, and a later project-policy set governs every tenant's data in it) while leaving the
+REGISTRATION route open (naming one individual dataset, which makes nobody an owner of anything).
+"Conflating them is how you conclude the cascade can never be governed" — and the cascade head
+registers its bronze seed into precisely that bucket.
 
-IT IS NOT THE SAME AS THE WAREHOUSE CASE AND IS WORSE IN ONE WAY: a warehouse claim at least creates a
-registry record an operator can see. A registered table is one row in a manifest.
+The guard was also inert. `register_table` addresses a location inside the root it is connected to and
+nowhere else (`catalog_register.relative_location`), every caller sends a relative path — undrop sends
+the final path segment alone — and the backend refuses an absolute URI outright. So it was a control
+that could not fire, whose only effect would have arrived the day absolute URIs became valid, by
+closing a route the design deliberately leaves open.
 
-WHAT THIS DOES NOT ASSERT: that register refuses a location outside the namespace's own root. That is
-the other half of the original row and it is deliberately not closed here — an external location is
-the whole POINT of register (`deregister` keeps bytes precisely because they are not ours), so a
-containment rule needs its own decision about what "outside" may mean.
+What is worth pinning is the property that makes the whole question moot: locations here are relative,
+and the platform's own bucket is registrable.
 """
 
 from __future__ import annotations
@@ -25,46 +29,44 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def reserved_bucket(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    monkeypatch.setenv("LANCE_RESERVED_BUCKETS", "platform-secrets")
+def reserved_bucket() -> Iterator[str]:
+    """The estate's real reserved bucket is the catalog root — the one the cascade head registers into."""
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()
-    yield "platform-secrets"
+    yield next(iter(sorted(get_settings().reserved_bucket_set)), "lance-catalog")
     get_settings.cache_clear()
 
 
-def test_registering_into_a_reserved_bucket_is_refused(real_ns_client: TestClient, reserved_bucket: str) -> None:
-    """The refusal the warehouse door already makes, at the door that had none."""
-    resp = real_ns_client.post(
-        "/v1/table/acme$attached/register",
-        json={"id": ["acme", "attached"], "location": f"s3://{reserved_bucket}/stolen"},
-    )
+def test_a_registration_is_not_refused_for_naming_platform_storage(real_ns_client: TestClient, reserved_bucket: str) -> None:
+    """The deliberately-open route: the cascade head registers its bronze seed in the reserved bucket.
 
-    assert resp.status_code == 400, f"a reserved-bucket location was not refused: {resp.status_code} {resp.text[:200]}"
-    assert reserved_bucket in resp.json().get("detail", ""), "the refusal must NAME the bucket so the caller can fix it"
-
-
-def test_the_refusal_happens_before_the_native_call(real_ns_client: TestClient, reserved_bucket: str) -> None:
-    """A guard that runs after the attach leaves a real manifest row behind to clean up.
-
-    The estate's own check order — identity, shape, parent, authz, conflict, THEN the native write —
-    exists for exactly this: rejecting afterwards means compensating, and a compensation can fail.
+    A 400 whose message mentions the bucket would mean the warehouse rule has leaked onto this door.
+    Any other status is this test's business to ignore — a missing parent or an absent location is a
+    different door's answer, and pinning them here would make this a test of unrelated behaviour.
     """
-    real_ns_client.post(
-        "/v1/table/acme$attached2/register",
-        json={"id": ["acme", "attached2"], "location": f"s3://{reserved_bucket}/stolen"},
-    )
-
-    described = real_ns_client.get("/v1/table/acme$attached2")
-    assert described.status_code == 404, "the refused register still left the table attached"
-
-
-def test_an_ordinary_location_is_still_accepted(real_ns_client: TestClient, reserved_bucket: str) -> None:
-    """The guard must not refuse the case register EXISTS for — attaching external bytes."""
     resp = real_ns_client.post(
-        "/v1/table/acme$ordinary/register",
-        json={"id": ["acme", "ordinary"], "location": "s3://a-tenants-own-bucket/data"},
+        "/v1/table/medallion$seed/register",
+        json={"id": ["medallion", "seed"], "location": "medallion/seed"},
     )
 
-    assert resp.status_code != 400 or reserved_bucket not in resp.text, f"an ordinary location was caught by the guard: {resp.text[:200]}"
+    refused_for_the_bucket = resp.status_code == 400 and reserved_bucket in resp.text
+    assert not refused_for_the_bucket, f"the warehouse rule leaked onto the register door: {resp.text[:200]}"
+
+
+def test_the_register_location_is_root_relative_by_construction() -> None:
+    """Why a bucket check on this door can never fire: there is no bucket in the location.
+
+    `relative_location` is the producer-side seam and it says so outright; the undrop paths send the
+    final path segment alone. A location that carries a bucket is refused below this layer, so a guard
+    reading one is reading a field that does not arrive.
+    """
+    from medallion.services.catalog_register import relative_location
+
+    assert relative_location("s3://lance-catalog/medallion/bronze", "s3://lance-catalog") == "medallion/bronze"
+
+    with pytest.raises(Exception) as caught:
+        relative_location("s3://someone-elses-bucket/data", "s3://lance-catalog")
+    assert "lance-catalog" in str(caught.value) or "someone-elses-bucket" in str(caught.value), (
+        "a location outside the connection root must be refused NAMING both, so the caller can see which is which"
+    )
