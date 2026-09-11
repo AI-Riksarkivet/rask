@@ -706,6 +706,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   The id is `declared_table_id(ds)`, the `lineage.dataset_id` stamped in schema metadata — so silver and
   gold each claim to BE the bronze dataset. That is a condition-1 defect in its own right, independent
   of compaction: every lineage edge those tiers carry attaches to the wrong Dataset node.
+- **CORRECTION, same day: the mis-stamped tier id is ALREADY FIXED AT HEAD, and the live data is stale
+  evidence.** `ray_stage_job.py:464` reads `RASK_DEST_TABLE` and stamps it, and its own comment names
+  this exact symptom as what it closed — "this job never read it, so every derived tier inherited its
+  UPSTREAM's name through schema metadata — silver's compactions and silver's per-dataset FAIL events
+  filed against bronze's node". `work_order.to_env` emits the key (`work_order.py:151`) and the
+  in-process lane passes `dataset_id` too. So the three tiers sharing one id are datasets written before
+  that fix, not proof of a live defect — which is the same "a verdict is not evidence" trap, applied to a
+  finding measured twenty minutes earlier in this session.
+- *What the live estate therefore cannot yet show:* whether the deployed Ray image carries that fix. The
+  Ray head image is not chart-owned, so the stamp landing correctly is exactly what a deploy would
+  settle, and nothing short of one will.
 - *Still unmeasured on this half:* why `lakehouse-bronze$events` 404s as well, since it is the correct
   two-segment shape — warehouse scoping is the obvious candidate and the catalog's table list would
   settle it.

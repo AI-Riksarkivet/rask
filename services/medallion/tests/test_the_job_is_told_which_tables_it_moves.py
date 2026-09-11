@@ -81,10 +81,15 @@ async def test_the_submitted_job_is_told_the_catalog_identifiers_it_moves(captur
 async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: dict[str, Any]) -> None:
     """Same rule as `RASK_ORIGINATOR`/`RASK_PROJECT`: an empty value is not an identity.
 
-    The runner reads `e.get("RASK_DEST_TABLE", "") or _identifier_from(to_uri)`, so an absent key takes the
-    documented stem fallback. Sending `""` would take the same branch today and pin a value the
-    platform does not know — and the moment a runner tests for the key's PRESENCE (the natural way to
-    ask "was I wired?"), a blank would answer yes.
+    ABSENT AND BLANK MUST STAY DISTINGUISHABLE, and what absent COSTS is worth naming because it is not
+    free. `ray_stage_job.py:464` reads `os.environ.get("RASK_DEST_TABLE", "").strip()` and nothing else —
+    there is no fallback deriving the id from the URI stem, and no `_identifier_from` anywhere in this
+    repository. So an unwired lane stamps `dataset_id=""`, which DROPS the tier's declared name rather
+    than inheriting its upstream's: the runner's own comment prefers that to "publishing a name that
+    describes another dataset".
+
+    Sending `""` instead of omitting would pin a value the platform does not know, and the moment a
+    runner tests for the key's PRESENCE — the natural way to ask "was I wired?" — a blank answers yes.
     """
     await ray_submit.submit_stage_job(
         _settings(),
