@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 46 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -375,6 +375,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Closes when:* The maintenance identity presents its dedicated token at the catalog's vend door — root
   cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
   refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
+
+**LH-143 · The cascade-lag monitor is blind for one project's silver→gold edge — the lineage producers door 403s it**
+`medallion, lineage` · low · found 2026-09-11 by reading the estate's own warnings
+
+- *Measured:* `cascade_lag_edge_unreadable` fires every tick, and every sampled record is the same
+  thing — `403 Forbidden` on `GET http://rask-lineage:8000/datasets/advref31-gold$catalog/producers`,
+  `project=advref31`, `edge=silver->gold`. 8 of 8 sampled, one project, one edge. Not estate-wide: every
+  other project's edges read fine.
+- *What it costs:* the silver→gold lag for that project is not measured. The cascade may be healthy or
+  stalled and the monitor cannot say, which is the failure mode a lag monitor exists to prevent.
+- *403, not 401, so the identity authenticated and lacks a RUNG* — a read grant on that tenant's gold
+  dataset. The likeliest cause is a missing or unseeded tuple for that project rather than anything in
+  the monitor.
+- *The open question worth answering first:* whether the same grant gap reaches beyond the monitor. A
+  403 on `/producers` says the medallion identity cannot read that dataset's lineage at all, and if the
+  tuple is simply absent for `advref31` then other doors scoped to the same rung are affected too. Check
+  that before treating this as a monitoring-only row.
+- *Why it went unseen:* it is a WARN line in a channel that is 91% two permanent, designed refusals (see
+  the audit's warning-composition section), so a 19-per-tick signal is 0.1% of the volume.
+- *Closes when:* the monitor reads that project's producers — by granting the rung if the tuple is
+  missing, or by naming why that project differs — and a blind edge is reported as a distinct state
+  rather than only as an unreadable-edge warning, so "not measured" cannot look like "not lagging".
 
 **LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
 `catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
