@@ -208,7 +208,25 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **LH-006 · `UPSTREAM`/`DOWNSTREAM`/column-lineage Cypher is unbounded `*1..`, and Dataset nodes carry no `latest_version`**
 `lineage` · med
 
-- *Why open:* The `/producers` and retention/index clauses closed; traversal depth did not. Verified at HEAD: `services/lineage/src/lineage/services/cypher.py:329,334,445,448` are all `*1..`, and `age.py:44` names the unbounded path over a grown graph as why a pooled connection cannot be pinned. `with_depth` (cypher.py:326) exists but no door applies a ceiling.
+- *Why open:* The `/producers` and retention/index clauses closed; traversal depth did not. The query
+  CONSTANTS are `*1..`, and `age.py:44` names the unbounded path over a grown graph as why a pooled
+  connection cannot be pinned.
+- **RE-MEASURED 2026-09-11 — "no door applies a ceiling" is FALSE, and the ask is a semantic change
+  rather than a missing bound.** The machinery is all present and named differently than this row says:
+  the helper is `cypher.bounded_walk` (not `with_depth`), the ceilings are `cypher.MAX_WALK_DEPTH` (20)
+  and `cypher.MAX_COLUMN_DEPTH`, and doors already use them — `datasets.py:103` takes
+  `depth: Annotated[int | None, Query(ge=1, le=MAX_WALK_DEPTH)]`, and the column-graph walk validates
+  against `MAX_COLUMN_DEPTH` (`repository.py:598`) and iterates a bounded frontier with a visited set.
+  What is genuinely unbounded is the four NEIGHBOURS doors: `/datasets/{name}/upstream`, `/downstream`
+  and the column pair pass no depth, so `bounded_walk` receives `None` — which its own docstring calls a
+  DELIBERATE unbounded walk, not an oversight.
+- *Which makes the remaining work a decision, not a fix:* `/upstream` answers "what this was derived
+  from", and bounding it by default would silently TRUNCATE an ancestry a caller may depend on. Adding
+  an optional bounded `depth` changes nothing by itself; changing the DEFAULT changes answers. That is
+  the call this row actually needs, and it is not one to make from the resilience argument alone.
+- *Attempted and reverted 2026-09-11:* a ceiling constant added in `repository.py` — a duplicate of
+  `cypher.MAX_WALK_DEPTH` with a different value (25 vs 20), caught before commit. Two definitions of
+  one bound is worse than the unbounded walk.
 - *Closes when:* Apply `cypher.with_depth` (or a validated integer literal) with a `Query(ge=1, le=N)` bound to the `UPSTREAM`, `DOWNSTREAM`, `COLUMN_UPSTREAM` and `COLUMN_DOWNSTREAM` statements, and add a `latest_version` property to the Dataset node maintained on write.
 
 **LH-007 · ~~`ray_stage_job.py` re-creates its target with `mode="overwrite"` every run, re-minting `_rowid` for the whole tier~~ — CLOSED 2026-09-11**
