@@ -26,7 +26,6 @@ from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import declared_columns_map, storage_options
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
-    STORAGE_LOSS_STATES,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
     read_storage_schema,
@@ -56,6 +55,7 @@ class SweepReport(BaseModel):
     checked: int = 0
     backfilled: list[str] = Field(default_factory=list)
     storage_loss: list[str] = Field(default_factory=list)
+    graph_ahead: list[str] = Field(default_factory=list)
     unreadable: dict[str, str | None] = Field(default_factory=dict)
     dangling_blobs: dict[str, list[str]] = Field(default_factory=dict)
     stale: list[str] = Field(default_factory=list)
@@ -90,7 +90,8 @@ def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
     return SweepReport(
         checked=len(statuses),
         backfilled=[s.dataset for s in statuses if s.status in BACKFILLABLE_STATES],
-        storage_loss=[s.dataset for s in statuses if s.status in STORAGE_LOSS_STATES],
+        storage_loss=[s.dataset for s in statuses if s.status is ReconcileState.MISSING_ON_STORAGE],
+        graph_ahead=[s.dataset for s in statuses if s.status is ReconcileState.GRAPH_AHEAD],
         unreadable={s.dataset: s.unreadable_reason for s in statuses if s.status is ReconcileState.UNREADABLE},
         dangling_blobs={s.dataset: s.dangling_blob_columns for s in statuses if s.dangling_blob_columns},
         stale=[s.dataset for s in statuses if s.stale],
@@ -105,6 +106,8 @@ def log_sweep(report: SweepReport) -> None:
     Every class here is a finding the sweep CANNOT auto-fix, which is why each gets its own line rather
     than a count buried in the summary:
 
+    * ``graph_ahead`` — the dataset READ fine and sits at an OLDER version than the graph records; a
+      drop-and-recreate leaves this, so it is usually benign and is reported apart from real loss.
     * ``storage_loss`` — the graph claims data on-disk Lance no longer has (a bad restore, a wipe). The
       data is gone; only a human can answer for it.
     * ``unreadable`` — datasets this reader could not OPEN, reported on their own line and deliberately
@@ -125,6 +128,13 @@ def log_sweep(report: SweepReport) -> None:
     """
     if report.storage_loss:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": report.storage_loss, "count": len(report.storage_loss)})
+    if report.graph_ahead:
+        # ITS OWN BODY, because the two findings differ in kind and an operator filters on the body. A
+        # dataset here was READ successfully and sits at an older version than the graph — an e2e run
+        # that drops and recreates a table leaves exactly this. Measured 2026-09-11, 29 of the 32 the
+        # single `storage_loss` line reported were live readable tables, so the real loss it also carried
+        # was the 9% no one could see.
+        log.warning("lineage_reconcile_graph_ahead", extra={"datasets": report.graph_ahead, "count": len(report.graph_ahead)})
     if report.unreadable:
         log.warning("lineage_reconcile_unreadable", extra={"datasets": report.unreadable, "count": len(report.unreadable)})
     if report.dangling_blobs:
@@ -148,6 +158,7 @@ def log_sweep(report: SweepReport) -> None:
             "checked": report.checked,
             "backfilled": len(report.backfilled),
             "storage_loss": len(report.storage_loss),
+            "graph_ahead": len(report.graph_ahead),
             "unreadable": len(report.unreadable),
             "dangling_blobs": len(report.dangling_blobs),
             "stale": len(report.stale),

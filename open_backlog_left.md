@@ -121,6 +121,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `lineage_reconcile_storage_loss` WARN carries the full list, and it is e2e residue by name —
   `probe$nonexistent`, `e2e-ns$t178b2dda`, `tracka$…`, `trackansd…`, `cli07837ns$t2`. Measured stable at
   `storage_loss=32, unreadable=2, stale=268, checked=356` across every tick sampled.
+- **THE SPLIT LANDED 2026-09-11.** `storage_loss` now means MISSING_ON_STORAGE alone; `graph_ahead` is
+  its own report field and its own `lineage_reconcile_graph_ahead` WARN body, so an operator can filter
+  the benign class without silencing real loss. `STORAGE_LOSS_STATES` is deleted — it had exactly one
+  consumer and two tests pinning it, and the property those tests actually guarded (neither state is
+  back-fillable) is re-pinned against the REPORT rather than against a tuple, which is what an operator
+  reads. Pinned by `tests/unit/test_a_readable_dataset_is_not_reported_as_storage_loss.py`.
+  UNDEPLOYED: the numbers above are from the running estate, which predates this.
+- *What is still open here:* the residue itself. The split makes the question answerable — once deployed,
+  `graph_ahead` vs `storage_loss` says how many of the 32 are recreated tables and how many are real —
+  but it prunes nothing and this row's `prune_orphan_datasets` remedy is still measured not to work.
 - *Smaller, truer fix than the row asks for:* split the two states into their own report fields and
   their own WARN lines, so `graph_ahead` (benign after a recreate) stops being spelled as loss. That is
   a `SweepReport` change plus `summarize_sweep`/`log_sweep`, no new probe and no extra I/O, and it makes

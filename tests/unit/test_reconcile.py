@@ -18,7 +18,6 @@ from lineage.api.reconcile_cron import _on_cron
 from lineage.core.config import LineageSettings
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
-    STORAGE_LOSS_STATES,
     StorageUnreadable,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
@@ -26,7 +25,7 @@ from lineage.core.reconcile import (
     reconcile,
     reconcile_all,
 )
-from lineage.schemas import DatasetSummary, ReconcileState
+from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.schema import SchemaFields
 
@@ -520,6 +519,7 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "outbox_stranded": 0,
         "backfilled": [],
         "storage_loss": [],
+        "graph_ahead": [],
         "unreadable": {},
         "provenance_holes": {},
         "dangling_blobs": {},
@@ -557,15 +557,19 @@ def test_mount_reconcile_cron_production_gate() -> None:
     assert TestClient(mounted).options("/reconcile-cron").status_code == 200  # the Dapr discovery ack
 
 
-def test_storage_loss_states_flag_graph_ahead_and_missing_not_insync() -> None:
-    # The states that mean STORAGE lost data the graph still records (surfaced as WARN, not auto-fixed) —
-    # distinct from the back-fillable "graph lost the event" set. Guards the classification the cron reports.
-    from lineage.core.reconcile import BACKFILLABLE_STATES, STORAGE_LOSS_STATES
+def test_neither_drift_direction_is_treated_as_a_lost_write() -> None:
+    """The property the old `STORAGE_LOSS_STATES` grouping actually guarded, kept after the split.
 
-    assert ReconcileState.GRAPH_AHEAD in STORAGE_LOSS_STATES
-    assert ReconcileState.MISSING_ON_STORAGE in STORAGE_LOSS_STATES
-    assert ReconcileState.IN_SYNC not in STORAGE_LOSS_STATES
-    assert not set(STORAGE_LOSS_STATES) & set(BACKFILLABLE_STATES)  # loss ≠ back-fillable (disjoint)
+    Both directions mean the graph and storage disagree in a way the sweep CANNOT auto-fix: it can
+    recreate no data, so neither may be back-fillable. They are now REPORTED apart — `graph_ahead` is a
+    readable dataset at an older version, which a drop-and-recreate produces and which is not loss — and
+    `test_a_readable_dataset_is_not_reported_as_storage_loss.py` owns that half.
+    """
+    from lineage.core.reconcile import BACKFILLABLE_STATES
+
+    assert ReconcileState.GRAPH_AHEAD not in BACKFILLABLE_STATES
+    assert ReconcileState.MISSING_ON_STORAGE not in BACKFILLABLE_STATES
+    assert ReconcileState.IN_SYNC not in BACKFILLABLE_STATES
 
 
 def test_unreadable_storage_is_not_reported_as_storage_loss(tmp_path: Path) -> None:
@@ -611,8 +615,20 @@ def test_unreadable_storage_is_not_reported_as_storage_loss(tmp_path: Path) -> N
 
 
 def test_an_unreadable_dataset_is_excluded_from_storage_loss() -> None:
-    """The signal an operator acts on must not count what it could not look at."""
-    assert ReconcileState.UNREADABLE not in STORAGE_LOSS_STATES
+    """The signal an operator acts on must not count what it could not look at.
+
+    Asserted against the REPORT rather than against a constant: the classes are what an operator reads,
+    and a dataset landing in the wrong one is the failure this guards — which a membership check on a
+    tuple cannot see.
+    """
+    from lineage.api import reconcile_cron
+
+    report = reconcile_cron.summarize_sweep([ReconcileStatus(dataset="blind", in_sync=False, status=ReconcileState.UNREADABLE, unreadable_reason="no creds")])
+
+    assert report.unreadable == {"blind": "no creds"}, "it belongs to its own class"
+    assert report.storage_loss == [] and report.graph_ahead == [] and report.backfilled == [], (
+        "a dataset nobody could open is neither lost, nor behind, nor recoverable"
+    )
     assert ReconcileState.UNREADABLE not in BACKFILLABLE_STATES
 
 
