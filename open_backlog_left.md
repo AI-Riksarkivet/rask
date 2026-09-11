@@ -245,19 +245,23 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   pick, and the lane that skips it is the one an operator reads as the cheap, correct path.
 - *This is LH-008's title's second half, one layer down.* The catalog door serves deletions on demand
   (`6f58b07c`) and that is closed; the estate's OWN consumer — the cascade — still does not apply them.
-- *THE OBVIOUS JOIN DOES NOT WORK PAST THE FIRST HOP, and that is deliberate design, not an oversight.*
-  `DatasetDelta.get_deleted_row_ids()` yields the upstream `_rowid`s that vanished, and silver's
-  `source_rowid` IS bronze's `_rowid` — so the head hop joins exactly. Deeper it does not:
-  `service_kit.lakehouse.stage_stamp.carry_source_rowid` deliberately KEEPS root provenance rather than
-  re-minting per hop ("re-minting from the immediate parent would silently reroot the provenance
-  chain"), so gold's `source_rowid` names a BRONZE row, not the silver row that was deleted.
-- *Two candidate mechanisms, both with a cost worth stating before either is built:* (a) time-travel the
-  upstream to `base_version` to map the dead `_rowid`s back to `id` — exact at every hop, but it makes
-  the delta lane depend on a version `cleanup_old_versions` is entitled to reclaim; (b) full-sync the
-  KEY column only — one cheap scan, exact for `1:1`, and WRONG for `1:N`, where a downstream id is a
-  child id that appears in no upstream, so "delete what the upstream no longer has" would delete the
-  whole tier. Whichever is chosen must branch on `cardinality`, which is why this is its own row and
-  not a follow-on line to the update half.
+- *THE JOIN IS THE ROOT KEY, and root provenance is exactly what makes it reach every hop.*
+  `DatasetDelta.get_deleted_row_ids()` yields the upstream `_rowid`s that vanished, which joins only at
+  the head (silver's `source_rowid` IS bronze's `_rowid`). What reaches deeper is the column both sides
+  already share: `carry_source_rowid` KEEPS root provenance rather than re-minting per hop, so measured
+  2026-09-11 over a real three-tier chain, `gold.source_rowid == silver.source_rowid == bronze._rowid`.
+  The upstream side of the join is therefore `source_rowid` where it exists and `_rowid` at the head —
+  the same head-detection the stamp itself uses — and the downstream side is always `source_rowid`.
+- *So the mechanism is a set difference over one int64 column per side*, deleting the small dead set
+  rather than filtering on an unbounded `NOT IN`. It is exact for `1:1` at every hop and for `1:N` at
+  the head. Its ONE imprecision is `1:N` deeper in: siblings share a root key, so deleting one of
+  several children upstream leaves the root present and the tier below keeps its rows. That is an
+  under-deletion — the safe direction, and it must be stated rather than discovered.
+- *Two guards this cannot ship without:* the retraction has to run BEFORE the lane's `delta_empty=1`
+  early return, because a deletion-only change IS an empty delta (that is precisely what the
+  measurement above shows); and an upstream whose key set reads back empty must REFUSE rather than
+  retract, or one unreadable scan deletes a governed tier — the same guard shape as
+  `StagedOutputEmptyError`.
 
 **LH-010 · HTR-lane cascade residuals: the P7b re-cut, the bronze→silver geometry stage runners, and populating the in-dataset `lineage` column**
 
