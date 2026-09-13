@@ -160,6 +160,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             kms_key_id=settings.s3_sse_kms_key_id,
             bucket_key_enabled=settings.s3_sse_bucket_key_enabled,
         ),
+        # THE OPERATOR'S allowlist of legitimate foreign base paths, and the same list the create door
+        # already enforces on a per-request `data_base`. A manifest-declared base outside the table's
+        # own vended scope is granted READ only if it is on this list — without it, a writer on one
+        # table could declare a base naming another tenant's prefix and read it with their next
+        # credential. Empty (the default) sanctions nothing foreign.
+        sanctioned_bases=settings.multibase_data_base_list,
     )
     # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
     # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so

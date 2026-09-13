@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -958,7 +958,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   against it.
 
 **LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
-`catalog` · **HIGH** · filed 2026-09-11 · the residual of a partial fix, stated rather than accepted
+`catalog` · med · filed 2026-09-11 · **the writer-chosen escalation is CLOSED 2026-09-13; an operator-sanctioned residual remains**
 
 - *Why open:* `build_session_policy` appends a READ grant for every base path the table's manifest
   declares, and a base may legitimately live in its own bucket — so the grant is not confined to the
@@ -976,11 +976,39 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   indistinguishable here from a legitimate cross-bucket base. Telling them apart needs the base resolved
   to a catalog object and the SAME read authorization the caller would need to read that object
   directly — a per-base FGA check on the vend path, not a shape rule.
-- *Closes when:* Each declared base is resolved to a table id and authorized at the caller's own read
-  rung before it is added to the session policy; a base that resolves to nothing, or that the caller may
-  not read, is dropped from the policy rather than failing the vend (a poisoned manifest must not make a
-  table permanently un-vendable). Pin with a test that a base inside another subject's warehouse is
-  absent from the rendered policy.
+- **LANDED 2026-09-13 — the vend door now applies the sanction the CREATE door already enforced.** A
+  declared base is granted READ only when it is inside the table's own vended scope, or on the
+  operator's `LANCE_MULTIBASE_DATA_BASES` allowlist; anything else is DROPPED (never raised — a
+  poisoned manifest must not make a table permanently un-vendable) and logged
+  `vend_base_path_unsanctioned`. `sanctioned_bases` defaults to empty, so a call site that has not
+  wired the allowlist sanctions nothing foreign. Wired through both STS plugs as deployment config
+  rather than a `vend` argument, because which buckets belong to this lakehouse is not a per-request
+  question — and a per-request one would be answerable by the caller whose manifest is the untrusted
+  input. RED-first, 16 tests in
+  `services/catalog/tests/test_a_declared_base_cannot_reach_a_table_the_caller_never_opened.py`,
+  including both near-misses (`lakehouse-evil`, `mine$t-evil`) that a bare prefix test would admit.
+  **Built and deployed? NO — rides the pending roll.**
+
+- *Why the allowlist rather than the per-base FGA check this row originally prescribed:* there is no
+  location->table index in the catalog, so "resolve each base to a table id" costs either a walk of the
+  estate on a 900 s-TTL hot path or a reversal of the backend's own layout convention. The allowlist is
+  not a shape rule — it is the estate's existing sanctioning mechanism for foreign bases, and
+  `config.py:70-77` already states the rule it encodes ("a caller can never point a base at an
+  arbitrary bucket (data-exfil / rogue-write door)"). The defect was the ASYMMETRY: the create door
+  enforced that list and the vend door ignored it.
+
+- *Measured while fixing, and both facts matter:* `LANCE_MULTIBASE_DATA_BASES` on the deployed catalog
+  carries neither a `value` nor a `valueFrom` — it is empty in the running pod, so `has_external_bases`
+  is never consulted and declared bases reached the policy wholly unchecked. And the bases live tables
+  actually declare are `<table-root>/tree/work` (shallow-clone/branch shapes, manifest feature flag 16),
+  i.e. inside the table's own scope — so the new gate narrows nothing that is running.
+
+- *Residual, stated rather than accepted:* a base on the allowlist is granted to any caller vending any
+  table, without checking that THIS caller may read THAT location. That is an operator's explicit
+  sanction of a shared multi-base bucket rather than a writer's choice, which is why it is no longer
+  HIGH — but it is still not a per-caller check. Closing it needs the location->table resolution above,
+  and is worth doing only if a deployment ever populates the allowlist with a bucket whose contents are
+  not uniformly readable by everyone who can vend.
 - *Note while this is open:* a refused base currently propagates a `ValueError` out of the vend rather
   than a typed refusal, the same shape `_reject_iam_metacharacters` already had. Fail-closed and
   consistent, but an operator sees an opaque error for a poisoned manifest.

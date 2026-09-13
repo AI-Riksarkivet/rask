@@ -24,6 +24,7 @@ OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` ->
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol, assert_never, cast, runtime_checkable
@@ -33,6 +34,8 @@ from pydantic import BaseModel
 
 from service_kit.lakehouse.objectfs import lance_storage_options
 
+
+log = logging.getLogger(__name__)
 
 Tier = Literal["read", "write"]
 VendingMode = Literal["mode_b", "sts", "web_identity"]
@@ -157,7 +160,51 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
         raise ValueError(f"base path {base!r} contains a '..' segment; no location the catalog vends contains one")
 
 
-def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[str] = ()) -> dict[str, object]:
+def _location_within(outer: tuple[str, str], inner: tuple[str, str]) -> bool:
+    """True iff ``inner`` names a location inside ``outer`` — same bucket, at or under its key prefix.
+
+    Containment is tested against ``<prefix>/`` rather than as a bare string prefix, and the bucket must
+    match exactly: otherwise ``acme-wh/mine$t-evil`` passes for ``acme-wh/mine$t`` and the bucket
+    ``lakehouse-evil`` passes for ``lakehouse``. Both near-misses are reachable by a writer choosing a
+    name, which is the input this whole loop distrusts.
+
+    An empty outer prefix IS the whole bucket — the policy renders ``<bucket>/*`` for that table — so
+    same-bucket is containment there. It cannot arrive from a base:
+    :func:`_reject_a_base_that_is_not_a_location` refuses a bucket root before this is asked.
+    """
+    outer_bucket, outer_prefix = outer
+    inner_bucket, inner_prefix = inner
+    if inner_bucket != outer_bucket:
+        return False
+    stem = outer_prefix.rstrip("/")
+    if not stem:
+        return True
+    return inner_prefix == stem or inner_prefix.startswith(f"{stem}/")
+
+
+def _base_is_sanctioned(base: tuple[str, str], table: tuple[str, str], sanctioned_bases: Sequence[str]) -> bool:
+    """May this declared base be granted READ on the caller's credential?
+
+    TWO SANCTIONS, and neither is a shape rule. A base inside the table's OWN vended scope adds nothing
+    the credential does not already carry — that is what a shallow clone and a branch are, and measured
+    2026-09-13 it is the shape live tables declare (``<table-root>/tree/work``). A base outside it is
+    legitimate only because an OPERATOR said so: ``LANCE_MULTIBASE_DATA_BASES`` is the estate's existing
+    allowlist for exactly this, and its own config note states the rule — "a caller can never point a
+    base at an arbitrary bucket (data-exfil / rogue-write door)". The create door enforced that list and
+    the vend door did not, which is the asymmetry this closes.
+
+    The alternative considered and rejected was resolving each base to a catalog table and checking the
+    caller's read rung on it. There is no location->table index, so that costs either a walk of the
+    estate on a 900 s-TTL hot path or a reversal of the backend's own layout convention. The operator's
+    allowlist answers the same question — is this foreign location a legitimate part of this lakehouse —
+    without either.
+    """
+    if _location_within(table, base):
+        return True
+    return any(_location_within(split_s3_location(entry), base) for entry in sanctioned_bases)
+
+
+def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[str] = (), *, sanctioned_bases: Sequence[str] = ()) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
     Two statements: ``s3:ListBucket`` on the bucket gated by an ``s3:prefix``
@@ -166,11 +213,16 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
     AbortMultipartUpload. As an STS *session* policy this can only RESTRICT the
     catalog's role (intersection-only), never widen it.
 
-    ``bases`` are the base paths the table's manifest declares, each granted READ and never write, at
-    either tier. A table whose fragments carry a ``base_id`` resolves them THROUGH those paths, so a
-    credential that cannot read them is scoped to less than the table actually is — measured 2026-09-08
-    as 69 datasets a tick refused compaction because the maintainer could not probe a declared base
-    (§ H12), against a base the root credential shows is not a dataset root at all.
+    ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
+    tier, and only when :func:`_base_is_sanctioned` allows it — inside the table's own vended scope, or
+    on the operator's ``sanctioned_bases`` allowlist. A table whose fragments carry a ``base_id``
+    resolves them THROUGH those paths, so a credential that cannot read them is scoped to less than the
+    table actually is — measured 2026-09-08 as 69 datasets a tick refused compaction because the
+    maintainer could not probe a declared base (§ H12).
+
+    ``sanctioned_bases`` defaults to EMPTY, which sanctions nothing foreign: a caller that has not wired
+    the operator's allowlist grants only bases inside the table's own scope. Fail-closed is the right
+    empty case here because the value being defaulted is a permission.
 
     READ ONLY is the whole of the privilege being added, and the asymmetry is deliberate: the table
     reads through the base, it does not own it, and a write grant on another dataset's root is exactly
@@ -209,13 +261,30 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
             "Resource": obj_resource,
         },
     ]
-    for n, base in enumerate(bases):
+    n = 0
+    for base in bases:
         _reject_iam_metacharacters("base path", base)
         base_bucket, base_prefix = split_s3_location(base)
         base_prefix = base_prefix.rstrip("/")
         _reject_a_base_that_is_not_a_location(base, base_prefix)
+        if not _base_is_sanctioned((base_bucket, base_prefix), (bucket, prefix), sanctioned_bases):
+            # DROPPED, not raised, unlike the two guards above: a manifest is writer-chosen, and one
+            # poisoned base must not make a table permanently un-vendable. The caller keeps the
+            # credential it was entitled to and loses only the grant it was not.
+            #
+            # WARNING rather than silence because the failure this produces is remote from its cause: a
+            # dropped base surfaces later as a read denial at the object store, on whoever used the
+            # credential, with nothing naming the base.
+            log.warning(
+                "vend_base_path_unsanctioned",
+                extra={"base": base, "table_bucket": bucket, "table_prefix": prefix, "sanctioned_count": len(sanctioned_bases)},
+            )
+            continue
         # A base may live in another BUCKET, so it needs its own pair of statements rather than another
         # resource on the table's: the ListBucket resource IS the bucket ARN.
+        #
+        # `n` counts SURVIVING bases, not declared ones: Sids are positional, and numbering by the
+        # declared index would leave a `BaseObjects1` with no `BaseObjects0` whenever one is dropped.
         statements.append(
             {
                 "Sid": f"ListBase{n}",
@@ -233,6 +302,7 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
                 "Resource": f"arn:aws:s3:::{base_bucket}/{base_prefix}/*" if base_prefix else f"arn:aws:s3:::{base_bucket}/*",
             }
         )
+        n += 1
     return {"Version": "2012-10-17", "Statement": statements}
 
 
@@ -285,9 +355,14 @@ class StsVendor:
         access_key: str | None = None,
         secret_key: str | None = None,
         encryption: EncryptionAtRest | None = None,
+        sanctioned_bases: Sequence[str] = (),
     ) -> None:
         #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
         self._encryption = encryption or EncryptionAtRest()
+        #: The operator's allowlist of legitimate FOREIGN base paths. Deployment config rather than a
+        #: `vend` argument: which buckets belong to this lakehouse is not a per-request question, and a
+        #: per-request one would be answerable by the caller whose manifest is the untrusted input.
+        self._sanctioned_bases = tuple(sanctioned_bases)
         self._role_arn = role_arn
         self._region = region
         self._endpoint = endpoint
@@ -312,7 +387,7 @@ class StsVendor:
 
     def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
         bucket, prefix = split_s3_location(table_location)
-        policy = build_session_policy(bucket, prefix, tier, bases)
+        policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases)
         resp = self._assume_role(
             RoleArn=self._role_arn,
             RoleSessionName="lance-catalog-vend",
@@ -364,9 +439,13 @@ class WebIdentityVendor:
         ttl_seconds: int = 900,
         assume: Callable[..., dict[str, object]] | None = None,
         encryption: EncryptionAtRest | None = None,
+        sanctioned_bases: Sequence[str] = (),
     ) -> None:
         #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
         self._encryption = encryption or EncryptionAtRest()
+        #: The operator's allowlist of legitimate FOREIGN base paths — see :class:`StsVendor`. Both
+        #: plugs carry it because both render a session policy from a writer-chosen manifest.
+        self._sanctioned_bases = tuple(sanctioned_bases)
         self._region = region
         self._endpoint = endpoint
         self._role_arn = role_arn  # RustFS ignores it; boto3 requires the param
@@ -392,7 +471,7 @@ class WebIdentityVendor:
             RoleArn=self._role_arn,
             RoleSessionName="lance-catalog-vend",
             WebIdentityToken=web_identity_token,
-            Policy=json.dumps(build_session_policy(bucket, prefix, tier, bases)),
+            Policy=json.dumps(build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases)),
             DurationSeconds=self._ttl,
         )
         creds = cast(dict[str, object], resp["Credentials"])
@@ -424,6 +503,7 @@ def make_vendor(
     access_key: str | None = None,
     secret_key: str | None = None,
     encryption: EncryptionAtRest | None = None,
+    sanctioned_bases: Sequence[str] = (),
 ) -> CredentialVendor:
     """Build the configured :class:`CredentialVendor`.
 
@@ -443,6 +523,7 @@ def make_vendor(
             access_key=access_key,
             secret_key=secret_key,
             encryption=encryption,
+            sanctioned_bases=sanctioned_bases,
         )
     if mode == "web_identity":
         return WebIdentityVendor(
@@ -451,6 +532,7 @@ def make_vendor(
             role_arn=assume_role_arn or _DEFAULT_VEND_ROLE_ARN,
             ttl_seconds=ttl_seconds,
             encryption=encryption,
+            sanctioned_bases=sanctioned_bases,
         )
     assert_never(mode)
 

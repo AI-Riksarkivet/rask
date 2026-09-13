@@ -326,8 +326,12 @@ def test_a_declared_base_is_granted_READ_even_at_write_tier() -> None:
     § C1: "read on inherited bases, write on `target_bases`, never on reference-only bases" — this is
     the first of the three, and the other two need `target_bases` evidence a manifest read does not yet
     provide.
+
+    The base here sits OUTSIDE the table's prefix, so it reaches the policy only because the operator
+    sanctioned it — the tier asymmetry is what this pins, and an unsanctioned base would be dropped
+    before the question could be asked (`test_a_declared_base_cannot_reach_a_table_the_caller_never_opened`).
     """
-    policy: Any = build_session_policy("bkt", "tables/db1$users", "write", bases=("s3://bkt/shared/src.lance",))
+    policy: Any = build_session_policy("bkt", "tables/db1$users", "write", bases=("s3://bkt/shared/src.lance",), sanctioned_bases=("s3://bkt/shared",))
     objects = [st for st in policy["Statement"] if st["Action"] != ["s3:ListBucket"]]
 
     table = next(st for st in objects if "tables/db1$users" in st["Resource"])

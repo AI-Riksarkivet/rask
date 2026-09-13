@@ -21,12 +21,14 @@ THE EXISTING GUARD IS REAL AND IS NOT THIS ONE. `_reject_iam_metacharacters` ref
 base, which stops a wildcard from being smuggled into an ARN — and is exactly why the field looked
 checked. It says nothing about WHERE the base points.
 
-WHAT THIS FIXES AND WHAT IT DOES NOT, stated because the difference matters. A base at a bucket ROOT is
-refused: no legitimate base is a bucket root — the spec's base path points at a dataset root or a file
-directory (`file_format.md`, Base Path System) — so refusing it cannot narrow a real table. A base
-naming another tenant's SPECIFIC prefix is not distinguishable here from a legitimate cross-bucket
-base, and closing that needs the same read authorization the caller would need to read that table
-directly, per base. That residual is tracked, not silently accepted.
+THIS FILE OWNS THE BUCKET-ROOT GATE, WHICH IS A REFUSAL. No legitimate base is a bucket root — the
+spec's base path points at a dataset root or a file directory (`file_format.md`, Base Path System) — so
+raising cannot narrow a real table, and a malformed base is worth an operator's attention.
+
+WHERE a well-formed base points is a separate question with a separate answer, and it is a DROP rather
+than a refusal: see `test_a_declared_base_cannot_reach_a_table_the_caller_never_opened.py`. A base is
+granted only inside the table's own vended scope or on the operator's `LANCE_MULTIBASE_DATA_BASES`
+allowlist, so the assertions here pass no allowlist and expect foreign bases to be absent.
 """
 
 from __future__ import annotations
@@ -62,11 +64,12 @@ def test_a_base_at_a_bucket_root_is_refused(base: str) -> None:
 def test_a_base_that_names_a_real_location_still_grants_it() -> None:
     """The other half: multi-base is a supported layout and a guard that broke it would be worse.
 
-    A base may legitimately live in its own bucket — the policy builds a separate statement pair for
-    exactly that reason — so containment here is about DEPTH, not about the bucket matching.
+    A base inside the table's own vended scope is granted — that is what a registered base, a shallow
+    clone and a branch all are. A base in its OWN bucket needs the operator's allowlist, which this
+    call deliberately does not pass, so it is absent here rather than granted.
     """
     assert _base_resources(("s3://lakehouse/acme-wh/mine$t/_bases/0",)) == ["arn:aws:s3:::lakehouse/acme-wh/mine$t/_bases/0/*"]
-    assert _base_resources(("s3://other-bucket/acme/data",)) == ["arn:aws:s3:::other-bucket/acme/data/*"]
+    assert _base_resources(("s3://other-bucket/acme/data",)) == []
 
 
 def test_the_table_prefix_itself_is_unaffected() -> None:
