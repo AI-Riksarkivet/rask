@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 16 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -95,12 +95,123 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Evidence:* services/catalog/src/catalog/api/v1/endpoints/namespaces.py:735-793 (`GET /v1/namespace/{id}/table/list`: `listing = await fga.list_objects(...)`; `authorization_truncated = listing.truncated`; `names = [name for name in names if f"table:{...}" in allowed]`; `if authorization_truncated: response.context = {**(response.context or {}), "authorization_truncated": "true"}`); packages/service-kit/src/service_kit/governed/fga.py:630-636 (`truncated = len(objects) >= LIST_OBJECTS_SERVER_CAP` + `openfga_list_objects_possibly_truncated` warning); services/catalog/src/catalog/api/v1/endpoints/tables.py:212-225 (same construction on `GET /v1/table`). Nowhere is a count of FGA-filtered-out entries computed or returned — `names` is rebound by the filter and the pre-filter length is discarded.
 - *What would reopen it:* Find a code path where `authorization_truncated` (or any other response field) is set as a consequence of the `can_read_data` filter removing entries, independent of `listing.truncated`; or show `LIST_OBJECTS_SERVER_CAP` is not OpenFGA's ListObjects ceiling. Either would restore the row's stated mechanism.
 
-**LH-127 · `lance-ray-durable` has been dead for 26 days and is accumulating the whole stream**
+**LH-127 · Four orphaned Dapr durables sit on the estate's streams, and the reconcile loop cannot remove any of them**
 `lineage, compute, chart` · med
 
-- *Why open:* Measured 2026-09-10: on the LINEAGE stream, consumer `lance-ray-durable` reports 2,445 unprocessed messages and a last delivery of 26 days ago — it is bound, durable, and nothing is draining it. Every event the estate emits accrues to it forever. A durable consumer nobody reads is not free: JetStream cannot age messages out of a stream while a consumer still needs them, so this one pins the entire retention window and the 5.8 MiB grows without bound. Nothing reports it — the depth is visible only by asking NATS directly.
-**NOT the same shape as lineage's own consumer, which was filed beside this and STRUCK.** Lineage's is ephemeral BY DESIGN — the chart states it ("a durable cursor would defeat its replay-rebuilds-the-graph recovery story") and `_is_replay` accepts what the replay re-presents, logging at INFO. This one is the opposite: a DURABLE consumer with a queue group that nothing is attached to, so nothing accepts and nothing acks.
-- *Closes when:* Establish whether anything is meant to consume `lance-ray-durable` (the name suggests the Ray lane). If yes, fix the subscriber and drain it; if no, delete the consumer so retention can do its job. Then add the depth of every consumer on the estate's streams to whatever the maintenance sweep already reports, so a dead subscriber is visible without a NATS client.
+- *Why open — RE-MEASURED AND WIDENED 2026-09-13.* The row was filed on one consumer. There are four, across two streams, and two of them name app-ids that exist nowhere in the estate:
+
+      stream    consumer                    created              delivered ever   last delivery   unprocessed   app-id live?
+      LINEAGE   lance-ray-durable           2026-08-05 20:18:21  53               29d3h ago       1,590         NO
+      LINEAGE   maintenance-durable         2026-09-03 17:21:42  2,067             5d2h ago         523         yes (gated off)
+      DLQ       lance-ray-durable           2026-08-05 20:18:21  0                never                0        NO
+      DLQ       pages-to-gold-htr-durable   2026-08-15 18:33:11  --               27d23h ago           0        NO
+
+  All four report `Active Interest: No`. The live app-ids are annotator, bronze-to-silver, catalog,
+  compute, controlplane, flows, gateway, ingest, lineage, maintenance, medallion-producer,
+  media-to-silver, notifications, search, silver-to-gold, viewer — `lance-ray` and `pages-to-gold-htr`
+  are not among them, and neither appears in the repo as an app-id (`lance-ray` occurs only as the name
+  of the Data-integration library).
+
+- **Retention is NOT pinned.** LINEAGE is `Retention: Limits, Discard: Old, Maximum Age: 7d`, so messages
+  age out regardless of any consumer's position — the "a consumer holds the stream" behaviour belongs to
+  WorkQueue/Interest retention, which this stream does not use. `lance-ray-durable`'s unprocessed fell
+  2,445 -> 1,590 *because* retention pruned beneath it, and 1,590 is now exactly the stream's whole
+  message count: it has consumed nothing that still exists.
+
+- *So the cost is a FALSE SIGNAL, not disk.* `nats consumer ls LINEAGE` presents an orphan exactly as it
+  presents a broken subscription — bound, durable, queue-grouped, far behind. Separating the two took
+  reading the deployed pod's `/dapr/subscribe`. That is the one distinction an operator needs from this
+  view, and the only one it cannot make.
+
+- **`maintenance-durable` is residue, NOT a dead subscription** — the distinction above, checked the hard
+  way. `chart/values.yaml:1518` ships `workTopic: ""`, the release sets no override (`helm get values
+  rask` -> `maintenance: {trashPurgeDryRun: false}`), so `register_arrival_route` returns `None` at
+  `services/maintenance/src/maintenance/api/arrival.py:78` and `GET /dapr/subscribe` **404s** on the
+  running pod: the service registers no Dapr subscription at all. The cron lane is doing the work — a
+  sweep at 18:49 on 2026-09-13 logging per-dataset `maintenance_dataset_outcome` with
+  `indices_optimized=1`/`2`. The consumer dates from the 2026-09-03 -> 09-08 window when `workTopic` was
+  set; the `MAINTENANCE_WORK` stream that implies still exists, empty, created 2026-09-03 17:17:03.
+
+- **ROOT CAUSE — the chart's reconcile loop cannot remove an orphan, by construction.**
+  `chart/templates/nats-stream-job.yaml:223-234` walks `LINEAGE MEDALLION TRAINING DLQ`, matches
+  `*-durable`, and deletes a consumer only when its `max_deliver`/`backoff` differ from
+  `EXP_MAXD`/`EXP_BOFF`. An orphan was created by a Dapr sidecar from those same templated values, so it
+  matches forever — measured, both LINEAGE orphans report `MaxDeliver 3, Backoff 12m0s,12m0s`, exactly
+  `EXP` for `resiliency.enabled`. The loop reconciles CONFIG drift and has no notion of "no app
+  subscribes to this", so the one class of stale durable it cannot see is the class that never changes.
+
+- **NOT the same shape as lineage's own consumer, which was filed beside this and STRUCK.** Lineage's is
+  ephemeral BY DESIGN — the chart states it ("a durable cursor would defeat its replay-rebuilds-the-graph
+  recovery story") and `_is_replay` accepts what the replay re-presents, logging at INFO. Confirmed live
+  2026-09-13: lineage's ingest consumer is `NrOCxPF3`, ephemeral, created 2026-09-11 20:58:00 at the pod
+  restart, `Unprocessed 0`. These four are the opposite: durable, queue-grouped, attached to nothing.
+
+- *Closes when:* The reconcile loop gains an orphan pass beside its drift pass. A durable whose app-id is
+  not in the release's rendered app-id set is pure residue and is deleted (`lance-ray`,
+  `pages-to-gold-htr`). A durable for a LIVE app whose subscription is merely gated off must be rendered
+  under the SAME conditional the subscription's pubsub component renders under — the discipline the file
+  already applies to `EXP_MAXD`/`EXP_BOFF` — so `maintenance-durable` is removed exactly when `workTopic`
+  is empty and recreated when it is set, rather than surviving to replay 523 stale events into `plan_one`
+  on the day someone enables the lane. Then surface per-consumer depth and `Active Interest` wherever the
+  maintenance sweep already reports, so the next one is visible without a NATS client.
+
+**LH-148 · The terminal-provenance-loss metric counts restarts, not losses — and the payload it parks can never be read back**
+`lineage, chart` · **HIGH** · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
+
+- *Measured live 2026-09-13.* The DLQ stream holds 8,612 messages / 25 MiB, of which **8,515 are on
+  `dlq.lineage.events`** — the lineage service's own ingest DLQ (`chart/templates/services.yaml:488`
+  sets `LINEAGE_DLQ_TOPIC=dlq.lineage.events`; the other subjects are `dlq.bronze-to-silver` 75,
+  `dlq.silver-to-gold` 18, `dlq.notifications` 3, `dlq.maintenance.work` 1). Retained window
+  2026-09-06 18:57:14 -> 2026-09-11 21:02:08, and **zero since**: `dapr_dead_letter_parked` over the
+  last 48 h of `rask-lineage` logs counts 0, and compaction provenance is landing today (`MATCH (r:Run)
+  WHERE r.operation='compaction'` groups to 84 on 2026-09-13, 14 on 09-12). Sampled payloads are real
+  cascade provenance — `embed_features` from `bronze-to-silver`, `aggregate_gold` from
+  `silver-to-gold`, a `compaction.m2proof_silver$…` COMPLETE from `maintenance`.
+
+- **THE METRIC OVERCOUNTS, AND THE ARITHMETIC PROVES IT WITHOUT SAMPLING.** The LINEAGE stream was
+  created 2026-08-05 and its **last sequence is 5,860** — so at most 5,860 messages have EVER been
+  published to `lineage.events.v1` in the stream's whole life. The DLQ holds **8,515** parked deliveries
+  of that one topic from a FIVE-DAY window. 8,515 > 5,860, so events were parked repeatedly; the excess
+  is not explainable by volume.
+
+- *The mechanism is the ingest consumer's replay, and it is deliberate.* `chart/templates/dapr-component.yaml:172`
+  registers lineage as `deliverPolicy: "all"`, and line 219 renders a `durableName` only for
+  `deliverPolicy: "new"` — so lineage's ingest consumer is EPHEMERAL + deliver-all by design (confirmed
+  live: it is `NrOCxPF3`, created 2026-09-11 20:58:00 at the pod restart). Every restart therefore
+  re-reads up to 168 h of retained stream and re-parks every event that still fails. So
+  `record_outcome(Outcome.DEAD_LETTERED)` counts *restarts x still-failing events*, not lost events.
+
+- **This is the hazard the code says it fixed, arriving by the other door.** `services/lineage/src/lineage/api/dapr.py:101-105`
+  explains that the parking route was moved onto its own `deliverPolicy=new` durable because riding the
+  ingest component "made this route re-park up to 168h of already-parked dead letters on every pod
+  restart, spiking the terminal-loss metric with no new loss". That fix landed `c316d744` (2026-08-08)
+  and it is real — but it stops the DLQ route re-reading ITS OWN parked copies. It does nothing about
+  the INGEST consumer re-reading the SOURCE stream and parking the same events again, which produces the
+  identical spike. The comment's claim that the metric now means terminal loss does not hold.
+
+- **AND THE PARKED PAYLOAD IS UNREACHABLE BY CONSTRUCTION — all three backstops miss this class, each in
+  its own words.**
+  - The **outbox** stages the event before the publish and deletes it once the publish returns
+    (`packages/service-kit/src/service_kit/lakehouse/outbox.py`). A dead letter happens AFTER the publish
+    returned, so the object is already gone. The module states the boundary itself: *"The DLQ only
+    catches events that were published then failed delivery."*
+  - **Replay-from-stream** is the documented recovery (`dapr.py:63`) — but it reads LINEAGE, whose
+    `Maximum Age` is **7d**, so it can only recover a dead letter younger than 168 h.
+  - The **DLQ** is a log line: `on_dead_letter` ERROR-logs, records the outcome and acks, and its own
+    docstring says it *"adds operator VISIBILITY, not a second path"*. Nothing re-ingests the DLQ stream;
+    `/admin/dlq` reads the OUTBOX object store, not this stream.
+
+  So the one place the FULL payload still exists is the one place nothing reads. Today is 2026-09-13 and
+  the parked window opened 09-06, so the earliest of these are already past LINEAGE's retention: their
+  provenance is terminally lost while a complete copy of each event sits in the DLQ.
+
+- *Closes when:* (a) the loss metric distinguishes a NEW parking from a re-parking of an event already
+  parked — otherwise the number that is supposed to mean "the graph is missing events" cannot be read,
+  and the prose at `dapr.py:101-105` must stop claiming it can; and (b) the DLQ stream becomes
+  replayable — re-presenting `dlq.<appId>` to the ingest handler is idempotent on `run_id` exactly as the
+  outbox relay already is, which turns a retained payload into recovery instead of a log line. Until (b),
+  `dapr.py`'s "recovery story stays replay-from-stream" should say what it actually means: a dead letter
+  older than the stream's retention is lost.
 
 **LH-002 · The sweep's whole `storage_loss` population is UNGOVERNED residue — 3 of 3, and the row's original 32 were two other things**
 `lineage, maintenance` · **HIGH**
