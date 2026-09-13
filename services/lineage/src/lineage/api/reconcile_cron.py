@@ -273,8 +273,13 @@ async def _prune_old_runs(repository: RepositoryDep, settings: SettingsDep) -> i
         log.info("lineage_runs_pruned", extra={"pruned": pruned, "retention_days": settings.run_retention_days})
     # THE SECOND HALF, and retention does not converge without it: pruning runs leaves their datasets
     # behind, so the graph keeps a node per table any expired run ever touched and the reconcile keeps
-    # probing them. Measured 2026-09-08 — 1,271 Dataset nodes, every one still edge-reachable — which is
-    # why this cannot be a standalone sweep: a dataset becomes prunable exactly when its last run goes.
+    # probing them. Measured 2026-09-08 — 1,271 Dataset nodes, every one still edge-reachable.
+    #
+    # LOSING ITS LAST RUN IS NOT SUFFICIENT. `cypher._ORPHAN_DATASETS` also requires no `CREATED` edge,
+    # and that edge comes from a `User` rather than a Run, so no run prune can ever remove it: measured
+    # 2026-09-11, 1145 of 1247 Dataset nodes carry one and the orphan query matches 0. The call belongs
+    # here — a run-less dataset is what retention leaves behind — but it reclaims nothing for a
+    # user-created table, so accumulated residue needs a remedy that is not this one.
     #
     # ONLY AFTER a successful run prune, and contained the same way: an orphan-prune failure must not
     # lose the run-prune count the caller already earned, and neither may end the reconcile.

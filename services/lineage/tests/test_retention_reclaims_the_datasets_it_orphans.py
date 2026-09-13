@@ -11,8 +11,15 @@ MEASURED ON THE LIVE ESTATE 2026-09-08, and it refutes the obvious fix:
     Run nodes       5692
 
 So there is NO isolated node to reclaim — a "delete unreferenced nodes" sweep would free nothing. The
-residue is reachable only THROUGH its runs, which makes dataset pruning the second half of run
-retention rather than a sweep of its own: a dataset becomes prunable exactly when its last run is.
+residue is reachable only THROUGH its runs, which makes dataset pruning the second half of run retention
+rather than a sweep of its own.
+
+LOSING ITS LAST RUN IS NOT SUFFICIENT, THOUGH, and the second test below is why. The query also requires
+no `CREATED` edge, and that edge comes from a `User` rather than a Run, so no run prune can remove it.
+Measured on the live estate 2026-09-11: all 1150 CREATED edges originate at `User` nodes, 1145 of 1247
+Dataset nodes carry one, and the orphan query matches ZERO. The guard is right and these tests pin it;
+what the pairing means is that retention reclaims nothing for a user-created table, so residue needs a
+remedy that is not this one.
 
 THE COST IS THE CONTROL, NOT THE DISK. The reconcile probes every node it holds, so the two warnings
 fire each tick carrying dead rows, and a REAL storage loss arrives invisible among them — the estate's

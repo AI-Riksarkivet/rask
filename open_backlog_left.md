@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
+**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -624,8 +624,10 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   against 6139 WROTE edges over 6153 Run nodes. **685 runs (11%) already carry `author='reconcile'`**
   from the outbox-gap back-fills, so the mechanism is not hypothetical; retention takes it to 100%.
 - *And it has DATES, because nothing has been pruned yet.* The oldest run is 2026-08-15 (27 days) and
-  `pruned_runs` is 0, so the pruner is idle rather than broken — which also answers the half [[LH-011]]
-  left open ("confirm the pruner actually deletes Run nodes — I did not query the live graph").
+  `pruned_runs` is 0 across 40 sampled sweeps, which is consistent with nothing being old enough — idle,
+  not broken. It does NOT settle the half [[LH-011]] left open ("confirm the pruner actually deletes Run
+  nodes — I did not query the live graph"): an idle pruner and a broken one both report 0, and the first
+  cutoff that would tell them apart falls on ~2026-09-14.
   Taking each swept dataset's newest run + 30 days:
 
   | date | datasets with NO real provenance left |
@@ -635,6 +637,13 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   | 2026-10-07 | 290 of 333 |
   | 2026-10-11 | **333 of 333** |
 
+- **AND THERE IS NO RECOVERY SOURCE, which settles whether any of this is reversible.** The durable
+  `/events` feed is retained 7 days (`LINEAGE_EVENTS_RETENTION_DAYS=7`, deployed) and `lineage_events`
+  holds 4051 rows reaching back only to 2026-09-07, while the graph holds runs back to 2026-08-15. So
+  the raw events for everything written before early September are ALREADY gone, and that provenance now
+  exists solely in the Run nodes retention begins deleting. Once a run is pruned there is nothing in the
+  estate to rebuild who wrote a version or what it read — provenance arrives with the write event and
+  never again.
 - **WHAT IS INTENDED AND WHAT IS NOT, because the first is an owner ruling and only the second is the
   defect.** Retention aging out old lineage IS intended — 30 days, owner, 2026-09-08. What is not is
   the sweep then REFILLING the gap with edges that look like provenance: a deliberate 30-day forget
@@ -2173,6 +2182,46 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 ### Not coupled to a workflow engine or Ray
 
 _The platform claims to run any workload on any engine, and today the deployed stage lane, the catalog's published API and the media write path all name Ray._
+
+**THE WORKFLOW-ENGINE HALF OF THIS CONDITION MEASURES AS HOLDING (2026-09-11), and it had no row either
+way.** Across catalog, lineage, medallion and maintenance: **zero** Ray imports and **zero** `ray` /
+`ray-kit` declared dependencies. `dapr-ext-workflow` is declared by `medallion` alone, and both places
+that use it start a runtime behind a flag — `producer.py:119` under `quality_review_enabled or
+ray_enabled`, `stage_runner.py:91` under `ray_enabled`, whose own comment says "Only started when the
+Ray lane is on, because that is the only lane with a job to wait for". Both imports are lazy and inside
+a `try/except`, and the cascade's workflow dispatch sits under `transform.py:823`'s `if use_ray`. So
+bronze→silver→gold runs in-process with Ray and Dapr Workflow both off: driven BY, not dependent ON.
+What stays open in this section is the ENGINE half — [[LH-083]], where `executor_for` has no production
+caller — and the latent gap below.
+
+**LH-147 · `HOSTED_ENGINES` is a constant, so the refusal for "an engine this deployment does not host" cannot fire for Ray — a declared Ray task on a Ray-OFF deployment enqueues a workflow nothing will execute**
+`medallion` · med · found 2026-09-11 while measuring condition 3 · **LATENT, not live**
+
+- *The chain, read out of the code:* `engine_choice.engine_for` honours the chart only when there is no
+  declaration — `chosen = RAY_ENGINE if settings.ray_enabled else IN_PROCESS_ENGINE` (:74). With a
+  DECLARED spec it returns `registration.engine` (:85), gated solely by
+  `HOSTED_ENGINES: Final = frozenset({RAY_ENGINE, IN_PROCESS_ENGINE})` (:52) — a static constant that
+  contains Ray whether or not this deployment runs the Ray lane. So a task registered for `ray` passes
+  the check, `use_ray` is true at `transform.py:821`, and `_dispatch_stage_workflow` runs.
+- *Why that is worse than an error:* the dispatch builds its own `DaprSagaClient`, which only ENQUEUES.
+  The runtime that registers the definitions and pulls work is what `stage_runner.py:91` starts, and
+  only `if settings.ray_enabled`. The stage is therefore scheduled and never executed — no failure, no
+  DLQ, no refusal. `stage_runner.py:84` records this exact asymmetry from ingest's first in-cluster
+  deploy: "the engine running in the sidecar and still could not run a workflow because the APP side was
+  absent — an asymmetry that looks healthy from every angle except an actual run."
+- *The guard at `:78` is written for precisely this case* — "refusing rather than running it on whichever
+  engine happens to be configured here" — and cannot fire for Ray, because hosting is asserted by a
+  constant rather than read from the deployment. A control that cannot fire, in the file whose job is
+  choosing.
+- **LATENT HERE, and stated that way rather than as an incident.** Measured on the live estate:
+  `RAY_ENABLED=true` on all four medallion workloads (`bronze-to-silver`, `silver-to-gold`,
+  `media-to-silver`, `medallion-producer`), so the runtime is started everywhere and nothing is
+  currently stranded. It bites a Ray-OFF deployment — which is exactly the configuration this condition
+  says must work.
+- *Closes when:* the hosted set is derived from what the deployment actually runs rather than declared
+  as a constant, so a declared Ray task refuses with `UnrunnableTaskError` where the runtime is absent.
+  Pin that a declared Ray task on a `ray_enabled=false` deployment is REFUSED rather than enqueued —
+  the assertion the current constant makes impossible.
 
 **LH-083 · `engine_registry.executor_for` has ZERO callers — the deployed stage lane still calls `ray_submit` directly at `workflow.py:495`**
 

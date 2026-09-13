@@ -260,9 +260,17 @@ PRUNE_OLD_RUNS_TEMPLATE: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff WIT
 PRUNE_BATCH_SIZE: Final = 500
 # A Dataset node no run refers to any more — the residue run retention LEAVES BEHIND, and the reason
 # retention alone does not converge the graph. Measured on the live estate 2026-09-08: 1,271 Dataset
-# nodes, and every one of them had an incoming edge, so there is no isolated node to reclaim. They are
-# reachable only THROUGH their runs, so a dataset becomes prunable exactly when its last run is pruned
-# — which makes this the second half of `prune_runs`, never a standalone sweep.
+# nodes, and every one of them had an incoming edge, so there is no isolated node to reclaim. It belongs
+# beside `prune_runs` because a run-less dataset is what retention leaves behind — but losing its last
+# run is NOT sufficient to make a dataset prunable.
+#
+# THE `nc = 0` BELOW IS USUALLY DECISIVE, and that is measured, not predicted. A `CREATED` edge is
+# written for every table a user makes and is never removed — it IS the creator's record — while
+# `prune_runs` deletes Run nodes. Asked of the live graph 2026-09-11: all 1150 CREATED edges come from
+# `User` nodes, 1145 of 1247 Dataset nodes carry one, and this query matches ZERO datasets today. So
+# retention cannot reclaim a user-created dataset however long it runs, and an estate waiting for it to
+# converge is waiting on something that cannot happen. The guard itself is correct and deliberate (see
+# the next paragraph); what is open is that it was scoped for a narrow case and covers everything.
 #
 # READ/WROTE ONLY, and the omission is the safety. A dataset that a User CREATED but no run has touched
 # is a declared table, not residue: dropping it would erase the record that someone made it. `MATCH`ing
