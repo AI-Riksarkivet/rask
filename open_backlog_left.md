@@ -2076,7 +2076,29 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   spec says so, `undrop` because its resumability rests on it.
 - *LATENT, not live:* the catalog logged no `NamespaceAlreadyExists` and no undrop activity in the six
   hours before the fix, so nothing was failing this way at the time.
-- *Closes when:* `register_table` gets the same treatment — its own model description says "Overwrite:
+- **THERE IS A THIRD DOOR, and the row's pair was not the population.** Asked the generated models
+  directly rather than trusting the list: SIX spec request models carry `mode`, in **four different
+  vocabularies** — so reading them all with `CreateMode` would silently fold the odd ones to `Create`.
+
+      CreateNamespaceRequest   Create/ExistOk/Overwrite   FIXED (1d2c93e3)
+      RegisterTableRequest     Create/Overwrite           FIXED
+      CreateTableRequest       Create/ExistOk/Overwrite   already implemented (table_create.py)
+      InsertIntoTableRequest   Append/Overwrite           HONOURED (dataplane.insert_into_table)
+      CreateEmptyTableRequest  Create/ExistOk/Overwrite   no catalog door uses this model
+      DropNamespaceRequest     Fail/Skip                  ACCEPTED AND IGNORED
+
+  `drop_namespace` reads `behavior` (Cascade/Restrict, via `DropBehavior.parse`) and never reads
+  `.mode`. Its contract, from the model itself: *"Fail (default): the server must return 400 indicating
+  the namespace to drop does not exist. Skip: the server must return 204 indicating the drop operation
+  has succeeded."*
+- *And this is the one with a consequence beyond a status code.* `Skip` is how a client makes a drop
+  IDEMPOTENT — retry a drop and a namespace already gone counts as success. Ignoring it means the second
+  attempt errors, which is exactly what breaks a caller recovering from a partial failure. Note the
+  shape: the same defect that made [[LH-141]]'s `undrop` non-resumable is here on the drop side.
+- *It cannot reuse `CreateMode`* — parsing Fail/Skip with it folds both to `Create`. It needs its own
+  closed vocabulary beside `DropBehavior` in `modes.py`, defaulting to `FAIL` (the spec's default, and
+  the direction that errors rather than silently claiming success).
+- *Closes when:* `drop_namespace` honours `Fail`/`Skip` — its own model description says "Overwrite:
   the existing table registration is replaced with the new registration", and it still answers the 409
   that means something else — and `Overwrite` on the namespace door is either implemented against an
   owner ruling on the cascade/trash interaction or stays refused.
