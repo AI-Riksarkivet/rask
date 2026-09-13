@@ -159,6 +159,91 @@ def test_contended_conditional_put_has_exactly_one_winner_per_round(s3) -> None:
         s3.delete_object(Bucket=BUCKET, Key=key)
 
 
+# ── Tier 2b ─ conditional REPLACE (If-Match): the registry RMW path's own assumption ───────────── #
+#
+# Tiers 1 and 2 prove `If-None-Match: *` — put-if-not-exists, what a Lance manifest commit stands on.
+# They say NOTHING about `If-Match`, and the estate already depends on it: `records._replace_json`
+# writes every control-root record with `put_object(..., IfMatch=etag)`, and `records.mutate_json` is
+# the seam every registry read-modify-write goes through. A store that ignores `If-Match` accepts both
+# writes and the last one silently wins — which is the check-then-act race that module exists to close,
+# on the tenant-isolation guards, reappearing underneath it.
+#
+# The unit suites cannot reach this: they exercise the LOCAL branch, where `flock` + a sha256 compare
+# arbitrate in-process. Only a live store can answer for the header.
+
+
+def test_conditional_replace_rejects_a_stale_etag(s3) -> None:
+    """Replace-if-unchanged must REJECT a write conditioned on a superseded ETag, and must not apply it."""
+    key = f"{PREFIX}/replace-preflight"
+    s3.delete_object(Bucket=BUCKET, Key=key)
+    first = s3.put_object(Bucket=BUCKET, Key=key, Body=b"v1")
+    stale = first["ETag"]
+
+    fresh = s3.put_object(Bucket=BUCKET, Key=key, Body=b"v2", IfMatch=stale)["ETag"]
+    assert fresh != stale, "a replace conditioned on the CURRENT etag must be accepted"
+    assert s3.get_object(Bucket=BUCKET, Key=key)["Body"].read() == b"v2"
+
+    with pytest.raises(ClientError) as excinfo:
+        s3.put_object(Bucket=BUCKET, Key=key, Body=b"v3-lost", IfMatch=stale)
+    assert _status(excinfo.value) in (409, 412)  # the header was HONORED
+
+    # THE DATA INVARIANT, which is the assertion that matters: a store that merely returned an error
+    # code while applying the write would still lose the update.
+    assert s3.get_object(Bucket=BUCKET, Key=key)["Body"].read() == b"v2", "a refused replace must not have been applied"
+    s3.delete_object(Bucket=BUCKET, Key=key)
+
+
+def test_contended_conditional_replace_has_exactly_one_winner(s3) -> None:
+    """N threads read ONE etag and all race to replace it. Exactly one may win.
+
+    The silent-ignore detector for `If-Match`, mirroring tier 2: a store that drops the header lets
+    several 'win' and the last write clobbers the rest — `mutate_json` would then converge on a record
+    that never existed, having reported success to every caller.
+    """
+    workers, rounds = 8, 3
+    for rnd in range(rounds):
+        key = f"{PREFIX}/replace-contended-{rnd}"
+        s3.delete_object(Bucket=BUCKET, Key=key)
+        etag = s3.put_object(Bucket=BUCKET, Key=key, Body=b"base")["ETag"]
+        barrier = threading.Barrier(workers)
+        outcomes: list[tuple[str, object]] = [("", None)] * workers
+
+        def worker(
+            i: int,
+            _key: str = key,
+            _etag: str = etag,
+            _bar: threading.Barrier = barrier,
+            _out: list[tuple[str, object]] = outcomes,
+        ) -> None:
+            client = _s3()  # a client per thread, so the race is on the STORE rather than on our pool
+            body = f"replacer-{i}".encode()
+            _bar.wait()
+            try:
+                client.put_object(Bucket=BUCKET, Key=_key, Body=body, IfMatch=_etag)
+                _out[i] = ("win", body)
+            except ClientError as exc:
+                _out[i] = ("lose", _status(exc))
+            except BotoCoreError as exc:  # transport blip (port-forward) — recorded so a dead thread cannot hide
+                _out[i] = ("error", repr(exc))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert all(o[0] in {"win", "lose", "error"} for o in outcomes), f"round {rnd}: a worker thread crashed (unresolved slot): {outcomes}"
+        errors = [o for o in outcomes if o[0] == "error"]
+        assert not errors, f"round {rnd}: transport errors weakened the race — INCONCLUSIVE, not a CAS verdict: {errors}"
+
+        winners = [o[1] for o in outcomes if o[0] == "win"]
+        assert len(winners) == 1, f"round {rnd}: If-Match admitted {len(winners)} winners — the header is not being honored: {outcomes}"
+        # And the survivor is the winner's bytes, not merely 'somebody's': a store that ordered the
+        # writes but applied a loser last would pass a winner count and still have lost the update.
+        assert s3.get_object(Bucket=BUCKET, Key=key)["Body"].read() == winners[0]
+        s3.delete_object(Bucket=BUCKET, Key=key)
+
+
 # ── Tier 3 ─ concurrent Lance appends all land (real manifest-CAS commit path) ─────────────────── #
 
 
