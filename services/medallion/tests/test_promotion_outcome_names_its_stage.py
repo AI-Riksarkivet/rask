@@ -45,7 +45,8 @@ from typing import Any
 
 import pytest
 
-from medallion.workflow import PromotionOutcome, PromotionReport, PromotionSpec, emit_promotion_outcome
+from medallion.schemas.promotion import PromotionSpec
+from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
 
 
 #: The producer's real deployed state: neither var is set, so `MedallionSettings` falls to the

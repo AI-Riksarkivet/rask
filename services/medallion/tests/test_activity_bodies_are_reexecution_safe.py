@@ -23,7 +23,8 @@ from typing import Any, cast
 
 import pytest
 
-from medallion.workflow import PromotionOutcome, PromotionReport, PromotionSpec, StageJobOutcome, StageJobSpec, StageReport, request_approval
+from medallion.schemas.promotion import PromotionSpec
+from medallion.workflow import PromotionOutcome, PromotionReport, StageJobOutcome, StageJobSpec, StageReport, request_approval
 
 
 def _spec(**over: Any) -> dict[str, Any]:

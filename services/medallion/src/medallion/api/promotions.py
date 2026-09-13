@@ -20,7 +20,6 @@ import logging
 from typing import Annotated, Any, Protocol
 
 from dapr.ext.fastapi import DaprApp
-from dapr.ext.workflow.workflow_state import WorkflowStatus
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
@@ -29,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 from medallion.api.dependencies import SettingsDep
 from medallion.api.produce_auth import authenticate_subject
 from medallion.core.config import get_settings
-from medallion.workflow import PromotionSpec, promotion_review
+from medallion.schemas.promotion import PromotionSpec
 from service_kit.draining import retry_when_draining
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
@@ -65,9 +64,21 @@ _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
 _DROP = {"status": "DROP"}
 
-#: A workflow instance is never terminal-and-answerable: the engine accepts an event for a completed
-#: instance and discards it, which is the silent-success this door exists to refuse.
-_LIVE = (WorkflowStatus.RUNNING, WorkflowStatus.PENDING, WorkflowStatus.SUSPENDED)
+
+def _is_live(status: Any) -> bool:  # noqa: ANN401 — the SDK's runtime-status enum, resolved lazily
+    """Is this instance still answerable? A workflow is never terminal-and-answerable: the engine
+    accepts an event for a completed instance and discards it, which is the silent-success this door
+    exists to refuse.
+
+    The enum is imported HERE rather than at module scope, and that is the whole point: this router is
+    mounted unconditionally by the producer, so a module-level `dapr.ext.workflow` import made the
+    cascade head depend on the workflow engine. By the time this is reached a workflow client exists,
+    so the engine is present. Identity against the enum rather than a name comparison — the member
+    names are the library's to change, the members are what it compares.
+    """
+    from dapr.ext.workflow.workflow_state import WorkflowStatus
+
+    return status in (WorkflowStatus.RUNNING, WorkflowStatus.PENDING, WorkflowStatus.SUSPENDED)
 
 
 class _Client(Protocol):
@@ -133,7 +144,7 @@ def _live_spec(client: _Client, instance_id: str) -> PromotionSpec:
     if state is None:
         raise TableNotFoundError(f"no promotion under review with id {instance_id!r}")
     status = getattr(state, "runtime_status", None)
-    if status not in _LIVE:
+    if not _is_live(status):
         name = getattr(status, "name", str(status))
         raise TableNotFoundError(f"promotion {instance_id!r} is no longer under review ({name})")
     return PromotionSpec.model_validate(json.loads(state.serialized_input or "{}"))
@@ -162,6 +173,11 @@ async def handle_promotion_held(event: dict[str, Any], *, client: _Client | None
         # so retrying it parks a poison message on the topic forever.
         log.warning("medallion_promotion_hold_malformed", extra={"event": str(event)[:512]})
         return _DROP
+
+    # The workflow FUNCTION is resolved here, not at module scope: `medallion.workflow` is the engine
+    # adapter (its body is `import dapr.ext.workflow as wf`), and importing it from a router the
+    # producer always mounts is what made the cascade head depend on the engine.
+    from medallion.workflow import promotion_review
 
     wf_client = _client(client)
     instance_id = instance_for(spec.token)

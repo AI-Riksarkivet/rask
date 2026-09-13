@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from medallion.core.config import MedallionSettings
-from medallion.workflow import PromotionSpec
+from medallion.schemas.promotion import PromotionSpec
 from service_kit import dapr_publish
 
 

@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 
-from medallion.workflow import PromotionSpec
+from medallion.schemas.promotion import PromotionSpec
 
 
 def _publishing_estate(monkeypatch: pytest.MonkeyPatch) -> None:
