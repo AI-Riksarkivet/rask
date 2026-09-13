@@ -2121,7 +2121,23 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 `catalog, storage` · med
 
 - *Why open:* Half of the study's #2 landed per-vendor (`expires_at_millis`); the split never shipped, so a client cannot tell which fields are secret and which are configuration.
-- *Closes when:* Split the vended response into `credentials` and `config` objects across the vendors, updating the generated clients that consume it.
+- *RE-MEASURED 2026-09-13 — the premise HOLDS and the worst reading of it does NOT.* `VendedCredentials`
+  is still one mapping (`storage_options: dict[str, str]`, `vending.py:49`) carrying the key, the secret
+  and the endpoint/region/allow_http config together. But the serious version of this row would be a
+  live secret leak, and it is not there: searched for the vended dict reaching a log call, an
+  `extra={...}` or an f-string across `services/` and `packages/` and found NO path that logs
+  `storage_options` or a vended credential. So this is a contract-and-redaction improvement, not an
+  incident.
+- *AND THE SPLIT HAS A COST THE ROW DOES NOT WEIGH.* The single dict is the shape the CONSUMER wants —
+  `vending.py:44` records it: "`storage_options` is consumed directly by pylance / lance-ray /
+  object_store". Those libraries take one mapping, so every caller would merge the two objects straight
+  back before the call, and the merged dict at the call site is exactly where a secret would land in a
+  log. A split that only moves the merge into every caller buys the taxonomy and loses the guarantee;
+  what would actually pay is a type that KNOWS which keys are secret and renders them redacted, with
+  one merge inside it.
+- *Closes when:* Split the vended response into `credentials` and `config` objects across the vendors,
+  updating the generated clients that consume it — and decide against the above whether the split is
+  the shape that helps, or whether a redacting container over one mapping is.
 
 **LH-073 · Right to erasure is a Lance row delete only — it reaches no blob sidecar, clone/branch or version-pinning tag**
 `catalog, maintenance, notifications` · med
