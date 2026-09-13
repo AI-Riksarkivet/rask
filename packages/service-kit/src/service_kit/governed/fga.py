@@ -638,6 +638,96 @@ async def resolve(api_url: str, *, store_name: str = "lance-catalog") -> tuple[s
         return store_id, found[0].id
 
 
+class PinnedModelDrift(NamedTuple):
+    """How a pinned authorization model differs from the one bundled in this image.
+
+    THREE FIELDS RATHER THAN ONE LIST, because the directions call for opposite actions: a relation the
+    pin lacks means this image expects a door the estate cannot answer, while one only the pin has means
+    the pin is AHEAD of this image. Collapsing them would make a rollback and a roll-forward
+    indistinguishable exactly where the difference decides what to do.
+
+    ``readable`` is False when the pinned model could not be read. An unread model is UNKNOWN — it is
+    neither in agreement nor divergent — so ``drifted`` stays False and the caller reports the read
+    failure instead of a divergence it did not measure.
+    """
+
+    readable: bool
+    absent_from_pin: tuple[str, ...] = ()
+    absent_from_image: tuple[str, ...] = ()
+    redefined: tuple[str, ...] = ()
+
+    @property
+    def drifted(self) -> bool:
+        return bool(self.absent_from_pin or self.absent_from_image or self.redefined)
+
+
+async def audit_pinned_model(client: OpenFgaClient, *, store_id: str, model_id: str) -> PinnedModelDrift:
+    """Report whether the PINNED model still says what this image's ``model.json`` says.
+
+    Pinning ``RASK_FGA_STORE_ID`` + ``RASK_FGA_MODEL_ID`` is the production posture, and it works by
+    skipping :func:`provision` entirely — no boot rewrites the estate's model, so image order stops
+    being load-bearing for who may do what. It also means ``load_model()`` is never read, and that is
+    the half nothing announced: an edit to ``model.fga`` shipped in this image takes effect nowhere and
+    says so nowhere. The symptom is a door answering "object relation does not exist", which the
+    fail-closed wrapper renders as "authorization service unavailable" — an outage-shaped signal for
+    what is really a configuration difference, and the same symptom the unpinned rollback produced.
+
+    REPORTS, NEVER REFUSES, and never aborts the boot. A pin is a deliberate deployment decision, so a
+    divergence is news rather than bad data, and raising would convert an operator's pin into a
+    crash-loop no redelivery can clear.
+
+    THE ONE MODEL READ IN THIS MODULE THAT IS NOT UNDER ``_guarded``, and the difference is the point:
+    :func:`_current_model` gates a WRITE, where failing closed is what stops a narrowing model reaching
+    the store. This gates nothing at all. Failing closed here would take a serving estate down because
+    a diagnostic could not run.
+
+    The client is the caller's already-pinned one (:func:`make_client` sets
+    ``authorization_model_id``), so the read resolves the pinned version rather than the store's newest
+    — which is the whole question being asked.
+    """
+    # TOTAL ON PURPOSE — the read, the bundled model and the comparison are all inside one guard. The
+    # caller runs this inside `build_fga_client`'s own `try`, which RE-RAISES for the services that
+    # build with `fatal=True` (the catalog among them), so anything escaping here would crash-loop a pod
+    # over a diagnostic. Under a pin the bundled `model.json` is not needed to SERVE, so a corrupt one
+    # must cost the audit and nothing else.
+    try:
+        response = await client.read_authorization_model()
+        pinned = getattr(response, "authorization_model", None)
+        if pinned is None:
+            log.warning(
+                "openfga_pinned_model_unreadable", extra={"store_id": store_id, "model_id": model_id, "reason": "the store answered no model for this id"}
+            )
+            return PinnedModelDrift(readable=False)
+        image = load_model()
+        image_types, pin_types = image.get("type_definitions"), getattr(pinned, "type_definitions", None)
+        image_names, pin_names = _relation_index(image_types), _relation_index(pin_types)
+        drift = PinnedModelDrift(
+            readable=True,
+            # `_narrowings(incoming, current)` answers "what would `incoming` take away from `current`",
+            # so each direction is one call with the arguments swapped.
+            absent_from_pin=tuple(_narrowings(pin_names, image_names)),
+            absent_from_image=tuple(_narrowings(image_names, pin_names)),
+            redefined=tuple(_body_changes(_relation_bodies(image_types), _relation_bodies(pin_types))),
+        )
+    except Exception:
+        log.warning("openfga_pinned_model_unreadable", extra={"store_id": store_id, "model_id": model_id}, exc_info=True)
+        return PinnedModelDrift(readable=False)
+    if drift.drifted:
+        log.error(
+            "openfga_pinned_model_differs_from_image",
+            extra={
+                "store_id": store_id,
+                "model_id": model_id,
+                "absent_from_pin": list(drift.absent_from_pin[:20]),
+                "absent_from_image": list(drift.absent_from_image[:20]),
+                "redefined": list(drift.redefined[:20]),
+            },
+        )
+    else:
+        log.info("openfga_pinned_model_matches_image", extra={"store_id": store_id, "model_id": model_id})
+    return drift
+
+
 def make_client(
     api_url: str,
     store_id: str,

@@ -126,7 +126,8 @@ async def build_fga_client(
         from service_kit.governed import fga
 
         store_id, model_id = settings.fga_store_id, settings.fga_model_id
-        if not (store_id and model_id):
+        pinned = bool(store_id and model_id)
+        if not pinned:
             if provision:
                 store_id, model_id = await fga.provision(settings.fga_api_url)
                 # STRUCTURED, not a printf: `openfga_provisioned` is a documented INFO audit-tier
@@ -153,6 +154,16 @@ async def build_fga_client(
                 store_id, model_id = resolved
                 log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "hint": "pin the store/model ids for production"})
         client = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+        if pinned and provision:
+            # A PIN SKIPS `provision`, WHICH IS THE POINT AND ALSO THE BLIND SPOT. Nothing above reads
+            # `load_model()`, so a `model.fga` edit shipped in this image takes effect nowhere and says
+            # so nowhere — the same "object relation does not exist" outage the unpinned rollback
+            # produced, from the other direction. The audit only REPORTS; it never refuses, because a
+            # pin is a deployment decision and crash-looping on one helps nobody.
+            #
+            # Gated on `provision` rather than on the pin alone: nine services ship the same bundled
+            # model, and the same gate that decides who may publish decides who speaks about it.
+            await fga.audit_pinned_model(client, store_id=store_id, model_id=model_id)
         log.info("%s: FGA client ready (%s)", service, settings.fga_api_url)
     except Exception:
         if fatal:
