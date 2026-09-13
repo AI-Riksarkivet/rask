@@ -1124,6 +1124,13 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   actually declare are `<table-root>/tree/work` (shallow-clone/branch shapes, manifest feature flag 16),
   i.e. inside the table's own scope — so the new gate narrows nothing that is running.
 
+- **THE WIRING WAS PINNED BY NOTHING, found by the same pass.** Every test called
+  `build_session_policy` DIRECTLY with an explicit `sanctioned_bases=`, so the rule was covered and
+  nothing that carries it was: deleting `sanctioned_bases=self._sanctioned_bases` from a vendor, or
+  `sanctioned_bases=settings.multibase_data_base_list` from the catalog's lifespan, drops the parameter
+  to its empty default — every allowlisted foreign base refused on every real vend, the §H12 compaction
+  refusals back, and not one test red. Now driven through a real `StsVendor` with a capturing
+  `assume_role` plus a negative twin, and mutation-tested: it fails with the forwarding removed.
 - *Residual, stated rather than accepted:* a base on the allowlist is granted to any caller vending any
   table, without checking that THIS caller may read THAT location. That is an operator's explicit
   sanction of a shared multi-base bucket rather than a writer's choice, which is why it is no longer
@@ -2098,10 +2105,18 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *It cannot reuse `CreateMode`* — parsing Fail/Skip with it folds both to `Create`. It needs its own
   closed vocabulary beside `DropBehavior` in `modes.py`, defaulting to `FAIL` (the spec's default, and
   the direction that errors rather than silently claiming success).
-- *Closes when:* `drop_namespace` honours `Fail`/`Skip` — its own model description says "Overwrite:
-  the existing table registration is replaced with the new registration", and it still answers the 409
-  that means something else — and `Overwrite` on the namespace door is either implemented against an
-  owner ruling on the cascade/trash interaction or stays refused.
+- **ALL THREE DOORS LANDED 2026-09-13** (`1d2c93e3`, `1e5f1c25`, `8de2ec28`). `drop_namespace` now
+  honours `Fail`/`Skip` through its own `DropMode` vocabulary, covering BOTH existence sites — the
+  cascade enumerates the subtree before the drop, so a `Skip` guarding only the drop would still raise
+  for the caller most likely to be retrying — and narrow on purpose: a descendant vanishing mid-destroy
+  is a real error, not a skip. A skipped drop returns before the trailer and announces nothing.
+  `register_table` no longer answers a 409 that means something else: `Overwrite` is REFUSED at the
+  shape rung with a 400 naming why — replacing a registration would detach bytes this catalog does not
+  own from the table that currently points at them — placed before `idem.begin`, so a request never
+  attempted mints no idempotency record.
+  **Built and deployed? NO — all three ride the pending roll.**
+- *Closes when:* the roll observes all three, and `Overwrite` on the namespace door is either
+  implemented against an owner ruling on the cascade/trash interaction or stays refused.
   Note `modes.py` records a deliberate decision that an UNRECOGNISED mode falls through to `Create`
   rather than raising; that tolerance is for typos and should stay, so the refusal is for the named
   modes this door cannot honour, not for anything it does not recognise.
@@ -2540,8 +2555,9 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - **THE IDEMPOTENT HALF LANDED 2026-09-13, and the measurement is the reason it mattered.** `provision`
   wrote the model unconditionally once the narrowing guard passed, and OpenFGA has no update for a model
-  — every write mints a new immutable version. `provision` runs in the lifespan of every FGA-enabled
-  service, so each pod start of each of them added one. Paged out of the live store 2026-09-13:
+  — every write mints a new immutable version. `provision` has exactly ONE non-test caller, the
+  catalog, and `tests/unit/test_only_one_service_may_publish_the_authorization_model.py` fails the suite
+  on a second — so every one of that single service's boots added a version. Paged out of the live store 2026-09-13:
   **1,316 authorization model versions**, for a `model.json` that has changed a handful of times — counted twice by different routes that agree: paging `GET /stores/{id}/authorization-models`, and `SELECT count(DISTINCT authorization_model_id) FROM authorization_model` against the store's own Postgres.
 - *Why that is not merely untidy:* the store's "latest" model is whichever pod booted last, which is the
   value [[LH-139]]'s narrowing guard reads to decide whether a boot is a rollback — churn is the
@@ -2551,10 +2567,24 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   not store the model it is given: it materialises `metadata: null`, `relations: {}`, `module: ""`,
   `condition: ""` and `source_info: null`, so the stored form is 36,482 characters against 24,579
   authored and a direct equality check answers "different" forever. Dropping null/empty values makes
-  them byte-identical — verified with the shipped `_canonical_model` against the live store's newest
-  model and this repo's `model.json`, 20,310 characters each, i.e. **the skip would fire on the deployed
-  estate today**. RED-first, 6 tests, two of which pin that the canonical form is neither always-equal
+  them byte-identical — 20,310 characters each for the live store's newest model and this repo's
+  `model.json`, measured through the SDK deserializer `_canonical_model` is actually handed. **That
+  equality did NOT hold as first shipped**, and the next entry is why: the original measurement used the
+  REST JSON on both sides, which is not what the function receives. RED-first, 6 tests, two of which pin that the canonical form is neither always-equal
   nor never-equal. **Built and deployed? NO — rides the pending roll.**
+- **THE SKIP SHIPPED UNABLE TO FIRE, and an adversarial pass caught it (`12a77138`).** `_plain`
+  called the SDK's `to_dict()`, and openfga_sdk's generated models render PYTHON attribute names unless
+  asked otherwise — `attr = self.attribute_map.get(attr, attr) if serialize else attr` — so `to_dict()`
+  yields `computed_userset` while `model.json` and the wire say `computedUserset`. The two strings could
+  never be equal; every boot still minted a version.
+  *The original verification compared `model.json` against the REST API JSON.* Both are camelCase, so
+  both agreed at 20,310 characters — but the code receives the SDK OBJECT, not the REST JSON. It
+  verified a different thing than the code does, which is the whole lesson: the 20,310 match was real
+  and measured the wrong pair.
+  *And the test could not have caught it* — `_StoredModel.to_dict()` returned the authored dict
+  verbatim, agreeing by construction. It now builds real SDK objects. Fixed by asking for the wire
+  spelling; re-verified against the live store's model through the real deserialization path, equal at
+  20,310 where it was unequal.
 - *Deliberately NOT an `ACTIVE_MODEL_VERSION` constant:* a hand-maintained version is one somebody
   forgets to bump, and the model's own canonical form answers the same question without a second source
   of truth. Everything else is unchanged: a widened model still writes, a narrowing one is still refused
