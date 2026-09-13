@@ -35,7 +35,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, cast
+from typing import Any, Final, Literal, NamedTuple, cast
 
 import aiohttp
 from lance_namespace import ServiceUnavailableError
@@ -331,6 +331,76 @@ def _relation_index(type_definitions: Iterable[Any] | None) -> dict[str, frozens
     return index
 
 
+def _plain(value: Any) -> Any:
+    """An SDK model (or any nesting of them) as plain JSON-able data.
+
+    The comparison has to span two shapes — `load_model()` yields dicts off `model.json`, the store
+    yields SDK objects — and every SDK model here exposes `to_dict()`, which recurses for us.
+    """
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _plain(to_dict())
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _without_defaults(value: Any) -> Any:
+    """Drop the keys OpenFGA fills in on write: ``None``, ``""``, ``{}`` and ``[]``.
+
+    THIS IS WHAT MAKES THE COMPARISON POSSIBLE AT ALL. The store does not keep the model it was given —
+    it materialises `metadata: null`, `relations: {}`, `module: ""`, `condition: ""` and
+    `source_info: null`, which for this estate's model is 36,482 stored characters against 24,579
+    authored. Comparing the two directly would answer "different" forever, so the skip built on it would
+    be a branch that never runs.
+
+    Verified rather than assumed (2026-09-13): stripped this way, the live store's newest model and this
+    repo's `model.json` are byte-identical at 20,310 characters.
+
+    A falsey SCALAR is not a default — `0` and `False` are values a condition may carry — and neither
+    equals any of the four sentinels, so they survive.
+    """
+    if isinstance(value, dict):
+        kept = {}
+        for key, item in value.items():
+            stripped = _without_defaults(item)
+            if stripped is None or stripped == "" or stripped == {} or stripped == []:
+                continue
+            kept[key] = stripped
+        return kept
+    if isinstance(value, list):
+        return [_without_defaults(item) for item in value]
+    return value
+
+
+#: The three fields a model WRITE carries. The store-assigned `id` is deliberately not among them: it
+#: differs by construction on every version and would make an unchanged model look changed.
+_MODEL_FIELDS: Final = ("schema_version", "type_definitions", "conditions")
+
+
+def _field(source: Any, name: str) -> Any:
+    """One field off either shape — a mapping from ``model.json`` or an object off the SDK."""
+    return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+
+
+def _canonical_model(model: Any) -> str:
+    """The comparable form of an authorization model, from either shape it arrives in.
+
+    Fields are read off the top level BEFORE flattening, because the two shapes disagree about what the
+    top level is: `load_model()` hands back a mapping and the store hands back an SDK object.
+
+    ``default=repr`` keeps the dump TOTAL rather than letting an unexpected value raise mid-boot. It is
+    unreachable for the two shapes that really arrive — plain JSON, and SDK models that all expose
+    `to_dict()` — and where it does fire, two unlike objects render unlike, so the answer is "changed"
+    and the write proceeds as it always did. Falling to the writing side is the safe direction: the
+    worst case is the version churn this exists to reduce, never a skipped model edit.
+    """
+    body = {name: _plain(_field(model, name)) for name in _MODEL_FIELDS}
+    return json.dumps(_without_defaults(body), sort_keys=True, separators=(",", ":"), default=repr)
+
+
 def _narrowings(incoming: dict[str, frozenset[str]], current: dict[str, frozenset[str]]) -> list[str]:
     """What ``incoming`` would take away, as ``type`` or ``type#relation``. Empty means it only adds.
 
@@ -428,6 +498,19 @@ async def provision(
                     "openfga_model_narrowing_refused",
                     extra={"store_id": store_id, "model_id": current.id, "removed": removed[:20], "removed_count": len(removed)},
                 )
+                return store_id, str(current.id)
+            # AN UNCHANGED MODEL IS NOT AN EDIT, AND OPENFGA HAS NO WAY TO SAY SO. Every
+            # `write_authorization_model` mints a new immutable version, and `provision` runs in the
+            # lifespan of every FGA-enabled service — so each pod start of each of them added one.
+            # Measured on the live store 2026-09-13: 1,316 model versions for a `model.json` that has
+            # changed a handful of times.
+            #
+            # The churn is not merely untidy: the store's "latest" model is whichever pod booted last,
+            # which is the value the narrowing guard above reads to decide whether a boot is a
+            # rollback, and it leaves an operator asking what the estate's authorization model says
+            # with 1,316 candidates to diff.
+            if _canonical_model(current) == _canonical_model(model):
+                log.info("openfga_model_unchanged", extra={"store_id": store_id, "model_id": current.id})
                 return store_id, str(current.id)
         written = await client.write_authorization_model(
             WriteAuthorizationModelRequest(
