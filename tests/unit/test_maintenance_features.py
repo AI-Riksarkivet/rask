@@ -70,6 +70,33 @@ def test_the_supported_mask_is_the_four_flags_a_rewrite_accounts_for() -> None:
     assert not features.SUPPORTED & features.FLAG_DATA_OVERLAYS, "an ignored overlay returns stale cell values — a correctness bug"
 
 
+def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Path) -> None:
+    """A refusal must say WHICH feature it declined, and this module exists for that.
+
+    Its own words: an operator "can act on `disable_transaction_file`, not on a bare bit". `_named`
+    renders an unlisted bit as `256 (unknown)`, so a flag upstream has defined and this table has not is
+    a refusal nobody can act on — the module's stated purpose, failing exactly one bit past where it was
+    last checked.
+
+    Measured against the source 2026-09-14 (`lance-format/lance`, `rust/lance-table/src/feature_flags.rs`):
+    upstream reserves `FLAG_MIXED_DATA_FILE_VERSIONS = 1 << 8` and puts `FLAG_UNKNOWN` at the same bit,
+    so the unknown boundary is 256. The vendored `file_format.md` still says "flags with bit values 32
+    and above are unknown" — a doc four bits behind the code it describes.
+
+    NAMING IS NOT SUPPORTING, which is why this asserts both halves: 256 must be named AND must still
+    refuse. A dataset mixing exact V2 file versions is one whose layout a rewrite has not been checked
+    against.
+    """
+    assert features.FLAG_MIXED_DATA_FILE_VERSIONS == 1 << 8
+    assert not features.SUPPORTED & features.FLAG_MIXED_DATA_FILE_VERSIONS, "naming a flag must never admit it"
+    assert not features.SUPPORTED_FOR_GC & features.FLAG_MIXED_DATA_FILE_VERSIONS
+
+    refusal = features.describe_unsupported_flags(features.FLAG_MIXED_DATA_FILE_VERSIONS, 0)
+    assert refusal is not None, "an unsupported flag must refuse"
+    assert "unknown" not in refusal, f"the refusal names no feature, so an operator cannot act on it: {refusal}"
+    assert "mixed" in refusal.lower(), f"the refusal should name the feature upstream calls it: {refusal}"
+
+
 def test_an_ordinary_dataset_is_not_refused(tmp_path: pathlib.Path) -> None:
     """The negative that makes every refusal below meaningful: a gate that refused everything would
     pass all of them. Deletion files + stable row ids are the flags a normal rask table carries."""

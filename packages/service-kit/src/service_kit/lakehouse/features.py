@@ -101,13 +101,15 @@ FLAG_STABLE_ROW_IDS = 2
 FLAG_USE_V2_FORMAT_DEPRECATED = 4
 FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
-#: THE THREE BITS THE VENDORED TABLE DOES NOT CARRY. `lance_docs/file_format.md` stops at 16 and says
-#: "flags with bit values 32 and above are unknown", but `lance-table/src/feature_flags.rs` defines
-#: all three — the same doc-lag the vendored `spec.yaml` shows against upstream. Named here so a
-#: refusal says WHICH feature it declined instead of "32 (unknown)": an operator can act on
-#: "disable_transaction_file", not on a bare bit. **Naming is not supporting** — none of them enters
-#: :data:`SUPPORTED`, so all three still refuse; pylance 10.0.0 has no symbol for 32 or 128 at all,
-#: which makes refusal the only correct answer today.
+#: THE FOUR BITS THE VENDORED TABLE DOES NOT CARRY. `lance_docs/file_format.md` stops at 16 and says
+#: "flags with bit values 32 and above are unknown"; upstream's own
+#: `rust/lance-table/src/feature_flags.rs` defines all four and puts its `FLAG_UNKNOWN` boundary at
+#: `1 << 8`, so the doc is four bits behind the code it describes — the same doc-lag the vendored
+#: `spec.yaml` carried until it was re-vendored (`lance_docs/PROVENANCE.md`). Read against the source
+#: 2026-09-14, not inferred. Named here so a refusal says WHICH feature it declined instead of
+#: "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare bit.
+#: **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all four still refuse;
+#: pylance 10.0.0 has no symbol for 32 or 128 at all, which makes refusal the only correct answer today.
 #:
 #: 32 is WRITER-REQUIRED ONLY, which is why it is the concrete case for the reader/writer split: a
 #: dataset that sets it writer-side is one a read-only pass may safely scan.
@@ -120,6 +122,13 @@ FLAG_DISABLE_TRANSACTION_FILE = 32
 FLAG_DATA_OVERLAYS = 64
 #: Reader- and writer-required, and STICKY once set.
 FLAG_COVERED_INDEX_METADATA = 128
+#: RESERVED UPSTREAM AT THE UNKNOWN BOUNDARY — `FLAG_MIXED_DATA_FILE_VERSIONS` and `FLAG_UNKNOWN` are
+#: both `1 << 8`, i.e. upstream has allocated the name and left the bit outside what any reader treats
+#: as known "until its storage contract lands". A dataset setting it references recognised V2 data
+#: files at DIFFERENT exact versions, which is a layout no rewrite here has been checked against.
+#: Named for the refusal message only; a reserved bit that arrives before its contract does must still
+#: be declined, and declined by name.
+FLAG_MIXED_DATA_FILE_VERSIONS = 256
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -167,6 +176,7 @@ _FLAG_NAMES = {
     FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
     FLAG_DATA_OVERLAYS: "data overlays",
     FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
+    FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions (reserved upstream)",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
