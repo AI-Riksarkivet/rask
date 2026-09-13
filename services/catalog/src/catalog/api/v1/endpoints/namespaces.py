@@ -172,16 +172,11 @@ async def create_namespace(
     # window in which another caller creates the namespace, and on THIS door the loser of that race
     # would go on to seed ownership over somebody else's object. The backend's own refusal is the only
     # answer that cannot be stale.
-    kept_existing = False
-    try:
-        response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns, "create_namespace", req)
-    except NamespaceAlreadyExistsError:
-        if create_mode is not CreateMode.EXIST_OK:
-            raise
-        # The namespace is KEPT — so return what it actually is, not an empty echo of the request.
-        kept_existing = True
-        described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
-        response = CreateNamespaceResponse(properties=getattr(described, "properties", None))
+    if create_mode is CreateMode.EXIST_OK:
+        response, kept_existing = await create_or_keep_namespace(ns, segments, req)
+    else:
+        response = await run_in_threadpool(native.call, ns, "create_namespace", req)
+        kept_existing = False
 
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
@@ -265,6 +260,29 @@ async def _drain_namespaces(ns: LanceNamespace, segments: list[str]) -> tuple[Li
         # answers 200 is exactly the silence this drain exists to remove. Logged like its sibling.
         log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "namespaces"})
     return response, sorted(set(seen))
+
+
+async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req: CreateNamespaceRequest) -> tuple[CreateNamespaceResponse, bool]:
+    """Create the namespace, or KEEP the one already there. Returns ``(response, kept_existing)``.
+
+    ``ExistOk`` SEMANTICS SUPPLIED HERE BECAUSE THE BACKEND DOES NOT. Driven 2026-09-13 against a real
+    `dir` namespace: `create_namespace` raises `NamespaceAlreadyExistsError` for every mode — default,
+    `ExistOk`, `exist_ok` and `Overwrite` alike — so any caller wanting those semantics has to apply
+    them itself, and two callers here want them for different reasons.
+
+    CATCHING RATHER THAN PRE-CHECKING. An ``exists?`` read followed by a create leaves a window another
+    caller can create the namespace in, and for the create door the loser of that race would then seed
+    ownership over somebody else's object. The backend's own refusal is the only answer that cannot be
+    stale.
+
+    The kept namespace is DESCRIBED rather than echoed, so a caller receives what the namespace
+    actually is instead of a reflection of its own request.
+    """
+    try:
+        return await run_in_threadpool(native.call, ns, "create_namespace", req), False
+    except NamespaceAlreadyExistsError:
+        described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
+        return CreateNamespaceResponse(properties=getattr(described, "properties", None)), True
 
 
 def _merge_bound_top_namespaces(names: list[str], bound: Iterable[Mapping[str, str]]) -> list[str]:
@@ -716,9 +734,17 @@ async def undrop_namespace(
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
         n_id = str(n_rec["id"])
-        created: CreateNamespaceResponse = await run_in_threadpool(
-            native.call, ns, "create_namespace", CreateNamespaceRequest(id=parse_identifier(n_id, settings.delimiter), mode="exist_ok")
-        )
+        # THROUGH THE SHARED SEAM, because the `mode="exist_ok"` below is not honoured by the backend
+        # and this loop's whole resumability rests on it: a rerun after a mid-recovery failure would
+        # raise on the first namespace the previous attempt already rebuilt, abandoning the rest of the
+        # subtree in the trash.
+        #
+        # THE TABLE LOOP BELOW ALREADY GETS THIS RIGHT — it catches `TableAlreadyExistsError` and logs
+        # `undrop_table_already_registered` — so the docstring's "rerun finishes the job" was true of
+        # tables and false of namespaces. And the false half gated the true one: namespaces are rebuilt
+        # shallowest-FIRST, so a rerun aborted before it ever reached the tolerant loop.
+        n_segments = parse_identifier(n_id, settings.delimiter)
+        created, _kept = await create_or_keep_namespace(ns, n_segments, CreateNamespaceRequest(id=n_segments, mode="exist_ok"))
         if n_id == canonical:
             response = created
         # Clear only AFTER the create commits — a failed rebuild must leave the subtree recoverable.
