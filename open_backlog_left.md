@@ -1672,7 +1672,35 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog` · med
 
 - *Why open:* Classed silently-weaker in the dropped-parameter sweep: a caller asking for an idempotent or overwrite mode gets the same 409 as a caller asking for strict create.
-- *Closes when:* Implement the `mode` values on both doors (or refuse an unsupported one 400 rather than 409), with tests per mode.
+- **MEASURED 2026-09-13, driven rather than classed.** Against a real `dir` namespace, a second
+  `create_namespace` on the same id answers `NamespaceAlreadyExistsError` for EVERY mode — default,
+  `EXIST_OK`, `exist_ok`, `OVERWRITE`, and a nonsense value alike. The catalog forwards `mode` faithfully
+  (`namespaces.py:149` passes `req` straight to `native.call`); the backend ignores it. Same shape as
+  [[LH-038]]: the door repeats a claim the layer below does not honour.
+- *The contract to implement against is explicit, and it is the generated model's own description
+  rather than the vendored prose* (`lance_docs/namespace.md` tabulates `mode` for CreateTable and
+  InsertIntoTable, not for CreateNamespace): **CreateNamespace** — `Create` fails 409, `ExistOk`
+  succeeds and KEEPS the existing namespace, `Overwrite` DROPS it and creates a new empty one.
+  **RegisterTable** — `Create` (default) fails 409, `Overwrite` replaces the registration. Case
+  insensitive, both PascalCase and snake_case.
+- **AND THE PATTERN IS ALREADY IN THE HOUSE:** `POST /v1/table/{id}/create` implements all three via
+  `catalog.core.modes.CreateMode` + `services/table_create.py` (`:139` parses, `:198-200` computes
+  `pre_existed` / `overwrote_existing` / `existok_kept_existing`, `:271` returns the kept table). So
+  this is mirroring a working door, not designing one.
+- *WHY IT IS NOT A SMALL CHANGE, which is the part this row did not say.* `ExistOk` on a governed door
+  has an AUTHORIZATION consequence: the namespace already exists and already has an owner, so the
+  handler must NOT run `seed_ownership_or_compensate` on that path — otherwise any caller passing
+  `mode=exist_ok` acquires ownership of someone else's namespace. That is precisely why
+  `table_create.py` carries the `pre_existed` flag. `Overwrite` is worse: dropping a namespace here
+  means the #96 cascade trashing a whole SUBTREE, interacting with `require_no_live_trash` and the
+  existing tuples, so it is destructive and needs an owner ruling rather than an implementation.
+- *Closes when:* `ExistOk` is honoured on both doors WITHOUT seeding ownership over a pre-existing
+  object — pinned by a test that a caller passing `exist_ok` against a namespace owned by someone else
+  gains no tuple — and `Overwrite` is either implemented against a ruling on the cascade/trash
+  interaction or refused 400 naming itself, rather than answering the 409 that means something else.
+  Note `modes.py` records a deliberate decision that an UNRECOGNISED mode falls through to `Create`
+  rather than raising; that tolerance is for typos and should stay, so the refusal is for the named
+  modes this door cannot honour, not for anything it does not recognise.
 
 **LH-038 · `POST /v1/table/{id}/version/list` accepts `page_token` and ignores it**
 `catalog` · med
