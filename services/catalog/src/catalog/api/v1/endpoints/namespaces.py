@@ -20,11 +20,13 @@ from lance_namespace import (
     DropNamespaceRequest,
     DropNamespaceResponse,
     DropTableRequest,
+    InvalidInputError,
     LanceNamespace,
     ListNamespacesRequest,
     ListNamespacesResponse,
     ListTablesRequest,
     ListTablesResponse,
+    NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
     NamespaceNotFoundError,
     PermissionDeniedError,
@@ -45,7 +47,7 @@ from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reco
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
 # them drift apart again the moment one is tuned.
-from catalog.core.modes import DropBehavior
+from catalog.core.modes import CreateMode, DropBehavior
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
@@ -123,6 +125,25 @@ async def create_namespace(
     # where a client sets a DEFAULT format for the tables created under it — so accepting one here
     # would let the ruling be bypassed one level up from the door that enforces it.
     reject_unsupported_format(body.properties if body else None)
+    # WHAT `mode` ACTUALLY MEANS HERE, refused at the SHAPE rung before anything is written. The
+    # generated model states three: "Create: the operation fails with 409. ExistOk: the operation
+    # succeeds and the existing namespace is kept. Overwrite: the existing namespace is dropped and a
+    # new empty namespace with this name is created." This door honours the first two and cannot
+    # honour the third: dropping a namespace is the #96 cascade taking a whole SUBTREE, entangled with
+    # `require_no_live_trash` and the existing tuples, which is an owner ruling rather than an
+    # implementation. Refusing names the mode; the 409 it used to answer means "it already exists",
+    # which is not why the request is declined.
+    #
+    # An UNRECOGNISED value is NOT refused — `CreateMode.parse` folds it to `Create`, a tolerance
+    # `modes.py` records as deliberate for typos. The refusal is for a named mode, never for a
+    # spelling this door does not know.
+    create_mode = CreateMode.parse(body.mode if body else None)
+    if create_mode is CreateMode.OVERWRITE:
+        raise InvalidInputError(
+            "mode 'Overwrite' is not supported on this door: dropping a namespace cascades to its whole subtree "
+            "and interacts with the recoverable trash, so it needs an explicit decision rather than a silent drop. "
+            "Use 'Create' (the default) or 'ExistOk', or drop the namespace explicitly first."
+        )
     segments = parse_identifier(id, settings.delimiter)
     # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to sibling objects once a table
     # lands under this namespace — refused at SHAPE, before the namespace is created.
@@ -147,7 +168,20 @@ async def create_namespace(
     await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
-    response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns, "create_namespace", req)
+    # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
+    # window in which another caller creates the namespace, and on THIS door the loser of that race
+    # would go on to seed ownership over somebody else's object. The backend's own refusal is the only
+    # answer that cannot be stale.
+    kept_existing = False
+    try:
+        response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns, "create_namespace", req)
+    except NamespaceAlreadyExistsError:
+        if create_mode is not CreateMode.EXIST_OK:
+            raise
+        # The namespace is KEPT — so return what it actually is, not an empty echo of the request.
+        kept_existing = True
+        described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
+        response = CreateNamespaceResponse(properties=getattr(described, "properties", None))
 
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
@@ -160,15 +194,26 @@ async def create_namespace(
     # and nothing can have been put in it yet — so the undo cannot destroy anyone's data. A failed
     # seed used to leave a namespace its creator could neither see nor drop, while native
     # `NamespaceAlreadyExists` refused every retry, permanently reserving the name.
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="namespace", segments=segments, undo=_undo_create)
-    await emit_control(
-        control,
-        action="namespace_created",
-        object_type="namespace",
-        object_id=f"namespace:{id}",
-        actor=f"user:{token.sub}" if token else None,
-        extra={"mode": req.mode, "properties": req.properties},
-    )
+    # NOT ON THE `ExistOk` KEEP PATH. The namespace already exists and already has an owner, so seeding
+    # here would hand ownership of somebody else's namespace to any caller who may create one — the
+    # same reason `table_create.py` carries `existok_kept_existing`. A namespace this call really
+    # created still gets its owner, which is what makes the flag rather than the mode the condition.
+    # NOT ON THE `ExistOk` KEEP PATH — for the seed and for the ANNOUNCEMENT alike. The namespace
+    # already exists and already has an owner, so seeding would hand somebody else's namespace to any
+    # caller who may create one (the same reason `table_create.py` carries `existok_kept_existing`),
+    # and `namespace_created` would announce a creation that did not happen to every subscriber of the
+    # control stream. Nothing changed, so the honest control event is none. A namespace this call
+    # really created still gets both, which is why the condition is the flag rather than the mode.
+    if not kept_existing:
+        await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="namespace", segments=segments, undo=_undo_create)
+        await emit_control(
+            control,
+            action="namespace_created",
+            object_type="namespace",
+            object_id=f"namespace:{id}",
+            actor=f"user:{token.sub}" if token else None,
+            extra={"mode": req.mode, "properties": req.properties},
+        )
     return response
 
 
