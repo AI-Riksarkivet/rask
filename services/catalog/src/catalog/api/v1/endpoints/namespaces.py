@@ -222,7 +222,6 @@ async def _drain_namespaces(ns: LanceNamespace, segments: list[str]) -> tuple[Li
     return response, sorted(set(seen))
 
 
-@router.get("/{id}/list", response_model_exclude_none=True)
 def _merge_bound_top_namespaces(names: list[str], bound: Iterable[Mapping[str, str]]) -> list[str]:
     """A ROOT listing's names plus the warehouse-bound top-level namespaces the default backend cannot see.
 
@@ -250,6 +249,7 @@ async def _bound_top_namespaces(settings: Settings) -> list[Mapping[str, str]]:
         return []
 
 
+@router.get("/{id}/list", response_model_exclude_none=True)
 async def list_namespaces(
     id: str,
     ns: NamespaceDep,
