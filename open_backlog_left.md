@@ -2662,7 +2662,28 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `maintenance` · med
 
 - *Why open:* Nothing records which buckets a tick actually reached, so silent starvation of the last buckets is undetectable.
-- *Closes when:* Give the sweep an explicit per-tick time budget and a rotated bucket order, and report which buckets a tick covered.
+- **RE-MEASURED 2026-09-13 — one third done, one third MIS-FRAMED, one third genuinely open.**
+  *Rotation is already there, at a finer grain than this row asks for.* `sweep.py:756` is
+  `random.shuffle(uris)`, and :750-755 names this exact starvation: "the discovery listing order is
+  deterministic across ticks, so a pass that consistently dies at dataset N never maintained anything
+  after N — silently, forever. Shuffling rotates which datasets sit behind a recurring failure point."
+  It also argues the axis: per-dataset pacing "lives in the policy stamps, which do not care about
+  order", so rotating BUCKETS would be coarser than what already ships.
+  *"Nothing records which buckets a tick reached" is too strong.* `_discover_all` logs one line per
+  bucket carrying its dataset count and truncation (`sweep.py:191-196`). What it does not record is
+  MAINTENANCE coverage — a tick can discover a bucket and then never reach its datasets — so the gap is
+  real but narrower than the row states.
+  *Genuinely absent:* any per-tick time budget. No deadline, elapsed check or `max_seconds` exists
+  anywhere in the sweep or its API.
+- *And the budget is not a free addition, which is why it is not done here.* Its VALUE is a decision, not
+  a default to infer: too small and a large estate never finishes a pass, too large and it is decorative.
+  It also needs to interact with whatever happens when a tick outruns its interval — overlap or skip —
+  which is not established. A budget cut mid-dataset must stop BETWEEN work items, never inside a
+  compaction.
+- *Closes when:* Give the sweep an explicit per-tick time budget — checked between work items, with its
+  value a chart setting rather than a literal — and report MAINTENANCE coverage per bucket (discovery
+  coverage already logs). Rotation is done; do not replace the dataset shuffle with a coarser bucket
+  rotation.
 
 **LH-102 · Storage reclamation has never been run live — trash purge must go first, and it is gated on a clean drift report**
 `maintenance` · med · **blocked:** a clean, complete drift report (the zero-tuple detector plus the `incomplete` rows)
