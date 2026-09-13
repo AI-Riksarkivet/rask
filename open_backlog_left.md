@@ -1081,10 +1081,38 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   a fix that assumes the catalog answers for all 60 will stall on exactly those two.
   *And 36 of the 60 are already dropped*, so they never reach the sweep — the live cost is the 24 that
   do, which is most of the `unreadable` line rather than all of it (the sweep reports 26).
-- *Closes when:* A stamp repair exists that does not require a data write, sourced from something that
-  can actually name the table — the catalog's own location→id answer is the only authoritative one, and
-  whether that means a reverse lookup, a registry read, or carrying the id on the registration is the
-  design question this row opens. Pin that a corrected dataset keeps its `_rowid`s
+- **RE-MEASURED 2026-09-13: the 60 are unchanged, and a SECOND candidate repair source is now
+  eliminated.** The graph still reports `1162 datasets carry a source_uri / 1102 absolute`, so the
+  forward-only fix holds and nothing has repaired one. Two sources have now been driven and neither
+  can supply the value:
+  - `table_id_from_location` — measured 2026-09-11, above.
+  - **lineage's own durable events feed** — it carries the FULL event JSON, so an earlier absolute URI
+    for the same dataset would have repaired these without any new dependency. It does not: the feed
+    holds 4,174 rows spanning 2026-09-07 -> 2026-09-13 only, and a search across the affected set
+    returns ONE marker. These datasets stopped being written before the retention window, which is the
+    same fact that makes them unrepairable by a write.
+
+  The relative URIs are also now known to carry no recoverable information: they are the table id with
+  `$` swapped for `/` (`silver$consensus-live-41965_…` -> `silver/consensus-live-41965_…`), so what is
+  missing is the ROOT, and the root is a warehouse binding only the catalog holds.
+
+- *THE REPAIR PATH IS NARROWED TO THREE, and the cheap one is blocked on an owner question.* Lineage
+  has NO catalog client — no `describe_table`, no catalog URL, nothing — so:
+  1. *Give lineage a catalog client.* Authoritative, and it puts a cycle between two lakehouse
+     services: the catalog already emits INTO lineage.
+  2. *Carry the id/location on the registration* so the graph never needs to ask. Forward-only again —
+     it does not repair these 60.
+  3. *Have the CATALOG re-assert the location*, which needs no new coupling direction and no new door:
+     `_merge_dataset` already rewrites `source_uri` via `SET_DATASET_SRC` on any ingested event that
+     carries one (`repository.py:409`), so a catalog-side assertion would restamp through the path that
+     already exists. **This is the cheap one and it is NOT free to choose:** it means emitting events
+     no run produced, which is precisely the "accept a synthetic graph" half of [[LH-146]]'s pending
+     owner ruling. Implementing it now would pre-empt that decision.
+
+- *Closes when:* the [[LH-146]] ruling settles whether a synthetic assertion is acceptable — if yes,
+  option 3 repairs all 58 governed datasets through existing seams; if no, option 1 is the remaining
+  authoritative answer and the catalog↔lineage cycle has to be accepted or broken deliberately. The
+  two ungoverned of the 60 are removals either way: no door will answer for them. Pin that a corrected dataset keeps its `_rowid`s
   (`update_schema_metadata` is metadata-only, so that is provable), and pin separately that the
   94-count id's absence from the catalog is diagnosed rather than folded in here.
 
