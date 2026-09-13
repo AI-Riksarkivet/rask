@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Request
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
 from lineage.core.metrics import Outcome, record_outcome
-from lineage.models import RunEvent, author_sub_from_payload
+from lineage.models import RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -55,28 +55,69 @@ async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated
     return await handle_cloud_event(request.app.state.repository, event, authorize)
 
 
-async def on_dead_letter(event: dict[str, Any], _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
-    """Park one dead-lettered ingest delivery: ERROR-log + ack (Dapr-native DLQ, RESILIENCE gap #2).
+async def _graph_already_holds(request: Request, run_id: str | None) -> bool:
+    """Does the graph already have this run? Anything short of a clear YES is ``False``.
+
+    Every fallback leans toward reporting LOSS. A parking route that cannot ask must not answer
+    "nothing was lost", and an unreachable graph is the moment the signal matters most; a false loss
+    costs an operator one lookup, a false all-clear costs them the event.
+
+    The exception is deliberately broad and must stay that way: this route's only job is to ACK. A
+    raise here becomes a 500, the sidecar retries the DLQ delivery, and the retry parks again — the
+    parking route would manufacture the very inflation it is being taught to avoid.
+    """
+    if run_id is None:
+        return False
+    repository = getattr(request.app.state, "repository", None)
+    if repository is None:
+        return False
+    try:
+        return await repository.run_status(run_id) is not None
+    except Exception as exc:  # noqa: BLE001 — see the docstring: this route must always ack
+        log.warning("dapr_dead_letter_graph_unreachable", extra={"run_id": run_id, "error": str(exc)})
+        return False
+
+
+async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
+    """Park one dead-lettered ingest delivery: log + ack (Dapr-native DLQ, RESILIENCE gap #2).
 
     No auto-requeue — the delivery already exhausted the sidecar's Resiliency retry schedule, and
-    lineage's real recovery story stays replay-from-stream (the ephemeral deliverPolicy=all consumer
-    re-reads the retained stream on restart); the DLQ adds operator VISIBILITY, not a second path."""
-    log.error(
+    lineage's recovery story stays replay-from-stream (the ephemeral deliverPolicy=all consumer re-reads
+    the retained stream on restart); the DLQ adds operator VISIBILITY, not a second path. That bounds
+    what recovery can reach: a dead letter older than the stream's retention has no path back, because
+    nothing re-ingests the DLQ stream itself.
+
+    SEVERITY IS THE ANSWER, not the event. The same replay that recovers also re-parks — it re-reads up
+    to the retention window on every restart and parks whatever still fails — so an unconditional ERROR
+    per parking counts restarts rather than losses, and buries the real ones among them. Measured on the
+    live estate 2026-09-13: 8,515 parked deliveries of `lineage.events.v1` against a stream whose last
+    sequence was 5,860, and 17 of 21 distinct parked run ids already present in the graph. Run ids are
+    deterministic and `ingest_event` MERGEs on them, so a stage that runs again heals its own gap.
+    """
+    payload = event.get("data") if isinstance(event, dict) else None
+    run_id = run_id_from_payload(payload)
+    already_recorded = await _graph_already_holds(request, run_id)
+    log.log(
+        logging.WARNING if already_recorded else logging.ERROR,
         "dapr_dead_letter_parked",
         extra={
             "app": "lineage",
             "event_id": event.get("id") if isinstance(event, dict) else None,
-            # WHOSE provenance was lost. This is terminal loss until someone replays the stream, and the
-            # payload being discarded carries the person it belonged to — naming only the event id let an
-            # operator see THAT provenance was dropped and never whose. `None` when the payload carries no
-            # verified sub: anonymous beats misattributed (see `author_sub_from_payload`).
-            "author": author_sub_from_payload(event.get("data") if isinstance(event, dict) else None),
+            "run_id": run_id,
+            # Which of the two this is, on the record rather than inferred from the level — an operator
+            # filtering a dashboard needs the field, and the level alone cannot be queried.
+            "already_recorded": already_recorded,
+            # WHOSE provenance this was. The payload being discarded carries the person it belonged to —
+            # naming only the event id let an operator see THAT provenance was dropped and never whose.
+            # `None` when the payload carries no verified sub: anonymous beats misattributed (see
+            # `author_sub_from_payload`).
+            "author": author_sub_from_payload(payload),
         },
     )
-    # A parked delivery is TERMINAL provenance loss until a replay — without this counter the retries all
-    # counted RETRIED and the loss itself vanished from the metrics (audit 2026-07-15; a dashboardable
-    # non-zero here means the graph is missing events the ERROR log alone would let scroll away).
-    record_outcome(Outcome.DEAD_LETTERED)
+    # Without this counter the retries all counted RETRIED and the parking vanished from the metrics
+    # (audit 2026-07-15). The split is what makes the number readable: a non-zero `DEAD_LETTERED` means
+    # the graph is missing that run, which is the claim an alert on it is making.
+    record_outcome(Outcome.DEAD_LETTERED if not already_recorded else Outcome.PARKED_ALREADY_RECORDED)
     return {"status": "SUCCESS"}
 
 

@@ -51,7 +51,15 @@ class Outcome(StrEnum):
     # a refusal is the one that can be a silent, deliberate loss, so it gets its own alert.
     REFUSED = "refused"  # authorization denied → Dapr DROP (redelivery cannot grant a permission)
     RETRIED = "retried"  # transient failure → Dapr RETRY (sidecar redelivers)
-    DEAD_LETTERED = "dead_lettered"  # exhausted the resiliency schedule → parked (terminal loss signal)
+    DEAD_LETTERED = "dead_lettered"  # exhausted the resiliency schedule → parked, and the graph lacks the run
+    # Parked, but the graph ALREADY holds the run — visibility, not loss. Its own value because
+    # `DEAD_LETTERED` is read as the terminal-loss signal and a re-park of a recorded run is not loss:
+    # the ingest consumer is deliverPolicy=all + ephemeral, so every restart re-reads up to the stream's
+    # retention and re-parks whatever still fails, while deterministic run ids mean a stage that runs
+    # again heals the gap. Measured against the live estate 2026-09-13: 8,515 parked deliveries of
+    # `lineage.events.v1` against a stream whose last sequence was 5,860, and 17 of 21 distinct parked
+    # run ids already present in the graph.
+    PARKED_ALREADY_RECORDED = "parked_already_recorded"
 
 
 def record_outcome(outcome: Outcome) -> None:

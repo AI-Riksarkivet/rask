@@ -215,11 +215,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   real and the recovery path is still missing; it is simply much narrower than the parked count suggests,
   and the parked count is the number an operator would have reached for.
 
-- *Closes when:* (a) the loss metric distinguishes a NEW parking from a re-parking of an event already
-  parked — otherwise the number that is supposed to mean "the graph is missing events" cannot be read,
-  and the prose at `dapr.py:101-105` must stop claiming it can; and (b) the DLQ stream becomes
-  replayable — re-presenting `dlq.<appId>` to the ingest handler is idempotent on `run_id` exactly as the
-  outbox relay already is, which turns a retained payload into recovery instead of a log line. Until (b),
+- **(a) LANDED 2026-09-13 — the metric now means what its comment claims.** `on_dead_letter` asks the
+  graph before calling a parking a loss (`repository.run_status`, the point read documented as "is this
+  run in the graph?"): a run the graph already holds records the new `Outcome.PARKED_ALREADY_RECORDED`
+  and logs at WARNING; a run it lacks still records `DEAD_LETTERED` and logs at ERROR, carrying
+  `run_id` and `already_recorded` as fields so a dashboard can filter on them rather than on severity.
+  Every fallback leans toward reporting loss — no run id, no repository, or a graph that raises all
+  record `DEAD_LETTERED`, because a route that cannot ask must not answer "nothing was lost". Because
+  the re-parks are what inflated the count, they stop counting as loss the moment the run heals, which
+  is what collapses the two-order-of-magnitude gap. RED-first, 7 tests in
+  `tests/unit/test_a_park_the_graph_already_holds_is_not_terminal_loss.py`. **Built and deployed? NO —
+  rides the pending roll.**
+
+- *Closes when:* (b) the DLQ stream becomes replayable — re-presenting `dlq.<appId>` to the ingest
+  handler is idempotent on `run_id`. **It must NOT go through the outbox relay**, which was the obvious
+  reuse and is a trap: `reconcile_cron._drain_outbox` re-PUBLISHES after ingesting (deliberately — the
+  cascade's `/bronze-arrival` reacts to that announcement), so staging a dead letter there would put it
+  back on `lineage.events.v1`, re-park it, and manufacture the flood this row measured. The replay must
+  ingest without re-publishing. Until (b),
   `dapr.py`'s "recovery story stays replay-from-stream" should say what it actually means: a dead letter
   older than the stream's retention is lost.
 

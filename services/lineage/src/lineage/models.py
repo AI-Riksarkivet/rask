@@ -350,6 +350,27 @@ def author_sub_from_payload(raw: object) -> str | None:
     return sub if isinstance(sub, str) and sub.strip() else None
 
 
+def run_id_from_payload(raw: object) -> str | None:
+    """The run id inside a run-event payload, or ``None`` — tolerant of a payload that does not parse.
+
+    Tolerant for the same reason :func:`author_sub_from_payload` is, and it shares that function's
+    caller: the parking path fires on a delivery that already exhausted its retries, so the strict
+    model is unavailable exactly where the answer is needed.
+
+    The answer decides whether a parked delivery is counted as provenance LOSS, so a blank or
+    wrong-typed id must read as "no run id" rather than as an id the graph will never match —
+    `run_status` would answer ``None`` for it and the park would be reported as a loss on the strength
+    of a malformed field.
+    """
+    if not isinstance(raw, dict):
+        return None
+    run = raw.get("run")
+    if not isinstance(run, dict):
+        return None
+    run_id = run.get("runId")
+    return run_id if isinstance(run_id, str) and run_id.strip() else None
+
+
 class RunEvent(BaseModel):
     """An OpenLineage run event (START/RUNNING/COMPLETE/FAIL/ABORT) with its inputs and outputs."""
 
