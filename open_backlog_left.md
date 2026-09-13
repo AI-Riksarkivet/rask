@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 48 rows
+**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 49 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -1773,11 +1773,28 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Why open:* Blob v2 columns read `None` through the MemWAL scanner today, so the shape cannot be evaluated without a prototype.
 - *Closes when:* Prototype MemWAL server-id sharding against bronze landing after §K.
 
-**LH-044 · `tags/create` drops `branch`, `branches/create` drops `from_branch`+`from_version`, `branches/delete` drops `name`**
-`catalog` · low
+**LH-044 · ~~`tags/create` drops `branch`, `branches/create` drops `from_branch`+`from_version`, `branches/delete` drops `name`~~ — STRUCK 2026-09-13 (PREMISE FALSIFIED, all three clauses)**
+`catalog` · was low
 
-- *Why open:* Classed cosmetic in the sweep and untouched — but a `branches/create` that ignores `from_branch`/`from_version` silently branches from the wrong point.
-- *Closes when:* Honour `branch` on `tags/create`, `from_branch`/`from_version` on `branches/create` and `name` on `branches/delete`, each with a test that a non-default value changes the result.
+- *What is true now:* every one of the three parameters is honoured, and each has a named mapping
+  helper whose docstring states the semantics — this was never the "classed cosmetic in the sweep and
+  untouched" it records.
+- *Evidence, clause by clause:*
+  **`tags/create` → `branch`.** `services/catalog/src/catalog/api/v1/endpoints/tags.py` forwards the
+  whole body to `dataplane.create_tag`, which calls `_tag_reference(req.branch, req.version)`
+  (`services/catalog/src/catalog/services/dataplane.py:1782`). `_tag_reference` (:1773-1776) maps it and
+  says WHY it must: "a bare int resolves against the CURRENT branch (main), so a branch-scoped tag must
+  pass the `(branch, version)` tuple". `CreateTableTagRequest` does carry `branch` (model fields:
+  identity, context, id, tag, version, branch), so there was a parameter to drop and it is not dropped.
+  **`branches/create` → `from_branch` + `from_version`.** `_branch_reference` (:1814-1824) maps all four
+  combinations explicitly — "fromBranch + fromVersion → `(branch, version)`; fromBranch only →
+  `(branch, None)`; fromVersion only → the `version` int (on main); neither → `None`" — and
+  `create_branch` (:1867) additionally VALIDATES `from_branch` against the branch list, answering
+  `TableBranchNotFoundError` rather than branching from the wrong point.
+  **`branches/delete` → `name`.** `delete_branch` (:1887) calls `branches.delete(req.name)`.
+- *What would reopen it:* a `create_tag` that passes a bare `req.version` to `tags.create`, a
+  `_branch_reference` that stops reading `from_version`, or a `delete_branch` keyed on anything but
+  `req.name`.
 
 **LH-045 · ~~rename / backfill / alter_transaction / MV create+refresh / batch-create + batch-commit versions return 501 from the native backend~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
