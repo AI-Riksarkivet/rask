@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**234 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 88 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -3390,11 +3390,29 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Evidence:* Multi-base fixture, live: scripts/e2e_stack.sh:27-28 defines `BASE_A=s3://mb-a` / `BASE_B=s3://mb-b`, :109 installs the chart with `catalog.multibase.dataBases=[mb-a, mb-b]`, :189 provisions both buckets, :266 exports them, :281 runs tests/e2e-py/test_multibase_e2e.py — under the no-silent-skips gate at :294-299. Orphan scan over a multi-base dataset: tests/unit/test_orphan_files.py:336-352 `test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere` builds it with the real `ds.shallow_clone(...)` API and asserts `checked is False`, `structural is True`, reason names `base_paths`. Shared-base cleanup sparing the sibling: tests/unit/test_base_refs_guard.py:205-224 `test_a_REAL_SWEEP_TICK_refuses_the_source_of_a_live_clone` drives the real `run_sweep` (via _sweep_results at :177-202, stubbing only the S3 fs and discovery) and asserts the SOURCE comes back refused with "resolves its files through"; :137-176 proves in a COLD subprocess that without the guard the clone breaks; :227-244 pins that an ordinary dataset is still swept, so the guard is not a blanket refusal.
 - *What would reopen it:* If test_base_refs_guard.py's sweep test stubbed `protected_roots` itself (it does not — that is the stated point of the file, :208-212), or if the multibase e2e were absent from the e2e_stack pytest list, the row would still stand.
 
-**LH-115 · Manifest flags 16/64 are refused only by the orphan pass, not by the rest of the maintenance surface**
-`maintenance` · low
+**LH-115 · ~~Manifest flags 16/64 are refused only by the orphan pass, not by the rest of the maintenance surface~~ — STRUCK 2026-09-14 (PREMISE FALSIFIED, and one third of the ask would be a REGRESSION)**
 
-- *Why open:* The refusal knowledge lives in `maintenance/services/orphans.py` and `test_orphan_files.py`, and no other operation consults it.
-- *Closes when:* Apply the 16/64 flag refusal to the other maintenance operations (compaction, reclamation, the sweep), sharing one predicate with `orphans.py`.
+- *What is true now:* the refusal knowledge lives in `service_kit.lakehouse.features` — the shared
+  predicate this row asks for — and every operation it names consults it, with the gate that SUITS that
+  operation rather than one blanket check.
+- *Evidence, measured 2026-09-14:* `maintenance/services/optimize.py:630-634` takes
+  `describe_gc_unsupported_flags` and returns `DatasetResult(refused=…)` with a
+  `maintenance_refused_unsupported_features` warning, then `describe_compaction_unsupported_flags` for
+  the compaction half; `catalog/services/maintenance.py:136` and `:159` raise
+  `UnsupportedOperationError` on the same two for the on-demand doors; `maintenance/services/orphans.py:345`
+  keeps the read gate it started with; `lineage/core/reconcile.py:91` classifies a failed open through
+  `unsupported_features_from_open_error` so the sweep REPORTS a feature refusal instead of a bare error.
+- **AND APPLYING THE REFUSAL TO THE SWEEP WOULD BE WRONG, which is why this is struck rather than
+  closed.** The row asks for "the 16/64 flag refusal" on "compaction, reclamation, the sweep". That
+  refusal is `describe_unsupported_flags`, which ORs both flag fields because it is *"the gate a WRITE
+  takes"*. The sweep writes nothing, and `describe_read_unsupported_flags` documents the trap with a
+  measurement: `FLAG_TABLE_CONFIG` (8) is reader-NOT-required and writer-required, and on pylance 10.0.0
+  `update_config({"k": "v"})` produces `reader=0, writer=8` — so ORing the fields refuses a read over a
+  bit only a writer must understand. That is a defect this module was corrected to remove; re-applying
+  it to the estate's one read-only pass would reintroduce it.
+- *What would reopen it:* a maintenance operation that WRITES and does not consult
+  `describe_unsupported_flags` / `describe_compaction_unsupported_flags` / `describe_gc_unsupported_flags`
+  before rewriting bytes. Not a read-only pass declining to take the write gate.
 
 **LH-116 · ~~Fragment sizing is left at Lance defaults with no per-table lever~~ — STRUCK 2026-09-10 (ALREADY FIXED)**
 
