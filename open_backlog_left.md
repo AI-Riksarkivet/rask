@@ -2986,7 +2986,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `catalog, lineage, notifications` · med
 
 - *Why open:* The door landed and was driven live 2026-09-09 (three defects found and fixed), leaving exactly one residue: a consumer can only poll, never be told.
-- *Closes when:* Emit a control-lane event on `catalog.control.v1` when a governed table's version advances, so a change-feed consumer is notified rather than polling.
+- **THE PRESCRIBED FIX HAS A COST THE ROW DID NOT PRICE, measured 2026-09-14.** `catalog.control.v1`
+  has TWO consumers and they want opposite things: notifications (which correctly files an action naming
+  no party as IGNORED — `NAMED_ACTIONS` holds exactly the six grant/task verbs) and the catalog's own
+  subscription, where "every replica buffers every event for `GET /v1/events`"
+  (`chart/templates/services.yaml:162`). A version advance fires on every insert, every compaction,
+  every index build and every stage output, so putting it there sizes a GOVERNANCE broadcast buffer for
+  DATA-PLANE frequency. `ControlAction`'s whole vocabulary is shape-of-the-estate — created, dropped,
+  renamed, registered, protected, policy, grant — and carries nothing meaning "bytes were written".
+- *And the premise is weaker than "must poll":* `catalog/core/lineage_emit.py::emit_write_event` already
+  takes `version: int | None` and publishes it on `lineage.events.v1` for EVERY governed write,
+  compaction, index op and restore included. So the signal a change-feed consumer needs — "table X is at
+  version N now" — is on the bus today; what it then does is call `POST /v1/table/{id}/changes` for the
+  rows, which is the door working as designed rather than polling for a trigger.
+- *Which makes this a lane question rather than a missing event,* and the estate has already written the
+  line it turns on (`.claude/skills/rask-notifications`): lineage answers *what happened to this dataset*,
+  the control lane answers *what changed for this person*. A version advance is the first.
+- *Closes when:* an owner rules on which — either point BYO consumers at `lineage.events.v1` (and say so
+  where the changes door is documented, which costs no event), or accept the control lane's broadcast
+  buffer carrying data-plane frequency and add the action with that cost stated. Do NOT add it to
+  `NAMED_ACTIONS` either way; it names no party, and `transform_set`/`policy_set` already sit on that
+  line for the same reason.
 
 **LH-092 · The ingest-lane slice proves the TRIGGER chain but not the DATA chain — `MEDALLION_FROM_URI`/`TO_URI` are unset there**
 
