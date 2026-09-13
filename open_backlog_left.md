@@ -193,8 +193,27 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   becomes an optional extra that medallion runs without, and the import edges below are what has to be
   cut first for that to even be possible. Cutting them is worth doing on its own; declaring condition 3
   met needs both.
-- *Closes when:* the three edges are cut and `import medallion.producer` no longer pulls
-  `dapr.ext.workflow` — pinned by a test that asserts exactly that, since nothing else can see it.
+- **BOTH MEDALLION ENTRYPOINTS WERE AFFECTED, not just the producer.** `services/transform.py:51`
+  imports `promotion_hold` at module scope, and that module took `PromotionSpec` from the engine
+  adapter — so `import medallion.stage_runner` and `import medallion.services.transform` pulled the
+  engine too, by a second route through the same adapter.
+- **LANDED 2026-09-13 (`25fc6905`).** `PromotionSpec` moves to `medallion/schemas/promotion.py` beside
+  the other wire and state contracts — plain pydantic, no engine — so the adapter imports the payload
+  instead of the payload living inside the adapter. `promotion_review` is resolved at the scheduling
+  call, where the workflow client is already built lazily; `WorkflowStatus` becomes `_is_live()`,
+  comparing against the enum MEMBERS rather than their names, since the names are the library's to
+  change. `medallion.workflow` still imports the engine and must — it IS the adapter — which is pinned
+  as its own test so the fix cannot decay into lazy-importing everything until the module means
+  nothing. No backward compat: all five importers moved in the same change.
+- *The test imports each module in a SUBPROCESS rather than reading source*, because by the time a
+  suite reaches it an earlier test has already pulled the engine into the interpreter and an in-process
+  check would pass regardless. That is also exactly why the earlier verdict was wrong.
+  **Built and deployed? NO — rides the pending roll.**
+- *What remains for condition 3 to be declared met:* `dapr-ext-workflow` is still an unconditional
+  entry in `services/medallion/pyproject.toml`. Cutting the import edges is what makes an optional
+  extra POSSIBLE; making it optional is the other half, and it is a packaging decision rather than a
+  defect.
+- *Closes when:* the roll observes the decoupled image, and the dependency becomes optional.
   The shape is already visible: `PromotionSpec` is a plain pydantic model (`workflow.py:1112`) with no
   engine in it and belongs beside the other schemas, so `promotions.py` and `promotion_hold.py` can take
   the domain without the adapter; `promotion_review` is referenced only inside the scheduling call
