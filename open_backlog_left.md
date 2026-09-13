@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 49 rows
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -1063,9 +1063,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   provisioned by the ported hooks, the credential-isolation e2e passes against it, and the estate is
   observed serving the lakehouse from it end to end.
 
-**LH-132 · The cascade's delta lane and its full lane DISAGREE about a deleted row**
-`medallion` · med · filed 2026-09-11
+**LH-132 · ~~The cascade's delta lane and its full lane DISAGREE about a deleted row~~ — CLOSED 2026-09-13 (LANDED, both guards, three tests)**
+`medallion` · was med · filed 2026-09-11
 
+- **LANDED, and the row is closed by reading the code rather than by argument.** `scripts/ray_stage_job.py`
+  now calls `retracted = _retract_deleted(upstream, to_uri, so)` inside the delta lane, and every clause
+  this row specified is there:
+  *Guard A — retraction BEFORE the early return.* The call sits above the `rows_in == 0` branch and the
+  comment states this row's own reasoning: "RETRACTION FIRST, because a deletion-only change IS an empty
+  delta … Run after the early return below and a delete would leave through the `delta_empty` door
+  reporting that nothing changed." The lane's log carries `retracted=` alongside `delta_empty=1`.
+  *Guard B — refuse rather than retract on an empty key set.* `UpstreamVanishedError` (:602, raised at
+  :656) — "retracting against it would empty {to_uri}" — the `StagedOutputEmptyError` shape this row
+  asked for.
+  *The join is the one specified:* upstream side `source_rowid` where present else the reserved
+  `_rowid`, downstream always `source_rowid`; a NULL `source_rowid` is left alone because "unjoinable"
+  must not read as "orphaned"; deletes are chunked. The 1:N-deeper-in under-deletion is documented in
+  the docstring rather than left to be discovered.
+- *Tested, three ways* (`tests/unit/test_ray_stage_job.py`, 43 passed):
+  `test_a_row_DELETED_upstream_is_retracted_from_the_tier_below`,
+  `test_the_two_lanes_AGREE_about_a_deleted_row` — this row's exact defect — and the guard at :1186-1196,
+  which deletes every upstream row and asserts the tier still holds 3, "the tier was emptied by a
+  refusal that did not hold".
 - *MEASURED, not inferred.* Bronze `{0,1,2}` derived to silver; delete bronze `id=1`; a DELTA run
   (`base_version` set) leaves silver holding `[0, 1, 2]` and logs `RAY-STAGE OK … lane=delta rows=0
   delta_empty=1` — it reports "nothing changed" about a retraction. A FULL run over the same upstream
