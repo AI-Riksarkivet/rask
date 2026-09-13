@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
 
 from fastapi import APIRouter, Request, Response
@@ -222,6 +223,33 @@ async def _drain_namespaces(ns: LanceNamespace, segments: list[str]) -> tuple[Li
 
 
 @router.get("/{id}/list", response_model_exclude_none=True)
+def _merge_bound_top_namespaces(names: list[str], bound: Iterable[Mapping[str, str]]) -> list[str]:
+    """A ROOT listing's names plus the warehouse-bound top-level namespaces the default backend cannot see.
+
+    SORTED AND DEDUPED because the caller's cursor is keyset over this list: an unsorted merge would make
+    ``page_token`` skip or repeat rows, and a namespace reachable both ways — bound AND present in the
+    default root — must be one row, not two.
+
+    A record with no ``top_ns`` is skipped rather than trusted: the registry is object-store JSON written
+    by another service, and an empty name in a listing is one a client will try to resolve.
+    """
+    return sorted({*names, *(top for record in bound if (top := record.get("top_ns")))})
+
+
+async def _bound_top_namespaces(settings: Settings) -> list[Mapping[str, str]]:
+    """The bindings registry, or NOTHING when it cannot be read.
+
+    Tolerant for the reason ``GET /v1/table`` is tolerant per seed: the registry lives in object storage
+    and an unreachable bucket must narrow this listing to the default root's answer, never turn a
+    discovery call into a 500. The narrowing is the same one every caller already gets today.
+    """
+    try:
+        return list(await run_in_threadpool(warehouses.list_bindings, settings.registry_root, settings.storage_options()))
+    except Exception:
+        log.warning("namespace_root_bindings_unreadable", extra={"registry_root": settings.registry_root}, exc_info=True)
+        return []
+
+
 async def list_namespaces(
     id: str,
     ns: NamespaceDep,
@@ -257,6 +285,20 @@ async def list_namespaces(
     """
     segments = parse_identifier(id, settings.delimiter)
     response, names = await _drain_namespaces(ns, segments)
+    # THE ROOT ONLY, and the condition is the whole point. The root id has no top segment to route by,
+    # so `get_namespace` hands this route the DEFAULT namespace and the drain above asks that one
+    # backend — while a warehouse-enabled estate keeps each tenant's namespaces in that tenant's own
+    # bucket. The bindings registry already names exactly the missing children, because the root's
+    # children ARE top-level namespaces and a binding names one.
+    #
+    # It is also the source that keeps this answer in step with the routes that serve it: `get_namespace`
+    # routes an id by its binding, so a namespace sitting in a warehouse bucket with no binding is
+    # reachable by no id route, and naming it here would advertise a listing the estate cannot serve.
+    #
+    # A binding merged below is NOT exempt from the per-item filter — it goes into `names` before it,
+    # because a bound namespace's name is as disclosive as a sibling's.
+    if not segments and settings.warehouses_enabled:
+        names = _merge_bound_top_namespaces(names, await _bound_top_namespaces(settings))
 
     if settings.fga_enabled and token is not None and client is not None:
         listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="namespace")
