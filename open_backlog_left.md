@@ -2050,10 +2050,36 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   `table_create.py` carries the `pre_existed` flag. `Overwrite` is worse: dropping a namespace here
   means the #96 cascade trashing a whole SUBTREE, interacting with `require_no_live_trash` and the
   existing tuples, so it is destructive and needs an owner ruling rather than an implementation.
-- *Closes when:* `ExistOk` is honoured on both doors WITHOUT seeding ownership over a pre-existing
-  object — pinned by a test that a caller passing `exist_ok` against a namespace owned by someone else
-  gains no tuple — and `Overwrite` is either implemented against a ruling on the cascade/trash
-  interaction or refused 400 naming itself, rather than answering the 409 that means something else.
+- **THE NAMESPACE DOOR LANDED 2026-09-13.** `create_namespace` honours `ExistOk` — the existing
+  namespace is kept and DESCRIBED rather than echoed — and it does not seed ownership on that path, so
+  a caller passing `exist_ok` against somebody else's namespace gains no tuple. A namespace the call
+  really created still gets its owner, which is why the condition is a `kept_existing` flag rather than
+  the mode itself, mirroring `table_create.py`'s `existok_kept_existing`.
+  *Race-free by CATCHING the backend's refusal rather than pre-checking existence*, and on this door
+  that is not a detail: an `exists?` read followed by a create leaves a window in which another caller
+  creates the namespace, and the loser of that race would then seed ownership over their object. The
+  backend's own refusal is the only answer that cannot be stale.
+  `Overwrite` is refused at the SHAPE rung naming itself, before anything is written. An unrecognised
+  mode still folds to `Create` — `modes.py` records that tolerance as deliberate for typos and it
+  stays. RED-first, 9 tests in
+  `tests/unit/test_a_namespace_create_mode_means_what_the_spec_says.py`, three of them pinning
+  unchanged behaviour. **Built and deployed? NO — rides the pending roll.**
+- **AND THE IGNORED `mode` HAD A SECOND VICTIM, found while fixing this one.** `undrop_namespace`
+  promises in its own docstring that "a rerun after a mid-recovery failure finishes the job instead of
+  409-ing on what the first attempt already rebuilt". Half of that was earned: the TABLE loop catches
+  `TableAlreadyExistsError` and logs `undrop_table_already_registered`. The NAMESPACE loop passed
+  `mode="exist_ok"` to the backend that ignores it and caught nothing — so a rerun raised on the first
+  namespace the previous attempt had rebuilt. **And the broken half gated the working one:** namespaces
+  are rebuilt shallowest-FIRST, so a rerun aborted before it ever reached the tolerant table loop,
+  leaving the rest of the subtree in the trash. Both callers now go through one seam,
+  `create_or_keep_namespace`, since they want `ExistOk` for different reasons — the door because the
+  spec says so, `undrop` because its resumability rests on it.
+- *LATENT, not live:* the catalog logged no `NamespaceAlreadyExists` and no undrop activity in the six
+  hours before the fix, so nothing was failing this way at the time.
+- *Closes when:* `register_table` gets the same treatment — its own model description says "Overwrite:
+  the existing table registration is replaced with the new registration", and it still answers the 409
+  that means something else — and `Overwrite` on the namespace door is either implemented against an
+  owner ruling on the cascade/trash interaction or stays refused.
   Note `modes.py` records a deliberate decision that an UNRECOGNISED mode falls through to `Create`
   rather than raising; that tolerance is for typos and should stay, so the refusal is for the named
   modes this door cannot honour, not for anything it does not recognise.
@@ -2494,7 +2520,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   wrote the model unconditionally once the narrowing guard passed, and OpenFGA has no update for a model
   — every write mints a new immutable version. `provision` runs in the lifespan of every FGA-enabled
   service, so each pod start of each of them added one. Paged out of the live store 2026-09-13:
-  **1,316 authorization model versions**, for a `model.json` that has changed a handful of times.
+  **1,316 authorization model versions**, for a `model.json` that has changed a handful of times — counted twice by different routes that agree: paging `GET /stores/{id}/authorization-models`, and `SELECT count(DISTINCT authorization_model_id) FROM authorization_model` against the store's own Postgres.
 - *Why that is not merely untidy:* the store's "latest" model is whichever pod booted last, which is the
   value [[LH-139]]'s narrowing guard reads to decide whether a boot is a rollback — churn is the
   substrate that defect lived on — and it leaves an operator asking what the estate's authorization
