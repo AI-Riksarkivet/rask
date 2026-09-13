@@ -2264,7 +2264,31 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog` · low
 
 - *Why open:* The vendored spec is 79 lines short of upstream main (101 changed) — the error contract is byte-identical, which is what made §A5's work safe, but all six files were hand-vendored with no manifest and no automation, so a reader citing them cannot tell which spec version they describe. Q3's 406 decision already cites a `spec.yaml` version this repo does not hold.
-- *Closes when:* Re-vendor the six `lance_docs/` files from a named upstream commit and land a provenance line/manifest recording the source version and commit beside them.
+- **LANDED 2026-09-14, and the row understated it: one of those 79 lines was a BREAKING contract
+  change.** Upstream `eb1de88e` (2026-09-01) is `feat(spec)!: allow multiple columns for the merge
+  insert on key (#363)` — `merge_insert`'s `on` went from a single `string` to a repeatable array. Same
+  operation id, still 54 operations, still `info.version: 1.0.0` on both sides, so
+  `test_the_vendored_spec_still_matches_UPSTREAM` answered "zero difference either way" on 2026-09-09
+  across a change already in upstream. The row's "the error contract is byte-identical" was true and
+  was not the whole contract.
+- *Re-measured 2026-09-14 rather than inherited:* vendored 6663 lines, upstream 6742, 101 differing —
+  the row's numbers still hold, and the op-id sets still match exactly.
+- *What landed:* `spec.yaml` re-vendored from the named commit; `lance_docs/PROVENANCE.md` recording all
+  six documents' sources and separating the ONE that is machine-checked from the five tool-generated
+  bundles that are not (a citation from those is weaker, and the file says so rather than implying
+  parity); a shapes-level drift gate; and a gate that fetches the spec AT the pinned sha and compares
+  bytes, so re-vendoring without moving the pin and moving the pin without re-vendoring both red.
+  *The shapes gate reads PATH-LEVEL parameters, which is the load-bearing detail* — `on` sits on the
+  path item rather than the operation, so an extractor reading only `operation.parameters` reports "no
+  structural change". Mutation-proven both ways, and the second mutation found a defect in the new test
+  itself: a 40-zero sha SKIPPED instead of failing, because a served 404 was caught as "upstream
+  unreachable". A 404 on a sha you wrote is a bad pin, not an offline laptop.
+- *It makes a known deviation VISIBLE rather than removing it:* `data.py`'s own comment records that
+  `on` stays a single key until the lance-namespace SDK bump (A9 blocked on A10), because the installed
+  0.11.0 model types it `str`. Vendoring the current spec is what stops that deviation hiding behind a
+  stale document.
+- *Closes when:* the five bundles get the same treatment — they carry no scrape commit, so nothing can
+  verify them, and re-vendoring them needs the tool that produced them rather than a `curl`.
 
 **LH-048 · Two upstream defects are unfiled: pylance's GET routes (A3) and the 0.12.0 `header.` vs `headers.` prefix in the bundled client**
 `catalog` · low · **blocked:** upstream
