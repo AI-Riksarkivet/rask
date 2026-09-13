@@ -1677,8 +1677,39 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 **LH-038 · `POST /v1/table/{id}/version/list` accepts `page_token` and ignores it**
 `catalog` · med
 
-- *Why open:* Classed read-from-wrong-target in the sweep; a paging caller silently re-reads the first page forever.
-- *Closes when:* Honour `page_token` in `version/list` (or refuse it 400), with a test that pages twice and gets different rows.
+- **FIXED 2026-09-13, RED-first — and the row UNDERSTATES it.** Driven against a real `dir` namespace
+  over a seven-version table rather than read: `limit=3` serves `[1, 2, 3]` and answers
+  `page_token: None`, and a token handed back in changes nothing. `None` is what a client STOPS on, so
+  the caller is not looping — it is told the listing is complete having seen three of seven. Silent
+  truncation, not a loop.
+- *The catalog's surface was already spec-correct and the lie was one layer down.*
+  `lance_docs/namespace.md` § ListTableVersions puts `page_token` and `limit` on the query string, and
+  `ListTableVersionsResponse` carries `page_token`; the handler forwarded both faithfully to a backend
+  that honours neither. Forwarding made the door repeat the backend's claim.
+- *So it pages HERE, which the backend makes possible:* measured, an unbounded call returns the whole
+  list (all seven), so the native call is now made UNPAGINATED — the rule `catalog.api.pagination`
+  already states for the name listings ("no upstream cursor can ride through by accident") — and the
+  cursor is this layer's. `paginate_versions` is a sibling of the existing keyset rather than a
+  generalisation, because a version keys on an integer and its comparison must FLIP with `descending`,
+  which a name cursor never has to think about. A `page_token` that is not a version number is refused
+  `InvalidInputError` rather than ignored.
+- *Seven tests, including the one this row asked for:* paging twice over a real table gets `[1,2,3]`,
+  `[4,5,6]`, `[7]` with the last page reporting `page_token: None`; plus descending cursors, the
+  unbounded case growing no cursor it does not need, and an assertion that the backend is asked with
+  `limit=None` and `page_token=None` — because forwarding either would reintroduce the truncation one
+  layer down where the helper can never see it.
+- *The siblings are NOT the same shape, driven rather than assumed.* `tags/list` on a five-tag table
+  answers all five for `limit=2` and all five again for a `page_token` — it ignores BOTH and returns the
+  complete set. So it lies about BOUNDING where `version/list` lied about COMPLETENESS, and only the
+  second can hide rows from a caller. Worth fixing for the contract (a `limit` that does not bound is a
+  declared ceiling that isn't one, and `_MAX_LIST_LIMIT` exists to make that ceiling real), but it is a
+  resource concern rather than a correctness one and belongs in its own row.
+  *And `indices/list` PAGES CORRECTLY* — `limit=1` over a two-index table answers one index and a real
+  continuation token (`'b_idx'`). So three sibling routes on one backend behave three different ways:
+  versions truncated silently, tags ignores `limit` and returns everything, indices is spec-correct.
+  There is no "the backend cannot page" generalisation to make, and the fix above must NOT be
+  blanket-applied — wrapping `indices/list` in a second cursor would break a door that already works.
+  `branches` is still undriven. This row covers `version/list`.
 
 **LH-039 · ~~`POST /produce` accepts a governed-tier claim in `settings` and disregards it~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 

@@ -32,6 +32,7 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
     assert_no_warehouse_bound_namespace,
 )
+from catalog.api.pagination import paginate_versions
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, native
@@ -212,15 +213,37 @@ def list_table_versions(
     branch: str | None = None,
 ) -> ListTableVersionsResponse:
     """List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees
-    latest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params)."""
+    latest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).
+
+    PAGED HERE, NOT DOWNSTREAM, because the backend cannot page. Driven against a `dir` namespace
+    2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,
+    and a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`
+    told a caller asking for three of seven that it had seen everything — truncation wearing
+    pagination's clothes, the shape `GET /v1/model` already names.
+
+    So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
+    listings — and the cursor is this layer's. The full list is what the backend returns unbounded
+    (measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.
+    """
     req = ListTableVersionsRequest(
         id=parse_identifier(id, settings.delimiter),
-        page_token=page_token,
-        limit=limit,
+        # Deliberately not forwarded: either one truncates or skips before this layer can page, and the
+        # two cursors would then disagree about what "the next page" means.
+        page_token=None,
+        limit=None,
         descending=descending,
         branch=branch,
     )
-    return native.call(ns, "list_table_versions", req)
+    answer = native.call(ns, "list_table_versions", req)
+    rows = list(answer.versions or [])
+    by_version = {row.version: row for row in rows}
+    try:
+        page, next_token = paginate_versions(list(by_version), page_token, limit, descending=bool(descending))
+    except ValueError as exc:
+        raise InvalidInputError(f"page_token must be a version number, got {page_token!r}") from exc
+    answer.versions = [by_version[version] for version in page]
+    answer.page_token = next_token
+    return answer
 
 
 def _refuse_a_manifest_this_table_does_not_own(manifest_path: str | None) -> None:
