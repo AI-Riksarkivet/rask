@@ -9,6 +9,16 @@ from __future__ import annotations
 #: layout and the medallion's ``<stage>$<table>`` convention both fix this at ``$``; a service's env
 #: override (``LANCE_NS_DELIMITER`` and its siblings) exists so an operator who changes it changes it
 #: from this single default — never so one plane can diverge from another.
+#:
+#: **IT IS FIXED AT BOOTSTRAP AND CANNOT BE CHANGED ON A RUNNING ESTATE.** This delimiter is not a
+#: formatting preference: it spells the OpenFGA object id, the lineage Dataset name and the id
+#: embedded in Lance metadata, and `tests/unit/test_cross_axis_identity.py` holds all three
+#: byte-identical under whatever it is set to. So changing it reformats nothing — it RENAMES every
+#: governed object. Demonstrated 2026-09-14 against the shipped functions: a tuple written as
+#: ``table:acme$bronze$events`` is looked up after the change as ``table:acme.bronze.events``, a
+#: different object holding no grants, so every check DENIES and every parent cascade misses. There
+#: is no migration for it and nothing detects it — the symptom is a total, silent authorization
+#: outage on an estate whose logs report a healthy catalog.
 CATALOG_DELIMITER = "$"
 
 

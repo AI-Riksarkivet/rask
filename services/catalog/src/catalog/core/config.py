@@ -41,6 +41,8 @@ class Settings(GovernedAuthSettings, BaseSettings):
     # Catalog
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
     root: str = Field(default="s3://lance-catalog", alias="LANCE_REST_ROOT")
+    #: BOOTSTRAP-ONLY. It spells every OpenFGA object id, so changing it on a running estate renames
+    #: every governed object and denies every check — see `service_kit.lakehouse.naming`.
     delimiter: str = Field(default=CATALOG_DELIMITER, alias="LANCE_NS_DELIMITER")
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making

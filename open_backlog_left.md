@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**234 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 88 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -2285,6 +2285,40 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Closes when:* Measured evidence that listings are being hit at interactive frequency, then a query-store design round.
 
 ### Governance: auth, authz, tenancy
+
+**LH-150 · `LANCE_NS_DELIMITER` is documented as an operator knob and is actually a bootstrap-only identity: changing it on a running estate silently denies every authorization check**
+`catalog, service-kit, openfga, lineage` · med · found 2026-09-14 while measuring [[LH-023]]
+
+- *Why open:* the delimiter spells the OpenFGA object id, not merely the wire identifier.
+  `fga.canonical_object_id(segments, delimiter=...)` JOINS with whatever it is given and 55 of its 64
+  call sites pass `settings.delimiter`, so the object a grant lands on and the object a check looks up
+  both follow the configured value — consistently at any instant, and NOT across a change.
+- *Demonstrated rather than argued, 2026-09-14, against the shipped functions:*
+
+      tuple written under '$' : table:acme$bronze$events
+      check issued under '.'  : table:acme.bronze.events        # a different object, no grants
+      parent under '$' / '.'  : acme$bronze / acme.bronze       # the cascade misses too
+
+  Every check DENIES, every parent cascade misses, and the fail-closed wrapper renders that as an
+  authorization outage on an estate whose catalog logs look healthy.
+- **THE PROSE INVITED IT, which is why this is a row and not a note.** `naming.py` said the env override
+  "exists so an operator who changes it changes it from this single default" — true about keeping the
+  planes aligned, and silent about the fact that changing it renames every governed object. An operator
+  reading only that would take it for a formatting preference.
+- *NOT fixed by spelling FGA ids with a fixed `$`, and that was checked before proposing it:*
+  `tests/unit/test_cross_axis_identity.py` deliberately holds the FGA object, the lineage Dataset name
+  and the id embedded in Lance metadata BYTE-IDENTICAL under any delimiter. Hardcoding one axis breaks
+  that identity instead of the estate's, which is a worse trade — the current design is right, and what
+  is missing is that the value is immutable after bootstrap.
+- *What landed now:* the consequence is stated at both documented sites (`naming.py`, `catalog/core/config.py`),
+  so the change is an informed one rather than an invited one. That is prose, and prose is not a control.
+- *Closes when:* an owner decides whether this warrants a mechanism — the shape would be recording the
+  delimiter in a bootstrap record on the control root and refusing a boot that disagrees, which is new
+  estate state for a knob nobody has changed, so it is a decision rather than an obvious fix. Related:
+  [[LH-023]], whose per-request delimiter support `docs/DECISIONS.md` row 6 consciously skipped for the
+  neighbouring reason (an endpoint-only delimiter would let the router-level FGA gate authorize a
+  differently-parsed object).
+
 
 _Multi-tenancy is the product claim; every item here is a place where one tenant's data, credentials or grants are protected by convention rather than by an enforced check._
 
