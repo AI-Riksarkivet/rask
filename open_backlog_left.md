@@ -795,6 +795,10 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **LH-145 · The lag tick's `unknown` count names no cell and reaches no metric — a store disagreement is counted, unactionable and unpageable**
 `medallion` · low · found 2026-09-11 while fixing [[LH-143]]
 
+- **CODE LANDED `5ad5e62d`** — `unknown` is replaced by `blind: list[BlindEdge]`, each naming its edge,
+  project and a reason from a closed vocabulary (`destination_invisible` / `stores_disagree`) validated by
+  `BlindEdge`. Verified on origin. **Not yet observed: rides the pending roll**, so this row stays open.
+
 - *Measured:* the post-deploy tick reports `unknown: 1` — one declared cell where both stores answered
   and DISAGREED. `lag_for_edge` returns `known=False` for exactly two shapes, and both are real
   inconsistencies rather than absences: a frontier AHEAD of the source's published version (a tag moved
@@ -1914,6 +1918,10 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 **LH-038 · `POST /v1/table/{id}/version/list` accepts `page_token` and ignores it**
 `catalog` · med
 
+- **CODE LANDED `283cada1`** — `paginate_versions` (`services/catalog/src/catalog/api/pagination.py`) pages
+  in-layer after an unpaginated backend read, and a malformed token raises `InvalidInputError`. Verified on
+  origin. **Not yet observed: rides the pending roll**, so this row stays open until a deployed pod answers.
+
 - **FIXED 2026-09-13, RED-first — and the row UNDERSTATES it.** Driven against a real `dir` namespace
   over a seven-version table rather than read: `limit=3` serves `[1, 2, 3]` and answers
   `page_token: None`, and a token handed back in changes nothing. `None` is what a client STOPS on, so
@@ -2429,6 +2437,10 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 **LH-139 · A catalog boot REWRITES the estate's authorization model from its own bundled copy, so an older image silently REMOVES relations and breaks every door that uses them**
 `catalog, service-kit, chart` · **HIGH** · found and measured 2026-09-11 while a helm upgrade was blocked by it
+
+- **CODE LANDED `45e7a155`** — `provision()` reads the live model under `_guarded` and refuses a boot that
+  would REMOVE a relation, logging `openfga_model_narrowing_refused` with the removed set. Verified on
+  origin. **Not yet observed: rides the pending roll**, so this row stays open until a deployed boot proves it.
 - **CONFIRMED LIVE 2026-09-11 — this row is not a hazard, it is currently blocking a deploy.** Ran
   `make k3s-up`; the upgrade stalled at rev 151 with `rask-bootstrap-admin` crash-looping on
   `Invalid tuple 'warehouse:lance_catalog#event_stager@user:service-ingest'. Reason: relation
