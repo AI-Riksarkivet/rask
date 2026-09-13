@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 16 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -156,7 +156,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   maintenance sweep already reports, so the next one is visible without a NATS client.
 
 **LH-148 · The terminal-provenance-loss metric counts restarts, not losses — and the payload it parks can never be read back**
-`lineage, chart` · **HIGH** · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
+`lineage, chart` · med · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
 
 - *Measured live 2026-09-13.* The DLQ stream holds 8,612 messages / 25 MiB, of which **8,515 are on
   `dlq.lineage.events`** — the lineage service's own ingest DLQ (`chart/templates/services.yaml:488`
@@ -172,7 +172,10 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   created 2026-08-05 and its **last sequence is 5,860** — so at most 5,860 messages have EVER been
   published to `lineage.events.v1` in the stream's whole life. The DLQ holds **8,515** parked deliveries
   of that one topic from a FIVE-DAY window. 8,515 > 5,860, so events were parked repeatedly; the excess
-  is not explainable by volume.
+  is not explainable by volume. *How repeatedly:* 31 evenly-spread `stream get`s across the DLQ's whole
+  sequence range yield only **21 distinct run ids**, which for a uniform population puts the distinct set
+  near 35-40 — so the parkings outnumber the events behind them by roughly two orders of magnitude, not
+  by a factor of six.
 
 - *The mechanism is the ingest consumer's replay, and it is deliberate.* `chart/templates/dapr-component.yaml:172`
   registers lineage as `deliverPolicy: "all"`, and line 219 renders a `durableName` only for
@@ -201,9 +204,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     docstring says it *"adds operator VISIBILITY, not a second path"*. Nothing re-ingests the DLQ stream;
     `/admin/dlq` reads the OUTBOX object store, not this stream.
 
-  So the one place the FULL payload still exists is the one place nothing reads. Today is 2026-09-13 and
-  the parked window opened 09-06, so the earliest of these are already past LINEAGE's retention: their
-  provenance is terminally lost while a complete copy of each event sits in the DLQ.
+  So the one place the FULL payload still exists is the one place nothing reads.
+
+- **BUT MOST OF THE PARKED PROVENANCE IS NOT LOST, AND THAT IS WHY THIS IS `med` AND NOT HIGH.** Of the
+  21 distinct parked run ids sampled above, **17 are present in the AGE graph and 4 are not** (absent:
+  `2780f402`, `7dc47e08`, `845c63a5`, `f8d26794`). The healing mechanism is that the run ids are
+  deterministic — every one sampled is a UUIDv5 — and `handle_cloud_event` is idempotent on `run_id`, so
+  when the producing stage runs again it re-emits the SAME id and the node lands. Terminal loss is
+  therefore confined to runs that never ran again, which is the ~19% measured here. The gap above is
+  real and the recovery path is still missing; it is simply much narrower than the parked count suggests,
+  and the parked count is the number an operator would have reached for.
 
 - *Closes when:* (a) the loss metric distinguishes a NEW parking from a re-parking of an event already
   parked — otherwise the number that is supposed to mean "the graph is missing events" cannot be read,
