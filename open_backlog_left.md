@@ -835,10 +835,15 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `advref31-bronze$events` does sit at a composed `s3://advref31-wh/medallion/bronze`, which is the
   bind86 shape — but sampling every `medallion_stage_from_uri_refused` since 2026-09-09 returns 8 of 8
   for bind86 and none for advref31. Same path shape, different story.
-- *The open question worth answering first:* whether the same grant gap reaches beyond the monitor. A
-  403 on `/producers` says the medallion identity cannot read that dataset's lineage at all, and if the
-  tuple is simply absent for `advref31` then other doors scoped to the same rung are affected too. Check
-  that before treating this as a monitoring-only row.
+- **THAT QUESTION IS ANSWERED — there is no grant gap to reach anything.** This row asked whether the
+  same gap reached beyond the monitor, on the theory that a 403 on `/producers` meant the medallion
+  identity was missing a rung for `advref31`. It is not: the dataset does not exist, so the 403 is
+  ABSENCE wearing forbiddance's status code, and a rung nobody is missing cannot affect a second door.
+  Two independent measurements say so, and both are in this row: 13 other edges read lineage with the
+  SAME credential on the SAME tick, and `advref31-gold$catalog` has no Dataset node.
+  **Re-measured against AGE 2026-09-14** — `MATCH (d:Dataset) WHERE d.name STARTS WITH 'advref31'`
+  returns exactly `advref31-bronze$events` and `advref31-silver$features`, so the state is unchanged
+  three days on and this is a monitoring row after all.
 - *Why it went unseen:* it is a WARN line in a channel that is 91% two permanent, designed refusals (see
   the audit's warning-composition section), so a 19-per-tick signal is 0.1% of the volume.
 - **THE BLAST RADIUS IS NOT ANSWERABLE FROM LOGS, and that is a finding of its own.** Checked: the
@@ -849,9 +854,11 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   That is defensible per-request — a door refusing a read is doing its job, not reporting an incident —
   but it means "how far does this grant gap reach" cannot be answered by reading more logs. It needs the
   tuples. Recorded so the next step is an FGA check rather than another query.
-- *Closes when:* the monitor reads that project's producers — by granting the rung if the tuple is
-  missing, or by naming why that project differs — and a blind edge is reported as a distinct state
-  rather than only as an unreadable-edge warning, so "not measured" cannot look like "not lagging".
+- *Closes when:* the roll observes `destination_invisible` reported for that edge. The grant half of
+  this criterion is struck rather than carried: it offered "granting the rung if the tuple is missing",
+  and the tuple is not missing — the destination was never written, which is a lane that never ran and
+  exactly the state the new `blind` report names. What is left is that a blind edge is a distinct
+  state rather than an unreadable-edge warning, so "not measured" cannot look like "not lagging".
 
 **LH-146 · Run retention and the provenance back-fill undo each other — every real author and EVERY input edge becomes a synthetic `author='reconcile'` record, starting 2026-09-16**
 `lineage` · **HIGH** · found 2026-09-11 by reading the two halves together; both are deployed and running
