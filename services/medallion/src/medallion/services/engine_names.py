@@ -9,9 +9,10 @@ A NAME MODULE RATHER THAN A HOME IN ONE OF THEM, because every candidate creates
 registry imports the adapters, the adapters need the name, and `engine_choice` needs it to answer
 which engine a stage runs on. This module imports nothing, so all four can take the name from here.
 
-It deliberately holds NO set of hosted engines. `engine_choice.HOSTED_ENGINES` declares what this
-deployment may choose and `engine_registry.hosted_engines()` reports what can actually be resolved;
-those are different questions, and collapsing them here would make the test that compares them
+It deliberately holds NO set of hosted engines. `engine_choice.KNOWN_ENGINES` is the ceiling this
+BUILD carries adapters for, `engine_choice.hosted_engines(settings)` narrows that to what the
+DEPLOYMENT actually runs, and `engine_registry.hosted_engines()` reports what can be resolved; those
+are three different questions, and collapsing any of them here would make the tests that compare them
 trivially true.
 """
 

@@ -81,13 +81,19 @@ def test_an_unknown_engine_is_REFUSED_rather_than_defaulted() -> None:
     assert "some-engine-nobody-hosts" in str(excinfo.value), "the refusal does not name the engine, so an operator cannot act on it"
 
 
-def test_the_registry_hosts_exactly_what_engine_choice_claims() -> None:
-    """`HOSTED_ENGINES` is asserted by the suite so widening it is a reviewed change. A registry that
-    resolves a different set makes that review meaningless in one direction or the other."""
-    from medallion.services.engine_choice import HOSTED_ENGINES
+def test_the_registry_resolves_every_engine_this_build_may_choose() -> None:
+    """`KNOWN_ENGINES` is asserted by the suite so widening it is a reviewed change. A registry that
+    resolves a different set makes that review meaningless in one direction or the other.
+
+    The BUILD's ceiling is what must match the registry. What a DEPLOYMENT may choose is narrower —
+    `engine_choice.hosted_engines` drops Ray where its runtime is not started — and asserting equality
+    against that made a Ray-OFF deployment unrepresentable, which is how [[LH-147]]'s guard came to be
+    a control that could not fire.
+    """
+    from medallion.services.engine_choice import KNOWN_ENGINES
     from medallion.services.engine_registry import hosted_engines
 
-    assert hosted_engines() == HOSTED_ENGINES, (
-        f"the registry hosts {sorted(hosted_engines())} while engine_choice claims {sorted(HOSTED_ENGINES)} — "
+    assert hosted_engines() == KNOWN_ENGINES, (
+        f"the registry resolves {sorted(hosted_engines())} while engine_choice may choose {sorted(KNOWN_ENGINES)} — "
         "a stage can choose an engine nothing resolves, or an engine nobody may choose is reachable"
     )

@@ -51,11 +51,14 @@ def test_an_UNDECLARED_estate_is_governed_by_the_chart_exactly_as_before(tmp_pat
 
 
 def test_a_DECLARED_transform_takes_the_decision_over(tmp_path: Path) -> None:
-    """The record wins over the flag, in BOTH directions — which is the whole property.
+    """The record wins over the flag where the flag is a PREFERENCE: a chart with ray on, and a task
+    registered for an engine that is not Ray, must not go to Ray because a boolean said so.
 
-    Only the first direction is obvious. The second is the one that catches the real defect: a chart
-    with ray on, and a task registered for an engine that is not Ray, must not go to Ray because a
-    boolean said so.
+    It does NOT win over what the deployment can run. `ray_enabled` answers two questions — the default
+    engine for an undeclared estate, and whether this pod starts the Ray workflow runtime — and a
+    declaration may only override the first. Overriding the second enqueued a stage onto a runtime
+    nothing started: see [[LH-147]] and
+    `test_a_declared_ray_task_is_refused_where_no_ray_runtime_runs.py`, which owns that direction.
     """
     _declare(tmp_path, task="compact", engine="inprocess")
     settings = _settings(tmp_path, ray_enabled=True, transform="lane")
@@ -65,7 +68,7 @@ def test_a_DECLARED_transform_takes_the_decision_over(tmp_path: Path) -> None:
 
     _declare(tmp_path, task="stage-transform", engine="ray")
     spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=False, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
+    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
 
 
 def test_an_engine_NOBODY_here_runs_is_refused_rather_than_silently_defaulted(tmp_path: Path) -> None:
@@ -101,7 +104,10 @@ def test_the_choice_never_reads_a_COMMAND(tmp_path: Path) -> None:
     task_registry.put_task(str(tmp_path), {}, TaskRegistration(task="stage-transform", engine="ray", command="anything at all, unparsed"))
     spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
 
-    assert engine_choice.engine_for(_settings(tmp_path, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
+    # `ray_enabled=True` because this pins the CHOOSER, not hosting: a declared Ray task belongs on a
+    # deployment that runs the Ray lane, and leaving it off would make this a test of [[LH-147]]'s refusal
+    # wearing another name.
+    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
 
 
 def test_a_spec_carrying_no_project_cannot_resolve_and_says_so(tmp_path: Path) -> None:
@@ -115,10 +121,17 @@ def test_a_spec_carrying_no_project_cannot_resolve_and_says_so(tmp_path: Path) -
         engine_choice.engine_for(settings, spec=spec)
 
 
-def test_the_ENGINES_this_deployment_hosts_are_named_in_one_place() -> None:
+def test_the_ENGINES_this_BUILD_carries_are_named_in_one_place(tmp_path: Path) -> None:
     """A second engine is added by registering tasks for it and hosting it — never by editing a
-    branch. The set is asserted so the addition is a visible, reviewed change rather than a drift."""
-    assert set(engine_choice.HOSTED_ENGINES) == {engine_choice.RAY_ENGINE, engine_choice.IN_PROCESS_ENGINE}
+    branch. The set is asserted so the addition is a visible, reviewed change rather than a drift.
+
+    `KNOWN_ENGINES` is the BUILD's ceiling; what a deployment may choose is derived from it by
+    `hosted_engines`, and asserting the ceiling alone would pass for a derivation that ignored the
+    deployment entirely — which is the defect [[LH-147]] names. So both are pinned here.
+    """
+    assert set(engine_choice.KNOWN_ENGINES) == {engine_choice.RAY_ENGINE, engine_choice.IN_PROCESS_ENGINE}
+    assert engine_choice.hosted_engines(_settings(tmp_path, ray_enabled=True)) == engine_choice.KNOWN_ENGINES
+    assert engine_choice.hosted_engines(_settings(tmp_path, ray_enabled=False)) == frozenset({engine_choice.IN_PROCESS_ENGINE})
 
 
 @pytest.mark.asyncio
@@ -133,5 +146,5 @@ async def test_the_registry_read_does_not_block_the_event_loop(tmp_path: Path) -
     _declare(tmp_path, task="stage-transform", engine="ray")
     spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
 
-    assert await engine_choice.engine_for_async(_settings(tmp_path, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
+    assert await engine_choice.engine_for_async(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
     assert await engine_choice.engine_for_async(_settings(tmp_path, compute_enabled=True, ray_enabled=True), spec=None) == engine_choice.RAY_ENGINE

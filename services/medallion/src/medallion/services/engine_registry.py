@@ -75,11 +75,14 @@ def executor_for(
 
 
 def hosted_engines() -> frozenset[str]:
-    """What this deployment can actually RESOLVE.
+    """What this BUILD can actually RESOLVE — which adapters are here, a code fact.
 
-    Deliberately separate from `engine_choice.HOSTED_ENGINES`, which declares what a stage may
-    CHOOSE. The two must agree, and a test asserts it: an engine that can be chosen and not resolved
-    is a stage that dies at submission, and one that can be resolved and not chosen is a reachable
-    path nobody reviewed.
+    Deliberately separate from `engine_choice`, which asks what a stage may CHOOSE. That is two
+    questions, not one: `KNOWN_ENGINES` is the build's ceiling and must equal this set (a test asserts
+    it — an engine that can be chosen and not resolved is a stage that dies at submission, and one
+    that can be resolved and not chosen is a reachable path nobody reviewed), while
+    `engine_choice.hosted_engines(settings)` narrows the ceiling to what the DEPLOYMENT runs and is
+    therefore a SUBSET of this, never an equal. Requiring equality against the deployment set is what
+    made a Ray-OFF deployment unrepresentable.
     """
     return frozenset({IN_PROCESS_ENGINE, RAY_ENGINE})

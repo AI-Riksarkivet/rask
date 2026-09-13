@@ -46,10 +46,11 @@ RAY_ENGINE: Final = engine_names.RAY_ENGINE
 #: is the cheapest proof the contract is engine-plural.
 IN_PROCESS_ENGINE: Final = engine_names.IN_PROCESS_ENGINE
 
-#: What THIS deployment can run. A third engine is added by hosting it and registering tasks for it —
-#: never by editing a branch, which is the shape that made the estate single-engine in the first
-#: place. Asserted by the suite so widening it is a reviewed change.
-HOSTED_ENGINES: Final = frozenset({RAY_ENGINE, IN_PROCESS_ENGINE})
+#: Engines this BUILD carries an adapter for. A third engine is added by hosting it and registering
+#: tasks for it — never by editing a branch, which is the shape that made the estate single-engine in
+#: the first place. It is the CEILING on what :func:`hosted_engines` may answer, never the answer
+#: itself: what a build can resolve and what a deployment runs are different questions.
+KNOWN_ENGINES: Final = frozenset({RAY_ENGINE, IN_PROCESS_ENGINE})
 
 
 class _EngineSettings(_TransformSettings, Protocol):
@@ -57,6 +58,27 @@ class _EngineSettings(_TransformSettings, Protocol):
     has declared nothing. A Protocol so a test needs no full `MedallionSettings`."""
 
     ray_enabled: bool
+
+
+def hosted_engines(settings: _EngineSettings) -> frozenset[str]:
+    """The engines THIS DEPLOYMENT can actually run.
+
+    A DEPLOYMENT FACT, NOT A CONSTANT, and that is the whole of it. Declared as a frozenset containing
+    Ray unconditionally, the refusal below could never fire for Ray: a task registered for `ray` on a
+    deployment with the Ray lane off passed the check, `_dispatch_stage_workflow` enqueued it through a
+    client that only ENQUEUES, and `stage_runner` starts the runtime that would execute it only
+    `if settings.ray_enabled`. Scheduled, never executed, and silent — no failure, no DLQ, no refusal.
+
+    ``ray_enabled`` is read here for the SECOND of its two jobs. It is also the chart's default engine
+    for an estate that has declared nothing (see :func:`engine_for`), and only this one — does this pod
+    start the Ray workflow runtime — may gate a declaration. A declaration still overrides the chart in
+    the direction that carries the decoupling: a task registered for in-process is honoured on a Ray-ON
+    deployment, because in-process needs no runtime.
+
+    Narrower than :data:`KNOWN_ENGINES` by construction, and `engine_registry.hosted_engines` is the
+    same ceiling from the adapter side — a stage must never choose an engine nothing can resolve.
+    """
+    return KNOWN_ENGINES if settings.ray_enabled else frozenset({IN_PROCESS_ENGINE})
 
 
 def engine_for(settings: _EngineSettings, *, spec: TransformSpec | None) -> str:
@@ -75,11 +97,22 @@ def engine_for(settings: _EngineSettings, *, spec: TransformSpec | None) -> str:
         log.debug("stage_engine_from_chart", extra={"engine": chosen})
         return chosen
     registration = resolve_task_registration(settings, task=spec.task)
-    if registration.engine not in HOSTED_ENGINES:
+    hosted = hosted_engines(settings)
+    if registration.engine not in hosted:
+        # TWO REFUSALS WEARING ONE TYPE, because both are operator errors no redelivery fixes — but the
+        # fixes differ, so the message names which. An engine this BUILD has no adapter for is a
+        # declaration for another plane; one the build knows and this deployment has turned OFF is a
+        # lever, and saying only "it hosts [inprocess]" leaves the operator to guess which.
+        lever = (
+            f" This build can run {registration.engine!r}, but this deployment does not: the Ray lane's workflow runtime "
+            "starts only when MEDALLION_RAY_ENABLED is true, so the stage would be enqueued and never executed."
+            if registration.engine in KNOWN_ENGINES
+            else " The declaration is valid and belongs to another executor."
+        )
         raise UnrunnableTaskError(
             f"task {spec.task!r} is registered for engine {registration.engine!r}, which this deployment does not host "
-            f"(it hosts {sorted(HOSTED_ENGINES)}). The declaration is valid and belongs to another executor; "
-            "refusing rather than running it on whichever engine happens to be configured here."
+            f"(it hosts {sorted(hosted)}).{lever} Refusing rather than running it on whichever engine happens to be "
+            "configured here."
         )
     log.info("stage_engine_from_declaration", extra={"transform": spec.name, "task": spec.task, "engine": registration.engine})
     return registration.engine
