@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -154,6 +154,53 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   is empty and recreated when it is set, rather than surviving to replay 523 stale events into `plan_one`
   on the day someone enables the lane. Then surface per-consumer depth and `Active Interest` wherever the
   maintenance sweep already reports, so the next one is visible without a NATS client.
+
+**LH-149 · The cascade head hard-imports the workflow engine, so the lakehouse DEPENDS ON Dapr Workflow rather than being driven by it**
+`medallion` · med · found 2026-09-13 while re-measuring condition 3 · **refines an earlier verdict that measured only two of the import sites**
+
+- *Condition 3 in the owner's words:* "Dapr Workflow and Ray are things the lakehouse can be driven BY,
+  never things it depends ON." A module-level import is a dependency.
+- **MEASURED 2026-09-13, in a subprocess rather than by reading:** importing `medallion.producer` — the
+  cascade head — pulls in `dapr.ext.workflow` and its whole durabletask stack (`_durabletask.client`,
+  `.deterministic`, `.internal`, the generated protobufs). The producer cannot be imported without the
+  workflow engine present.
+- *The chain, named so it can be cut:* `producer.py:33` imports `medallion.api.promotions` at module
+  level — one of the six routers the producer always mounts, human-facing control rather than an
+  opt-in lane — and that module imports the engine twice over: `promotions.py:23`
+  `from dapr.ext.workflow.workflow_state import WorkflowStatus`, and `promotions.py:32`
+  `from medallion.workflow import PromotionSpec, promotion_review`, where `workflow.py:54` is a
+  module-level `import dapr.ext.workflow as wf`. `services/promotion_hold.py:19` carries the same second
+  edge. Confirmed per-module: promotions, promotion_hold and workflow each pull it; `stage_runner_ops`
+  does not.
+- *Why the earlier verdict missed it, recorded so the next re-measure is not fooled the same way:* the
+  two sites it checked — `producer.py:121` and `stage_runner.py:93` — ARE lazy, and the cascade's
+  workflow dispatch IS gated by `transform.py`'s `if use_ray`. Both true, and neither is the import
+  graph. The question "is the engine optional?" is answered by importing the module, not by reading the
+  call sites.
+- *`workflow.py` itself is NOT the defect and must not be 'fixed':* it is the engine ADAPTER —
+  `ACTIVITY_RETRY: Final = wf.RetryPolicy(...)` at :76, `register(runtime: wf.WorkflowRuntime)` at :827,
+  `DaprWorkflowContext` generators throughout. An adapter may import the thing it adapts. The defect is
+  that an always-mounted HTTP router imports FROM the adapter.
+- **WHY med AND NOT HIGH, stated so the severity is not mistaken for the goal's verdict.** The
+  RUNTIME gating is correct and its comment is true: `producer.py:118` starts the engine only
+  `if settings.quality_review_enabled or settings.ray_enabled`, and says "with neither feature on, this
+  app hosts no workflow and should run no engine" — no threads, no client. And `dapr-ext-workflow` is
+  already an unconditional entry in `services/medallion/pyproject.toml`, so the import adds no
+  dependency the manifest did not already carry. Nothing is operationally broken. What it costs is the
+  claim: condition 3 cannot be declared met while the cascade head cannot be IMPORTED without a
+  workflow engine.
+- *Which makes the full fix larger than moving imports:* real decoupling means `dapr-ext-workflow`
+  becomes an optional extra that medallion runs without, and the import edges below are what has to be
+  cut first for that to even be possible. Cutting them is worth doing on its own; declaring condition 3
+  met needs both.
+- *Closes when:* the three edges are cut and `import medallion.producer` no longer pulls
+  `dapr.ext.workflow` — pinned by a test that asserts exactly that, since nothing else can see it.
+  The shape is already visible: `PromotionSpec` is a plain pydantic model (`workflow.py:1112`) with no
+  engine in it and belongs beside the other schemas, so `promotions.py` and `promotion_hold.py` can take
+  the domain without the adapter; `promotion_review` is referenced only inside the scheduling call
+  (`promotions.py:169`), where `wf` is ALREADY imported lazily at :125; and `WorkflowStatus` builds one
+  module-level tuple (`_LIVE`, :70) that can be resolved where it is used. No backward compat, so every
+  importer of `PromotionSpec` moves in the same change.
 
 **LH-148 · The terminal-provenance-loss metric counts restarts, not losses — and the payload it parks can never be read back**
 `lineage, chart` · med · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
@@ -1845,7 +1892,25 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog` · med
 
 - *Why open:* Upheld by construction: the root id has no top segment to route by, so `dependencies.get_namespace` returns the DEFAULT namespace and `_drain_namespaces` asks that one backend — a root listing sees only the shared default root's `__manifest`. The estate proves the consequence: `maintenance/reconcile._top_level_namespaces_across` exists because each tenant's namespaces live in that tenant's own bucket.
-- *Closes when:* Federate the root listing — enumerate the warehouse registry, drain each root and merge — relying on the per-item `can_get_metadata` filter this route already applies; that requires `get_namespace` to hand back a handle per root.
+- **LANDED 2026-09-13, and simpler than this row assumed.** The root listing now merges the bindings
+  registry's `top_ns` names before the per-item `can_get_metadata` filter. No per-root HANDLE is needed:
+  the root's children ARE top-level namespaces and a binding names exactly one, so the registry already
+  holds the missing names — draining each warehouse would only add namespaces that have no binding, and
+  `get_namespace` routes an id BY its binding, so those are reachable by no id route and naming them
+  would advertise a listing the estate cannot serve.
+- *Measured on the live graph 2026-09-13:* dataset locations span **123 distinct warehouse buckets**
+  against 12 other buckets, so the root listing was answering from a small fraction of the estate.
+- *The merge is sorted and deduped* (the route's `page_token` is keyset over that list), a binding with
+  no `top_ns` is skipped, and an unreadable registry degrades to the default root's answer with a
+  warning — the same per-seed tolerance `GET /v1/table` applies. RED-first, 8 tests in
+  `tests/unit/test_the_root_namespace_listing_sees_every_warehouse.py`, three of them negative: a child
+  listing is not seeded and pays no registry read, a warehouses-off deployment is untouched, and a
+  failed registry read still answers.
+- **A DEFECT THIS INTRODUCED AND THE ESTATE'S OWN GUARD CAUGHT** (`4a44fa36`): the helpers first landed
+  between `@router.get("/{id}/list")` and `list_namespaces`, so the route was registered to the merge
+  helper and the endpoint was gone. The LH-031 suite could not see it — those tests call the function
+  directly — and `test_di_aliases_are_only_on_routes` did, by flagging `list_namespaces` as a non-route
+  helper still carrying `NamespaceDep`/`SettingsDep`. **Built and deployed? NO — rides the pending roll.**
 
 **LH-032 · `handle_validation_error` hardcodes 422 while emitting `ErrorCode.INVALID_INPUT`, which maps to 400 — the vendored spec contains zero 422s**
 `catalog, service-kit` · med
@@ -1975,8 +2040,30 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 **LH-041 · Branch/tag writes are unconditional at every layer including pylance's `Tags::update` — a lost update in waiting**
 `catalog` · med
 
-- *Why open:* `_set_tag` is unconditional all the way down and nothing has verified whether RustFS honours `If-Match` on the tag object.
-- *Closes when:* Use an object-store conditional put on `_refs/tags/<name>.json` and verify RustFS honours `If-Match` there.
+- **THE VERIFICATION HALF IS DONE 2026-09-13, AND IT FOUND A WIDER GAP THAN THE TAG.** The CAS e2e
+  proved only `If-None-Match: *` (put-if-not-exists) across its three tiers. Nothing drove `If-Match`,
+  while `records._replace_json` already writes EVERY control-root record with
+  `put_object(..., IfMatch=etag)` and `records.mutate_json` is the seam every registry read-modify-write
+  goes through — so a store that ignored the header would last-writer-win on the tenant-isolation
+  guards, underneath the module written to stop exactly that. The unit suites cannot reach it: they
+  exercise the LOCAL branch, where `flock` plus a sha256 compare arbitrate in-process.
+  Tier 2b now drives both halves and **passes live**: a stale-etag replace is refused AND not applied,
+  and under 8-way contention on one etag exactly one writer wins with the survivor's bytes intact.
+  *Stated precisely:* this cluster's store is **MinIO** (`svc/rask-minio`; `rustfs.enabled` is off), so
+  what is measured is that MinIO honours `If-Match`. The RustFS leg of the same claim is still unproven.
+- **THE TAG HALF IS NOT A CODE GAP, AND THIS ROW'S PRESCRIPTION WOULD MAKE IT ONE.** `_set_tag`'s create
+  race is already arbitrated — `tags.create` refuses an existing tag and the handler converges by moving
+  it, the same shape `records.create_json` uses. What has no conditional form is the UPDATE, and that is
+  the library's: verified on **pylance 11.0.0**, `Tags.update(tag, reference)` takes no expected-version.
+  The row asks for "a conditional put on `_refs/tags/<name>.json`" — that means the catalog writing the
+  format's internals by hand (`createdAt`/`updatedAt`/`manifestSize`; `lance_docs/file_format.md` §Tags,
+  2796-2820 defines the file's shape and gives tag updates no concurrency contract — only manifest
+  commits get put-if-not-exists, 5394). Writing another library's on-disk format from outside it is not
+  a fix this estate should ship.
+- *Closes when:* the owner rules between (a) accepting a last-writer-wins tag MOVE and recording it in
+  `docs/DECISIONS.md` — the create race, which is the one that loses data rather than ordering, is
+  already closed — and (b) raising a conditional `Tags::update` upstream in Lance, which is where the
+  primitive belongs. Re-verify `If-Match` against RustFS if a deployment ever enables it.
 
 **LH-042 · ~~Blob v2 default thresholds disagree three ways (64 KB/4 MB vs 16 KiB/2 MiB vs rask's measured 64 KiB/4 MiB)~~ — STRUCK 2026-09-10 (ALREADY FIXED)**
 
@@ -2325,8 +2412,30 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 **LH-070 · No versioned authz-model migration (`ACTIVE_MODEL_VERSION` + an idempotent `migrate()`) — the 3-axis model shipped without it**
 `service-kit, catalog` · med
 
-- *Why open:* The study ruled it mandatory before the 3-axis model and the model shipped anyway; there is no recorded active model version and no idempotent migration, so a model change cannot be rolled out safely.
-- *Closes when:* Add an `ACTIVE_MODEL_VERSION` constant plus an idempotent `migrate()` that writes the authz model and pins the active version, called at service start.
+- **THE IDEMPOTENT HALF LANDED 2026-09-13, and the measurement is the reason it mattered.** `provision`
+  wrote the model unconditionally once the narrowing guard passed, and OpenFGA has no update for a model
+  — every write mints a new immutable version. `provision` runs in the lifespan of every FGA-enabled
+  service, so each pod start of each of them added one. Paged out of the live store 2026-09-13:
+  **1,316 authorization model versions**, for a `model.json` that has changed a handful of times.
+- *Why that is not merely untidy:* the store's "latest" model is whichever pod booted last, which is the
+  value [[LH-139]]'s narrowing guard reads to decide whether a boot is a rollback — churn is the
+  substrate that defect lived on — and it leaves an operator asking what the estate's authorization
+  model says with 1,316 candidates to diff.
+- **THE COMPARISON HAD TO BE PROVEN REACHABLE FIRST, because the obvious one cannot fire.** OpenFGA does
+  not store the model it is given: it materialises `metadata: null`, `relations: {}`, `module: ""`,
+  `condition: ""` and `source_info: null`, so the stored form is 36,482 characters against 24,579
+  authored and a direct equality check answers "different" forever. Dropping null/empty values makes
+  them byte-identical — verified with the shipped `_canonical_model` against the live store's newest
+  model and this repo's `model.json`, 20,310 characters each, i.e. **the skip would fire on the deployed
+  estate today**. RED-first, 6 tests, two of which pin that the canonical form is neither always-equal
+  nor never-equal. **Built and deployed? NO — rides the pending roll.**
+- *Deliberately NOT an `ACTIVE_MODEL_VERSION` constant:* a hand-maintained version is one somebody
+  forgets to bump, and the model's own canonical form answers the same question without a second source
+  of truth. Everything else is unchanged: a widened model still writes, a narrowing one is still refused
+  ahead of this check, and a new store still writes without a read.
+- *Closes when:* the roll observes `openfga_model_unchanged` on a boot and the store's version count
+  stops climbing. If the owner still wants a recorded ACTIVE version pinned for production rollout
+  (distinct from the churn this fixed), that is the remaining half.
 
 **LH-071 · ~~Tuple helpers were never split into `tuples.py` and there are no golden tuple tests~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
