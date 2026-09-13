@@ -98,15 +98,32 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **LH-127 · Four orphaned Dapr durables sit on the estate's streams, and the reconcile loop cannot remove any of them**
 `lineage, compute, chart` · med
 
-- *Why open — RE-MEASURED AND WIDENED 2026-09-13.* The row was filed on one consumer. There are four, across two streams, and two of them name app-ids that exist nowhere in the estate:
+- *Why open — RE-MEASURED TWICE ON 2026-09-13.* The row was filed on one consumer; the first re-measure found four on two streams; a census across EVERY stream found **eight, on six streams**, and the two largest were in neither earlier count. Listing only the streams somebody had already looked at is how a census undercounts:
 
-      stream    consumer                    created              delivered ever   last delivery   unprocessed   app-id live?
-      LINEAGE   lance-ray-durable           2026-08-05 20:18:21  53               29d3h ago       1,590         NO
-      LINEAGE   maintenance-durable         2026-09-03 17:21:42  2,067             5d2h ago         523         yes (gated off)
-      DLQ       lance-ray-durable           2026-08-05 20:18:21  0                never                0        NO
-      DLQ       pages-to-gold-htr-durable   2026-08-15 18:33:11  --               27d23h ago           0        NO
+      stream            consumer                    unprocessed   last delivery   app-id live?
+      LINEAGE           lance-ray-durable                 1,572   29d             NO
+      LINEAGE           maintenance-durable                 529    5d             yes (gated off)
+      MEDALLION         pages-to-gold-htr-durable           296   28d             NO
+      CATALOG_CONTROL   lance-ray-control-durable           872   37d             NO
+      TRAINING          lance-ray-durable                    26   never           NO
+      DLQ               lance-ray-durable                     0   never           NO
+      DLQ               pages-to-gold-htr-durable             0   27d             NO
+      MAINTENANCE_WORK  maintenance-work-durable              0    5d             yes (gated off)
 
-  All four report `Active Interest: No`. The live app-ids are annotator, bronze-to-silver, catalog,
+  `lance-ray` alone holds FOUR durables and `pages-to-gold-htr` two. **`lance-ray-control-durable`'s
+  872 is the ENTIRE `CATALOG_CONTROL` stream** — every control event the estate has published, held by
+  a consumer for an app that does not exist.
+- **AND THAT ONE IS BEYOND THE DRIFT LOOP'S REACH ENTIRELY**, which sharpens the root cause below
+  rather than repeating it: `nats-stream-job.yaml` walks `LINEAGE MEDALLION TRAINING DLQ` and nothing
+  else, so `CATALOG_CONTROL` and `MAINTENANCE_WORK` sit outside even the pass that WOULD delete a
+  config-drifted durable. The blind spot is two-dimensional — the streams it does not walk, and, on the
+  streams it does, the orphans whose config matches by construction.
+- *`pages-to-gold-htr` is also a WORKLOAD-NAMED app-id*, which the estate no longer permits anywhere
+  (R23, "the platform knows NO workload"). Dead metadata rather than a live violation, but it dates the
+  residue: pre-R23, and nothing has removed it since.
+- *(The `ingest-r*` consumers on INGEST are a different defect with its own row — [[LH-131]], one
+  durable leaked per run — and are deliberately not counted here.)*
+  All eight report `Active Interest: No`. The live app-ids are annotator, bronze-to-silver, catalog,
   compute, controlplane, flows, gateway, ingest, lineage, maintenance, medallion-producer,
   media-to-silver, notifications, search, silver-to-gold, viewer — `lance-ray` and `pages-to-gold-htr`
   are not among them, and neither appears in the repo as an app-id (`lance-ray` occurs only as the name
@@ -213,6 +230,19 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   entry in `services/medallion/pyproject.toml`. Cutting the import edges is what makes an optional
   extra POSSIBLE; making it optional is the other half, and it is a packaging decision rather than a
   defect.
+- **COSTED 2026-09-13 so the decision is cheap, and the trap named so it is not taken blind.** The
+  mechanics are ordinary — `[project.optional-dependencies] workflow = ["dapr-ext-workflow>=1.18"]`
+  beside the precedent `service-kit` already sets, then `uv lock`, then `--extra workflow` on both
+  `uv sync` steps in `.docker/rest-catalog.dockerfile`. Probed: `uv sync --extra` resolves an extra
+  defined by ANY selected package ("Extra `X` is not defined in any project's optional-dependencies
+  table"), so `--extra workflow` binds unambiguously to medallion among the seven `--package` flags.
+  **THE TRAP IS THAT `--all-packages` DOES NOT IMPLY EXTRAS.** Nothing in this repo passes `--extra` or
+  `--all-extras` today, and `uv sync --all-packages` is what the Makefile runs three times, what
+  `.dagger/test.go` runs, and what three CI jobs run as `--frozen --all-packages --all-groups`. Move
+  the dependency without updating all of those and the engine is absent from every developer and CI
+  environment, so `medallion.workflow` — the adapter, which MUST import it — fails at import and takes
+  its suite with it. Loud rather than silent, which is the only good news in it. Six-plus call sites
+  across the Makefile, a Go module and CI config is a deliberate change, not an opportunistic one.
 - *Closes when:* the roll observes the decoupled image, and the dependency becomes optional.
   The shape is already visible: `PromotionSpec` is a plain pydantic model (`workflow.py:1112`) with no
   engine in it and belongs beside the other schemas, so `promotions.py` and `promotion_hold.py` can take
@@ -393,6 +423,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - **THE POST-DEPLOY PREDICTION, stated before the roll so it can falsify the change:** `storage_loss`
   **3 -> 0**, `unreadable` **26 -> 24** (`acme-bronze$zzprobe8926` and `uiproof-gold$catalog` move),
   `ungoverned` **0 -> 11**, `checked` unchanged at 356.
+  **THE PRE-ROLL BASELINE, measured 2026-09-13 and stable across consecutive ticks**, so the comparison
+  needs no memory of what it used to say:
+
+      lineage_reconcile_sweep checked=356 backfilled=0 storage_loss=3 graph_ahead=31 unreadable=26
+        dangling_blobs=0 stale=320 contract_violations=0 provenance_holes=0 outbox_drained=0
+        outbox_stranded=0 pruned_runs=0 pruned_events=0
+
+  Note what is ABSENT: there is no `ungoverned` field at all, because the state ships in `1ba4156e` and
+  that has not rolled. Its APPEARANCE is the first thing to look for; a rolled image whose sweep still
+  has no such field did not take the change.
   The 11, not the 58: the drop stamp is checked FIRST, so the 47 purge-dropped datasets never reach the
   governed branch — which is correct, a deliberate drop is already handled. I had written 58 and the
   arithmetic corrected it; the 11 that remain are exactly [[LH-144]]'s real population, which is the
@@ -745,13 +785,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   verified present in the registry (283 tags; the tag is there, not merely a zero exit). The roll is
   blocked — `kubectl set image` is refused here as a Shared Cluster Mutation — so the fix is not yet
   observed live. Ten workloads share that image and the pins file has ONE key for it, so they must move
-  together or `values-live-pins.yaml` stops being true; only medallion's three files differ between
-  `main-b641103f` and this build, which is what makes rolling all ten safe.
-  *What observing it means:* the tick should report `destination_invisible: 1` and a
+  together or `values-live-pins.yaml` stops being true; the roll is no longer a medallion-only change: measured 2026-09-13, **38 commits** separate
+  `main-b641103f` from HEAD, touching 8 medallion source files, 7 in lineage, 5 in catalog and
+  service-kit besides. All ten workloads share the image and the pins file has ONE key for it, so
+  they move together either way.
+  **THE PRE-ROLL BASELINE, measured 2026-09-13 and stable across consecutive ticks:**
+
+      cascade_lag_tick edges=267 published=14 unknown=1 failed=0 unmeasurable=0 skipped=252
+
+  *What observing it means:* `unknown` disappears entirely — [[LH-145]] replaces it with `blind`, a list
+  of named edges — and the tick should report `destination_invisible` for the `advref31` silver->gold
+  edge, with a
   `medallion_cascade_lag_blind{lance_medallion_edge="silver->gold",lance_medallion_project="advref31",lance_medallion_reason="destination_invisible"}`
-  series should appear. If it instead stays at 0 with `unmeasurable: 252`, then that tenant's silver has
-  no `published` tag and the state is a different one — an unpublished mid-cascade tier — which is worth
-  its own row rather than a patch to this one.
+  series appearing. A rolled image still printing `unknown=` did not take the change.
+  If `blind` instead comes back EMPTY while the 252 stay `skipped`, then that tenant's silver has no
+  `published` tag and the state is a different one — an unpublished mid-cascade tier — which is worth
+  its own row rather than a patch to this one. (The 252 are `skipped`, not `unmeasurable`: both fields
+  exist and the deployed tick moves the population between them, so reading the wrong one would answer
+  this question backwards.)
   *The ALERT cannot be observed here at all, by design:* `observability.alerting.enabled` defaults false
   (dev has no on-call) and no vmalert pod exists in this cluster — verified, `helm get manifest` names
   it zero times. The chart's own note makes promtool the bar for a rule and the prod drill the bar for
@@ -1151,6 +1202,14 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   a fix that assumes the catalog answers for all 60 will stall on exactly those two.
   *And 36 of the 60 are already dropped*, so they never reach the sweep — the live cost is the 24 that
   do, which is most of the `unreadable` line rather than all of it (the sweep reports 26).
+- **THE STAMP HALF HAS A LIVE COUNT NOW, 2026-09-13.** Across 20 minutes of maintenance sweep
+  outcomes, 205 distinct datasets: **186 carry a `table_id` matching their own path, 19 do not** — and
+  the 19 are two different things, which a count alone would hide. Most are a SPELLING difference
+  (`silver/consensus-live-…` stamped `silver$consensus-live-…`, `/` where the id uses `$`) and name the
+  same table. The genuine stale stamps are the composed `medallion/<tier>` paths, and one is worse than
+  the ids this row already names: `dataset='s3://bind86-wh/medallion/silver'` stamped
+  `table_id='bronze$events'` — a SILVER dataset claiming to be a BRONZE table, in a tenant warehouse.
+  The sweep sends that id to `/compaction_plan` every tick.
 - **RE-MEASURED 2026-09-13: the 60 are unchanged, and a SECOND candidate repair source is now
   eliminated.** The graph still reports `1162 datasets carry a source_uri / 1102 absolute`, so the
   forward-only fix holds and nothing has repaired one. Two sources have now been driven and neither
