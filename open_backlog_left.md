@@ -2520,7 +2520,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `maintenance, lineage` · med
 
 - *Why open:* The first half landed and is deployed — `audit_material_work` records a rewrite on the `lance.audit` stream keyed on `table:<id>`, wired into `_record_dataset_outcome` and gated on `_did_material_work` — but it is operator-global telemetry on a 14-day trace TTL, so 'which compaction rewrote my table last quarter, and did it fail first?' has no tenant answer. It is also not yet OBSERVED (2,200 dataset outcomes with `fragments_removed` and `old_versions_removed` both summing to 0, because the estate is converged), and `maintenance/core/lineage_emit.py` gives FAIL a deterministic run id per dataset so attempts merge onto one node and are structurally uncountable.
-- *Closes when:* Add attempt number and duration to the audit record and make it FGA-gated per object so a tenant can query its own table's rewrites; fix the deterministic FAIL run id in `maintenance/core/lineage_emit.py`; then observe it on a dataset that actually has fragments to reclaim, measured through the running app or a door.
+- **"FIX THE DETERMINISTIC FAIL RUN ID" WOULD BE A REGRESSION, and the code says why (re-measured
+  2026-09-13).** It is not an oversight: `lineage_emit.py:271-279` calls it "the flood guard" and states
+  the arithmetic — the cron re-sweeps every ~2 min, so a persistently failing dataset would otherwise
+  mint a fresh never-pruned `(:Run)` node per tick (~720 a day, per dataset). One id per dataset makes
+  every tick MERGE onto ONE node in AGE, and the `/events` partial-unique `(run_id, event_type)` index
+  dedups the redelivered FAIL rows. The consequences are ACCEPTED and enumerated there against a
+  2026-07-10 review: after recovery the node lingers until Run retention prunes it, and across distinct
+  episodes `/runs` is last-wins while `/events` keeps the first.
+  *Its one stale premise is now closed:* that comment tells the reader to "enable it alongside
+  lineageEmit", and `LINEAGE_RUN_RETENTION_DAYS=30` is deployed (measured 2026-09-11), so consequence
+  (a) has its sweeper.
+- *WHICH LEAVES THE ROW'S REAL ASK INTACT AND ITS REMEDY WRONG.* "Attempts are structurally
+  uncountable" is TRUE and worth fixing; minting a run id per attempt is not the way, because that is
+  precisely the flood the guard exists to prevent. Counting does not need a node per attempt — one node
+  carrying an attempt COUNTER and a last-attempt timestamp answers "did it fail first, and how often"
+  without multiplying nodes. That is a facet on the existing MERGE target, not a new id.
+- *Closes when:* Add attempt number and duration to the audit record — as a counter on the SINGLE
+  deterministic FAIL node, not by minting one id per attempt — and make it FGA-gated per object so a
+  tenant can query its own table's rewrites; then observe it on a dataset that actually has fragments to
+  reclaim, measured through the running app or a door. Do NOT remove the deterministic run id without
+  replacing the flood guard it is.
 
 **LH-099 · A sweep that deleted a terabyte and one that deleted nothing produce the same-shaped report — no bytes-reclaimed anywhere, and no control event for what was rewritten**
 
