@@ -1225,6 +1225,26 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `/compaction_plan` answers 404 for medallion tier ids, so the distributed compaction door cannot be
   driven for exactly the datasets the cascade writes (0 distributed commits against 24 in-pod fallbacks
   in 24 h).
+- **THE DIAGNOSABILITY BLOCKER IS GONE — verified in the RUNNING POD 2026-09-13, not inferred from a
+  commit date.** This row records that the branch "could not be named" because the deployed text format
+  renders no `extra`. That is no longer true of the estate: `DiagnosticFormatter` renders every `extra=`
+  field after the message, and `rask-silver-to-gold` was read in place —
+  `inspect.getsource(DiagnosticFormatter.format)` carries the diagnostics tail. So the NEXT silver→gold
+  refusal names its own `from_uri` on the line, and half (a) needs one hop DRIVEN rather than a new
+  mechanism.
+- *And the 2026-09-11 avenue is closed off rather than left hanging.* That note leaves "GreptimeDB's
+  `opentelemetry_logs` was not queried" as untried; it is tried now and yields nothing recoverable.
+  Those records reached GreptimeDB through the collector's FILELOG receiver, which tails pod stdout, so
+  their `log_attributes` carry only `log.file.path` / `log.iostream` / `logtag` and the body is the bare
+  string `medallion_stage_from_uri_refused`. The refusing URI was never written anywhere that survives —
+  the OTLP copy that rescued other diagnostics this week does not exist for this one.
+  *For whoever re-drives it:* `medallion_stage_refused_total` runs 2026-09-10 12:56 → 16:03 and then
+  stops, max counter 6 in the retained window (this row says 8 triggers; retention may have clipped the
+  earlier samples, so the two are not necessarily in conflict).
+- *A SECOND FAULT sat in the same window and is recorded because it was in front of me:* that same
+  stage-runner pod logged repeated `UNAVAILABLE: … ipv4:127.0.0.1:50001: Connection refused` — it could
+  not reach its own Dapr sidecar. Cause, consequence or coincidence is NOT established; it is named so
+  the next person driving this hop checks the sidecar before the confinement branch.
 - *NOT REPRODUCED 2026-09-11:* the stage-runner pods were recreated at 11:17 and the text log format
   renders no `extra`, so the specific `_preflight`/`_confine_from_uri` branch could not be named;
   GreptimeDB's `opentelemetry_logs` was not queried, and no new silver→gold traffic has run since.
@@ -2156,10 +2176,29 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   `RASK_FGA_STORE_ID` + `RASK_FGA_MODEL_ID`", and that is right for production. It leaves dev with a
   mechanism where deploying an older image silently rewrites who may do what — the estate's own
   signature failure, a control that is not wrong so much as pointed at the wrong authority.
-- *Closes when:* `provision` refuses to write a model that REMOVES a type or relation the store's
-  current model defines (compare before writing; log and keep the existing model id, since a narrower
-  model is a rollback rather than an edit), and the chart pins the pair in any deployment that is not a
-  throwaway. A RED test writing a relation-removing model against a store that already has it.
+- **THE CODE HALF IS DONE 2026-09-13, RED-first.** `provision` now reads the store's current model and
+  refuses to write one that removes a type or a relation, keeping the existing model id and logging
+  `openfga_model_narrowing_refused` with what would have been lost. Additions still write, because
+  `provision` exists so a `model.json` edit takes effect and a guard that blocked those would freeze
+  the estate at whatever the first pod shipped.
+  *The read is where the guard gets its teeth, and the first version had none.* Answering `None` on a
+  failed read would let a flaky OpenFGA wave a narrowing model through — exactly when a boot storm is
+  likeliest. It now runs under the module's own posture (`_guarded`: retry, then fail closed), so an
+  unverifiable store raises, `auth_lifespan` builds no client, and the governed routes answer 503: an
+  estate that cannot verify its own model does not get to overwrite it. A store created moments ago
+  skips the read entirely, so a first boot never depends on a model that cannot exist yet.
+  Five tests in `test_a_boot_cannot_narrow_the_estates_authorization_model.py`: a removed relation, a
+  removed type, an unreadable store — plus the two controls that keep this from becoming a guard that
+  refuses everything (an ADDING model still writes; a fresh store still writes).
+- *RE-MEASURED 2026-09-13, and the mechanism was unchanged at HEAD:* `provision` still called
+  `load_model()` and wrote unconditionally ("(re)written each time" in its own docstring), the catalog
+  still passed `provision=True` (`catalog/main.py:140`), and the deployed catalog still has
+  `RASK_FGA_STORE_ID` and `RASK_FGA_MODEL_ID` UNSET with `RASK_FGA_ENABLED=true` — so every boot really
+  was rewriting the estate's model from that image.
+- *Closes when:* the above ships AND the chart pins `RASK_FGA_STORE_ID` + `RASK_FGA_MODEL_ID` in any
+  deployment that is not a throwaway — the half still open, and a values decision rather than a code
+  one. The guard makes a rollback loud instead of silent; pinning is what stops the write happening at
+  all.
 
 **LH-080 · ~~`can_promote` buys nothing on `table` because `validator ⊇ owner`~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 

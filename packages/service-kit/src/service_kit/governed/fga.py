@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -316,14 +316,83 @@ async def _guarded[T](
 # --------------------------------------------------------------------------- #
 
 
-async def provision(api_url: str, *, store_name: str = "lance-catalog") -> tuple[str, str]:
+def _relation_index(type_definitions: Iterable[Any] | None) -> dict[str, frozenset[str]]:
+    """`{type: {relation, …}}` from either shape a model arrives in.
+
+    `load_model()` yields plain dicts off `model.json`; a model read back from the store yields SDK
+    `TypeDefinition` objects. One index over both is what lets the comparison be written once.
+    """
+    index: dict[str, frozenset[str]] = {}
+    for definition in type_definitions or ():
+        is_mapping = isinstance(definition, dict)
+        type_name = definition["type"] if is_mapping else definition.type
+        relations = (definition.get("relations") if is_mapping else definition.relations) or {}
+        index[str(type_name)] = frozenset(relations)
+    return index
+
+
+def _narrowings(incoming: dict[str, frozenset[str]], current: dict[str, frozenset[str]]) -> list[str]:
+    """What ``incoming`` would take away, as ``type`` or ``type#relation``. Empty means it only adds.
+
+    Additions are invisible here ON PURPOSE: `provision` exists so a `model.json` edit takes effect on
+    boot, and a guard that also refused new types would freeze the estate at whatever the first pod
+    shipped. Only the removing direction makes image order decide who may do what.
+    """
+    lost: list[str] = []
+    for type_name, relations in current.items():
+        if type_name not in incoming:
+            lost.append(type_name)
+            continue
+        lost.extend(f"{type_name}#{relation}" for relation in relations - incoming[type_name])
+    return sorted(lost)
+
+
+async def _current_model(
+    client: OpenFgaClient,
+    *,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+) -> Any:
+    """The store's newest model, or ``None`` when a store that EXISTS has never been modelled.
+
+    UNDER THE MODULE'S OWN POSTURE — retry, then fail closed — and that is what gives the guard below
+    its teeth. A read that merely answered ``None`` on failure would let a flaky OpenFGA wave a
+    narrowing model through, which is exactly when a boot storm is most likely. Raising instead reaches
+    `auth_lifespan`, which then builds no client and leaves the governed routes answering 503: an
+    estate that cannot verify its own model does not get to overwrite it.
+
+    A store created moments ago never pays this read — see the caller.
+    """
+
+    async def _do_read() -> Any:
+        response = await client.read_latest_authorization_model()
+        return getattr(response, "authorization_model", None)
+
+    return await _guarded(
+        _do_read,
+        event="openfga_read_model_unavailable",
+        attempts=retry_attempts,
+        backoff=retry_backoff_seconds,
+        max_backoff=retry_max_backoff_seconds,
+    )
+
+
+async def provision(
+    api_url: str,
+    *,
+    store_name: str = "lance-catalog",
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+) -> tuple[str, str]:
     """Idempotently ensure the catalog store + model exist; return ``(store_id, model_id)``.
 
     REUSES an existing store of the same name instead of minting a fresh one on every
     unpinned boot — otherwise a restart strands every tuple written against the previous
-    store (creators silently lose access). The model is (re)written each time so
-    ``model.json`` edits take effect; tuples live on the store and survive new model
-    versions. For dev / e2e; in production pin ``RASK_FGA_STORE_ID`` + ``RASK_FGA_MODEL_ID``.
+    store (creators silently lose access). A ``model.json`` edit takes effect on boot, but only in the
+    ADDING direction: a model that would REMOVE a type or relation the store already defines is refused
+    and the existing model id kept, because a narrower model is a rollback and image order must not
+    decide who may do what. Tuples live on the store and survive new model versions. For dev / e2e; in
+    production pin ``RASK_FGA_STORE_ID`` + ``RASK_FGA_MODEL_ID``.
     """
     model = load_model()
     async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
@@ -331,10 +400,35 @@ async def provision(api_url: str, *, store_name: str = "lance-catalog") -> tuple
         existing = [s for s in (stores.stores or []) if s.name == store_name]
         if existing:
             store_id = max(existing, key=lambda s: s.created_at).id
+            store_is_new = False
         else:
             created = await client.create_store(CreateStoreRequest(name=store_name))
             store_id = created.id
+            store_is_new = True
     async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=store_id)) as client:
+        # A BOOT MAY ADD TO THE ESTATE'S MODEL AND MUST NEVER TAKE A RELATION AWAY. This write is
+        # unpinned, so whichever pod boots last decides the store's newest model — and a pod on an
+        # OLDER image ships an older `model.json`. Measured 2026-09-11: a routine upgrade rolled the
+        # catalog back one tag, the store lost `warehouse#event_stager`, and `rask-bootstrap-admin`
+        # crash-looped on a tuple naming a relation that no longer existed, blocking the upgrade so the
+        # estate could not converge — every re-apply booted the same pod and reverted the model again.
+        #
+        # A missing relation ERRORS rather than denies ("object relation does not exist"), which the
+        # fail-closed wrapper renders as "authorization service unavailable" for every caller of that
+        # door, so the loss reads as an outage rather than as a permissions change.
+        # A store minted moments ago holds nothing to narrow, so it never pays the read — which is
+        # also what keeps a first boot from depending on a model that cannot exist yet.
+        current = None if store_is_new else await _current_model(client, retry_attempts=retry_attempts)
+        if current is not None:
+            removed = _narrowings(_relation_index(model["type_definitions"]), _relation_index(current.type_definitions))
+            if removed:
+                # KEEP THE STORE'S OWN MODEL. A narrower model is a rollback, not an edit, so the
+                # honest answer is the id the estate is already answering with.
+                log.error(
+                    "openfga_model_narrowing_refused",
+                    extra={"store_id": store_id, "model_id": current.id, "removed": removed[:20], "removed_count": len(removed)},
+                )
+                return store_id, str(current.id)
         written = await client.write_authorization_model(
             WriteAuthorizationModelRequest(
                 schema_version=model["schema_version"],
