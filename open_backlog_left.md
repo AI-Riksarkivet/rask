@@ -2773,10 +2773,33 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   still passed `provision=True` (`catalog/main.py:140`), and the deployed catalog still has
   `RASK_FGA_STORE_ID` and `RASK_FGA_MODEL_ID` UNSET with `RASK_FGA_ENABLED=true` — so every boot really
   was rewriting the estate's model from that image.
-- *Closes when:* the above ships AND the chart pins `RASK_FGA_STORE_ID` + `RASK_FGA_MODEL_ID` in any
-  deployment that is not a throwaway — the half still open, and a values decision rather than a code
-  one. The guard makes a rollback loud instead of silent; pinning is what stops the write happening at
-  all.
+- **THE VALUES HALF WAS NOT SAFE TO TAKE, and that is now fixed rather than argued.** Pinning works by
+  skipping `provision` outright (`auth_lifespan.py`: `if not (store_id and model_id)` wraps BOTH the
+  provision and resolve branches), so a pinned boot never calls `load_model()` at all. An operator who
+  adopted the prescribed posture and later edited `model.fga` would ship an image whose model takes
+  effect NOWHERE and says so nowhere — the same door answering "object relation does not exist", the
+  same "authorization service unavailable" the fail-closed wrapper renders, from the opposite
+  direction. Measured 2026-09-13: `chart/values.yaml:925-926` ship `fgaStoreId: ""`/`fgaModelId: ""`,
+  the live catalog has both env UNSET, and NO shipped values file sets either — so the row's own
+  prescription was the one configuration nobody could adopt without re-creating the defect.
+  `fga.audit_pinned_model` now reads the pinned model through the already-pinned client and compares it
+  to the image's bundled copy, logging `openfga_pinned_model_differs_from_image` with three SEPARATE
+  fields — `absent_from_pin`, `absent_from_image`, `redefined` — because a rollback and a roll-forward
+  need different answers and one merged list cannot tell them apart. It REPORTS and never refuses: a
+  pin is a deployment decision, and crash-looping on one helps nobody. It is deliberately the one model
+  read in the module NOT under `_guarded` — `_current_model` gates a WRITE, where failing closed stops
+  a narrowing model reaching the store, while this gates nothing, and taking a serving estate down
+  because a diagnostic could not run is the wrong trade. Gated on `provision=True` so the nine services
+  sharing the bundled model do not report the same divergence nine times.
+  RED-first, 8 tests, mutation-proven in both halves: removing the `auth_lifespan` call reds the wiring
+  test, removing the comparison reds three rule tests. **Built and deployed? NO — rides the pending
+  roll.**
+- *Closes when:* the above ships AND an owner takes the values decision — which is now a decision
+  rather than a trap. **NOT TAKEN HERE, deliberately:** whether to pin, and whether
+  `scripts/k3s-pins.sh` should capture the live store/model ids beside the image tags (it is the
+  capture tool `make k3s-up` already layers over live values, so adding them there IS the pin), is an
+  operator posture, not a code fix. The guard makes a rollback loud; the audit makes a pin loud;
+  pinning is what stops the write happening at all.
 
 **LH-080 · ~~`can_promote` buys nothing on `table` because `validator ⊇ owner`~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
