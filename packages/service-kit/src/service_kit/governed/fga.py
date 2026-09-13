@@ -339,7 +339,20 @@ def _plain(value: Any) -> Any:
     """
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
-        return _plain(to_dict())
+        # `serialize=True`, and it is the whole correctness of the comparison. The SDK's generated
+        # models keep PYTHON attribute names and render those unless asked otherwise —
+        # `attr = self.attribute_map.get(attr, attr) if serialize else attr` — so the default
+        # `to_dict()` yields `computed_userset` while `model.json`, and the wire it came from, say
+        # `computedUserset`. Comparing the two spellings can only ever answer "different", which would
+        # make the unchanged-model skip below a branch that never runs.
+        #
+        # The fallback is for a `to_dict` that takes no argument at all; the SDK's does, and the real
+        # shapes are pinned against actual SDK objects rather than a double, because a double that
+        # returns the authored dict agrees with it by construction and proves nothing about spelling.
+        try:
+            return _plain(to_dict(serialize=True))
+        except TypeError:
+            return _plain(to_dict())
     if isinstance(value, dict):
         return {key: _plain(item) for key, item in value.items()}
     if isinstance(value, list):

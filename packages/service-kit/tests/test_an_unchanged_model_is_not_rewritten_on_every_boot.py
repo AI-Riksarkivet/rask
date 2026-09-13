@@ -191,3 +191,52 @@ async def test_a_brand_new_store_is_modelled_without_a_read(monkeypatch: pytest.
     assert _FakeClient.reads == 0, "a first boot must not depend on a model that cannot exist yet"
     assert len(_FakeClient.requests) == 1
     assert (store_id, model_id) == ("store-NEW", "model-NEWLY-WRITTEN")
+
+
+# ---------------------------------------------------------------------------------------------- #
+# The shape the store really hands back
+# ---------------------------------------------------------------------------------------------- #
+
+
+def test_the_canonical_form_matches_a_REAL_sdk_model_not_just_a_double() -> None:
+    """THE DOUBLE ABOVE CANNOT CATCH THE ONE THING THAT MATTERS: key spelling.
+
+    `_StoredModel.to_dict()` returns the authored dict verbatim, so it agrees with `model.json` by
+    construction. The store does not. `openfga_sdk`'s generated models keep Python attribute names and
+    their `to_dict()` renders those unless asked to serialize:
+
+        attr = self.attribute_map.get(attr, attr) if serialize else attr   # openfga_sdk/models/userset.py
+
+    so `to_dict()` yields `computed_userset` while `model.json` — and the wire — say `computedUserset`.
+    A canonicaliser reading the unserialized form can never equal the authored model, which makes the
+    skip it feeds a branch that cannot fire.
+
+    This test builds REAL SDK objects for exactly that reason. It is the check the double was standing
+    in for and could not perform.
+    """
+    from openfga_sdk.models.object_relation import ObjectRelation
+    from openfga_sdk.models.type_definition import TypeDefinition
+    from openfga_sdk.models.userset import Userset
+
+    authored = {
+        "schema_version": "1.1",
+        "type_definitions": [
+            {"type": "user"},
+            {"type": "doc", "relations": {"can_read": {"computedUserset": {"relation": "owner"}}}},
+        ],
+        "conditions": {},
+    }
+
+    class _Stored:
+        id = "model-EXISTING"
+        schema_version = "1.1"
+        conditions: ClassVar[dict[str, Any]] = {}
+        type_definitions: ClassVar[list[Any]] = [
+            TypeDefinition(type="user"),
+            TypeDefinition(type="doc", relations={"can_read": Userset(computed_userset=ObjectRelation(relation="owner"))}),
+        ]
+
+    assert fga._canonical_model(_Stored()) == fga._canonical_model(authored), (
+        "the stored model and the authored one must canonicalise equal, or the unchanged-model skip is a "
+        "branch that never runs and every boot mints another version"
+    )
