@@ -64,6 +64,7 @@ from catalog.core.lineage_emit import (
     InputPin,
     emit_write_event,
 )
+from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
 from catalog.core.vending import has_external_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
@@ -672,6 +673,29 @@ async def register_table(
 ) -> RegisterTableResponse:
     """Register an existing table location at ``id`` via ``register_table``, then seed the caller's FGA
     ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
+    # `mode` WAS ACCEPTED AND NEVER READ. The generated model states two: "Create (default): the
+    # operation fails with 409. Overwrite: the existing table registration is replaced with the new
+    # registration." This door passes `body` straight to the backend, and the backend ignores the
+    # field — measured 2026-09-13 on the namespace twin, where every mode raised the same conflict —
+    # so a caller asking to REPLACE a registration got the 409 that means "it already exists".
+    #
+    # Replacing a registration is not implemented here, and refusing says which of the two it is. It
+    # is also not a cosmetic difference: `register_table` ATTACHES bytes the catalog does not own, so
+    # silently treating "replace" as "conflict" leaves the caller believing their new location was
+    # rejected as a duplicate rather than never attempted.
+    #
+    # An UNRECOGNISED value still folds to `Create` — `modes.py` records that tolerance as deliberate
+    # for typos, and the refusal is for a named mode this door cannot honour.
+    #
+    # BEFORE `idem.begin`, deliberately: this is a SHAPE refusal, and minting an idempotency record
+    # for a request the door was never going to attempt would make the replay of a malformed call
+    # converge on nothing.
+    if CreateMode.parse(body.mode) is CreateMode.OVERWRITE:
+        raise InvalidInputError(
+            "mode 'Overwrite' is not supported on this door: replacing a registration would detach bytes this "
+            "catalog does not own from the table that currently points at them. Deregister the existing table "
+            "first, then register the new location."
+        )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/register")
