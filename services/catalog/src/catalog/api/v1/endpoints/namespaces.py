@@ -47,7 +47,7 @@ from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reco
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
 # them drift apart again the moment one is tuned.
-from catalog.core.modes import CreateMode, DropBehavior
+from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
@@ -559,6 +559,15 @@ async def drop_namespace(
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
     fga_deps.require_not_protected(guard or {}, kind="namespace", obj_id=canonical, force=force)
     req = body or DropNamespaceRequest()
+    # TWO ORTHOGONAL FIELDS, and this door read only one. `behavior` (below) decides what happens to
+    # the CONTENTS; `mode` decides what happens when the namespace IS NOT THERE — "Fail (default):
+    # the server must return 400 … Skip: the server must return 204 indicating the drop operation has
+    # succeeded". Measured 2026-09-13 against a real `dir` backend: it raises NamespaceNotFound for
+    # EVERY mode, `Skip` included, so the semantics have to be supplied here.
+    #
+    # `Skip` is the IDEMPOTENCY lever rather than a status-code nicety: it is how a client makes a
+    # drop safe to retry, so a namespace a previous attempt already removed counts as success.
+    drop_mode = DropMode.parse(req.mode)
     req.id = reconcile_body_id(segments, req.id)
     # A Cascade drop (behavior=Cascade; case-insensitive per the lance spec) removes all child tables +
     # nested namespaces from storage. Their FGA grants must be revoked too, or a later object reusing a
@@ -573,7 +582,16 @@ async def drop_namespace(
     # list, a protected table under a cascade-dropped namespace died silently while the docstring
     # claimed protection covered it. The tuple-revoke below consumes the same list when FGA is on.
     if cascade:
-        descendants = await run_in_threadpool(_collect_descendants, ns, segments)
+        # A CASCADE TOUCHES EXISTENCE EARLIER than the drop itself — it enumerates the subtree first —
+        # so a `Skip` guarding only the drop below would still raise for the caller most likely to be
+        # retrying. Narrow on purpose: this covers the NAMED namespace being absent, never a descendant
+        # vanishing mid-destroy, which is a real error and must not read as a skip.
+        try:
+            descendants = await run_in_threadpool(_collect_descendants, ns, segments)
+        except NamespaceNotFoundError:
+            if drop_mode is not DropMode.SKIP:
+                raise
+            return DropNamespaceResponse()
         # Protection is a property of the SUBTREE, so it is checked against every id about to die, and
         # the refusal NAMES the protected descendant — "something in here is protected" is not an
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
@@ -590,7 +608,15 @@ async def drop_namespace(
         await _destroy_subtree(ns, segments, descendants)
         response = DropNamespaceResponse()
     else:
-        response = await run_in_threadpool(native.call, ns, "drop_namespace", req)
+        try:
+            response = await run_in_threadpool(native.call, ns, "drop_namespace", req)
+        except NamespaceNotFoundError:
+            if drop_mode is not DropMode.SKIP:
+                raise
+            # RETURNS BEFORE THE TRAILER, deliberately. Nothing was dropped, so there is no protection
+            # record to clear and no `namespace_dropped` to announce — emitting one would tell every
+            # subscriber of the control stream that an object died when none did.
+            return DropNamespaceResponse()
     # The record dies with the object — a reused id must not inherit protection nobody set on it.
     if guard:  # only when one existed — see the table doors
         await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)

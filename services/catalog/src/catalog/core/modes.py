@@ -51,6 +51,35 @@ _CREATE_MODES: dict[str, CreateMode] = {
 }
 
 
+class DropMode(StrEnum):
+    """What ``drop_namespace`` does when the namespace to drop IS NOT THERE.
+
+    Orthogonal to :class:`DropBehavior`, which answers what to do about the CONTENTS — the spec's
+    request carries both and they decide different things. From the generated model: "Fail (default):
+    the server must return 400 indicating the namespace to drop does not exist. Skip: the server must
+    return 204 indicating the drop operation has succeeded."
+
+    ``SKIP`` IS THE IDEMPOTENCY LEVER, which is why it is worth its own vocabulary rather than a
+    boolean: it is how a client makes a drop safe to retry, so a namespace a previous attempt already
+    removed counts as success instead of failing the retry.
+
+    A FOURTH VOCABULARY, and not a :class:`CreateMode`. Parsing ``Fail``/``Skip`` with that one folds
+    both to ``CREATE``, so a ``Skip`` would read as the default and change nothing.
+
+    Tolerant in the same way as its siblings — case-insensitive, absent or unrecognised falls to the
+    default. The default is ``FAIL`` because that is the spec's, and because it is the direction that
+    errors rather than silently reporting a drop that never happened.
+    """
+
+    FAIL = "fail"
+    SKIP = "skip"
+
+    @classmethod
+    def parse(cls, raw: str | DropMode | None) -> DropMode:
+        """Normalise a wire ``mode``. Absent, blank or unrecognised → :attr:`FAIL`."""
+        return cls.SKIP if str(raw or "").lower() == cls.SKIP.value else cls.FAIL
+
+
 class DropBehavior(StrEnum):
     """What ``drop_namespace`` does about the namespace's contents.
 
