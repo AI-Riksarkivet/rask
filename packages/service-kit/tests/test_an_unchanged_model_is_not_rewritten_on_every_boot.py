@@ -1,8 +1,9 @@
 """`provision` writes the authorization model on EVERY boot, even when nothing about it changed.
 
 OpenFGA has no "update" for a model: every `write_authorization_model` mints a new immutable version.
-`provision` runs in the lifespan of every FGA-enabled service, so each pod start of each of them adds
-one. Measured against the live store 2026-09-13: **1,316 authorization model versions**, paged out of
+`provision` has exactly one non-test caller — the catalog's lifespan — so each catalog boot adds one.
+(A second publisher is not merely rare: `tests/unit/test_only_one_service_may_publish_the_authorization_
+model.py` fails the suite on any service other than `catalog`.) Measured against the live store 2026-09-13: **1,316 authorization model versions**, paged out of
 `GET /stores/{id}/authorization-models` — for a `model.json` that has changed a handful of times.
 
 WHY THAT IS NOT MERELY UNTIDY. The store's "latest" model is whichever pod booted last, and that is the

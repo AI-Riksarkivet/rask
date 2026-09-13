@@ -357,10 +357,11 @@ def run_id_from_payload(raw: object) -> str | None:
     caller: the parking path fires on a delivery that already exhausted its retries, so the strict
     model is unavailable exactly where the answer is needed.
 
-    The answer decides whether a parked delivery is counted as provenance LOSS, so a blank or
-    wrong-typed id must read as "no run id" rather than as an id the graph will never match —
-    `run_status` would answer ``None`` for it and the park would be reported as a loss on the strength
-    of a malformed field.
+    A blank or wrong-typed id reads as "no run id", and what that buys is narrower than it looks: the
+    VERDICT is the same either way — `_graph_already_holds` answers ``False`` for ``None``, and
+    `run_status("")` would answer ``None`` and reach the same ``False`` — so both paths record
+    ``DEAD_LETTERED``. What it actually avoids is a graph query for an id that cannot match, and a
+    `run_id` log field presenting a malformed value as though it were an id.
     """
     if not isinstance(raw, dict):
         return None

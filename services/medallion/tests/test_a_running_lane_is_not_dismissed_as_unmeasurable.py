@@ -217,33 +217,42 @@ def test_a_reason_outside_the_vocabulary_cannot_be_constructed() -> None:
         BlindEdge(edge="silver->gold", project="acme", reason="something_someone_added_later")
 
 
-def test_a_cell_that_stops_being_invisible_and_starts_disagreeing_is_not_left_skipped() -> None:
-    """The memo asks about ANSWERING, and a disagreement is an answer.
+def test_a_cell_that_answers_between_misses_does_not_accumulate_toward_the_skip() -> None:
+    """`record_present` is what makes the misses CONSECUTIVE rather than cumulative.
 
-    A cell can move between states — a destination is created, so it stops being invisible and starts
-    contradicting its source. If the memo only forgave cells whose lag came out KNOWN, such a cell would
-    keep the misses it earned while invisible and stay skipped until the twenty-tick re-probe: silent for
-    exactly the reason `blind` exists.
+    The memo skips a cell after ``MISSES_BEFORE_SKIP`` refusals IN A ROW. An answer in between has to
+    clear the count, or a cell that merely flickers — two misses, an answer, two misses — reaches the
+    threshold by addition and goes silent, which is the opposite of what the threshold is for: a tenant
+    mid-deploy answers intermittently, and that is exactly the cell the operator still needs measured.
+
+    DRIVEN THROUGH THE TICK, not by calling the memo, because the question is whether the tick tells the
+    memo about the answer at all. An earlier version of this test reset the memo mid-scenario and then
+    asserted `skipped == 0`; that could not fail, since a reset memo has nothing left to skip. Mutating
+    `record_present` to a no-op is the check that matters, and this fails under it.
     """
     memo = AbsentEdgeMemo()
     edges = [("silver->gold", "acme")]
-    invisible = True
+    cell = ("silver->gold", "acme")
+    visible = False
 
     def _consumed(edge: str, project: str) -> list[ConsumedRange]:
-        if invisible:
+        if not visible:
             raise EdgeNotMeasurable("not visible yet")
         return [ConsumedRange(from_version=None, to_version=9)]
 
-    for _ in range(AbsentEdgeMemo.MISSES_BEFORE_SKIP):
+    # Two misses: one short of the threshold.
+    for _ in range(AbsentEdgeMemo.MISSES_BEFORE_SKIP - 1):
         run_lag_tick(edges=edges, published=lambda edge, project: None, consumed=_consumed, gauge=_Gauge(), memo=memo)
-    assert memo.should_skip(("silver->gold", "acme")), "the setup must actually reach the skipping state, or this proves nothing"
+    assert not memo.should_skip(cell), "the setup must stop one short, or the answer below proves nothing"
 
-    invisible = False
-    memo.reset()
-    report = run_lag_tick(edges=edges, published=lambda edge, project: 2, consumed=_consumed, gauge=_Gauge(), memo=memo)
-    assert report.blind == [BlindEdge(edge="silver->gold", project="acme", reason=STORES_DISAGREE)]
+    # One tick where BOTH stores answer. A disagreement is still an answer.
+    visible = True
+    run_lag_tick(edges=edges, published=lambda edge, project: 2, consumed=_consumed, gauge=_Gauge(), memo=memo)
 
-    for _ in range(AbsentEdgeMemo.MISSES_BEFORE_SKIP + 1):
-        report = run_lag_tick(edges=edges, published=lambda edge, project: 2, consumed=_consumed, gauge=_Gauge(), memo=memo)
-    assert report.skipped == 0, "a cell that answers every tick must never accumulate misses"
-    assert report.blind == [BlindEdge(edge="silver->gold", project="acme", reason=STORES_DISAGREE)]
+    # Two more misses. Consecutively that is two, not four — so the cell must still be measured.
+    visible = False
+    for _ in range(AbsentEdgeMemo.MISSES_BEFORE_SKIP - 1):
+        report = run_lag_tick(edges=edges, published=lambda edge, project: None, consumed=_consumed, gauge=_Gauge(), memo=memo)
+
+    assert not memo.should_skip(cell), "an answering tick must clear the miss count — otherwise a flickering cell is skipped by addition"
+    assert report.skipped == 0

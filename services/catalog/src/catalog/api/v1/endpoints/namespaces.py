@@ -189,10 +189,6 @@ async def create_namespace(
     # and nothing can have been put in it yet — so the undo cannot destroy anyone's data. A failed
     # seed used to leave a namespace its creator could neither see nor drop, while native
     # `NamespaceAlreadyExists` refused every retry, permanently reserving the name.
-    # NOT ON THE `ExistOk` KEEP PATH. The namespace already exists and already has an owner, so seeding
-    # here would hand ownership of somebody else's namespace to any caller who may create one — the
-    # same reason `table_create.py` carries `existok_kept_existing`. A namespace this call really
-    # created still gets its owner, which is what makes the flag rather than the mode the condition.
     # NOT ON THE `ExistOk` KEEP PATH — for the seed and for the ANNOUNCEMENT alike. The namespace
     # already exists and already has an owner, so seeding would hand somebody else's namespace to any
     # caller who may create one (the same reason `table_create.py` carries `existok_kept_existing`),

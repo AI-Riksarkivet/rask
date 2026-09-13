@@ -414,12 +414,52 @@ def _canonical_model(model: Any) -> str:
     return json.dumps(_without_defaults(body), sort_keys=True, separators=(",", ":"), default=repr)
 
 
-def _narrowings(incoming: dict[str, frozenset[str]], current: dict[str, frozenset[str]]) -> list[str]:
-    """What ``incoming`` would take away, as ``type`` or ``type#relation``. Empty means it only adds.
+def _relation_bodies(type_definitions: Iterable[Any] | None) -> dict[str, str]:
+    """``{type#relation: canonical body}`` from either shape a model arrives in.
 
-    Additions are invisible here ON PURPOSE: `provision` exists so a `model.json` edit takes effect on
-    boot, and a guard that also refused new types would freeze the estate at whatever the first pod
-    shipped. Only the removing direction makes image order decide who may do what.
+    The companion to :func:`_relation_index`, which keeps only the names. Bodies go through the same
+    canonicaliser the unchanged-model check uses, so the two agree about what "the same definition"
+    means and a wire-vs-python spelling cannot make an unchanged relation read as changed.
+    """
+    bodies: dict[str, str] = {}
+    for definition in type_definitions or ():
+        is_mapping = isinstance(definition, dict)
+        type_name = definition["type"] if is_mapping else definition.type
+        relations = (definition.get("relations") if is_mapping else definition.relations) or {}
+        for relation, body in relations.items():
+            bodies[f"{type_name}#{relation}"] = json.dumps(_without_defaults(_plain(body)), sort_keys=True, separators=(",", ":"), default=repr)
+    return bodies
+
+
+def _body_changes(incoming: dict[str, str], current: dict[str, str]) -> list[str]:
+    """Relations present in BOTH models whose definition differs — what a write is about to change.
+
+    NOT a narrowing detector, and must not be read as one: a widened relation and a narrowed one both
+    appear here. It exists so a model write names what it changed, because `provision` logged nothing
+    at all and a boot that replaced the estate's authorization model was indistinguishable from one
+    that did not.
+    """
+    return sorted(key for key, body in current.items() if key in incoming and incoming[key] != body)
+
+
+def _narrowings(incoming: dict[str, frozenset[str]], current: dict[str, frozenset[str]]) -> list[str]:
+    """What ``incoming`` would take away, as ``type`` or ``type#relation``.
+
+    EMPTY MEANS "REMOVES NO TYPE AND NO RELATION NAME" — not "only adds". The indexes compared here come
+    from :func:`_relation_index`, which keeps the relation dict's KEYS and discards every userset body,
+    so a model that narrows a relation in place is invisible to this guard: measured, an incoming
+    ``can_read_data: reader`` against a stored ``can_read_data: reader or pass_grants`` returns ``[]``
+    and the narrower model is written. The live failure this was built for — an older image whose
+    `model.json` lacked ``warehouse#event_stager`` entirely — is a removed NAME, which is caught.
+
+    Telling a narrowed body from a widened one is a semantic question about usersets, not a structural
+    one, so it is not attempted here. :func:`_body_changes` reports WHICH relations changed instead, and
+    `provision` logs them with the write, so a rollback that narrows a body is visible even though it is
+    not refused.
+
+    Additions are invisible ON PURPOSE: `provision` exists so a `model.json` edit takes effect on boot,
+    and a guard that also refused new types would freeze the estate at whatever the first pod shipped.
+    Only the removing direction makes image order decide who may do what.
     """
     lost: list[str] = []
     for type_name, relations in current.items():
@@ -441,9 +481,13 @@ async def _current_model(
 
     UNDER THE MODULE'S OWN POSTURE — retry, then fail closed — and that is what gives the guard below
     its teeth. A read that merely answered ``None`` on failure would let a flaky OpenFGA wave a
-    narrowing model through, which is exactly when a boot storm is most likely. Raising instead reaches
-    `auth_lifespan`, which then builds no client and leaves the governed routes answering 503: an
-    estate that cannot verify its own model does not get to overwrite it.
+    narrowing model through, which is exactly when a boot storm is most likely.
+
+    RAISING ABORTS THE BOOT, which is stronger than the 503 this once claimed. The only path that
+    reaches here is `provision=True`, which has exactly one caller — the catalog — and it passes
+    `fatal=True`, so `build_fga_client` re-raises and nothing catches it: the pod crash-loops instead of
+    serving. Right either way (an estate that cannot verify its own model does not get to overwrite it),
+    but an operator planning for a serving-but-refusing catalog would be planning for the wrong thing.
 
     A store created moments ago never pays this read — see the caller.
     """
@@ -513,8 +557,13 @@ async def provision(
                 )
                 return store_id, str(current.id)
             # AN UNCHANGED MODEL IS NOT AN EDIT, AND OPENFGA HAS NO WAY TO SAY SO. Every
-            # `write_authorization_model` mints a new immutable version, and `provision` runs in the
-            # lifespan of every FGA-enabled service — so each pod start of each of them added one.
+            # `write_authorization_model` mints a new immutable version, and every catalog boot wrote
+            # one — so the count grew with catalog restarts, which on this estate is often.
+            #
+            # THE CATALOG, not every FGA-enabled service: `provision=True` has exactly one non-test
+            # caller (`catalog/main.py`), and `tests/unit/test_only_one_service_may_publish_the_
+            # authorization_model.py` fails the suite if a second service ever publishes. Saying
+            # otherwise here would read as licence to add one.
             # Measured on the live store 2026-09-13: 1,316 model versions for a `model.json` that has
             # changed a handful of times.
             #
@@ -525,6 +574,7 @@ async def provision(
             if _canonical_model(current) == _canonical_model(model):
                 log.info("openfga_model_unchanged", extra={"store_id": store_id, "model_id": current.id})
                 return store_id, str(current.id)
+        changed = _body_changes(_relation_bodies(model["type_definitions"]), _relation_bodies(current.type_definitions)) if current is not None else []
         written = await client.write_authorization_model(
             WriteAuthorizationModelRequest(
                 schema_version=model["schema_version"],
@@ -536,6 +586,15 @@ async def provision(
                 conditions=model.get("conditions"),
             )
         )
+    # A MODEL WRITE WAS SILENT, which is half of why 1,316 versions accumulated with nobody noticing.
+    # Now that an unchanged model is skipped, reaching this line means the model REALLY changed, so
+    # naming what changed is signal rather than noise. `changed` lists relations redefined in place —
+    # widened and narrowed alike, since telling those apart is a semantic question `_narrowings` does
+    # not answer — which is what makes a body-level rollback visible even though it is not refused.
+    log.info(
+        "openfga_model_written",
+        extra={"store_id": store_id, "model_id": written.authorization_model_id, "changed": changed[:20], "changed_count": len(changed)},
+    )
     return store_id, written.authorization_model_id
 
 
