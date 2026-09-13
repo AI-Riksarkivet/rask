@@ -2287,8 +2287,18 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   `on` stays a single key until the lance-namespace SDK bump (A9 blocked on A10), because the installed
   0.11.0 model types it `str`. Vendoring the current spec is what stops that deviation hiding behind a
   stale document.
+- **AND THE BUNDLES' LAG IS NOT HYPOTHETICAL — one was measured the same day.** Reading
+  `lance-format/lance` `rust/lance-table/src/feature_flags.rs` against the vendored `file_format.md`
+  2026-09-14: the doc says "flags with bit values 32 and above are unknown"; upstream defines
+  `FLAG_DISABLE_TRANSACTION_FILE` (32), the overlay bit (64), `FLAG_COVERED_INDEX_METADATA` (128) and
+  `FLAG_MIXED_DATA_FILE_VERSIONS` (256), with `FLAG_UNKNOWN` at `1 << 8`. So the doc is FOUR bits behind
+  the code it describes. `service_kit.lakehouse.features` already named three of them; the fourth was
+  refusing as a bare `256 (unknown)`, which is exactly what that module exists to prevent — fixed and
+  mutation-proven, naming it without admitting it to `SUPPORTED`.
 - *Closes when:* the five bundles get the same treatment — they carry no scrape commit, so nothing can
-  verify them, and re-vendoring them needs the tool that produced them rather than a `curl`.
+  verify them, and re-vendoring them needs the tool that produced them rather than a `curl`. The
+  feature-flag case shows the cost is real rather than tidiness: a doc four bits behind is a refusal an
+  operator cannot act on.
 
 **LH-048 · Two upstream defects are unfiled: pylance's GET routes (A3) and the 0.12.0 `header.` vs `headers.` prefix in the bundled client**
 `catalog` · low · **blocked:** upstream
