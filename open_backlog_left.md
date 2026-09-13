@@ -2858,10 +2858,29 @@ caller — and the latent gap below.
   `media-to-silver`, `medallion-producer`), so the runtime is started everywhere and nothing is
   currently stranded. It bites a Ray-OFF deployment — which is exactly the configuration this condition
   says must work.
-- *Closes when:* the hosted set is derived from what the deployment actually runs rather than declared
-  as a constant, so a declared Ray task refuses with `UnrunnableTaskError` where the runtime is absent.
-  Pin that a declared Ray task on a `ray_enabled=false` deployment is REFUSED rather than enqueued —
-  the assertion the current constant makes impossible.
+- **LANDED 2026-09-14, and the root is one flag doing two jobs — which this row did not say.**
+  `ray_enabled` is BOTH the chart's default engine for an estate that has declared nothing AND whether
+  this pod starts the Ray workflow runtime. Only the second may gate a declaration, and conflating them
+  is why the constant looked defensible. `HOSTED_ENGINES` is now `KNOWN_ENGINES` — what this BUILD
+  carries adapters for, a ceiling rather than an answer — and `hosted_engines(settings)` narrows it to
+  what the deployment runs. In-process is always hosted (it needs no runtime; `transform.py` calls it
+  directly), so a Ray-OFF estate is not an estate that can run nothing. The refusal names the LEVER
+  rather than only the hosted set: an engine no adapter answers to and one this build knows but the
+  deployment turned off are both operator errors no redelivery fixes, but the fixes differ. It stays
+  `UnrunnableTaskError`, an `UndeclaredTransformError` subclass caught at `transform.py:469` — DROP
+  with a trace, never RETRY.
+  *`engine_registry.hosted_engines` stays constant and is compared against the BUILD ceiling.* Their
+  EQUALITY was the wrong relation and is what made a Ray-OFF deployment unrepresentable; choosable ⊆
+  resolvable is the property worth holding.
+  *THREE EXISTING TESTS ASSERTED THE DEFECT OR LEANED ON IT*, each corrected rather than deleted: the
+  declared-transform test pinned "a declared ray task on `ray_enabled=false` returns RAY" (and its
+  docstring described the first assertion while calling it the second), and two chooser tests declared
+  ray while leaving `ray_enabled` at its default `False` — exercising this very path under another
+  name. RED-first, 7 new tests, mutation-proven: restoring the constant reds three.
+  **Built and deployed? NO — rides the pending roll.** Still LATENT there: all four medallion workloads
+  run `MEDALLION_RAY_ENABLED=true` (re-measured 2026-09-13), so the roll changes no live behaviour —
+  it makes the Ray-OFF configuration honest.
+- *Closes when:* the roll observes it. There is nothing further to build.
 
 **LH-083 · `engine_registry.executor_for` has ZERO callers — the deployed stage lane still calls `ray_submit` directly at `workflow.py:495`**
 
