@@ -29,6 +29,18 @@ Outcome = Literal["pass", "fail", "skip"]
 #: answers "does the store honour the scope", so only this one may set `enforced`.
 SCOPE_CHECK: Final = "write_outside_refused"
 
+#: The check whose result IS the COMMIT-SAFETY claim, and the only one that may set `commit_safe`.
+#: `lance_docs/file_format.md` § "Commit Protocol" -> "Storage Primitives": Lance commits rely on
+#: put-if-not-exists, and those primitives are what "guarantee that exactly one writer succeeds when
+#: multiple writers attempt to create the same manifest file concurrently". A store that ACCEPTS a
+#: second conditional put has no such guarantee, and the loss is silent — both writers see success.
+CAS_CHECK: Final = "conditional_put_refused"
+
+#: Its setup step: the FIRST conditional put, which must be accepted. Separate because a store that
+#: rejects the header outright and one that ignores it are different operator problems — the first
+#: proves nothing about a second writer (UNKNOWN), the second is a live hazard (UNSAFE).
+CAS_RESERVE: Final = "conditional_put"
+
 
 class ProbeCheck(BaseModel):
     """One step of the probe, with its own outcome — never folded into a neighbour's."""
@@ -49,6 +61,12 @@ class ProbeReport(BaseModel):
 
     outcome: Outcome
     enforced: bool | None = None
+    #: Whether the store honours put-if-not-exists, the primitive Lance's commit protocol rests on.
+    #: THREE-VALUED for the same reason `enforced` is: `None` means the question was never asked — no
+    #: credential, or the store refused the conditional header itself, which proves nothing about what
+    #: a second concurrent writer would see. Reporting that as `False` raises a false alarm about the
+    #: store; reporting it as `True` claims a guarantee nothing tested.
+    commit_safe: bool | None = None
     checks: list[ProbeCheck] = Field(default_factory=list)
 
 
@@ -61,6 +79,8 @@ def summarize_probe(checks: list[ProbeCheck]) -> ProbeReport:
     by_name = {c.name: c for c in checks}
     scope = by_name.get(SCOPE_CHECK)
     enforced = None if scope is None or scope.outcome == "skip" else scope.outcome == "pass"
+    cas = by_name.get(CAS_CHECK)
+    commit_safe = None if cas is None or cas.outcome == "skip" else cas.outcome == "pass"
 
     if any(c.outcome == "fail" for c in checks):
         outcome: Outcome = "fail"
@@ -68,4 +88,4 @@ def summarize_probe(checks: list[ProbeCheck]) -> ProbeReport:
         outcome = "skip"
     else:
         outcome = "pass"
-    return ProbeReport(outcome=outcome, enforced=enforced, checks=list(checks))
+    return ProbeReport(outcome=outcome, enforced=enforced, commit_safe=commit_safe, checks=list(checks))

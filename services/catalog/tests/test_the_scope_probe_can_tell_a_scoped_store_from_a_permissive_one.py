@@ -56,13 +56,20 @@ class _Store:
     def __init__(self, *, scoped_to: str | None) -> None:
         self._scoped_to = scoped_to
         self.keys: dict[str, bytes] = {}
+        #: Every key a PUT was attempted at, kept whether or not it survived. What the probe TRIED is a
+        #: different question from what it left behind, and the probe now cleans up after itself — so a
+        #: test that read `keys` to learn where it wrote would be reading the cleanup, not the attempt.
+        self.attempted: list[str] = []
 
     def _check(self, key: str) -> None:
         if self._scoped_to is not None and not key.startswith(self._scoped_to):
             raise PermissionError(f"AccessDenied: {key} is outside {self._scoped_to}")
 
-    def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> dict[str, Any]:  # noqa: N803 — boto3's own casing
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None) -> dict[str, Any]:  # noqa: N803 — boto3's own casing
+        self.attempted.append(Key)
         self._check(Key)
+        if IfNoneMatch is not None and Key in self.keys:
+            raise FileExistsError("PreconditionFailed: the key already exists")
         self.keys[Key] = Body
         return {}
 
@@ -168,9 +175,11 @@ class TestTheProbeTellsTheTwoStoresApart:
 
         _run(vendor)
         assert installed.store is not None
-        written = set(installed.store.keys)
+        # ATTEMPTED, not retained: the probe cleans up the out-of-scope object when a permissive store
+        # accepts it, so what it left behind no longer answers where it tried to write.
+        attempted = set(installed.store.attempted)
 
-        outside = {k for k in written if "_validate/" not in k}
+        outside = {k for k in attempted if "_validate/" not in k}
         assert outside, "the probe never attempted a write outside its own prefix"
         assert all(k.startswith("acme/warehouse/") for k in outside), f"the outside write must land under the warehouse root: {outside}"
 

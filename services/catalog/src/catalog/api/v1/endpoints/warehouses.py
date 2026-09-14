@@ -72,7 +72,7 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import native, warehouses
-from catalog.services.vend_probe import SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
+from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
@@ -1010,6 +1010,9 @@ def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: d
     bucket, prefix = split_s3_uri(root_uri.rstrip("/"))
     probe_prefix = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate/{uuid.uuid4().hex}"
     inside = f"{probe_prefix}/probe"
+    # Its own key, inside the same vended prefix: the conditional put must land on a key nothing else
+    # wrote, or a leftover from a previous run would make the FIRST put look like a racing writer.
+    cas = f"{probe_prefix}/cas"
     # The PARENT, never a sibling: a credential scoped to `<probe>/` must not reach the warehouse root,
     # and the root is where a policy that was ignored would let it write.
     outside = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate_scope_probe_should_fail"
@@ -1028,7 +1031,9 @@ def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: d
         )
 
     if vended is None:
-        checks += [ProbeCheck(name=n, outcome="skip", detail="no credential") for n in ("write_inside", "read_inside", SCOPE_CHECK, "cleanup")]
+        checks += [
+            ProbeCheck(name=n, outcome="skip", detail="no credential") for n in ("write_inside", "read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, "cleanup")
+        ]
         return checks
 
     options = vended.storage_options
@@ -1057,8 +1062,34 @@ def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: d
     wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
     if wrote:
         _step("read_inside", lambda: s3.get_object(Bucket=bucket, Key=inside))
-        _step(SCOPE_CHECK, lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"), expect_refusal=True)
-        _step("cleanup", lambda: s3.delete_object(Bucket=bucket, Key=inside))
+        # `_step` returns "the step got the outcome we wanted", so a False here means the out-of-scope
+        # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
+        # a correctly scoped credential is refused the delete too, and reporting that refusal as a
+        # cleanup failure would raise a false alarm about the store that just passed.
+        scope_refused = _step(SCOPE_CHECK, lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"), expect_refusal=True)
+        # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
+        # (`lance_docs/file_format.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
+        # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
+        # both has no "exactly one writer succeeds" guarantee, so two concurrent Lance writers would
+        # each believe they committed the same manifest version — with a 200 on both and no error
+        # anywhere. That is the failure this step exists to name, and it is why the SECOND put is the
+        # check rather than the first.
+        reserved = _step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
+        if reserved:
+            _step(CAS_CHECK, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"), expect_refusal=True)
+        else:
+            # The store refused the HEADER, not a racing writer. That is a real failure — recorded by
+            # the step above — but it measures nothing about a second writer, so the claim stays
+            # UNKNOWN rather than becoming a verdict the probe never reached.
+            checks.append(ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the store refused the conditional header itself"))
+
+        def _clean() -> None:
+            s3.delete_object(Bucket=bucket, Key=inside)
+            s3.delete_object(Bucket=bucket, Key=cas)
+            if not scope_refused:
+                s3.delete_object(Bucket=bucket, Key=outside)
+
+        _step("cleanup", _clean)
     else:
-        checks += [ProbeCheck(name=n, outcome="skip", detail="nothing was written") for n in ("read_inside", SCOPE_CHECK, "cleanup")]
+        checks += [ProbeCheck(name=n, outcome="skip", detail="nothing was written") for n in ("read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, "cleanup")]
     return checks

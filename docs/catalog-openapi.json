@@ -8919,6 +8919,17 @@
             "title": "Checks",
             "type": "array"
           },
+          "commit_safe": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Safe"
+          },
           "enforced": {
             "anyOf": [
               {
