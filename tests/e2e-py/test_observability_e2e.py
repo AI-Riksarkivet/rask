@@ -229,9 +229,18 @@ def test_logs_populated() -> None:
         # distinguish the two paths by trace_id instead. App OTLP logs are emitted inside a span → carry a
         # trace_id; the Collector's file-tailed infra logs have no span context → no trace_id. Both present in
         # the ONE table proves both paths landed (Vector is gone — its lance_logs table no longer exists).
+        #
+        # THE INFRA HALF IS A SUBTRACTION, because GreptimeDB cannot answer it directly. `trace_id` is
+        # indexed, and any predicate that must MATCH NULLs on it fails the query engine outright —
+        # measured live 2026-09-14 against `opentelemetry_logs` (101,385,870 rows): both
+        # `NOT (trace_id IS NOT NULL AND trace_id != '')` and its De Morgan twin
+        # `trace_id IS NULL OR trace_id = ''` answer HTTP 500, while the positive form returns in 75 ms.
+        # So this leg reported "logs not populated" about a table holding a hundred million rows. Total
+        # minus the trace-carrying count is the same number and both halves are supported queries.
         has_trace = "trace_id IS NOT NULL AND trace_id != ''"
         app = int(_gt_sql(f"SELECT count(*) FROM opentelemetry_logs WHERE {has_trace}")[0][0])
-        infra = int(_gt_sql(f"SELECT count(*) FROM opentelemetry_logs WHERE NOT ({has_trace})")[0][0])
+        total = int(_gt_sql("SELECT count(*) FROM opentelemetry_logs")[0][0])
+        infra = total - app
         return (app > 0 and infra > 0) or None
 
     assert _eventually(app_and_infra_logs_present)
