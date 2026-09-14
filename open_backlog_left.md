@@ -3678,11 +3678,35 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `lineage_e2e::test_medallion_column_lineage` and
   `observability_e2e::test_distributed_trace_spans_catalog_to_lineage`, both of which PASSED in the
   previous drive.
+  **BOTH FLIPPERS NOW HAVE A CAUSE, and they are not the same one.**
+  `lineage_e2e::test_medallion_column_lineage` fails with
+  `psycopg.OperationalError: consuming input failed: server closed the connection unexpectedly` —
+  AGE backends are being OOM-killed (five `terminated by signal 9` events in 24h, `restartCount: 0`),
+  which takes the whole graph into crash recovery and drops every in-flight connection. That is a
+  real, live defect and it is FIXED rather than filed: AGE asked `lance.resources` for a `comp="age"`
+  tier that did not exist and fell through to the stateless-app default (128Mi/512Mi) against a 385Mi
+  steady state. `observability_e2e::test_distributed_trace_spans_catalog_to_lineage` is a DIFFERENT
+  cause — a 500 from GreptimeDB's `/v1/sql`, whose pod has restarted 3 times — and still needs a
+  verdict.
   *So the row's own shape is vindicated and is now current rather than four days old:* a stable core of
   ELEVEN plus TWO that flip between consecutive runs. `119 passed` is two better than the baseline it
   records. The two flippers are the ones the row says to "run repeatedly rather than once", and they
   are now named.
-- *Closes when:* the **eleven** stable legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
+- **A FIFTH VERDICT: `catalog_live::test_catalog_errors_translate_to_domain_errors` is SUITE-DRIFT,
+  and it looked like a security defect until the subject was read correctly.** The estate answers 404
+  (naming the table) where the leg expects 403, and a 403 on a table that DOES exist sat in the same
+  log — which reads as an existence oracle. It is not: owner ruling 2026-09-11
+  (`fga_deps.py::_absent_to_a_reader_of_the_parent`) converts a denied READ to the spec's 404 **only
+  for a caller holding the parent's read rung**, on the grounds that such a caller can already list the
+  parent. The check that settles it must use the real subject — the Dex-encoded
+  `user:CiQwOGE4Njg0Yi1kYjg4...`, not `user:alice`, which holds nothing — and that subject holds
+  `reader` on `namespace:media` (read off the live store 2026-09-14). So 404 is correct and the leg
+  encodes the pre-ruling contract.
+  *Fixed, and no coverage was dropped:* the no-oracle property needs two identities and a real object,
+  which this leg has neither of; all three conditions are pinned at the integration layer by
+  `tests/integration/test_an_absent_object_is_not_found_rather_than_forbidden.py`, including
+  `test_an_EXISTING_forbidden_table_is_still_403`. Verified live: the suite is 3 passed.
+- *Closes when:* the **ten** remaining stable legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
   CONTAMINATION / ALREADY-FIXED. Current list after the Ray restart, 2026-09-14: `governed_union` x3
   (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `quality_gate_blocks_bad_batch`),
   `catalog_live` (`errors_translate_to_domain_errors`), `maintenance_e2e`
