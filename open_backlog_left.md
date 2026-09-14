@@ -3711,7 +3711,22 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   which this leg has neither of; all three conditions are pinned at the integration layer by
   `tests/integration/test_an_absent_object_is_not_found_rather_than_forbidden.py`, including
   `test_an_EXISTING_forbidden_table_is_still_403`. Verified live: the suite is 3 passed.
-- *Closes when:* the **ten** remaining stable legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
+- **A SIXTH VERDICT: `medallion_e2e::test_produce_cascades_bronze_to_gold` is SUITE-DRIFT, and the
+  assertion was UNSATISFIABLE by construction.** It compared a global run COUNT before and after
+  (`>= before + 3`), read from `GET /runs` with no limit — and `runs.py:_RUNS_RETURN = 200` is both the
+  default and the `le=` maximum, so once the estate passed 200 runs `len()` saturated at 200 and no
+  cascade could ever satisfy it. The failure message said so plainly and was read as a broken cascade:
+  `runs 200->200, expected >= 203`.
+  *The cascade was working the whole time,* which the stage runners confirm for the drive's own token:
+  `medallion_stage_moved transition='bronze->silver' token='e2e-6f4e7e2652124b4b'` at 20:40:08, then
+  silver→gold at 20:40:40 publishing `acme-gold$catalog` — under a DIFFERENT token, because the
+  publication head mints the next trigger's token from the publication event id, so a token does not
+  survive a tier boundary by construction.
+  *Fixed by counting IDS, not rows:* `/runs` is newest-first, so a run created seconds ago is on the
+  page whatever the total — the content does not saturate even though `len()` does. A set difference
+  proves what the count was written to prove and keeps proving it as the estate grows. Verified live:
+  the suite is 5 passed.
+- *Closes when:* the **nine** remaining stable legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
   CONTAMINATION / ALREADY-FIXED. Current list after the Ray restart, 2026-09-14: `governed_union` x3
   (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `quality_gate_blocks_bad_batch`),
   `catalog_live` (`errors_translate_to_domain_errors`), `maintenance_e2e`
