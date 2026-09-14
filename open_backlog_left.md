@@ -3670,7 +3670,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   leaves the stage runner unable to write at all. The safe shape is to assert against a namespace whose
   parent grants the subject nothing (a fixture namespace the leg owns), which is a redesign of the leg
   rather than an edit, and it should not be improvised against a live estate.
-- *Closes when:* the **eleven** remaining legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
+- **MEASURED, not inferred, after all of the above (third full drive, 2026-09-14):
+  `13 failed / 119 passed / 3 skipped / 1 xfailed`.** Diffed against the previous drive: four legs
+  fixed (`dummy_lane::TERMINAL_event_READS_BACK`, `governed_union::media_lane_derives`,
+  `governed_union::train_lineage_lands_attributed` by the Ray head restart; `maintenance_s3::sweep_names_exactly`
+  by the branch-set fix), **eleven failing in BOTH**, and **two that flipped in** —
+  `lineage_e2e::test_medallion_column_lineage` and
+  `observability_e2e::test_distributed_trace_spans_catalog_to_lineage`, both of which PASSED in the
+  previous drive.
+  *So the row's own shape is vindicated and is now current rather than four days old:* a stable core of
+  ELEVEN plus TWO that flip between consecutive runs. `119 passed` is two better than the baseline it
+  records. The two flippers are the ones the row says to "run repeatedly rather than once", and they
+  are now named.
+- *Closes when:* the **eleven** stable legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
   CONTAMINATION / ALREADY-FIXED. Current list after the Ray restart, 2026-09-14: `governed_union` x3
   (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `quality_gate_blocks_bad_batch`),
   `catalog_live` (`errors_translate_to_domain_errors`), `maintenance_e2e`
