@@ -740,10 +740,17 @@ def test_batch_delete_versions_marshals_request_to_a_dict(client: TestClient, fa
     assert isinstance(arg, dict) and arg["id"] == ["db", "t"]
 
 
-def test_request_validation_maps_to_422_problem_json(client: TestClient) -> None:
+def test_request_validation_on_a_SPEC_route_maps_to_400_problem_json(client: TestClient) -> None:
+    """`UpdateTable` is a spec operation, so its errors answer the spec's contract.
+
+    This asserted 422 until 2026-09-14. The vendored spec contains ZERO 422s and maps `InvalidInput`
+    to 400 — which `ns_errors` itself already encodes in both directions (`_STATUS`,
+    `_STATUS_CODE_FALLBACK`) — so serving that same code at 422 made one server answer one condition
+    two ways, and a generated Lance client dispatches on the CODE.
+    """
     # UpdateTableRequest requires `updates`; an empty body fails validation.
     resp = client.post("/v1/table/db$t/update", json={})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["title"] == "Validation Error"
 

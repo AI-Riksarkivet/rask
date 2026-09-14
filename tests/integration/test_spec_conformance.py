@@ -169,6 +169,28 @@ def test_the_vendored_spec_matches_upstream_on_PARAMETER_SHAPES_too() -> None:
 _PROVENANCE = _SPEC.resolve().parents[1] / "PROVENANCE.md"
 
 
+def test_the_committed_SPEC_ROUTES_set_still_matches_the_vendored_spec() -> None:
+    """`service_kit.lakehouse.spec_routes.SPEC_ROUTES` is data, and data drifts unless something re-derives it.
+
+    It exists because `handle_validation_error` must answer 400 on a spec operation and 422 elsewhere,
+    and it CANNOT ask the spec at runtime: no image copies `lance_docs/` (checked across every
+    `.docker/*.dockerfile`, and confirmed in the running catalog pod, which holds no `spec.yaml`). A
+    committed set is the only shape available — so this is what stops it becoming the hand-maintained
+    tag set that answers the wrong status for a year without anyone noticing.
+
+    Re-vendoring the spec reds this unless the set moves with it, which is the intended coupling.
+    """
+    from service_kit.lakehouse.spec_routes import SPEC_ROUTES
+
+    derived = {
+        (method.upper(), re.sub(r"\{[^}]+\}", "{}", path)) for path, item in _spec().get("paths", {}).items() for method in item if method.lower() in _METHODS
+    }
+    assert derived == SPEC_ROUTES, (
+        f"SPEC_ROUTES disagrees with the vendored spec — only in it: {sorted(SPEC_ROUTES - derived)}; "
+        f"only in the spec: {sorted(derived - SPEC_ROUTES)}. Regenerate it in the same change that re-vendors."
+    )
+
+
 def test_the_provenance_pin_names_the_commit_the_vendored_BYTES_came_from() -> None:
     """A pin nothing checks is a comment, and a wrong one is worse than none.
 

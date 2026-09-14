@@ -127,11 +127,17 @@ class TestTheKeyIsBoundToTheOperation:
 class TestTheHeaderIsConstrainedAtTheDoor:
     @pytest.mark.parametrize("bad", ["", "a" * 65, "has space", "../escape"])
     def test_a_key_that_is_not_a_plain_bounded_token_is_refused(self, real_ns_client: TestClient, bad: str) -> None:
-        """It becomes part of an object key. Refused at the header AND at the seam — the door's 422 is
-        the better error, and the seam's `ValueError` is what protects a second caller of the module."""
+        """It becomes part of an object key. Refused at the header AND at the seam — the door's refusal is
+        the better error, and the seam's `ValueError` is what protects a second caller of the module.
+
+        400 because `CreateTable` is a SPEC operation: the vendored spec has no 422 and maps
+        `InvalidInput` to 400. It also makes this door answer one way — `TestTheKeyIsScopedToItsEndpoint`
+        above already expects 400 for a CROSSED key, so a malformed one answering 422 had the same door
+        giving two statuses for two flavours of the same invalid input.
+        """
         response = real_ns_client.post("/v1/table/db$y/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": bad})
 
-        assert response.status_code == 422, response.text
+        assert response.status_code == 400, response.text
 
 
 class TestTheDestructiveDoorsConvergeToo:

@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import logging
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
+from service_kit.lakehouse.spec_routes import is_spec_route
 from service_kit.problem import PROBLEM_JSON, problem_body
 
 
@@ -209,13 +210,23 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # ONE CODE MUST NOT ARRIVE AT TWO STATUSES. This module maps `INVALID_INPUT` to 400 in both
+        # directions (`_STATUS`, `_STATUS_CODE_FALLBACK`), and a generated Lance client dispatches on
+        # the CODE — so serving that same code at 422 made one server answer one condition two ways.
+        # The vendored spec contains zero 422s (checked against the re-vendored copy, 2026-09-14), so
+        # on a spec operation 422 is a status no generated client has a contract for.
+        #
+        # Narrowed to SPEC routes rather than flipped estate-wide: a rask-only door (`/credentials`,
+        # the registries) has no lance-ns contract to honour, and FastAPI's 422 is what its callers —
+        # this estate's own zones and tests — already expect. `spec_routes` is committed data because
+        # no image carries `lance_docs/`; a test re-derives it from the spec so it cannot drift.
+        route = request.scope.get("route")
+        status = 400 if is_spec_route(request.method, getattr(route, "path_format", "") or "") else 422
         return JSONResponse(
-            status_code=422,
-            # The shared envelope PLUS the field list. A 422 is served on the same `/v1` routes a
-            # generated client calls, and `code` is required on its `ErrorResponse` — so this body
-            # made the client raise just as the hand-built ones did, at the status a client is most
-            # likely to hit.
-            content=problem_body(ErrorCode.INVALID_INPUT, status=422, title="Validation Error", detail="Validation Error", slug="validation")
+            status_code=status,
+            # The shared envelope PLUS the field list. `code` is required on the generated client's
+            # `ErrorResponse`, so this body makes the client raise just as the hand-built ones do.
+            content=problem_body(ErrorCode.INVALID_INPUT, status=status, title="Validation Error", detail="Validation Error", slug="validation")
             | {"errors": [{"field": ".".join(str(p) for p in e["loc"]), "message": e["msg"], "type": e["type"]} for e in exc.errors()]},
             media_type=PROBLEM_JSON,
         )
@@ -255,3 +266,40 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             content=problem_body(ErrorCode.INTERNAL, status=500, title="InternalError", detail="Internal Server Error"),
             media_type=PROBLEM_JSON,
         )
+
+    _declare_spec_validation_status(app)
+
+
+def _declare_spec_validation_status(app: FastAPI) -> None:
+    """Make the published schema say what `handle_validation_error` actually serves.
+
+    FastAPI declares a 422 on every operation that validates anything, and that declaration is what
+    `docs/catalog-openapi.json` carries to the frontend — 159 operations declaring 422 and NONE
+    declaring 400, measured 2026-09-14. Serving 400 on a spec route without moving the declaration
+    would just relocate the disagreement instead of closing it: the served status would match
+    lance-ns while this estate's own generated client still expected 422.
+
+    Renames rather than adds, so an operation ends with exactly one validation response. Operations
+    outside :data:`SPEC_ROUTES` are untouched — a rask-only door still declares and serves 422 — and an
+    app that serves no spec route (lineage, medallion) is left byte-identical, which is why this can
+    live in the shared installer.
+    """
+    generate = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        schema = generate()
+        for path, item in schema.get("paths", {}).items():
+            for method, operation in item.items():
+                if not isinstance(operation, dict) or not is_spec_route(method, path):
+                    continue
+                responses = operation.get("responses")
+                if isinstance(responses, dict) and "422" in responses and "400" not in responses:
+                    responses["400"] = responses.pop("422")
+        return schema
+
+    # FastAPI's own documented override point is this attribute (its `openapi()` is looked up on the
+    # INSTANCE, not the class), so assigning it is the supported seam rather than a monkeypatch. The
+    # cast is because the DECLARED type is the unbound `openapi(self)` while what is installed is the
+    # zero-argument callable FastAPI will actually call — a type-level mismatch the framework's own
+    # contract creates, not one this code could narrow away.
+    cast(Any, app).openapi = openapi

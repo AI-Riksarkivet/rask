@@ -1372,7 +1372,8 @@
           "untracked",
           "missing_on_storage",
           "absent",
-          "unreadable"
+          "unreadable",
+          "ungoverned"
         ],
         "title": "ReconcileState",
         "type": "string"
@@ -1442,6 +1443,13 @@
               }
             ],
             "title": "Unreadable Reason"
+          },
+          "versions_without_lineage": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Versions Without Lineage",
+            "type": "array"
           }
         },
         "required": [
@@ -3420,7 +3428,7 @@
     },
     "/datasets/{name}/reconcile": {
       "get": {
-        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs: because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.",
+        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs: because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.\n\n``versions_without_lineage`` is the axis the version comparison cannot answer: it compares two\nMAXIMA, so a write whose event was lost and which a later write superseded leaves both equal and the\ndataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered\nin_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here \u2014 this door\nreports the holes and the cron sweep is what recovers them, so an operator asking a question never\nmutates the graph as a side effect.",
         "operationId": "get_reconcile_datasets__name__reconcile_get",
         "parameters": [
           {

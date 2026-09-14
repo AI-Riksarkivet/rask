@@ -10741,7 +10741,8 @@
             "default": "inserted",
             "enum": [
               "inserted",
-              "updated"
+              "updated",
+              "deleted"
             ],
             "title": "Kind",
             "type": "string"
@@ -13629,7 +13630,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -13760,7 +13761,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15115,7 +15116,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15246,7 +15247,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15397,7 +15398,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15521,7 +15522,7 @@
           "200": {
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15667,7 +15668,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -16649,7 +16650,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -19835,7 +19836,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -19950,7 +19951,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -20065,7 +20066,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -20935,7 +20936,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21091,7 +21092,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21213,7 +21214,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21337,7 +21338,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21642,7 +21643,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21766,7 +21767,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21914,7 +21915,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -22767,7 +22768,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -23038,7 +23039,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -23194,7 +23195,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -23350,7 +23351,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -23641,7 +23642,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -23797,7 +23798,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -23989,7 +23990,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -24232,7 +24233,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -24417,7 +24418,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -24573,7 +24574,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -24697,7 +24698,7 @@
           "200": {
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -24819,7 +24820,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -25128,7 +25129,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -25283,7 +25284,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -25439,7 +25440,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -25629,7 +25630,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -26370,7 +26371,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -27220,7 +27221,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -27395,7 +27396,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -27580,7 +27581,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -27755,7 +27756,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -27911,7 +27912,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -28058,7 +28059,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -28182,7 +28183,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -28306,7 +28307,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -28532,7 +28533,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -28656,7 +28657,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -28780,7 +28781,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -29168,7 +29169,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -29324,7 +29325,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -29348,6 +29349,7 @@
     },
     "/v1/table/{id}/version/create": {
       "post": {
+        "description": "Create one version entry for this table, from a manifest the table itself owns.",
         "operationId": "create_table_version_v1_table__id__version_create_post",
         "parameters": [
           {
@@ -29447,7 +29449,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -29570,7 +29572,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -29717,7 +29719,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -29741,7 +29743,7 @@
     },
     "/v1/table/{id}/version/list": {
       "post": {
-        "description": "List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees\nlatest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).",
+        "description": "List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees\nlatest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).\n\nPAGED HERE, NOT DOWNSTREAM, because the backend cannot page. Driven against a `dir` namespace\n2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,\nand a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`\ntold a caller asking for three of seven that it had seen everything \u2014 truncation wearing\npagination's clothes, the shape `GET /v1/model` already names.\n\nSo the native call is made UNPAGINATED \u2014 the same rule `catalog.api.pagination` states for the name\nlistings \u2014 and the cursor is this layer's. The full list is what the backend returns unbounded\n(measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.",
         "operationId": "list_table_versions_v1_table__id__version_list_post",
         "parameters": [
           {
@@ -29897,7 +29899,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -30021,7 +30023,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -30152,7 +30154,7 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
