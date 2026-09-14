@@ -3673,7 +3673,11 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 **LH-113 · One 340-line catalog `Settings` class carries every domain's configuration**
 `catalog` · med
 
-- *Why open:* Listed OPEN in the Q3 carry-over table and neither re-measured nor struck.
+- *RE-MEASURED 2026-09-14 — still true, and the number in the title UNDERSTATES it.* The class is
+  `services/catalog/src/catalog/core/config.py:31-467` — **437 lines, 63 annotated fields**, in a
+  499-line module, deriving from `GovernedAuthSettings` + `BaseSettings`. It has grown since the row
+  was written, which is what an unowned catch-all does.
+- *Why open:* Listed OPEN in the Q3 carry-over table and, until now, neither re-measured nor struck.
 - *Closes when:* Split the catalog `Settings` into per-domain settings blocks, the shape the eight services already share via `GovernedAuthSettings`.
 
 **LH-114 · ~~Multi-base (`base_paths`) is implemented but never exercised, and no test proves cleanup on a shared non-root base spares its sibling~~ — STRUCK 2026-09-10 (ALREADY FIXED)**
