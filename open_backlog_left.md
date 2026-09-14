@@ -3793,9 +3793,20 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   *A hypothesis ruled OUT, so it is not re-tried:* `SET_WROTE_QUALITY` is a `MATCH ... SET` on an
   existing WROTE edge, which looks like a silent no-op against a missing edge. It is not — it runs in
   the SAME ingest as the edge it matches (`repository.py:336-356`), guarded by `if assertions:`.
-  *So the question is at the PRODUCER:* lineage writes `quality_passed` only when the ingested event's
-  output carries a `dataQualityAssertions` facet, so the event it received carried none. Whether the
-  medallion omits the facet, or emits the verdict on an event lineage never sees, is the next step.
+  *ANSWERED — VERDICTS ELEVEN AND TWELVE: CONTAMINATION (configuration), and both legs now SKIP with a
+  reason instead of failing.* The measurement is a chart toggle that ships OFF, traced end to end:
+  `values.yaml:1366 medallion.quality: false` (no override in the live release) → `medallion.yaml:586-590`
+  gates `MEDALLION_QUALITY_ENABLED` on it → neither running stage runner carries that env →
+  `config.py:448 quality_enabled` defaults False → `transform.py:1075 if settings.quality_enabled:`
+  guards `assert_quality`, whose output is the ONLY producer of the `dataQualityAssertions` facet
+  (`schemas/events.py:118-124`) → `repository.py:345-346` writes `quality_passed` only `if assertions:`.
+  So NULL is correct and the legs read it as a broken gate. The gate is a different mechanism and fires
+  regardless — `transform.py:1065` states it: "THE STAGE RUNNER MEASURES; IT DOES NOT RULE."
+  *Why it only bites here:* `test_governed_union_e2e.py` is not in `e2e_stack.sh`'s list, so it runs
+  only via `e2e_live` against a deployed release. Fixed the way this suite already handles a missing
+  prerequisite — `pytest.skipif` naming the toggle — with `e2e_live.sh` discovering it from the running
+  POD rather than the values, per its own "every value is discovered" rule. Driven live: 2 passed,
+  2 skipped, and the suite's only remaining failure is the FGA-deny leg above.
 - *Closes when:* the **eight** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
