@@ -3568,8 +3568,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   anchor the alerting rules already cite.
   *A finding the row did not anticipate is split out as [[LH-151]]:* a delivery that is not a valid
   CloudEvent is dead-lettered in 21ms with zero retries, and parks where `/dlq-event` cannot read it.
-- *Closes when:* the two remaining asks — encode the chaos rows as an automated mutating harness kept
-  out of default `make e2e`, and re-verify lineage scale-0 → restart-replay on a fresh deploy.
+- **THE TWO REMAINING ASKS ARE ONE PIECE OF WORK, and trying to hand-drive the second is what showed
+  it (2026-09-14).** Re-verifying lineage scale-0 → restart-replay needs three events published while
+  lineage is down. Hand-driving that against the live estate has no good form: `/lineage-events`
+  applies `enforce_bus_authz` (`api/dapr.py:52-55`), so a synthetic author is REFUSED — which still
+  proves delivery, the property actually at risk, but bumps the refusal counter a real alert watches —
+  while an author that IS authorized injects fabricated provenance into the authoritative AGE graph.
+  Neither is acceptable ad hoc, and both are fine inside an isolated fixture. The e2e suites already
+  establish that shape: `test_maintenance_s3_e2e.py` creates uuid-suffixed buckets and touches only
+  those.
+- *Closes when:* one harness covers both — a `tests/e2e-py/test_chaos_e2e.py` driving the pull-a-service
+  rows (lineage scale-0 → replay included) against a uuid-suffixed throwaway namespace, behind an
+  env-gated `make e2e-chaos` target kept OUT of `e2e-ci`'s list, the way the other eleven suites are
+  gated. Scoped 2026-09-14; the scaffold and the gating convention already exist.
 
 **LH-107 · The catalog is correct only at `replicas=1` because `controlEmit`'s ring buffer and cursor are per-replica, and every stage runner calls it**
 
