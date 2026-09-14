@@ -35,6 +35,9 @@ a committed write's provenance is the wrong answer to "you may not record this":
 from __future__ import annotations
 
 import inspect
+from typing import Any
+
+import pytest
 
 from lineage.api import reconcile_cron
 
@@ -78,3 +81,77 @@ def test_the_cron_can_supply_the_principal_the_gate_needs() -> None:
     """
     assert "request" in inspect.signature(reconcile_cron._on_cron).parameters, "the cron handler must take a Request to thread to the drain"
     assert "request" in inspect.signature(reconcile_cron._drain_outbox).parameters, "the drain needs it to call the shared gate"
+
+
+def test_a_refusal_is_HANDLED_and_not_a_crash(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal branch, EXECUTED — which is the one thing the three tests above cannot do.
+
+    They read `_drain_outbox`'s source text and assert substrings. That form pins the SHAPE of the
+    branch and can say nothing about whether it runs, and this is what it missed: the refusal handler
+    logged `author_sub_from_payload(payload)` while `payload` is bound only inside the `except
+    ValidationError` branch above it, so reaching a refusal raised `UnboundLocalError`. The handler
+    sits inside the drain's per-event `try`, so that escaped to the tick's error boundary and aborted
+    the WHOLE drain — every other staged event stayed put, tick after tick.
+
+    Observed on the deployed estate 2026-09-14: `lineage_outbox_drain_failed error="cannot access local
+    variable 'payload' where it is not associated with a value"` on EVERY sweep — 18 in 50 minutes —
+    with `outbox_drained: 0` while `list_events` confirmed an event was staged. The outbox is what makes
+    a committed write's provenance survive its producer; a drain that cannot complete a tick makes it a
+    write-only store, which is the failure mode `test_ONE_ungraphable_event_does_not_strand_every_other
+    _staged_event` already names for a different cause.
+
+    The GATE's decision is not under test here — `test_the_relay_authorizes_before_it_ingests` owns
+    that. What is under test is the drain's handling of a refusal it has already received, which is why
+    the gate is replaced wholesale rather than driven through a real FGA.
+    """
+    import asyncio
+    import json as _json
+    from types import SimpleNamespace
+    from typing import cast
+
+    from lance_namespace import PermissionDeniedError
+
+    from medallion.schemas.events import build_run_event
+    from service_kit.lakehouse import outbox
+
+    async def _refuse(*_args: object, **_kwargs: object) -> None:
+        raise PermissionDeniedError("can_write_data required")
+
+    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refuse)
+
+    uri = f"file://{tmp_path}/_lineage_outbox"
+    event = build_run_event(
+        operation="ingest_events",
+        author="mallory",
+        job_namespace="medallion",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="bronze",
+        output_name="bronze$events",
+        version=2,
+        token="refusal-probe",
+    )
+    outbox.stage_event(uri, {}, event["run"]["runId"], _json.dumps(event))
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.ingested: list[str] = []
+
+        async def ingest_event(self, ev: Any) -> None:  # pragma: no cover — a refusal must never reach here
+            self.ingested.append(ev.run.run_id)
+
+    class _Settings:
+        outbox_uri = uri
+        outbox_drain_limit = 500
+        dapr_pubsub = "lineage-pubsub"
+        dapr_topic = "lineage.events.v1"
+        dapr_publish_timeout_seconds = 5.0
+        fga_enabled = True  # the whole point: the other executing tests leave this OFF
+
+    repo = _Repo()
+    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
+
+    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), cast("Any", _Settings()), {}))
+
+    assert outcome.stranded == 1, "a refused event must be counted as stranded"
+    assert outcome.drained == 0 and repo.ingested == [], "a refused event must never reach the graph"
+    assert list(outbox.list_events(uri, {})), "a refusal must LEAVE the event staged — dropping it destroys the only durable copy"

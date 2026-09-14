@@ -491,9 +491,18 @@ async def _drain_outbox(
             # producer is staging provenance it is not authorized to record, which the generic stranded
             # line — shared with credential expiry and store outages — would bury.
             stranded += 1
+            # THE VERIFIED `sub`, parsed HERE from the raw json rather than reused from the poison branch
+            # above — `payload` is bound only inside that branch, so reading it here raised
+            # `UnboundLocalError`, and because this handler sits inside the per-event `try` it escaped to
+            # the tick's error boundary and aborted the WHOLE drain. Not `event.author`: that property
+            # prefers the producer-supplied `name` and ownership facet, which is right for attribution on
+            # a board and wrong for a loss record, where naming the wrong person is worse than naming
+            # nobody (`author_sub_from_payload`). The json already validated into a `RunEvent` on this
+            # path, so it parses.
+            refused_author = author_sub_from_payload(json.loads(event_json))
             log.warning(
                 "lineage_outbox_event_unauthorized",
-                extra={"outbox_key": key, "run_id": event.run.run_id, "author": author_sub_from_payload(payload), "reason": str(exc)},
+                extra={"outbox_key": key, "run_id": event.run.run_id, "author": refused_author, "reason": str(exc)},
             )
             continue
         except Exception as exc:
