@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -2472,6 +2472,41 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   neighbouring reason (an endpoint-only delimiter would let the router-level FGA gate authorize a
   differently-parsed object).
 
+**LH-151 · A delivery that is not a valid CloudEvent is dead-lettered with ZERO retries and parks where nothing can read it — no ERROR log, no counter, no alert**
+`medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2
+
+- *Why open:* the DLQ plane's whole promise is that parking is VISIBLE — `/dlq-event` ERROR-logs
+  `dapr_dead_letter_parked` and bumps `medallion_dlq_parked_total`, which `MedallionCascadeDeadLettering`
+  alerts on. That promise holds only for a message the sidecar can deserialize as a CloudEvent.
+- *Measured live 2026-09-14 by publishing a raw non-CloudEvent body to `medallion.bronze` on
+  `bronze-to-silver` (`metadata.rawPayload=true`, body `["LH-106-poison-probe"]`):*
+
+      18:15:53.034  error  dapr.runtime.processor.subscription  error deserializing cloud event in pubsub
+                           lineage-pubsub-bronze-to-silver and topic medallion.bronze
+      18:15:53.055  error  dapr.runtime.processor.subscription  error deserializing cloud event in pubsub
+                           lineage-pubsub-bronze-to-silver and topic dlq.bronze-to-silver
+      18:15:53.055  error  dapr.contrib                         Error processing JetStream message
+                           dlq.bronze-to-silver/{181 9952}
+
+  **21 milliseconds, and no app delivery at all.** The failure is in the sidecar's envelope decoding,
+  ahead of any retry policy, so the `constant 120s x 4` schedule never engages — the contrast with the
+  well-formed poison driven minutes later on the same subscription (5 attempts, then a parked+logged
+  dead letter) is what isolates it. The dead letter then lands on the DLQ topic as the SAME unparseable
+  bytes, so `/dlq-event` cannot read it either: nothing logs, nothing counts, nothing pages. The
+  message is retried per the component's own `maxDeliver: 3` / `backOff: 720s,720s` and then gone.
+- *Why it is not merely theoretical:* the bus is the estate's widest trust surface — `transform.py`'s
+  own validate-or-DROP comment says so — and an external OpenLineage producer, a hand-run `nats pub`,
+  or any publisher that omits the CloudEvent envelope produces exactly this. It is the one class of
+  message MOST likely to be malformed, and it is the one class the parking plane cannot see.
+- *Closes when:* an owner decides the shape. The candidates are not equivalent: (a) subscribe
+  `/dlq-event` with `rawPayload` handling so a parked envelope-failure is still logged and counted —
+  smallest, but changes how every dead letter is parsed; (b) alert on the sidecar's
+  `error deserializing cloud event` log line instead, which needs no app change but moves a data-plane
+  signal into log-scraping; (c) accept it and say so in `RESILIENCE.md`, since a non-CloudEvent
+  publisher is arguably outside the contract. The measurement above is what the decision needs;
+  it should not be guessed at.
+
+
 
 _Multi-tenancy is the product claim; every item here is a place where one tenant's data, credentials or grants are protected by convention rather than by an enforced check._
 
@@ -3508,7 +3543,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `lineage, chart` · med
 
 - *Why open:* The pull-a-service chaos rows were driven by hand and never encoded (deliberately out of default `make e2e` — they scale shared infra). Gap #2's poison-inject → Dapr `deadLetterTopic` parking has only unit tests (the #83 DLQ drive exercised the OUTBOX surface, not sidecar parking) and the runbook §6.5 it pointed at no longer exists. Honesty-note row 1 (lineage scale-0 → restart-replay under the per-app queue-group components) still awaits its one-shot re-verify on a fresh deploy.
-- *Closes when:* Encode the chaos rows as an automated mutating harness kept out of default `make e2e`; drive a poison message live to observe Dapr `deadLetterTopic` parking; re-verify lineage scale-0 → restart-replay on a fresh deploy; and rewrite the dangling §6.5 runbook pointer.
+- **TWO OF FOUR LANDED 2026-09-14, and the poison drive was worth more than the row expected.**
+  *Gap #2 is DRIVEN AND OBSERVED.* A well-formed trigger naming a nonexistent source, published to
+  `medallion.bronze` on `bronze-to-silver`, took five deliveries — each `medallion_stage_failed` →
+  RETRY — and was then parked: `dapr_dead_letter_parked app='bronze-to-silver'
+  dlq_topic='dlq.bronze-to-silver' source_topic='medallion.bronze' token='lh106-poison-probe'`, with
+  `/dlq-event` answering 200. That is the first time the retry → dead-letter → parking chain has been
+  seen end to end on this estate; the #83 drive only ever exercised the outbox.
+  *And it falsified the schedule.* The whole thing completed in **3.553 seconds** against a chart that
+  documents ~7.5 minutes: `policy: exponential` ignores `duration` outright (dapr/kit `NewBackOff`
+  reads it only under `PolicyConstant`), so the window was cenkalti/backoff's 500ms default times 1.5
+  — 0.5 + 0.75 + 1.125 + 1.6875 ≈ 4s. Every measured gap sat inside its jittered band. Fixed to
+  `constant 120s x 4` (480s over 5 attempts, deterministic) and gated by
+  `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py`, which COMPUTES the window
+  from the rendered policy and checks both edges — the too-short one and the one where backoff plus
+  the handler's own time outruns the broker's 720s `ackWait`.
+  *The dangling pointer is rewritten* to `RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up`, the
+  anchor the alerting rules already cite.
+  *A finding the row did not anticipate is split out as [[LH-151]]:* a delivery that is not a valid
+  CloudEvent is dead-lettered in 21ms with zero retries, and parks where `/dlq-event` cannot read it.
+- *Closes when:* the two remaining asks — encode the chaos rows as an automated mutating harness kept
+  out of default `make e2e`, and re-verify lineage scale-0 → restart-replay on a fresh deploy.
 
 **LH-107 · The catalog is correct only at `replicas=1` because `controlEmit`'s ring buffer and cursor are per-replica, and every stage runner calls it**
 
