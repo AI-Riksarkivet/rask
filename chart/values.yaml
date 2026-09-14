@@ -2530,8 +2530,10 @@ dapr:
   # Dapr-native retry + dead-letter layer — DEFAULT ON (Dapr-first rule). Wires THREE things TOGETHER
   # (they are only correct as a set — a deadLetterTopic without a retry policy dead-letters on the FIRST
   # failure per Dapr's documented default):
-  #   1. a Resiliency CRD: the SIDECAR owns delivery retries (exponential 30s→300s, 5 attempts), scoped
-  #      to the subscriber apps;
+  #   1. a Resiliency CRD: the SIDECAR owns delivery retries (constant 120s x 4 = 480s over 5 attempts,
+  #      deterministic), scoped to the subscriber apps. The policy MUST be `constant`: the Resiliency
+  #      CRD declares no `initialInterval`, so an `exponential` one is pinned to cenkalti/backoff's
+  #      500ms default and gives ~4s no matter what `duration` sits beside it (measured 2026-09-14);
   #   2. deadLetterTopic on every subscription (via the *_DLQ_TOPIC envs): retry exhaustion PARKS the
   #      message on a per-app dlq.* topic (the DLQ stream, nats-stream-job) — ERROR-logged by the
   #      app's /dlq-event route — instead of silently ceasing to redeliver;

@@ -3,25 +3,30 @@
 # broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
 # delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
 # ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
-# Schedule mirrors the previous broker one: exponential 30s→300s, 5 total attempts (~7.5 min) — under
-# the component's 720s crash-recovery ack window so broker redelivery never races these retries.
 #
-# THE FIELDS MUST MATCH THE POLICY (fixed 2026-07-28). This block previously read
-# `policy: exponential` with `duration: 30s`. Dapr reads `duration` ONLY under PolicyConstant
-# (dapr/kit retry.go: Duration drives NewConstantBackOff; InitialInterval/Multiplier/MaxInterval/
-# RandomizationFactor drive NewExponentialBackOff). Under `exponential` the duration was ignored and
-# `initialInterval` fell back to its 500ms default, so the rendered schedule was
-# 0.5 + 0.75 + 1.125 + 1.7 ≈ 4 SECONDS — not the ~7.5 min stated here, and `maxInterval: 300s` was
-# unreachable dead config. Because the sidecar DLTs and ACKs the original on exhaustion, the 720s
-# broker ackWait never applies to an app-returned RETRY, so resiliency being ON (the default)
-# SHORTENED the app-failure retry window ~125x versus OFF. The whole point of this CRD was inverted.
+# THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
+# reads `Duration` under PolicyConstant alone (`b = backoff.NewConstantBackOff(c.Duration)`); under
+# PolicyExponential it is ignored outright and the schedule comes from InitialInterval / Multiplier /
+# RandomizationFactor / MaxInterval. The Resiliency CRD declares only policy, duration, matching,
+# maxInterval and maxRetries (read off the live CRD, 2026-09-14), so under `exponential` the first
+# step is pinned at cenkalti/backoff's 500ms default and NO chart value can move it — 0.5 + 0.75 +
+# 1.125 + 1.6875 ≈ 4s, whatever duration is written beside it. `constant` is also the only
+# DETERMINISTIC shape, for the same reason: `randomizationFactor` is equally unsettable and
+# exponential carries a 0.5 default that swings the total ±50%.
 #
-# The arithmetic, so the next edit can check itself: 30 + 60 + 120 + 240 = 450s = 7.5 min over 4
-# retries (5 attempts). The 4th step is 240s, under `maxInterval: 300s`, so the cap is a guard rather
-# than a participant. `randomizationFactor` is pinned to 0 rather than left at Dapr's 0.5 default:
-# with jitter the worst case is 450 x 1.5 = 675s, which still fits the 720s broker window but leaves
-# only 45s of margin — and that margin is the invariant that stops the broker redelivering while the
-# sidecar is still retrying. Deterministic beats 6% headroom here.
+# The arithmetic, so the next edit can check itself: 4 retries × 120s = 480s = 8 min, no jitter, over
+# 5 total attempts. The margin under the components' 720s crash-recovery ackWait is not slack — while
+# the sidecar retries, the broker still holds the original un-acked, so a schedule outlasting ackWait
+# has JetStream redeliver the same trigger underneath a retry still in flight and the stage runs
+# twice. THE HANDLER'S OWN TIME COUNTS AGAINST THAT MARGIN, which is why the window is spent on FEW
+# LONG steps rather than many short ones: 480s of backoff plus 5 attempts leaves 48s apiece, where the
+# same 480s split into 30s steps would need 16 attempts and overrun ackWait on any handler slower than
+# 15s. Long steps cost little for the failure this exists to survive — a dependency pod is back inside
+# ~90s, so the FIRST retry already lands after recovery.
+#
+# Measured 2026-09-14 by driving a poison delivery to `bronze-to-silver` and timing the park; pinned
+# by tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py, which computes the
+# window from the rendered policy under dapr/kit's semantics and checks BOTH edges.
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
 metadata:
@@ -32,14 +37,13 @@ spec:
     retries:
       pubsubDeliveryRetry:
         # ONLY the fields the Resiliency CRD actually declares: policy, duration, matching,
-        # maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` were
-        # sent for months and REJECTED every time — `strict decoding error: unknown field` — so this
-        # CR never applied and the retry it describes never existed. `helm upgrade` swallowed it as
-        # a warning; a GitOps reconciler parks the whole Application OutOfSync on it. `duration` is
-        # the CRD's name for the first backoff step.
-        policy: exponential
-        duration: 30s
-        maxInterval: 300s
+        # maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` are
+        # rejected — `strict decoding error: unknown field` — which `helm upgrade` swallows as a
+        # warning while a GitOps reconciler parks the whole Application OutOfSync on it. `maxInterval`
+        # is omitted deliberately: it is read only under `exponential`, so carrying it here would be a
+        # value that looks like a bound and bounds nothing.
+        policy: constant
+        duration: 120s
         maxRetries: 4
   targets:
     components:

@@ -41,11 +41,13 @@ Two properties make it safe:
 | **Idempotency** (replays re-deliver old events) | fixed `run_id`s re-MERGE | `gaptest1` has **exactly 1** producer run — no duplication |
 
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** Transient dependency
-failures recover via Dapr `RETRY` (with the DEFAULT `dapr.resiliency.enabled=true` the sidecar's Resiliency
-policy owns the retry schedule and the broker ackWait is 720s crash-recovery only; the numbers below
-describe the `resiliency=false` escape hatch: ackWait 30s, maxDeliver 5, backOff `30s,60s,120s,300s` — the first
-backOff step IS the effective ack window per NATS consumer semantics, so it must not undercut the slowest
-handler; the ~8.5 min total window covers a realistic dependency blip).
+failures recover via Dapr `RETRY`. With the DEFAULT `dapr.resiliency.enabled=true` the sidecar's Resiliency
+policy owns the schedule — **constant 120s x 4 retries = 480s (8 min) over 5 attempts, no jitter** — and the broker ackWait is
+720s crash-recovery only, so the two never race. The policy must be `constant`: the Resiliency CRD exposes no
+`initialInterval`, so an `exponential` policy is pinned to cenkalti/backoff's 500ms default and gives ~4s however
+long a `duration` sits beside it. With `resiliency=false` the broker owns it instead: ackWait 30s, maxDeliver 5,
+backOff `30s,60s,120s,300s` — there the first backOff step IS the effective ack window per NATS consumer
+semantics, so it must not undercut the slowest handler. Either way the window covers a realistic dependency blip.
 
 > ⚠️ **Semantics changed by the §2 bus fixes (re-verify live on next deploy).** Each subscriber now has
 > its **own** pubsub component with `queueGroupName=<app-id>` (replicas = competing consumers → single
@@ -86,8 +88,9 @@ handler; the ~8.5 min total window covers a realistic dependency blip).
    consumer (`deliverPolicy: all`) re-saw it on restart — but an outage longer than the retry window
    meant the event wasn't ingested **until a restart**. The fix is the Dapr-native SET (only correct
    together — a `deadLetterTopic` without a retry policy dead-letters on the FIRST failure, Dapr's
-   documented default): a **Resiliency CRD** makes the sidecar own delivery retries (exponential
-   30s→300s, 5 attempts ≈ the old broker schedule), every subscription declares a per-app
+   documented default): a **Resiliency CRD** makes the sidecar own delivery retries (constant
+   120s x 4 retries = 480s over 5 attempts, deterministic — the old broker schedule's shape, reached the
+   only way the CRD can express it), every subscription declares a per-app
    **`deadLetterTopic`** (`dlq.*`, parked on the dedicated **DLQ stream** — load-bearing: Dapr does
    not auto-create streams, so without it the parking publish itself would fail), exhausted
    deliveries PARK there — ERROR-logged (`dapr_dead_letter_parked`) by each app's `/dlq-event`
@@ -96,8 +99,10 @@ handler; the ~8.5 min total window covers a realistic dependency blip).
    SOURCE (components-contrib `jetstream.go` applies `durableName` as-is per subscription; NATS
    scopes consumer names PER STREAM; the dlq topics live on their own stream — and the producer
    already runs two same-durable subscriptions across two streams live). CI render-asserts the set
-   ships together and the escape hatch restores the chaos-verified schedule. Live check remaining:
-   the runbook 6.5 poison-inject. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
+   ships together and the escape hatch restores the chaos-verified schedule. **DRIVEN LIVE 2026-09-14**
+   (see the chaos table above, and [RUNBOOK-oncall § DLQ parking](runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up)):
+   a poison trigger published to `medallion.bronze` retried, exhausted the schedule and parked on
+   `dlq.bronze-to-silver`, ERROR-logged by `/dlq-event`. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
 
 3. **Trigger loss on stage runner death: FIXED (durable cursors, 2026-07-06); lineage full-stream-replay
    remains by design.** The cascade head + stage runners now pair `deliverPolicy: new` with a `durableName`

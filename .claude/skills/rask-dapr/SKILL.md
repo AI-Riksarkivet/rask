@@ -177,3 +177,16 @@ sidecar. The Jobs-API echo of `runtime_env` is exactly why "inject at submit" is
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
 - Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`
   crash-loops the pod. Missing row in `dapr-resiliency.yaml` ⇒ no sidecar retry AND no dead-letter.
+- **A Resiliency retry whose `policy` and `duration` disagree is silently ineffective, and nothing
+  rejects it.** dapr/kit's `NewBackOff` reads `Duration` ONLY under `PolicyConstant`; under
+  `PolicyExponential` it is ignored and the schedule comes from `InitialInterval`/`Multiplier`/
+  `RandomizationFactor` — none of which `resiliencies.dapr.io` declares, so the first step is pinned at
+  cenkalti/backoff's 500ms default. `policy: exponential` + `duration: 30s` therefore renders, applies,
+  and retries for **~4 seconds**. Measured 2026-09-14 by driving a poison delivery at `bronze-to-silver`
+  and timing the park: 3.553s against a chart that documented 7.5 minutes. **`constant` + `duration` is
+  the only shape that reaches minutes, and the only deterministic one** (`randomizationFactor` is
+  equally unsettable, and exponential's 0.5 default swings the total ±50%). When sizing the window,
+  spend it on FEW LONG steps: the handler's own time per attempt counts against the component's
+  `ackWait`, so the same total split into many short steps overruns it and the broker redelivers
+  underneath a retry still in flight. Gated by
+  `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py`.
