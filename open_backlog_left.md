@@ -3642,6 +3642,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `dummy_lane::TERMINAL_event_READS_BACK`, `governed_union::media_lane_derives_under_governance` and
   `governed_union::train_lineage_lands_attributed_under_governance` green. **VERDICT for those three:
   CONTAMINATION** — a deployed-environment defect the chart already fixes, not a suite or estate one.
+- **A FOURTH VERDICT: `governed_union::test_fga_deny_drops_promotion_and_regrant_restores` is
+  SUITE-DRIFT, and the "revoke did not take" message is misleading rather than alarming.** Read off the
+  live store 2026-09-14: `namespace:acme-silver#can_create_table` computes from `#writer`, whose union
+  includes `tupleToUserset: namespace:acme-silver#parent -> warehouse:acme-bucket#writer`; the parent
+  IS `warehouse:acme-bucket`, and `user:service-bronze-to-silver` holds `writer` on it (alongside the
+  producer, media-to-silver and silver-to-gold). The leg deletes only the namespace-level writer and
+  owner tuples, so the rung survives by WAREHOUSE INHERITANCE — the model working as designed, not an
+  ungated cascade.
+  *NOT fixed here, deliberately.* The obvious repair — also delete `warehouse:acme-bucket#writer` —
+  strips a grant the live cascade depends on, and a leg that fails between the revoke and its regrant
+  leaves the stage runner unable to write at all. The safe shape is to assert against a namespace whose
+  parent grants the subject nothing (a fixture namespace the leg owns), which is a redesign of the leg
+  rather than an edit, and it should not be improvised against a live estate.
 - *Closes when:* the **eleven** remaining legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
   CONTAMINATION / ALREADY-FIXED. Current list after the Ray restart, 2026-09-14: `governed_union` x3
   (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `quality_gate_blocks_bad_batch`),
