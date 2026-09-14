@@ -3818,8 +3818,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   fixed five call sites still sending `limit=1000` after the board was capped. Swept the rest of
   `tests/e2e-py` afterwards: the only other bounded read is `/events?limit=200` against
   `_EVENTS_RETURN = 500`, which is within bounds.
-- *Closes when:* the **two** remaining legs each carry a verdict — both in `observability_e2e`
-  (`logs_populated`, `distributed_trace_spans_catalog_to_lineage`). Measured list, 2026-09-14 21:25:
+- **VERDICTS FIFTEEN AND SIXTEEN complete the pass — every leg now carries one.**
+  *FIFTEEN — `observability_e2e::test_logs_populated`, SUITE-DRIFT, fixed:* it asked GreptimeDB to
+  count logs WITHOUT a trace_id, and that engine cannot answer it. `trace_id` is indexed, so any
+  predicate that must MATCH NULLs on it 500s — measured live against `opentelemetry_logs`
+  (**101,385,870 rows**): both `NOT (trace_id IS NOT NULL AND trace_id != '')` and its De Morgan twin
+  `trace_id IS NULL OR trace_id = ''` answer HTTP 500, while the positive form returns 18,422,464 in
+  75 ms. So the leg reported "logs not populated" about a table holding a hundred million rows.
+  Computed as total minus the trace-carrying count instead — same number, two supported queries.
+  Verified live: it passes.
+  *SIXTEEN — `observability_e2e::test_distributed_trace_spans_catalog_to_lineage`, SUITE-DRIFT, NOT
+  fixed, and it is the second flapper this row tracks:* it drives NO traffic. It reads the newest 200
+  rows of `opentelemetry_traces` and requires a trace joining catalog + lineage that also carries a
+  `PublishEvent` span — so it passes or fails on whatever the estate happened to do in the preceding
+  moments. Consecutive drives show exactly that: run 1 failed `logs_populated` and passed this; run 2
+  passed `logs_populated` and failed this.
+  *Its fix is a fixture decision, not an edit:* the span it needs is produced only by a governed WRITE
+  through the catalog, so making it deterministic means the observability suite starts mutating the
+  estate. That is worth deciding rather than improvising.
+- *Closes when:* the four legs whose verdicts are CONTAMINATION or blocked are dealt with — the three
+  that need an e2e identity the estate authorizes ([[LH-109]]'s FGA-deny and both outbox legs), and
+  `maintenance_e2e`'s `errors == {}` against 24 known-unreadable registry entries. Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
   (`sweep_compacts_real_datasets_and_meters`), `media_e2e` (`ingest_media_derives_artifacts`),
