@@ -11,13 +11,18 @@ deployment fails fast at boot.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
+
+if TYPE_CHECKING:
+    # Type-only: `lance` is a heavy import and this module is read by every catalog process at boot.
+    import lance
 
 
 _STORAGE_PREFIX = "storage."
@@ -44,6 +49,14 @@ class Settings(GovernedAuthSettings, BaseSettings):
     #: BOOTSTRAP-ONLY. It spells every OpenFGA object id, so changing it on a running estate renames
     #: every governed object and denies every check — see `service_kit.lakehouse.naming`.
     delimiter: str = Field(default=CATALOG_DELIMITER, alias="LANCE_NS_DELIMITER")
+    #: The bounded Lance caches this process is willing to hold (#102 / [[LH-096]]). Lance's own defaults
+    #: are 1 GiB metadata + 6 GiB index, which dwarf the 512 Mi limit every lakehouse pod runs under —
+    #: and a bare `lance.dataset()` mints those ceilings per open and discards them WITH the handle, so
+    #: the cache never engages at all. Named settings rather than literals because a literal cannot
+    #: track `resources.limits.memory`: raise the pod and these should follow, lower it and they must.
+    #: `shared_lance_session` clamps them to the container on top of whatever is set here.
+    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="LANCE_METADATA_CACHE_MB")
+    lance_index_cache_mb: int = Field(default=256, ge=8, alias="LANCE_INDEX_CACHE_MB")
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
@@ -458,3 +471,29 @@ class Settings(GovernedAuthSettings, BaseSettings):
 def get_settings() -> Settings:
     """Return the process-wide cached settings instance."""
     return Settings()  # required fields are read from the environment
+
+
+def shared_lance_session() -> lance.Session:
+    """The process-wide bounded Lance session every catalog open threads ([[LH-096]]).
+
+    THE CATALOG OPENS PER REQUEST, which is what makes this worth more here than anywhere else: a bare
+    `lance.dataset(uri)` takes Lance's default 1 GiB metadata + 6 GiB index ceilings, serves one request
+    and throws the cache away with the handle. Inside a 512 Mi pod that is both a cache that never warms
+    and a set of caps that describe a container the process is not running in. `rask-maintenance` was
+    OOMKilled (exit 137) on 2026-09-10 before it clamped, which is why this is the shape it already uses.
+
+    NOT A HANDLE CACHE, and that distinction is why this needs no freshness contract. Caching a DATASET
+    pins a version; a `Session`'s keys carry `(uri, version, etag)`, so a compaction writes NEW keys and
+    a stale read is not expressible. `service_kit.lakehouse.lance_session` records that and its
+    thread-safety under concurrent opens.
+
+    ONE OBJECT per cap pair: `lance_session` is `@cache`d on its arguments, so every caller here gets
+    the same session and the opens actually share a cache rather than each minting one.
+    """
+    from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
+
+    settings = get_settings()
+    # Clamped from the cgroup rather than by lowering the defaults, so the caps track the pod's real
+    # limit instead of a literal somebody has to remember to change.
+    metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
+    return lance_session(metadata, index)

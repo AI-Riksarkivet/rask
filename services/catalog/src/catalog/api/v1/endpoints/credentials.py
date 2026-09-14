@@ -31,6 +31,7 @@ from lance_namespace import (
 
 from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentToken, RawBearerToken
+from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import Tier, has_external_bases
 from catalog.schemas import CredentialResponse
@@ -151,7 +152,7 @@ def _dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int,
     the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
     """
     try:
-        ds = lance.dataset(location, storage_options=storage_options)
+        ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
     except (ValueError, OSError):
         return 0, ()
     bases: list[str] = []

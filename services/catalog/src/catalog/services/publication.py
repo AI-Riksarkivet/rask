@@ -49,6 +49,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
+from catalog.core.config import shared_lance_session
 from catalog.core.namespace import open_dataset
 from catalog.services import dataplane
 from service_kit.lakehouse import gate_specs
@@ -180,7 +181,7 @@ def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) 
     """
     import lance
 
-    dataset = lance.dataset(uri, storage_options=storage_options, version=version)
+    dataset = lance.dataset(uri, storage_options=storage_options, version=version, session=shared_lance_session())
     # BOTH READINGS FROM ONE OPEN. The schema answers the column half of the contract and
     # `has_stable_row_ids` answers the half the columns cannot show; opening twice would let a
     # concurrent commit put the two halves on different versions.

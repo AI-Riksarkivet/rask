@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
+from catalog.core.config import shared_lance_session
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -550,7 +551,7 @@ def has_external_bases(location: str, storage_options: dict[str, str]) -> bool:
     import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
 
     try:
-        ds = lance.dataset(location, storage_options=storage_options)
+        ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
         # `is not None`, NOT a truthy test, and the difference is the whole check. `base_id` INDEXES
         # `base_paths`, so the first registered base is **0** — while a file living under the dataset's
         # own root carries `None`. Measured on pylance 10.0.0: a plain dataset reads `None`, and a

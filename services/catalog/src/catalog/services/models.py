@@ -31,6 +31,7 @@ from lance_namespace import (
     TableVersionNotFoundError,
 )
 
+from catalog.core.config import shared_lance_session
 from service_kit.lakehouse.objectfs import fs_and_base
 
 
@@ -55,7 +56,7 @@ def _open(model_uri: str, storage_options: dict[str, str], *, version: int | Non
     subclass, so it must be caught on the 404 arm first.
     """
     try:
-        return lance.dataset(model_uri, storage_options=storage_options, version=version)
+        return lance.dataset(model_uri, storage_options=storage_options, version=version, session=shared_lance_session())
     except (ValueError, FileNotFoundError) as exc:
         if version is not None:
             raise TableVersionNotFoundError(f"model version {version} not found") from exc

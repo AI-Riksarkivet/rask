@@ -87,6 +87,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
+from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
 from catalog.services import changes, native
@@ -304,7 +305,7 @@ def create_table(
             )
             return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
-            version = lance.dataset(existing, storage_options=so).version
+            version = lance.dataset(existing, storage_options=so, session=shared_lance_session()).version
             return CreateTableResponse(location=existing, version=version, properties=properties)
         # `create` against a written table → let declare surface the canonical TableAlreadyExists conflict.
 
@@ -625,7 +626,7 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
     """
     marker = _RUN_MARKER_PREFIX + run_id
     try:
-        dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+        dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
     except Exception as exc:
         if not reads_as_absent(exc):
             raise ServiceUnavailableError(
@@ -660,7 +661,7 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
                 ) from exc
             continue
         if (props or {}).get("__lance_commit_message") == marker:
-            rows = lance.dataset(location, version=version, storage_options=dict(so) if so else None).count_rows()
+            rows = lance.dataset(location, version=version, storage_options=dict(so) if so else None, session=shared_lance_session()).count_rows()
             return version, rows
     return None
 
@@ -834,7 +835,7 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
         raise InvalidInputError(f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS)}")
     options = {k: v for k, v in policy.items() if v is not None}
     try:
-        dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+        dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
     except ValueError as exc:
         # A REGISTERED TABLE WHOSE BYTES ARE NOT THERE. Measured live 2026-09-04: a table declared into
         # a namespace bound to one warehouse, with its data written to another bucket, reached this
@@ -894,7 +895,7 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str])
         rewrites = [_RewriteResult.from_json(result) for result in results]
     except (ValueError, TypeError, AttributeError) as exc:
         raise InvalidInputError(f"malformed compaction result: {exc}") from exc
-    dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
     # THE SAME GATE THE BUTTON ASKS, and asked HERE rather than at plan time because this is the half
     # that mints a version and drops the old fragments — a plan nobody commits costs nothing.
     #

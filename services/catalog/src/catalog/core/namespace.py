@@ -18,7 +18,7 @@ from lance_namespace import (
     connect,
 )
 
-from catalog.core.config import Settings
+from catalog.core.config import Settings, shared_lance_session
 
 
 def build_namespace(settings: Settings) -> LanceNamespace:
@@ -89,7 +89,7 @@ def open_dataset(
         raise TableNotFoundError(f"Table not found: {table_id}")
     if branch is None:
         try:
-            return lance.dataset(location, storage_options=storage_options, version=version)
+            return lance.dataset(location, storage_options=storage_options, version=version, session=shared_lance_session())
         except ValueError as exc:
             # pylance raises a bare ValueError for BOTH "no dataset here" and "no such version", and
             # letting either through produced a 500 — which says "the catalog is broken" when the
@@ -111,7 +111,7 @@ def open_dataset(
             if version is not None and "_versions/" in message and ".manifest" in message:
                 raise TableVersionNotFoundError(f"table version {version} was not found") from exc
             raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
-    dataset = lance.dataset(location, storage_options=storage_options)
+    dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
     try:
         return dataset.checkout_version((branch, version))
     except (ValueError, OSError) as exc:
