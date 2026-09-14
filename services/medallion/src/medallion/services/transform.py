@@ -111,8 +111,15 @@ def _drop(reason: str) -> dict[str, str]:
 
 
 # A quality-blocked run was handled (its failed assertions are recorded in lineage), it just must not
-# promote — DROP so Dapr doesn't redeliver (the data is deterministically bad; no DLQ is configured,
-# so the drop is final — the failed run in the lineage graph is the audit trail).
+# promote — DROP so Dapr doesn't redeliver: the data is deterministically bad and the failed run in the
+# lineage graph is the audit trail.
+#
+# THE DROP IS NOT SILENT, and a reader sizing its cost must know: with `MEDALLION_DLQ_TOPIC` set (the
+# chart sets it unconditionally) Dapr forwards a DROP to the dead-letter topic, so `/dlq-event`
+# ERROR-logs it and `medallion_dlq_parked_total` rises — which `MedallionCascadeDeadLettering` pages on
+# as "a stage delivery gave up". Measured 2026-09-14: one quality block produced exactly one park, 42ms
+# after the hold, with no retries in between. Tracked as LH-151 — the parking plane assumes every park
+# is retry exhaustion, and a deliberate governance decision is not one.
 _QUALITY_BLOCKED = {"status": "DROP"}
 
 

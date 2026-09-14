@@ -2472,7 +2472,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   neighbouring reason (an endpoint-only delimiter would let the router-level FGA gate authorize a
   differently-parsed object).
 
-**LH-151 · A delivery that is not a valid CloudEvent is dead-lettered with ZERO retries and parks where nothing can read it — no ERROR log, no counter, no alert**
+**LH-151 · The DLQ parking plane assumes every park is retry exhaustion, and Dapr parks on at least two other paths — one invisibly, one as a false page**
 `medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2
 
 - *Why open:* the DLQ plane's whole promise is that parking is VISIBLE — `/dlq-event` ERROR-logs
@@ -2498,6 +2498,21 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   own validate-or-DROP comment says so — and an external OpenLineage producer, a hand-run `nats pub`,
   or any publisher that omits the CloudEvent envelope produces exactly this. It is the one class of
   message MOST likely to be malformed, and it is the one class the parking plane cannot see.
+- **A SECOND SHAPE, measured 2026-09-14, and this one PAGES.** A handler returning `DROP` is also
+  forwarded to the dead-letter topic — `transform.py`'s `_QUALITY_BLOCKED` is `{"status": "DROP"}`, and
+  its comment asserted "no DLQ is configured, so the drop is final", which the chart falsified by
+  setting `MEDALLION_DLQ_TOPIC` unconditionally (comment rewritten in place). Observed on the live
+  estate: `medallion_quality_blocked token='11417bea0a56'` at 19:48:02.070, `promotion_held_for_review
+  reasons=['not_null']` at :02.107, `dapr_dead_letter_parked ... token='11417bea0a56'` at :02.112 —
+  **42ms, no retries**, and the only park in the whole window. So `medallion_dlq_parked_total` rises and
+  `MedallionCascadeDeadLettering` fires saying "a stage delivery gave up ... a dataset has silently
+  stopped updating" about a quality gate doing exactly its job and holding the batch for a human. Every
+  deterministic DROP in `transform.py` — malformed payload, authz denial, undeclared transform — has
+  the same consequence.
+  *Verified at the source, not only measured:* `dapr/dapr` `pkg/runtime/subscription/subscription.go:365-368`
+  — `} else if errors.Is(pErr, rtpubsub.ErrMessageDropped) {` / `// send dropped message to dead letter
+  queue if configured` / `if route.DeadLetterTopic != "" { derr := s.sendToDeadLetter(...) }`. The HTTP
+  postman returns that error for a `DROP` status (`postman/http/http.go:143-147`).
 - *Closes when:* an owner decides the shape. The candidates are not equivalent: (a) subscribe
   `/dlq-event` with `rawPayload` handling so a parked envelope-failure is still logged and counted —
   smallest, but changes how every dead letter is parsed; (b) alert on the sidecar's
