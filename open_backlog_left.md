@@ -3781,6 +3781,21 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   independently in its `unreadable` set: "'4750a5b9_acme-bronze$events' names no storage location — a
   relative path cannot say whether the data is there", one of **24**. So `errors == {}` is
   unsatisfiable on a long-lived estate, and the sweep reporting them is the sweep working.
+- **THE TWO QUALITY LEGS ARE NARROWED TO THE PRODUCER, not yet a verdict — recorded so the next
+  reader starts where this stopped.** `governed_union::test_governed_allow_full_cascade_with_quality_verdicts`
+  fails `silver["quality_passed"] is True` with the field NULL (and `consumed_from_version` /
+  `consumed_to_version` null beside it); `governed_union::test_quality_gate_blocks_bad_batch_and_records_verdict`
+  fails waiting for `quality_passed is False`. Same field, both directions.
+  *What is established:* the gate RUNS — `medallion_gate_resolved gate_source='declared' review_band=0.42`
+  then `medallion_quality_blocked token='5215f78ca636'`, the blocked leg's own token. And lineage is not
+  refusing it: the only `ingest_run_mutation_denied` / `ingest_denied` lines in the window name the
+  `e2e` outbox probes, never a medallion run.
+  *A hypothesis ruled OUT, so it is not re-tried:* `SET_WROTE_QUALITY` is a `MATCH ... SET` on an
+  existing WROTE edge, which looks like a silent no-op against a missing edge. It is not — it runs in
+  the SAME ingest as the edge it matches (`repository.py:336-356`), guarded by `if assertions:`.
+  *So the question is at the PRODUCER:* lineage writes `quality_passed` only when the ingested event's
+  output carries a `dataQualityAssertions` facet, so the event it received carried none. Whether the
+  medallion omits the facet, or emits the verdict on an event lineage never sees, is the next step.
 - *Closes when:* the **eight** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
