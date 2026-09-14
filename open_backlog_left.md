@@ -3271,6 +3271,13 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   from its own cgroup rather than from a literal. Zero catalog errors in the window; every pod Ready.
 - **THE LAKEHOUSE HALF IS COMPLETE 2026-09-14 (`1535fdf1`)** — lineage 8 sites, medallion 15, and
   maintenance 3. Every open in catalog, lineage, medallion and maintenance now threads a bounded session.
+- **OBSERVED ON THE ROLL** (helm rev 155, `main-b777d740`): catalog, maintenance AND lineage each logged
+  the identical clamp —
+  `lance_cache_clamped_to_container requested_bytes=402653184 granted_bytes=214748364 container_budget_bytes=214748364 fraction=0.4`
+  — 384 MB configured reduced to 204.8 MB, which is exactly 0.4 x each pod's own 512 Mi cgroup limit.
+  The lineage sweep on the new image is unchanged (`checked=356 storage_loss=0 ungoverned=11
+  graph_ahead=31 unreadable=24 stale=317`), so threading the session altered nothing about what it reads
+  — which is the other half of the claim and the easier one to forget to check.
 - **AND THE ESTATE-WIDE GATE FOUND THE MAINTENANCE THREE, which is the argument for it being
   estate-wide.** Maintenance shipped this pattern FIRST and still had bare opens in
   `compaction_executor.py` and `index_build.py` — the newer lanes, added after its own conversion. A
