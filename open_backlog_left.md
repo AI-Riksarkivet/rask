@@ -3807,7 +3807,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   prerequisite — `pytest.skipif` naming the toggle — with `e2e_live.sh` discovering it from the running
   POD rather than the values, per its own "every value is discovered" rule. Driven live: 2 passed,
   2 skipped, and the suite's only remaining failure is the FGA-deny leg above.
-- *Closes when:* the **eight** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
+- **VERDICTS THIRTEEN AND FOURTEEN, both SUITE-DRIFT, both fixed and verified live — and both are the
+  200-run board again.** `media_e2e::ingest_media_derives_artifacts` counted runs with `len()` and
+  failed `assert 200 >= (200 + 2)` against a media lane that had flowed; converted to a set difference
+  on run ids, now 1 passed. `ray_train::train_to_blessed` asked `/runs?limit=300` against
+  `le=_RUNS_RETURN` (200), which is a 422 before the handler runs, so its poll burned the full 120s
+  reporting that an attributed `service-trainer` run never appeared; the limit is dropped rather than
+  lowered, now 2 passed.
+  *That is the SIXTH instance of the defect this row already records as repaired* — the earlier pass
+  fixed five call sites still sending `limit=1000` after the board was capped. Swept the rest of
+  `tests/e2e-py` afterwards: the only other bounded read is `/events?limit=200` against
+  `_EVENTS_RETURN = 500`, which is within bounds.
+- *Closes when:* the **two** remaining legs each carry a verdict — both in `observability_e2e`
+  (`logs_populated`, `distributed_trace_spans_catalog_to_lineage`). Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
   (`sweep_compacts_real_datasets_and_meters`), `media_e2e` (`ingest_media_derives_artifacts`),
