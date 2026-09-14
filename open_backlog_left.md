@@ -2245,7 +2245,27 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog, storage` · med
 
 - *Why open:* The Lance commit model assumes conditional put; on any store rask might run on other than RustFS (COS/GooseFS need commit locks per the guide) that assumption is untested and nothing refuses such a store at registration.
-- *Closes when:* Add a per-store CAS probe to the warehouse validation endpoint so an unsupported store is refused at registration.
+- **LANDED 2026-09-14, in the shape the 09-10 re-measure prescribed rather than the row's original one.**
+  `POST /{warehouse_id}/validate` now runs two conditional-put steps inside the vended prefix — the
+  first must be ACCEPTED (`conditional_put`), the second REFUSED (`conditional_put_refused`) — and
+  `ProbeReport.commit_safe` carries the verdict.
+  *Three behaviours, not two, and the difference is the design:* a store may honour the header, IGNORE
+  it (accepting the second put — the silent case, which a probe that only asked "did the write work"
+  would score as a PASS), or REJECT the header outright (loud, and proving nothing about a second
+  writer). `commit_safe` is three-valued for the reason `enforced` already is: an unexercised control is
+  UNKNOWN, never a guarantee. Cited: `lance_docs/file_format.md` § "Commit Protocol" -> "Storage
+  Primitives" — the primitives are what "guarantee that exactly one writer succeeds when multiple
+  writers attempt to create the same manifest file concurrently".
+- **AND IT FOUND A PRE-EXISTING LEAK IN THE PROBE ITSELF.** The out-of-scope object
+  (`_validate_scope_probe_should_fail`, at the warehouse ROOT) was written by the scope step and never
+  removed on a store that ACCEPTED it — so exactly the over-permissive store this probe exists to find
+  accumulated one object per validate call. Cleaned now, and only when it landed: a correctly scoped
+  credential is refused that delete too, and reporting the refusal as a cleanup failure would be a false
+  alarm about the store that had just passed. RED-first, 5 tests, mutation-proven three ways.
+  **Built and deployed? NO — rides the pending roll.**
+- *Closes when:* the roll observes it. The `scripts/verify_lance_storage.py::check_conditional_put`
+  script stays as the manual whole-store sweep; what changed is that a warehouse door now asks the
+  question for the bucket it is about to govern.
 
 **LH-041 · Branch/tag writes are unconditional at every layer including pylance's `Tags::update` — a lost update in waiting**
 `catalog` · med
