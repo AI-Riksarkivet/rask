@@ -100,9 +100,23 @@ class Estate(BaseModel):
     deact_uri: str
 
     @property
+    def branch_child_uri(self) -> str:
+        """The BRANCH itself, which lives at ``<dataset>/tree/<name>`` and is a dataset in its own right."""
+        return f"{self.branch_uri}/tree/feature-a"
+
+    @property
     def swept_uris(self) -> set[str]:
-        """Every dataset the sweep must find — the deactivated warehouse's is deliberately absent."""
-        return {self.plain_uri, self.blob_uri, self.branch_uri, self.extra_uri, self.reg_uri}
+        """Every dataset the sweep must find — the deactivated warehouse's is deliberately absent.
+
+        THE BRANCH COUNTS TWICE ON PURPOSE, and leaving its child out is what made this assertion fail
+        against a correct sweep. `optimize.discover_datasets` descends a dataset's own `tree/` and says
+        why: "a BRANCH is a full dataset the parent contains rather than part of it". So `branched` and
+        `branched/tree/feature-a` are two datasets, both carry a `_versions/` marker, and both are
+        maintained on their own merits — which is consistent with what main cleanup does, since the
+        version a branch stands on survives it (`tests/unit/test_main_cleanup_does_not_delete_a_version_
+        a_branch_stands_on.py`). Expecting only the parent asserted the opposite of the design.
+        """
+        return {self.plain_uri, self.blob_uri, self.branch_uri, self.branch_child_uri, self.extra_uri, self.reg_uri}
 
 
 def _rows(n: int = 3, offset: int = 0) -> pa.Table:
