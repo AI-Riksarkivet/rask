@@ -3750,7 +3750,17 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   not a test edit.
   *An operational fact worth its own line:* four unauthorized probe events are now stranded in
   `_lineage_outbox` and will stay there, because `e2e` will never be authorized. Every future drive
-  adds another. The drain reports them correctly now, which it could not before.
+  adds another — measured going 4 -> 5 on the very next one. The drain reports them correctly now,
+  which it could not before.
+- **AN EIGHTH VERDICT, the same cause: `outbox_crash_e2e::test_sigkilled_producer_loses_nothing` is
+  SUITE-DRIFT.** It stages through a real SIGKILLed producer rather than a literal, so it was worth
+  driving separately after the drain fix — but `build_run_event(operation="e2e_crash_probe",
+  author="e2e", ...)` stamps the same unauthorized author, and its event joins the stranded pile
+  (`outbox_drained=0 outbox_stranded=5` on every tick of that drive). Its failure message —
+  "every sweep skipped and the run stayed staged" — is half right and misleading: there WERE 25
+  `lineage_reconcile_skipped_locked` in the window, which is the documented single-flight contract
+  working, but the run would not have drained on an unlocked tick either. Both outbox legs close the
+  same way, together with [[LH-109]]'s FGA leg: an e2e identity the estate actually authorizes.
 - *Closes when:* the **ten** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
