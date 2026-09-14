@@ -20,6 +20,14 @@ before trusting it in an incident.
 |---|---|---|---|
 | **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables), the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | RustFS S3 `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS data PVC = the **Lance lakehouse** (all medallion + registry data) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
+| **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + namespace bindings), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
+
+> **The VolumeSnapshot row needs a cluster that can take one.** Measured 2026-09-14 on the k3s dev
+> cluster: `kubectl get volumesnapshotclass` answers *"the server doesn't have a resource type"*, and
+> `backups.volumeSnapshot` is off in the live release — so on this cluster the registry data in that row
+> is covered by **nothing**. That is why the control-root row exists: it needs no CSI, and it restores
+> RECORDS rather than a whole store, which is the right granularity for "somebody deleted the warehouse
+> bindings".
 
 **Not backed up** (accept the loss window or externalize — see [DECISIONS.md "P4/P7"](../DECISIONS.md) and
 [DURABILITY.md](../DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable), OpenBao's file
@@ -93,6 +101,45 @@ mandatory before relying on this path.**
 2. Point the `rustfs` StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
 3. Restart `rustfs`; then `catalog`/`lineage`/stage runners reconnect (their `/readyz` gates hold them out until the
    object store answers).
+
+## Restore — the control root (projects, warehouses, bindings, trash)
+
+The control root holds the estate's governance as small JSON objects. The Lance data can survive intact
+while every statement about **who may touch it** is gone, and that is a different failure from losing a
+dataset — so it has its own backup and its own restore.
+
+```bash
+# Back up. --dest ANOTHER BUCKET for real DR; the default lands under the control root itself.
+uv run python scripts/control_root_backup.py backup --root s3://lance-catalog
+
+# Is the backup intact? (ask this BEFORE an incident)
+uv run python scripts/control_root_backup.py verify --from s3://lance-catalog/_backups/control/<UTC>
+
+# Rehearse into a scratch prefix — the DEFAULT, because it risks nothing.
+uv run python scripts/control_root_backup.py restore \
+    --from s3://lance-catalog/_backups/control/<UTC> --into s3://lance-catalog/_restore_probe
+
+# Replace the live records. Refused without --force, deliberately.
+uv run python scripts/control_root_backup.py restore \
+    --from s3://lance-catalog/_backups/control/<UTC> --into s3://lance-catalog --force
+```
+
+**EXERCISED 2026-09-14 against the live estate**, which is the only reason this section is here rather
+than in a plan: 1,454 records backed up, `verify` intact with 0 missing and 0 changed, and a restore into
+a scratch prefix returning `verified: true` with 0 mismatched.
+
+Three things that exercise taught, each of which had already produced a wrong answer once:
+
+- **The outboxes are NOT restored.** `_control_outbox/` and `_lineage_outbox/` are queues, not records:
+  putting them back re-publishes events the estate already acted on — a replayed grant, a replayed drop
+  announcement. A queue's correct recovery is to be empty.
+- **A backup of a live root is not a point-in-time snapshot.** Three `_tasks/` records changed between
+  the listing and the copy on a single run. The manifest records the ETag of what was COPIED, so `verify`
+  answers "is this backup intact", and the records that moved are reported separately as `raced`.
+- **Clear a failed restore's residue before retrying.** MinIO stores objects as files, so a partial run
+  that left a zero-byte object named `<prefix>` blocks the correct run from creating `<prefix>/...`:
+  `head_object` finds the child and `list_objects_v2` does not. `mc rm --recursive --force` the target
+  prefix first, and confirm with the same API the tool uses.
 
 ## After restore
 
