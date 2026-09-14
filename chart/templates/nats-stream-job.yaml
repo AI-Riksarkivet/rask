@@ -170,9 +170,18 @@ spec:
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish
-              # can't fail for want of a stream. Consumers are EPHEMERAL (no durableName) → they are NOT in
-              # the durable-drift reconcile loop below, and deliverPolicy=new means retention isn't
-              # load-bearing (a booting replica skips the backlog rather than replaying it into memory).
+              # can't fail for want of a stream. The CATALOG's own consumer is ephemeral (no durableName)
+              # and deliverPolicy=new, so retention isn't load-bearing for it — a booting replica skips the
+              # backlog rather than replaying it into memory.
+              #
+              # IT IS NOT THE ONLY CONSUMER, and this stream IS in the drift loop below because of the
+              # other two. `dapr-component.yaml` renders `medallion-producer-control-durable` (:88) and
+              # `notifications-control-durable` (:139) — chart-owned DURABLE subscriptions whose
+              # maxDeliver/backOff are templated from the same `dapr.resiliency.enabled` conditional as
+              # EXP_MAXD/EXP_BOFF, which is exactly the pair the loop repairs. `dapr-component.yaml:103`
+              # already promises that repair ("nats-stream-job reconcile compares (maxDeliver/backOff) and
+              # repairs"); walking the stream is what makes the promise true. Measured live 2026-09-14:
+              # both durables exist and both report Active Interest.
               add_if_missing CATALOG_CONTROL "catalog.control.>"
               {{- end }}
               {{- if .Values.maintenance.workTopic }}
@@ -220,7 +229,16 @@ spec:
                   nats --server "$S" consumer rm DLQ "$c" -f
                 esac
               done
-              for st in LINEAGE MEDALLION TRAINING DLQ; do
+              # CATALOG_CONTROL joins only when its stream exists, under the SAME conditional that
+              # creates it — a loop over a stream the release does not own would just log noise.
+              #
+              # MAINTENANCE_WORK and the index lane stay OUT, and the reason is the INGEST reason rather
+              # than an oversight: their backOff is sized by the WORK, not by the fleet convention
+              # (`maintenance-work-durable` renders 720s,720s,720s,720s with resiliency OFF against
+              # EXP_BOFF's 30s,60s,120s,300s; the index lane's is `indexAckWait` repeated). Comparing
+              # them to EXP would find a mismatch every run and delete the queue out from under
+              # in-flight maintenance work. Walking them needs per-stream expected values, not this list.
+              for st in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
                   info=$(nats --server "$S" consumer info "$st" "$c" --json 2>/dev/null | tr -d ' \n')
                   maxd=$(echo "$info" | sed -n 's/.*"max_deliver":\(-\{0,1\}[0-9]*\).*/\1/p')
