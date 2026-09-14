@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
 import pytest
 import requests
@@ -66,9 +67,22 @@ def test_sweep_compacts_real_datasets_and_meters(urls: tuple[str, str]) -> None:
     # authenticating exactly like the sidecar does (dapr-api-token header).
     # `plan_sweep` opens one manifest per dataset, so a tick costs what the estate is worth:
     # measured 288 datasets at ~12 s, and 30 s left no headroom on a busier one.
-    resp = requests.post(f"{compaction}/{BINDING}", headers=_TOKEN_HEADER, timeout=120)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    # RETRY WHILE THE CRON HOLDS THE LOCK, which a single blind trigger cannot survive on a live
+    # estate. The sweep is single-flight: a tick that finds one in progress answers 200 `skipped` and
+    # does no work — the documented contract ("the next tick retries"), not a failure. `test_outbox_e2e`
+    # measured what that costs a one-shot caller: "one sweep checks 347 datasets in 158 s against an
+    # `@every 300s` cron, so a single blind trigger lands on a busy lock about half the time". This leg
+    # fired once and asserted on the answer, so it reported a healthy estate as an overlapping sweep
+    # roughly every other drive. Same shape as the sibling suite rather than a second invention.
+    body: dict[str, Any] = {}
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        resp = requests.post(f"{compaction}/{BINDING}", headers=_TOKEN_HEADER, timeout=600)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        if body.get("status") != "skipped":
+            break
+        time.sleep(10)
 
     # TWO LANES answer this route and they report different things, because on one of them the tick
     # maintains nothing itself. `on_cron` chooses on `MAINTENANCE_WORK_TOPIC`: SET — as the deployed
