@@ -163,7 +163,32 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   2026-09-13: lineage's ingest consumer is `NrOCxPF3`, ephemeral, created 2026-09-11 20:58:00 at the pod
   restart, `Unprocessed 0`. These four are the opposite: durable, queue-grouped, attached to nothing.
 
-- *Closes when:* The reconcile loop gains an orphan pass beside its drift pass. A durable whose app-id is
+- **PART OF THE BLIND SPOT CLOSED 2026-09-14, and it was a different defect than this row names.**
+  The row calls the unwalked streams a second dimension of the orphan problem. One of them was not an
+  orphan problem at all: CATALOG_CONTROL carries TWO LIVE chart-owned durables —
+  `medallion-producer-control-durable` (`dapr-component.yaml:88`) and `notifications-control-durable`
+  (`:139`), both reporting Active Interest when re-measured 2026-09-14 — and the loop's own promise to
+  repair them sits at `dapr-component.yaml:103` ("nats-stream-job reconcile compares
+  (maxDeliver/backOff) and repairs"). The job excluded the stream on the written ground that
+  "Consumers are EPHEMERAL (no durableName)", which is true of the catalog's ring-buffer consumer and
+  false of those two. Two files asserting opposite things, the live stream agreeing with neither, and
+  the exposure is the 2026-07-13 failure this loop exists for: a values change to the resiliency flip
+  would leave both durables unbindable and every subscribe failing while the pods stay Ready.
+  Their components render maxDeliver/backOff from the SAME conditional the loop templates EXP from, so
+  walking it is a no-op today and catches the next drift. `82d9f6f2`.
+- *And NOT by walking every stream, which is why the other two stay out.* `maintenance-work-durable`
+  renders `720s,720s,720s,720s` with resiliency OFF against EXP_BOFF's `30s,60s,120s,300s` — its
+  backoff is sized by the WORK, not the fleet convention (the index lane's is `indexAckWait` repeated).
+  Walking those would find a mismatch every run and delete the work queue out from under in-flight
+  units, the documented reason INGEST is excluded. The exclusion now carries that reason instead of an
+  incorrect one, and the new gate pins the RULE — a durable whose config the comparison understands
+  must be walked, a bespoke one must not — mutation-proven in both directions, including against the
+  naive over-fix.
+- *Closes when:* The reconcile loop gains an orphan pass beside its drift pass. **Still fully open:**
+  re-measured 2026-09-14, all EIGHT orphans are present and unchanged in kind (`lance-ray` x4,
+  `pages-to-gold-htr` x2, `maintenance-durable`, `maintenance-work-durable`), with retention moving
+  the depths beneath them — LINEAGE/`lance-ray-durable` now reads 1,330 unprocessed, which is the
+  stream's ENTIRE message count, i.e. it has still consumed nothing that exists. A durable whose app-id is
   not in the release's rendered app-id set is pure residue and is deleted (`lance-ray`,
   `pages-to-gold-htr`). A durable for a LIVE app whose subscription is merely gated off must be rendered
   under the SAME conditional the subscription's pubsub component renders under — the discipline the file
@@ -909,6 +934,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   The loss is invisible precisely because the back-fill is good at its job.
 - *This is condition 1 of the goal — "a write's provenance survives it" — and it is the one that stops
   holding on a known date.* The fact of the write survives; the actor and the derivation do not.
+- **THE CLOCK STARTED, MEASURED 2026-09-14 — this row stops being a forecast.** The pruner's first
+  deletions are on the board: `pruned_runs` went non-zero for the first time (9 ticks in a 6h window
+  deleting 1-4 runs each, against 63 at zero), and the oldest run is `2026-08-15T15:17` — exactly the
+  30-day cutoff. The graph read directly: 6,506 Run nodes, 6,492 `WROTE`, 1,336 `READ`.
+  *The destructive half has begun and the rewriting half has not caught up:* `backfilled=0` across all
+  72 sampled ticks and `author='reconcile'` is STATIC at 685 — the same 685 measured on 2026-09-11, so
+  those are the historical outbox-gap back-fills and not the retention cycle. That gap is the window in
+  which a ruling costs nothing; once a swept dataset loses its last real run the back-fill mints the
+  synthetic one and the original author and inputs are gone with no source to rebuild them from.
+  Consistent with this row's own table (1 of 333 by 2026-09-16), so the forecast is holding rather than
+  being overtaken.
 - *Closes when:* an owner ruling on which of the two yields, and the code matches it. The shapes are:
   exempt a dataset's last surviving run from retention; or stop treating UNTRACKED as back-fillable
   when the runs were deliberately pruned (the two are indistinguishable today — a lost event and an
