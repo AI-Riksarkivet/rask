@@ -388,8 +388,18 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `source_uri` now reads as "cannot say" instead of "destroyed".
 - *And `provenance_holes=0` on the same tick* is the compaction fix (`5eb73751`) observed — no phantom
   `WROTE` edge planted for either version a compaction commits.
-- *What this row still owns:* the 3 real losses, and the residue itself — which [[LH-144]] now explains
-  cannot be pruned, because an ungoverned table cannot be dropped by anyone.
+- **OBSERVED ON THE ROLL 2026-09-14, and the row's own headline is now PROVEN rather than argued.**
+  The first sweep on `main-94e88b35`:
+
+      before (main-b641103f)  checked=356 storage_loss=3 graph_ahead=31 unreadable=26 stale=320   (no ungoverned field)
+      after  (main-94e88b35)  checked=356 storage_loss=0 ungoverned=11 graph_ahead=31 unreadable=24 stale=317
+
+  `ungoverned` APPEARED, exactly as this row predicted the roll would show — and `storage_loss` went to
+  **ZERO**. So the "3 real losses" this row reserved for itself were ungoverned residue too, and the
+  title ("the whole `storage_loss` population is UNGOVERNED residue") is right about 3 of 3 in the
+  strongest sense: there is no residual real-loss population at all.
+- *What this row still owns:* the residue itself — 11 ungoverned datasets — which [[LH-144]] explains
+  cannot be pruned, because an ungoverned table cannot be dropped by anyone. The loss half is closed.
 - **THE SPLIT LANDED 2026-09-11.** `storage_loss` now means MISSING_ON_STORAGE alone; `graph_ahead` is
   its own report field and its own `lineage_reconcile_graph_ahead` WARN body, so an operator can filter
   the benign class without silencing real loss. `STORAGE_LOSS_STATES` is deleted — it had exactly one
@@ -818,9 +828,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
       cascade_lag_tick edges=267 published=14 unknown=1 failed=0 unmeasurable=0 skipped=252
 
-  *What observing it means:* `unknown` disappears entirely — [[LH-145]] replaces it with `blind`, a list
-  of named edges — and the tick should report `destination_invisible` for the `advref31` silver->gold
-  edge, with a
+  **OBSERVED 2026-09-14, AND THE PREDICTION WAS HALF RIGHT — the divergence is the finding.** `unknown=`
+  is gone, `blind` is populated, and the named edge is NOT the one this row forecast:
+  `cascade_lag_edge_blind edge='silver->gold' project='bind86' reason='stores_disagree' published=3`.
+  Predicted was `advref31` / `destination_invisible`; observed is **bind86** / **stores_disagree**, with
+  `destination_invisible=0`.
+  *That is not a miss, it is a join.* bind86 is [[LH-137]]'s tenant — the one whose silver->gold hop was
+  DROPped with `unconfined_uri` because its silver was published at a COMPOSED path
+  (`s3://bind86-wh/medallion/silver`) while the catalog vends
+  `s3://bind86-wh/78de8931_bind86-silver$features`. "The two stores disagree" is that same fact seen
+  from the lag detector: the lineage graph and the catalog answer differently for one dataset. So this
+  row's mechanism works and it is now pointing at LH-137's defect rather than at advref31's absent gold.
+  *The original prediction for advref31 remains unrefuted and unobserved* — `destination_invisible=0`
+  means no edge reported it this tick, which is consistent with that project's lane simply not running.
+  The old text said the tick should report
   `medallion_cascade_lag_blind{lance_medallion_edge="silver->gold",lance_medallion_project="advref31",lance_medallion_reason="destination_invisible"}`
   series appearing. A rolled image still printing `unknown=` did not take the change.
   If `blind` instead comes back EMPTY while the 252 stay `skipped`, then that tenant's silver has no
@@ -957,7 +978,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
 - **CODE LANDED `5ad5e62d`** — `unknown` is replaced by `blind: list[BlindEdge]`, each naming its edge,
   project and a reason from a closed vocabulary (`destination_invisible` / `stores_disagree`) validated by
-  `BlindEdge`. Verified on origin. **Not yet observed: rides the pending roll**, so this row stays open.
+  `BlindEdge`.
+- **OBSERVED ON THE ROLL 2026-09-14 — this row is closed.** The first tick on `main-94e88b35`:
+
+      before  cascade_lag_tick edges=267 published=14 unknown=1 failed=0 unmeasurable=0   skipped=252
+      after   cascade_lag_tick edges=267 published=14           failed=0 unmeasurable=252 skipped=0 destination_invisible=0 stores_disagree=1
+      WARNING cascade_lag_edge_blind edge='silver->gold' project='bind86' reason='stores_disagree' published=3
+
+  `unknown=` is gone and the cell is NAMED, which is the whole ask: an operator can now see which edge,
+  which tenant and why. The `unmeasurable`/`skipped` populations also swapped fields, which is the
+  restart clearing `AbsentEdgeMemo` and re-probing every cell — not a change in what is known.
 
 - *Measured:* the post-deploy tick reports `unknown: 1` — one declared cell where both stores answered
   and DISAGREED. `lag_for_edge` returns `known=False` for exactly two shapes, and both are real
@@ -2742,6 +2772,13 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   verbatim, agreeing by construction. It now builds real SDK objects. Fixed by asking for the wire
   spelling; re-verified against the live store's model through the real deserialization path, equal at
   20,310 where it was unequal.
+- **OBSERVED WORKING 2026-09-14 — this row is closed by the roll.** The catalog booted on
+  `main-94e88b35` and logged
+  `openfga_model_unchanged store_id='01KYPGG8F8MAZTJANME4K077DE' model_id='01M2946MMRYAXF9KMQD93ZA7FH'`,
+  keeping the store's existing model instead of minting one. Counted immediately after that boot: the
+  store still holds **exactly 1,316** authorization model versions — the same number measured before
+  the fix, across a fresh boot that would previously have written the 1,317th. The skip fires through
+  the real SDK path, which is precisely what the original (wrong-pair) verification could not show.
 - *Deliberately NOT an `ACTIVE_MODEL_VERSION` constant:* a hand-maintained version is one somebody
   forgets to bump, and the model's own canonical form answers the same question without a second source
   of truth. Everything else is unchanged: a widened model still writes, a narrowing one is still refused
