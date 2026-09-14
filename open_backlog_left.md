@@ -3726,7 +3726,22 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   page whatever the total — the content does not saturate even though `len()` does. A set difference
   proves what the count was written to prove and keeps proving it as the estate grows. Verified live:
   the suite is 5 passed.
-- *Closes when:* the **nine** remaining stable legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
+- **FOURTH FULL DRIVE, 2026-09-14 21:04-21:25, after the Ray-head restart and the AGE resize:
+  `10 failed / 122 passed / 3 skipped / 1 xfailed`.** 122 passed is FIVE better than the baseline this
+  row records. Confirmed fixed and no longer failing: `catalog_live`, `medallion_e2e`,
+  `maintenance_s3` (all three by the fixes above) and `lineage_e2e::test_medallion_column_lineage` (by
+  the AGE resize).
+  *A hypothesis that did NOT hold, recorded so it is not re-tried:* the outbox legs were expected to
+  recover with AGE, on the reasoning that the relay drains by ingesting into the graph and a dropped
+  connection would make it report 0. Both still fail, so the drain reporting `outbox_drained: 0`
+  against an event its own `list_events` confirms is staged has a different cause.
+- *Closes when:* the **ten** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
+  `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
+  `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
+  (`sweep_compacts_real_datasets_and_meters`), `media_e2e` (`ingest_media_derives_artifacts`),
+  `observability_e2e` x2 (`logs_populated`, `distributed_trace_spans_catalog_to_lineage`),
+  `outbox_crash` (`sigkilled_producer_loses_nothing`), `outbox_e2e`
+  (`reconcile_sweep_drains_a_staged_outbox_event`), `ray_train` (`train_to_blessed`) — SUITE-DRIFT / ESTATE-DEFECT /
   CONTAMINATION / ALREADY-FIXED. Current list after the Ray restart, 2026-09-14: `governed_union` x3
   (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `quality_gate_blocks_bad_batch`),
   `catalog_live` (`errors_translate_to_domain_errors`), `maintenance_e2e`
