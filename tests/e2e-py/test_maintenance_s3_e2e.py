@@ -411,8 +411,14 @@ def test_a_branch_is_refused_on_object_storage(estate: Estate, settings: Mainten
     assert result.checked is False, "a branched dataset was SCANNED on S3 — the tree/ gate did not fire"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
-    # ...and the aggregate report says so out loud rather than counting it as clean.
-    assert any("tree/" in note.reason for note in scanned.incomplete), "the refusal never reached the report's incomplete list"
+    # ...and the aggregate report says so out loud rather than counting it as clean. EXCLUDED, not
+    # INCOMPLETE: `reconcile.py:860-863` states the rule and the cost of getting it wrong — `incomplete`
+    # gates the purge, so recording a correct structural refusal there would stall purges on every
+    # dataset that has a branch, and `counts` feeds `report.total`, so a key there would report a
+    # correct exclusion as drift.
+    assert any("tree/" in name or "tree/" in str(name) for name in scanned.excluded_datasets), (
+        f"the refusal never reached the report's excluded list: {scanned.excluded_datasets}"
+    )
     assert not any(o.dataset == estate.branch_uri for o in scanned.orphan_files)
 
 

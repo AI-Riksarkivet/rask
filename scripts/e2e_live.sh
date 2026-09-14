@@ -52,7 +52,13 @@ step "1/4 discovering the deployed release"
 CATALOG="$(svc "$RELEASE-catalog")"  || true
 LINEAGE="$(svc "$RELEASE-lineage")"  || true
 GATEWAY="$(svc "$RELEASE-gateway")"  || true
-S3="$(svc "$RELEASE-rustfs-io")"     || true
+# THE OBJECT STORE ANSWERS TO WHICHEVER BACKEND THE RELEASE INSTALLED, and the name is not a
+# formality: `rustfs.enabled` renders a RustFS Tenant at `<release>-rustfs-io` while the MinIO path
+# renders `<release>-minio`. Discovering only one of them is how this script exported the literal
+# string `http://` and handed 17 suites `ValueError: Invalid endpoint` from inside botocore —
+# measured 2026-09-14 against a MinIO-backed release. Ask for each, take the one that exists.
+S3="$(svc "$RELEASE-minio")"         || true
+[ -n "$S3" ] || S3="$(svc "$RELEASE-rustfs-io")" || true
 DEX="$(svc "$RELEASE-dex")"          || true
 FGA="$(svc "$RELEASE-openfga")"      || true
 GREPTIME="$(svc "$RELEASE-greptimedb-standalone")" || true
@@ -94,23 +100,44 @@ step "3/4 reading the estate's own secrets"
 # From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
 # the doors verify, and any other copy is a guess.
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
-S3_KEY="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.accesskey}' 2>/dev/null | base64 -d || true)"
-S3_SECRET="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.secretkey}' 2>/dev/null | base64 -d || true)"
+# Same two-backend rule as the address above, and the key NAMES differ as well as the secret's: the
+# MinIO path keeps its root credential in the shared `<release>-infra-credentials` under
+# `minio-access-key`/`minio-secret-key` (read off the running StatefulSet's own env, 2026-09-14),
+# where RustFS ships a dedicated `<release>-rustfs` with `accesskey`/`secretkey`.
+S3_KEY="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-access-key}' 2>/dev/null | base64 -d || true)"
+S3_SECRET="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-secret-key}' 2>/dev/null | base64 -d || true)"
+if [ -z "$S3_KEY" ]; then
+  S3_KEY="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.accesskey}' 2>/dev/null | base64 -d || true)"
+  S3_SECRET="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.secretkey}' 2>/dev/null | base64 -d || true)"
+fi
 # The lineage suites open the AGE graph DIRECTLY rather than through the service, because what they
 # assert is that the write reached the store — an assertion the service's own read cannot make. The
 # deployment's `LINEAGE_DATABASE_URL` carries no password (the pod takes it from the Dapr secret
 # store at lifespan), so the host-run form is rebuilt here from the same secret the cluster uses.
 PG_PASSWORD="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.postgres-password}' 2>/dev/null | base64 -d || true)"
 
-export LANCE_E2E_CATALOG_URL="http://$CATALOG"
-export LANCE_E2E_LINEAGE_URL="http://$LINEAGE"
-export LANCE_E2E_GATEWAY_URL="http://$GATEWAY"
-export LANCE_E2E_S3="http://$S3"
-export LANCE_E2E_S3_ENDPOINT="http://$S3"
-export LANCE_E2E_DEX="http://$DEX/dex"
-export LANCE_E2E_FGA="http://$FGA"
-export LANCE_E2E_GREPTIME_URL="http://$GREPTIME"
-export LANCE_E2E_MAINTENANCE_URL="http://$MAINT"
+# AN ADDRESS THAT DID NOT RESOLVE IS EXPORTED AS NOTHING, never as the scheme alone. Every line below
+# used to be `export X="http://$Y"` unconditionally, so a service this script could not find became the
+# literal string `http://` — which no suite recognises as absent, so its own "needs X" skip never fires
+# and the leg dies deep inside a client library instead. Measured 2026-09-14: one unfound object store
+# produced 17 errors reading `ValueError: Invalid endpoint: http://`, none of which named the service
+# or this script. Unset is the honest value: the suites already skip on it, and the roll-call below
+# makes the absence visible rather than letting a skip pass for a pass.
+_missing=""
+url() {  # url VARNAME HOST[/path] — export VARNAME=http://HOST... only if HOST resolved
+  local var="$1" host="$2" suffix="${3-}"
+  if [ -n "$host" ]; then export "$var=http://$host$suffix"; else _missing="$_missing $var"; fi
+}
+url LANCE_E2E_CATALOG_URL     "$CATALOG"
+url LANCE_E2E_LINEAGE_URL     "$LINEAGE"
+url LANCE_E2E_GATEWAY_URL     "$GATEWAY"
+url LANCE_E2E_S3              "$S3"
+url LANCE_E2E_S3_ENDPOINT     "$S3"
+url LANCE_E2E_DEX             "$DEX" /dex
+url LANCE_E2E_FGA             "$FGA"
+url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
+url LANCE_E2E_MAINTENANCE_URL "$MAINT"
+[ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_ADMIN_TOKEN="$ALICE"
 # NOT exported blind. `test_create_warehouse_denied_for_non_admin` asserts a 403, and on THIS estate
