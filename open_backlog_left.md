@@ -3537,7 +3537,20 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `maintenance` · med
 
 - *Why open:* Carried as a one-phrase row, so a corrupt or mis-parameterised index can only be repaired by hand.
-- *Closes when:* Add a drop-and-rebuild-index operation to `services/maintenance` with a door, a task record and a test.
+- **RE-MEASURED 2026-09-14 — the premise holds, it is SHARPER than stated, and the fix needs no new
+  vocabulary.** `index_build.build_index` deliberately does not pass `replace`, and says why
+  (`index_build.py:84-87`): the spec's request carries no such field, so no caller can ask for it and
+  pylance's defaults apply — **a scalar index replaces, a vector index REFUSES a duplicate name**. So
+  half the estate's indices are already repairable by re-issuing the build unit and half are not, which
+  is a narrower and more actionable statement than "no reindex operation exists".
+  *The drop half already exists and is spec-native, so nothing has to be invented:* `DropTableIndex`
+  is `spec.yaml:1850,1867` (`/v1/table/{id}/index/{index_name}/drop`), the catalog serves it at
+  `api/v1/endpoints/indices.py:180-195` over the native `drop_table_index` op with a `DROP_INDEX`
+  lineage emit, and it is live on the deployed catalog (read off `/openapi.json` on port 2333,
+  2026-09-14). A reindex is therefore drop-then-create against doors that both exist.
+- *Closes when:* Add a drop-and-rebuild-index operation to `services/maintenance` with a door, a task
+  record and a test — composed from the existing `DropTableIndex` + the index work unit rather than a
+  new primitive, and covering the vector case, which is the one that cannot repair itself today.
 
 **LH-106 · Resilience rows exist only inline in `RESILIENCE.md`: the chaos harness was never automated, DLQ sidecar parking was never driven live, and lineage scale-0 restart-replay was never re-verified**
 `lineage, chart` · med
