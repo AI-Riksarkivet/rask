@@ -29,7 +29,7 @@ import pytest
 
 from annotator.annotations.commit import check_base_version_value
 from annotator.annotations.schema import EMPTY_SCHEMA
-from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
+from service_kit.exceptions import ConflictError, NotFoundError
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from service_kit.lancekit.writer import CatalogTableWriter, RestCatalogWriteTransport
 
@@ -221,11 +221,24 @@ def test_milestone_loop(reader: CatalogTableReader, writer: CatalogTableWriter) 
 
 
 def test_catalog_errors_translate_to_domain_errors() -> None:
-    """A missing table surfaces as OUR typed DomainError (problem+json downstream),
-    never the generated client's raw ApiException → opaque 500. Auth-off: NotFoundError.
-    GOVERNED (token set): the catalog fail-closes authz BEFORE existence — a table with no
-    FGA object answers 403, never leaking whether it exists — so ForbiddenError is the
-    correct governed translation (the estate's no-existence-leak posture)."""
+    """A missing table surfaces as OUR typed DomainError (problem+json downstream), never the
+    generated client's raw ApiException → opaque 500.
+
+    NotFoundError IN BOTH PROFILES, and the governed one is a RULING rather than a gap. Owner ruling
+    2026-09-11 (`catalog/api/fga_deps.py::_absent_to_a_reader_of_the_parent`): a READ door refusing an
+    object that is not there answers the spec's 404 — but ONLY to a caller who already holds the
+    parent's read rung, because someone who can read the parent can already list it, so "does this
+    child exist" is not information the 403 was protecting. This suite's identity holds
+    `reader` on the parent namespace (verified against the live store 2026-09-14), so 404 is the
+    correct governed answer here.
+
+    THE NO-ORACLE PROPERTY IS NOT TESTED HERE, and must not be re-added here either: it needs two
+    identities and an object that really exists, which this leg has neither of. It is pinned where it
+    can be stated exactly — `tests/integration/test_an_absent_object_is_not_found_rather_than_forbidden.py`
+    holds all three conditions, including `test_an_EXISTING_forbidden_table_is_still_403` (an object
+    that exists and is forbidden never converts) and `test_the_probe_is_skipped_when_the_caller_cannot_
+    read_the_parent` (no probe from outside the hierarchy).
+    """
     missing = CatalogTableReader(RestCatalogTransport(CATALOG_URL, token=CATALOG_TOKEN or None), [NAMESPACE, "no_such_table"])
-    with pytest.raises(ForbiddenError if CATALOG_TOKEN else NotFoundError):
+    with pytest.raises(NotFoundError):
         missing.to_table(limit=1)
