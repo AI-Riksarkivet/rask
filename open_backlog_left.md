@@ -3264,7 +3264,11 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   *Two of my own test assumptions were wrong and are corrected rather than worked around:* the clamp
   assertion ran on a host with NO cgroup limit, where granting verbatim is correct (it now forces a
   budget and mirrors the real `fraction` signature), and `Session.size_bytes` is a method, not a property.
-  **Built and deployed? NO — rides the next roll.**
+  **OBSERVED ON THE ROLL 2026-09-14** (helm rev 154, `main-dd7c9b20`), and the clamp is the proof it is
+  not decoration: the live catalog logged
+  `lance_cache_clamped_to_container requested_bytes=402653184 granted_bytes=214748364 container_budget_bytes=214748364 fraction=0.4`
+  — the configured 128+256 MB reduced to 204.8 MB, which is exactly 0.4 x the pod's 512 Mi limit, read
+  from its own cgroup rather than from a literal. Zero catalog errors in the window; every pod Ready.
 - *Re-measured at HEAD 2026-09-14, so the remaining scope is exact:* medallion **16** opens, lineage
   **9**, service-kit **8** (1 already threaded), maintenance 10 (5 threaded) — ingest (8) is phase 2 and
   viewer (6) is parked. The conversion is identical for each; only the catalog is done.
