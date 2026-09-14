@@ -3761,7 +3761,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `lineage_reconcile_skipped_locked` in the window, which is the documented single-flight contract
   working, but the run would not have drained on an unlocked tick either. Both outbox legs close the
   same way, together with [[LH-109]]'s FGA leg: an e2e identity the estate actually authorizes.
-- *Closes when:* the **ten** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
+- **A NINTH AND TENTH VERDICT, both on `maintenance_e2e::test_sweep_compacts_real_datasets_and_meters`,
+  because fixing the first exposed the second.**
+  *NINTH — SUITE-DRIFT, fixed:* the leg fired ONE blind trigger at the sweep route and asserted
+  `status != "skipped"`. The sweep is single-flight; a tick that finds one in progress answers 200
+  `skipped` and does no work, which is the documented contract. `test_outbox_e2e` measured the cost of
+  ignoring that — "one sweep checks 347 datasets in 158 s against an `@every 300s` cron, so a single
+  blind trigger lands on a busy lock about half the time" — and retries. This leg did not, so it
+  reported a healthy estate as an overlapping sweep on roughly every other drive. Now retries in the
+  same shape as its sibling rather than a second invention.
+  *TENTH — CONTAMINATION, not fixed:* with the retry in place the leg reaches its real assertion,
+  `summarize(swept)["errors"] == {}`, and fails on
+  `s3://acme-bucket/4750a5b9_acme-bronze$events` → `403 AccessDenied` on a `_versions/` list. That is
+  not a credential defect: `acme-bucket` exists, maintenance presents `rask-maintenance`, the
+  provisioning Job for revision 157 reports "Attached Policies: [rask-maintenance]", and that policy
+  grants `s3:ListBucket` on `arn:aws:s3:::*`. The path is STALE REGISTRY RESIDUE — the catalog's
+  registered uri for that table is `s3://acme-bucket/medallion/bronze`, which compacted normally in the
+  same tick (`compaction_distributed_nothing_to_do`). The lineage reconciler reports the same id
+  independently in its `unreadable` set: "'4750a5b9_acme-bronze$events' names no storage location — a
+  relative path cannot say whether the data is there", one of **24**. So `errors == {}` is
+  unsatisfiable on a long-lived estate, and the sweep reporting them is the sweep working.
+- *Closes when:* the **eight** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
   (`sweep_compacts_real_datasets_and_meters`), `media_e2e` (`ingest_media_derives_artifacts`),
