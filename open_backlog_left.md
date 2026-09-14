@@ -3518,6 +3518,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   bucket carrying its dataset count and truncation (`sweep.py:191-196`). What it does not record is
   MAINTENANCE coverage — a tick can discover a bucket and then never reach its datasets — so the gap is
   real but narrower than the row states.
+- **THE OBVIOUS PLACE TO MEASURE COVERAGE CANNOT MEASURE IT, and that was found by building it and
+  checking the branch before shipping (2026-09-14).** Adding per-bucket coverage to `plan_sweep` —
+  compare the buckets `_discover_all` found against the buckets the planned units and decisions cover —
+  produces a warning that can NEVER fire: `_exclude_trashed` (`sweep.py:314-326`) PARTITIONS the
+  discovered list, returning `(kept, excluded)` whose union is the input, and every kept uri becomes a
+  `DatasetWorkItem` while every excluded one becomes a `DatasetResult`. So on the queue lane coverage is
+  total BY CONSTRUCTION and the gate would be decoration. It was written, gated green, and reverted
+  unshipped.
+- *WHERE THE GAP ACTUALLY LIVES, therefore:* not in planning but in EXECUTION. On the queue lane the
+  units are published and executed by a separate subscription in another process, so "did this tick's
+  work actually happen" cannot be answered from the planner at all — it needs the unit outcomes
+  correlated back to the tick that planned them. On the serial lane it is `run_sweep`'s loop, which can
+  die partway. Either is a real measurement; `plan_sweep` is not the place for it.
   *Genuinely absent:* any per-tick time budget. No deadline, elapsed check or `max_seconds` exists
   anywhere in the sweep or its API.
 - *And the budget is not a free addition, which is why it is not done here.* Its VALUE is a decision, not
