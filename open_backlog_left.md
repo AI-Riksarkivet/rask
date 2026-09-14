@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -3574,11 +3574,29 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Evidence:* services/catalog/src/catalog/services/blob_serving.py:38-41 sets `_BLOB_CHUNK_BYTES = 8 * 1024 * 1024`; :77-87 `chunks()` yields the window one bounded `read_range` at a time, and the module docstring (:15) states "a multi-GB blob is served through bounded `read_range` windows". The door itself (services/catalog/src/catalog/api/v1/endpoints/data.py:509-571) returns a StreamingResponse over those chunks — data.py:527-531 says the read-side mirrors the write-side OOM guard. So a 4 GB blob and a 4 KB blob cost the same resident bytes. What the row's fix targets does not exist: no byte budget anywhere (grep byte_budget/max_inflight_bytes/blob_budget across services/, packages/, chart/ returns nothing), and services/catalog/src/catalog/api/load_shed.py:33-51 gates only bulk Arrow-IPC POST writes on a request COUNT, not blob GETs.
 - *What would reopen it:* If `chunks()` read the whole window in one call, or if `read_blob` materialised the payload before returning, the row's mechanism would be real. The narrower true residual: blob GETs are not counted by load_shed at all, so N concurrent readers cost N x 8 MiB — a concurrency cap on the blob door (mirroring load_shed's 429 + Retry-After), not a byte budget answering 503.
 
-**LH-112 · Unknown whether Lance honours a tag that pins a BRANCH version during main cleanup**
+**LH-112 · ~~Unknown whether Lance honours a tag that pins a BRANCH version during main cleanup~~ — CLOSED 2026-09-14 (MEASURED)**
 `maintenance, catalog` · med
 
 - *Why open:* Unmeasured, and it becomes load-bearing as soon as the sweep maintains branches.
-- *Closes when:* A test on `tree/<branch>/` with a root tag, run through main cleanup.
+- **MEASURED AND CLOSED 2026-09-14 — and the answer is sharper than the question.** pylance 11.0.0,
+  main at v1..v5, a branch rooted at v2, then `cleanup_old_versions(older_than=0)`, the most aggressive
+  form there is:
+
+      main versions after : [2, 5]      (an UNPROTECTED run leaves [5] — asserted as its own control)
+      branch              : opens [2, 3], 3 rows
+      tag                 : still resolves, {'branch': 'work', 'version': 3}
+
+  **It is the BRANCH REFERENCE that protects main v2, not the tag.** Run with and without the tag, the
+  results are identical — so Lance keeps a version a branch stands on structurally, and tagging neither
+  adds to that protection nor is required for it. Crediting the tag would have been the exact shape of
+  a control that looks like it fired and did not, which is why both arms are pinned rather than the
+  reassuring one alone.
+- *A third fact the experiment turned up, worth having before reading `tags.list()` anywhere:* tags are
+  ROOT-SCOPED. A tag created on a branch is visible from MAIN and carries its branch name, so "the
+  dataset's tags" is one namespace spanning every branch rather than a per-branch list — a caller that
+  read it as main's own would act on a pin belonging to a branch it is not looking at.
+- *Closes when:* nothing further. `tests/unit/test_main_cleanup_does_not_delete_a_version_a_branch_stands_on.py`
+  pins all three findings and is mutation-proven; a pylance upgrade that changes any of them reds it.
 
 **LH-113 · One 340-line catalog `Settings` class carries every domain's configuration**
 `catalog` · med
