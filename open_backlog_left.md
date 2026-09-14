@@ -3269,9 +3269,24 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `lance_cache_clamped_to_container requested_bytes=402653184 granted_bytes=214748364 container_budget_bytes=214748364 fraction=0.4`
   — the configured 128+256 MB reduced to 204.8 MB, which is exactly 0.4 x the pod's 512 Mi limit, read
   from its own cgroup rather than from a literal. Zero catalog errors in the window; every pod Ready.
-- *Re-measured at HEAD 2026-09-14, so the remaining scope is exact:* medallion **16** opens, lineage
-  **9**, service-kit **8** (1 already threaded), maintenance 10 (5 threaded) — ingest (8) is phase 2 and
-  viewer (6) is parked. The conversion is identical for each; only the catalog is done.
+- **THE LAKEHOUSE HALF IS COMPLETE 2026-09-14 (`1535fdf1`)** — lineage 8 sites, medallion 15, and
+  maintenance 3. Every open in catalog, lineage, medallion and maintenance now threads a bounded session.
+- **AND THE ESTATE-WIDE GATE FOUND THE MAINTENANCE THREE, which is the argument for it being
+  estate-wide.** Maintenance shipped this pattern FIRST and still had bare opens in
+  `compaction_executor.py` and `index_build.py` — the newer lanes, added after its own conversion. A
+  per-service test would not have looked there, and the catalog's own structural check could not. The
+  rule now lives once, in `tests/unit/test_no_lakehouse_service_opens_lance_unbounded.py`, covering all
+  four services; the catalog's copy was removed rather than left beside it.
+- *A sibling test moved with the change rather than being relaxed:* `test_the_storage_leg_reads_MAIN`
+  asserted on the exact source TEXT `lance.dataset(uri, storage_options=storage_options)`, so adding a
+  kwarg that alters nothing about WHICH ref is read still broke it. It now pins the property that leg
+  holds — it names no ref: no `branch=`, no `version=` — and that assertion is mutation-proven.
+- *What is left, and it is a decision rather than a conversion:* **service-kit's 6 opens**
+  (`introspect`, `sources`, `stage_stamp`, `descriptor`, `quality`, `registry`). They sit in code SHARED
+  by services whose caps may differ, so a session there is a SIGNATURE question — thread it from each
+  caller, or give service-kit a default session and accept two caches per process when a service
+  configures different caps. The gate names service-kit out of scope for exactly that reason instead of
+  passing while shared code still mints the defaults. ingest (8) is phase 2; viewer (6) is parked.
 
 **RE-MEASURED 2026-09-10, AND THE COUPLING THE ROW ASSERTS DOES NOT APPLY TO THE HALF THAT MATTERS.** The row treats "stop opening per request" and "size the caches" as one change. They are two, and only the first is dangerous: a cached HANDLE pins a version, which is why the viewer's registry is a read-only trade. A bounded `lance.Session` is NOT a handle cache — its keys are `(uri, version, etag)`, so a compaction writes NEW keys and there is no freshness contract to design and no stale-read window; `lance_session.py` records that, and that it is thread-safe under 8x50 concurrent opens. **Maintenance has already shipped exactly this and it is the proof:** `shared_lance_session()` caps it at 128 MB metadata + 256 MB index and threads it through reconcile, purge and the orphan scan. **Measured today:** every lakehouse pod runs a 512 Mi limit (128 Mi request), and ONLY maintenance passes a session — catalog opens 12 bare datasets, medallion 15, lineage 6, with 6 more in shared service-kit code. Each of those mints Lance's 1 GiB metadata + 6 GiB index ceilings and discards them WITH the handle, so the cache never engages at all: ten version-opens against a shared session grow `size_bytes` 168 -> ~75k, the same opens without one leave it flat. So the safe, proven half is a bounded session per service — soft LRU bounds, no version pinning, the pattern already running in maintenance — and it needs ONE seam plus 39 call sites converged onto it, not a redesign. - *Why the rest of the row is open:* A shared handle also pins a version, so the fix needs `checkout_latest` (or a session-scoped open) plus an explicit freshness contract per service. Measured: 53 `lance.dataset()` call sites and 5 pass a session; the catalog opens ~24 bare datasets per request path. The same row carries the rest of the runtime hygiene: no `LANCE_CPU_THREADS`/`LANCE_IO_THREADS`/`LANCE_LOG` in the Ray `runtime_env`, `instrument_lance_metrics` never called by ingest/viewer/search/annotator, no branch/tag name validation at the door, blob thresholds unpinned on some create paths, `allow_http` not derived from the endpoint scheme, missing HTTPX timeouts.
 - *A LIVE OOM, 2026-09-10, on the one service that ALREADY has the bounded session.* `rask-maintenance` was OOMKilled (exit 137, `reason: OOMKilled`) against its 512Mi limit and restarted; steady-state is 153Mi. It happened while three manual `/maintenance-reconcile-cron` invocations overlapped the 5-minute scheduled ticks — self-inflicted, and the pod recovered unaided — so this is a data point about HEADROOM, not a standing outage.
