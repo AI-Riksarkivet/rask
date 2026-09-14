@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -973,7 +973,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   say so in `docs/DECISIONS.md` so nobody reads `author='reconcile'` as a defect later. Pin whichever
   lands, because the current pair is a cycle no test covers.
 
-**LH-145 · The lag tick's `unknown` count names no cell and reaches no metric — a store disagreement is counted, unactionable and unpageable**
+**LH-145 · ~~The lag tick's `unknown` count names no cell and reaches no metric — a store disagreement is counted, unactionable and unpageable~~ — CLOSED 2026-09-14 (OBSERVED ON THE ROLL)**
 `medallion` · low · found 2026-09-11 while fixing [[LH-143]]
 
 - **CODE LANDED `5ad5e62d`** — `unknown` is replaced by `blind: list[BlindEdge]`, each naming its edge,
@@ -1016,7 +1016,14 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   SEPARATELY rather than as a sum, so one rising while the other falls cannot hide.
   *`ty` earned its keep here:* it flagged `pydantic-discarded-extra-argument` at four test sites still
   passing `unknown=`, each of which would otherwise have asserted against a silently dropped kwarg.
-- *Closes when:* an operator can name which edge disagreed and be paged when the disagreement persists.
+- *Closed by:* the roll, on both halves and to the bar this row set for each. NAMING is observed live —
+  `cascade_lag_edge_blind edge='silver->gold' project='bind86' reason='stores_disagree'`, with `unknown=`
+  gone from the tick. PAGING is the rule `MedallionCascadeLagBlind`
+  (`max by (lance_medallion_edge, lance_medallion_project, lance_medallion_reason) (medallion_cascade_lag_blind) == 1`,
+  `for: 30m`), fed by a real gauge (`metrics.py:96,295` sets `medallion.cascade.lag_blind` with exactly
+  those three labels) and gated by `make alert-rules-check` — which is the bar this row set, because it
+  records that firing "cannot be observed here at all, by design": alerting is off and no vmalert pod
+  exists in this cluster.
 
 **LH-144 · Three live tables are ungoverned — but 47 of the 58 were simply DROPPED, and the row said otherwise**
 `catalog` · medium · found 2026-09-11 by reading OpenFGA directly, RE-MEASURED the same day
@@ -2737,7 +2744,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 - *Why open:* The ghost ids never passed the mint rule, so tightening the consume rule would refuse them and the adopt-vs-revoke call has to come first. No live defect from the asymmetry itself — `is_safe_project` uses `fullmatch` and the Pydantic models anchor — but tightening is wire-visible on medallion's generated clients.
 - *Closes when:* Decide adopt-vs-revoke for pre-registry project ids and run the migration over the live control root; then tighten the consume-side project-id rule to match the mint rule and regenerate medallion's clients.
 
-**LH-070 · No versioned authz-model migration (`ACTIVE_MODEL_VERSION` + an idempotent `migrate()`) — the 3-axis model shipped without it**
+**LH-070 · ~~No versioned authz-model migration (`ACTIVE_MODEL_VERSION` + an idempotent `migrate()`) — the 3-axis model shipped without it~~ — CLOSED 2026-09-14 (OBSERVED ON THE ROLL)**
 `service-kit, catalog` · med
 
 - **THE IDEMPOTENT HALF LANDED 2026-09-13, and the measurement is the reason it mattered.** `provision`
@@ -2783,7 +2790,10 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   forgets to bump, and the model's own canonical form answers the same question without a second source
   of truth. Everything else is unchanged: a widened model still writes, a narrowing one is still refused
   ahead of this check, and a new store still writes without a read.
-- *Closes when:* the roll observes `openfga_model_unchanged` on a boot and the store's version count
+- *Closed by:* the roll. The catalog logged `openfga_model_unchanged` on its boot and the store held
+  exactly 1,316 versions afterwards — the same count as before the fix, across a boot that would
+  previously have written the 1,317th. Both halves of the criterion below, met.
+- *The criterion was:* the roll observes `openfga_model_unchanged` on a boot and the store's version count
   stops climbing. If the owner still wants a recorded ACTIVE version pinned for production rollout
   (distinct from the churn this fixed), that is the remaining half.
 
@@ -3483,7 +3493,37 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `catalog, chart` · med
 
 - *Why open:* There is a chart snapshot for RustFS and Postgres and nothing that has ever been restored from it, so the control root's recoverability is untested.
-- *Closes when:* Write and actually exercise a restore of projects, warehouses, bindings and trash from the snapshot, and document it.
+- **LANDED AND EXERCISED 2026-09-14 — and "from the snapshot" turned out to be impossible here.**
+  The row assumes the chart's snapshot covers this. Measured: `backups.pgDump` covers the lineage and
+  OpenFGA databases, `backups.volumeSnapshot` covers the MinIO PVCs, BOTH default off and neither is
+  enabled in the live release — and this cluster has no `volumesnapshotclass` resource type at all, so
+  that path could not run even if switched on. `RUNBOOK-restore.md` meanwhile claimed the VolumeSnapshot
+  row covered "all medallion + registry data"; on this cluster it covers the registry with nothing. That
+  claim is corrected in place.
+- *So the restore is LOGICAL, not a second PVC snapshot,* which is also the right granularity: the whole
+  record set is 1,454 objects of a few hundred bytes, and "somebody deleted the warehouse bindings" is
+  not answered by restoring a whole store. `scripts/control_root_backup.py` backs up, verifies and
+  restores `_projects/`, `_warehouses/` (registry + bindings), `_trash/`, `_protection/`, `_policies/`,
+  `_gates/`, `_transforms/`, `_tasks/`.
+- **EXERCISED AGAINST THE LIVE ESTATE, which is what the row asked for and what found the bugs:**
+  1,454 backed up, `verify` intact (0 missing, 0 changed), restore into a scratch prefix `verified: true`
+  with 0 mismatched. Three defects surfaced only because it was run for real —
+  *(a)* MinIO keeps zero-byte directory markers (`_projects/`) that moto does not, and the path join
+  stripped the trailing slash, so every record collapsed onto one key: 1,464 copies landed as 9 objects;
+  *(b)* a live root is written while it is read — three `_tasks/` records changed between the listing and
+  the copy — so a manifest built from LISTED etags declared a good backup corrupt; it now records the
+  etag of what was COPIED and reports the moved records as `raced`;
+  *(c)* a failed restore's residue BLOCKS the retry on MinIO, because a zero-byte object named
+  `<prefix>` occupies the name the correct run needs as a directory — `head_object` finds the child and
+  `list_objects_v2` does not. All three are in the runbook.
+- *The outboxes are deliberately NOT in the set:* `_control_outbox/`/`_lineage_outbox/` are queues, and
+  restoring one re-publishes events the estate already acted on. A queue's correct recovery is empty.
+- *Residual, stated rather than accepted:* the tool has NO retention — `backups.pgDump` prunes to
+  `keep: 7` and this prunes nothing, so `_backups/control/` grows without bound. And the default
+  destination is the control root's own bucket, which survives a bad write and not a lost bucket;
+  `--dest` takes another bucket and the manifest says which of the two you got.
+- *Closes when:* retention lands, and a scheduled run exists (this is operator-invoked today, not a
+  CronJob beside `backup-pg.yaml`).
 
 **LH-111 · ~~No in-flight blob-byte admission budget — the catalog counts requests, not bytes~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
