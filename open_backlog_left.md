@@ -3635,11 +3635,17 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   purges on every dataset that has a branch. And its `swept_uris` omitted `<dataset>/tree/<branch>`,
   which `optimize.discover_datasets` descends on purpose ("a BRANCH is a full dataset the parent
   contains rather than part of it"). That suite is now 10 passed, from 10 errors.
-- *Closes when:* the **fourteen** remaining legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
-  CONTAMINATION / ALREADY-FIXED. Current list, 2026-09-14: `governed_union` x5
-  (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `media_lane_derives`,
-  `quality_gate_blocks_bad_batch`, `train_lineage_lands_attributed`), `catalog_live`
-  (`errors_translate_to_domain_errors`), `dummy_lane` (`TERMINAL_event_READS_BACK`), `maintenance_e2e`
+- **THE RAY-LANE CLUSTER IS [[XC-002]] FIRING, and restarting the head fixed three of them.** Every
+  cascade stage job was dying `SignatureDoesNotMatch` against `rask-minio` because the hand-applied Ray
+  head still held a pre-rotation credential ([[XC-001]]: nothing makes a pod re-read a rotated Secret).
+  A `rollout restart` — image preserved — produced `RAY-STAGE OK stage=gold` and took
+  `dummy_lane::TERMINAL_event_READS_BACK`, `governed_union::media_lane_derives_under_governance` and
+  `governed_union::train_lineage_lands_attributed_under_governance` green. **VERDICT for those three:
+  CONTAMINATION** — a deployed-environment defect the chart already fixes, not a suite or estate one.
+- *Closes when:* the **eleven** remaining legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
+  CONTAMINATION / ALREADY-FIXED. Current list after the Ray restart, 2026-09-14: `governed_union` x3
+  (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `quality_gate_blocks_bad_batch`),
+  `catalog_live` (`errors_translate_to_domain_errors`), `maintenance_e2e`
   (`sweep_compacts_real_datasets_and_meters`), `medallion_e2e` (`produce_cascades_bronze_to_gold`),
   `media_e2e` (`ingest_media_derives_artifacts`), `observability` (`logs_populated`), `outbox_crash`
   (`sigkilled_producer_loses_nothing`), `outbox_e2e` (`reconcile_sweep_drains_a_staged_outbox_event`),
@@ -3805,10 +3811,31 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 - *Closes when:* Add a `checksum/secret` pod-template annotation (sha256sum of the rendered Secret) beside every `secretKeyRef` env in `chart/templates/`, and pin it with a rendered-manifest test that fails when a template adds a `secretKeyRef` without the annotation.
 
 **XC-002 · The chart fix moving the Ray head's S3 credential onto the sanctioned ESO path is committed and never deployed**
-`chart, medallion, storage` · **HIGH** · **blocked:** owner go-ahead for a live credential rotation
+`chart, medallion, storage` · **HIGH** — the cascade half is CLOSED 2026-09-14; what remains is the ESO switch
 
 - *Why open:* Live, `rask-ray-compute-s3` is a hand-applied Secret on none of the three sanctioned paths, and `rask-infra-credentials`' `ray-compute-access-key`/`ray-compute-secret-key` decode to `rustfsadmin` because `values.yaml` ships `rayComputeAccessKey: ""` and `infra-credentials.yaml:36` falls back to `rustfs.accessKey`. Both halves are in the chart and render green (369 chart/secret invariants), but rolling them out rotates a live credential and either half alone is `SignatureDoesNotMatch` on every cascade call.
-- *Closes when:* Run `helm upgrade` first (rotates the RustFS user and updates the ESO target), then re-apply `deploy/ray-lance-demo.yaml` preserving the head's current image tag — re-applying that manifest has reverted the head to `ray-lance:dev` and broken the cascade before — and verify a cascade tick.
+- **THE ROLLOUT HALF IS DONE AND VERIFIED 2026-09-14, AND IT NEEDED NO ROTATION — the blocker was a
+  STALE POD, not a credential.** `values.yaml:2055` now ships `rayComputeAccessKey: rask-ray-compute`
+  and `infra-credentials.yaml:48-49` derives the scoped secret from it, so the `rustfsadmin` fallback
+  this row describes is gone from the chart; `helm upgrade` to revision 156 carried it to the cluster.
+  What kept the estate broken is [[XC-001]]: no `checksum/secret` annotation exists anywhere, so the
+  hand-applied Ray head — running since 2026-09-11 — went on serving the pre-rotation value it read at
+  start. Every cascade stage job died
+  `SignatureDoesNotMatch ... GET http://rask-minio:9000/lance-catalog?list-type=2&prefix=medallion/bronze/_versions/`,
+  which is this row's own predicted symptom, firing.
+  *`kubectl rollout restart deploy/ray-lance-head` was sufficient and is strictly safer than the
+  re-apply this row prescribes* — it recreates the pod from the existing spec, so the image tag cannot
+  revert (verified: `localhost:5000/ray-lance:main-7a2de41a` before and after, the exact regression the
+  Closes-when warns about). Cascade tick verified immediately after:
+  `RAY-STAGE OK stage=gold lane=delta rows=8 rows_in=8 retracted=5370 version=199`, and three
+  [[LH-109]] legs that had failed for this reason went green in the same drive.
+- *WHAT IS STILL OPEN IS THE ROW'S TITLE, not its symptom.* The credential now WORKS but still arrives
+  by `secretKeyRef` — a k8s Secret through env, which is not one of the three sanctioned paths. ESO is
+  built and switched off ([[XC-004]]), so "onto the sanctioned ESO path" is unmet.
+- *Closes when:* `externalSecrets.enabled=true` with an ExternalSecret for the Ray head's S3
+  credential, so it stops arriving through env — the same switch [[XC-004]] tracks for the other 43
+  refs. The rotation and the cascade verification this row was blocked on are done; it is no longer
+  blocked on an owner go-ahead.
 
 **XC-003 · `lance.audit` shares `opentelemetry_logs` with all telemetry: 14-day TTL, and an unauthenticated in-cluster `DELETE` on the audit stream is accepted**
 `catalog, lineage, medallion` · **HIGH**
