@@ -3735,6 +3735,22 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   recover with AGE, on the reasoning that the relay drains by ingesting into the graph and a dropped
   connection would make it report 0. Both still fail, so the drain reporting `outbox_drained: 0`
   against an event its own `list_events` confirms is staged has a different cause.
+- **A SEVENTH VERDICT, and it was INVISIBLE until a crash was fixed:
+  `outbox_e2e::test_reconcile_sweep_drains_a_staged_outbox_event` is SUITE-DRIFT.** The drain was
+  throwing `UnboundLocalError` on every tick (fixed in `07076737`), which aborted the whole loop and
+  reported `outbox_drained: 0` with no reason. With the branch executing, the estate says exactly what
+  it is doing: `lineage_outbox_event_unauthorized outbox_key='36944760-...@COMPLETE' author='e2e'
+  reason='can_write_data required to amend run ...: e2e_outbox_ds'`, and the tick totals
+  `outbox_drained=0 outbox_stranded=4`. The leg stages an event authored by `e2e`, which holds no
+  grant, and the relay's authz gate — added deliberately to close the stage-instead-of-publish bypass
+  (`tests/unit/test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`) — refuses it. The leg
+  predates that gate.
+  *NOT fixed here, for the reason the FGA leg was not:* the repair is to stage as an author the estate
+  authorizes for that dataset, and inventing that grant against a live estate is a governance mutation,
+  not a test edit.
+  *An operational fact worth its own line:* four unauthorized probe events are now stranded in
+  `_lineage_outbox` and will stay there, because `e2e` will never be authorized. Every future drive
+  adds another. The drain reports them correctly now, which it could not before.
 - *Closes when:* the **ten** remaining legs each carry a verdict. Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
