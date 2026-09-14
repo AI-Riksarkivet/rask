@@ -67,11 +67,17 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
     lance_ray, lineage = urls
 
     # Snapshot the run count FIRST (like the medallion e2e): silver-media may already exist from an
-    # earlier run, so schema assertions alone could false-pass — a strictly rising run count proves THIS
-    # trigger flowed (ingest run + derive run = at least +2).
+    # earlier run, so schema assertions alone could false-pass — two NEW runs prove THIS trigger flowed
+    # (ingest run + derive run).
+    #
+    # IDS, NOT A COUNT. `/runs` is bounded at the query (`runs.py:_RUNS_RETURN = 200`, both the default
+    # and the `le=` maximum), so `len()` saturates: past 200 runs it is 200 forever and "two more than
+    # before" can never be true. This leg failed exactly that way — `assert 200 >= (200 + 2)` — against a
+    # media lane that had flowed. The board is newest-first, so runs created seconds ago are on the page
+    # whatever the estate's total; a set difference keeps proving the same thing as the estate grows.
     before = requests.get(f"{lineage}/runs", headers=_LINEAGE_HEADERS, timeout=8)
     before.raise_for_status()
-    runs_before = len(before.json().get("runs", []))
+    runs_before = {r["run_id"] for r in before.json().get("runs", []) if r.get("run_id")}
 
     headers = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
     # `Idempotency-Key` is REQUIRED by the route, exactly as on `/produce` — omitting it 422s before any
@@ -88,11 +94,11 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
     assert resp.status_code == 202, resp.text
     token = resp.json()["token"]
 
-    # Poll until THIS run's cascade lands: the graph gains at least 2 runs (ingest + derive) AND the
+    # Poll until THIS run's cascade lands: the graph gains at least 2 NEW runs (ingest + derive) AND the
     # derived silver's schema carries the artifacts. Schema alone would false-pass from an earlier run
-    # (silver-media persists); count alone wouldn't prove derivation — both together correlate the run.
+    # (silver-media persists); new runs alone wouldn't prove derivation — both together correlate the run.
     fields: dict[str, str] = {}
-    runs_after = runs_before
+    new_runs: set[str] = set()
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         # Same hold the medallion drive meets — the media lane publishes silver-media and then waits for
@@ -103,11 +109,11 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
             fields = {f["name"]: f["type"] for f in schema.json().get("fields", [])}
         runs = requests.get(f"{lineage}/runs", headers=_LINEAGE_HEADERS, timeout=8)
         if runs.status_code == 200:
-            runs_after = len(runs.json().get("runs", []))
-        if "thumbnail" in fields and "embedding" in fields and runs_after >= runs_before + 2:
+            new_runs = {r["run_id"] for r in runs.json().get("runs", []) if r.get("run_id")} - runs_before
+        if "thumbnail" in fields and "embedding" in fields and len(new_runs) >= 2:
             break
         time.sleep(3)
-    assert runs_after >= runs_before + 2, f"cascade did not flow for token {token}"
+    assert len(new_runs) >= 2, f"cascade did not flow for token {token}: {len(new_runs)} new runs, expected 2"
     assert "thumbnail" in fields and "embedding" in fields, f"media lane did not derive artifacts for token {token}: schema fields = {fields}"
     assert fields["payload"] == "blob"  # the heavy original is still a blob column in silver
     assert fields["embedding"].startswith("array")  # the vector column, typed in the graph

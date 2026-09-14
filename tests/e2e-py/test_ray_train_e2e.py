@@ -202,9 +202,17 @@ def test_train_to_blessed_with_full_reproducibility_capture(stack: tuple[str, st
     assert detail.get("candidate_metrics"), "candidate must carry recorded metrics (rows_seen/features)"
 
     # 3. Reproducibility: the OpenLineage run pins the exact input feature version (nothing floats).
+    #
+    # NO `limit` AT ALL, because the server's own bound is the only one that is right. `/runs` declares
+    # `limit: Annotated[int, Query(ge=1, le=_RUNS_RETURN)] = _RUNS_RETURN` with `_RUNS_RETURN = 200`, so
+    # `le=` is a CEILING and not a suggestion: `limit=300` is a 422 before the handler runs, and this
+    # poll then burned its whole budget reporting "attributed service-trainer run" never appeared. Same
+    # class as the five call sites that were still sending `limit=1000` after the board was capped; this
+    # was the sixth. Omitting it takes the server's default, which is that same 200 — and the board is
+    # newest-first, so a run this drive just produced is on the page.
     run = _poll(
         lambda: next(
-            (r_ for r_ in requests.get(f"{lineage}/runs?limit=300", headers=alice, timeout=10).json().get("runs", []) if r_.get("author") == "service-trainer"),
+            (r_ for r_ in requests.get(f"{lineage}/runs", headers=alice, timeout=10).json().get("runs", []) if r_.get("author") == "service-trainer"),
             None,
         ),
         timeout=120.0,
