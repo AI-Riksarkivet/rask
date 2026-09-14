@@ -3615,7 +3615,35 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 `medallion, maintenance, catalog, lineage` · med
 
 - *Why open:* Driven twice against the deployed estate 2026-09-10: 13 failed / 117 passed / 3 skipped / 1 xfailed. One class was repaired (five call sites still sent `limit=1000` after the board was capped at 200; 422 count 6 → 0). The stable eleven — `governed_union` x4, `maintenance_e2e`, `maintenance_s3` x2, `medallion_e2e`, `media_e2e`, `outbox_e2e` — are all in scope and none carries a verdict; two further legs flip between consecutive runs.
-- *Closes when:* Give each of the eleven a verdict — SUITE-DRIFT / ESTATE-DEFECT / CONTAMINATION / ALREADY-FIXED — starting with the two whose assertions carry the storage-residue findings (`gold$catalog`, `uiproof-gold$catalog` on buckets that do not exist), and run the two flaky legs repeatedly rather than once.
+- **RE-DRIVEN 2026-09-14, AND MOST OF WHAT THE ROW COUNTS WAS THE HARNESS.** The first run read
+  **37 failed / 77 passed / 17 errors** — far worse than the row's figures, and almost none of it the
+  estate. `e2e_live.sh` discovered the object store as `<release>-rustfs-io` while this release runs
+  MinIO (`<release>-minio`), so the address came back empty and the script exported the literal string
+  `http://`; the credentials were stale the same way. Seventeen legs then died inside botocore with
+  `ValueError: Invalid endpoint: http://`, naming neither the service nor the script, and eight more
+  failed on the same empty endpoint. Fixed in `c8dcb030`, together with the systematic half — every
+  address was exported as `http://$X` unconditionally, so anything undiscovered became the scheme
+  alone, which no suite recognises as absent, so its own skip never fired.
+- **AFTER THE FIX, the same estate reads `15 failed / 117 passed / 3 skipped / 1 xfailed`** — the
+  **117 passed is exactly the row's own baseline**, so the measurement is comparable again. Nine suites
+  went to zero: `track_a_acceptance` 11→0, `credential_isolation` 8→0, `object_store_cas` 5→0,
+  `registry_cas` 2→0, `client_direct` 2→0, `maintenance_s3` 10→1, plus `duckdb_lance`, `multibase`
+  and `warehouses`.
+- *TWO VERDICTS GIVEN, both SUITE-DRIFT, both fixed and verified live:* `maintenance_s3`'s branch
+  refusal asserted the report's `incomplete` list, and `reconcile.py:860-863` deliberately routes it to
+  `excluded_datasets` because `incomplete` gates the purge — restoring the old contract would stall
+  purges on every dataset that has a branch. And its `swept_uris` omitted `<dataset>/tree/<branch>`,
+  which `optimize.discover_datasets` descends on purpose ("a BRANCH is a full dataset the parent
+  contains rather than part of it"). That suite is now 10 passed, from 10 errors.
+- *Closes when:* the **fourteen** remaining legs each carry a verdict — SUITE-DRIFT / ESTATE-DEFECT /
+  CONTAMINATION / ALREADY-FIXED. Current list, 2026-09-14: `governed_union` x5
+  (`fga_deny_drops_promotion`, `governed_allow_full_cascade`, `media_lane_derives`,
+  `quality_gate_blocks_bad_batch`, `train_lineage_lands_attributed`), `catalog_live`
+  (`errors_translate_to_domain_errors`), `dummy_lane` (`TERMINAL_event_READS_BACK`), `maintenance_e2e`
+  (`sweep_compacts_real_datasets_and_meters`), `medallion_e2e` (`produce_cascades_bronze_to_gold`),
+  `media_e2e` (`ingest_media_derives_artifacts`), `observability` (`logs_populated`), `outbox_crash`
+  (`sigkilled_producer_loses_nothing`), `outbox_e2e` (`reconcile_sweep_drains_a_staged_outbox_event`),
+  `ray_train` (`train_to_blessed`).
 
 **LH-110 · No documented, exercised restore of the control root (projects, warehouses, bindings, trash)**
 `catalog, chart` · med
