@@ -2044,7 +2044,33 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog, service-kit` · med
 
 - *Why open:* Measured 2026-09-09 and recorded so the next reader does not start the cheap fix, which does not exist: `install_problem_handlers` is installed on every app that can import `lance_namespace` (app.py:157-165) and 153 suite assertions expect 422; narrowing by path fails because `router.py:55-75` mounts spec and rask-only routes equally under `/v1`.
-- *Closes when:* Derive a per-ROUTE 'this operation is in the spec' marker FROM the vendored spec rather than a hand-maintained tag set, have `handle_validation_error` answer 400 on spec routes only, and update the assertions that reach it.
+- **LANDED 2026-09-14 (`c2b2e454`), and the row's own cost estimate was the thing that made it look
+  impractical.** "153 suite assertions expect 422" is wrong: measured, 56 lines in the entire estate use
+  422 at all, and applying the narrowing broke FIVE — one test whose NAME encoded the defect
+  (`test_request_validation_maps_to_422_problem_json`) and four parametrizations of one idempotency-key
+  case. Both sit on spec operations (`UpdateTable`, `CreateTable`) where 400 is the correct answer, and
+  the second was already self-inconsistent: the same door's CROSSED-key case asserts 400 three classes
+  above it, so one door gave two statuses for two flavours of the same invalid input.
+- *The defect is sharper than "hardcodes 422" too:* `ns_errors` maps `INVALID_INPUT` to 400 in BOTH
+  directions (`_STATUS`, `_STATUS_CODE_FALLBACK`) and then served that code at 422 — one module, one
+  code, two statuses, and a generated Lance client dispatches on the CODE.
+- **THE PRESCRIBED FIX WAS NOT IMPLEMENTABLE AS WRITTEN.** "Derive the marker FROM the vendored spec"
+  cannot happen at runtime: NO image copies `lance_docs/` — checked across every `.docker/*.dockerfile`
+  and confirmed in the running catalog pod, which holds no `spec.yaml` at all. So `SPEC_ROUTES` is
+  committed DATA and `test_spec_conformance` re-derives it from the spec on every run, which buys the
+  same non-drift the row wanted; re-vendoring reds the suite unless the set moves with it. Path-parameter
+  names are collapsed, because the spec writes `{id}` where a route may write `{table_id}` and they are
+  one route.
+- *And the declaration had to move with the wire,* which the row does not mention. FastAPI declares 422
+  on every validating operation and `docs/catalog-openapi.json` carries that to the frontend — measured,
+  159 operations declaring 422 and NONE declaring 400. Serving 400 without moving it would relocate the
+  disagreement rather than close it. After regeneration: spec routes `422=0/400=54`, rask-only
+  `422=105/400=0`. Mutation-proven both ways. **Built and deployed? NO — rides the pending roll.**
+- *Unrelated drift absorbed in the same commit, stated so it is not read as caused by it:* the committed
+  contracts had not been regenerated since 2026-09-10, so `ReconcileState`'s `ungoverned` and a schema's
+  `versions_without_lineage` came in too — `make openapi-check` was ALREADY red, verified by
+  regenerating with this change removed.
+- *Closes when:* the roll observes it.
 
 **LH-033 · ~~Nine catalog operations answer 501: branch-scoped `query`/`explain_plan`/`analyze_plan`, `create_index`/`create_scalar_index`, `stats`, `index/list`, `index/{n}/stats`~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
