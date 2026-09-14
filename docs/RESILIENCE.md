@@ -39,6 +39,8 @@ Two properties make it safe:
 | **Kill `AGE` (Postgres) mid-ingest, restart** | ingest returned `RETRY`; Dapr redelivered per `backOff` until the DB was back | **ingested on redelivery** — no loss |
 | **Pull `bronze-to-silver` stage runner, fire `/produce`, restart** | cascade **stalled at bronze** (trigger buffered in the MEDALLION stream); restart replayed it | **cascade resumed to gold** |
 | **Idempotency** (replays re-deliver old events) | fixed `run_id`s re-MERGE | `gaptest1` has **exactly 1** producer run — no duplication |
+| **Poison-inject 2026-09-14: a trigger naming a nonexistent source** | every delivery answered `RETRY`; the sidecar exhausted its schedule and published the original to `dlq.bronze-to-silver` | **parked + ERROR-logged** by `/dlq-event` — the retry → dead-letter → parking chain observed end to end, and the run that measured the schedule: 4 steps of 120.2/120.1/120.1/120.6s, **481.1s** against a designed 480s, no jitter |
+| **Poison-inject 2026-09-14: a NON-CloudEvent body** (`rawPayload`) | the sidecar could not deserialize the envelope, dead-lettered it in **21ms with ZERO retries** (ahead of any retry policy), and the dead letter reached the DLQ topic as the same unreadable bytes | **parked INVISIBLY** — `/dlq-event` never ran, so no ERROR log, no `medallion_dlq_parked_total`, nothing for `MedallionCascadeDeadLettering` to fire on. Tracked as LH-151 |
 
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** Transient dependency
 failures recover via Dapr `RETRY`. With the DEFAULT `dapr.resiliency.enabled=true` the sidecar's Resiliency
@@ -102,7 +104,10 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    ships together and the escape hatch restores the chaos-verified schedule. **DRIVEN LIVE 2026-09-14**
    (see the chaos table above, and [RUNBOOK-oncall § DLQ parking](runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up)):
    a poison trigger published to `medallion.bronze` retried, exhausted the schedule and parked on
-   `dlq.bronze-to-silver`, ERROR-logged by `/dlq-event`. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
+   `dlq.bronze-to-silver`, ERROR-logged by `/dlq-event` — measured at **481.1s** end to end on helm
+   revision 156, against the 480s the policy specifies. **A policy change reaches a sidecar only on
+   restart** (`HotReload: false`), so rolling the chart is not enough: all six subscriber app-ids were
+   rollout-restarted before this was re-measured. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
 
 3. **Trigger loss on stage runner death: FIXED (durable cursors, 2026-07-06); lineage full-stream-replay
    remains by design.** The cascade head + stage runners now pair `deliverPolicy: new` with a `durableName`

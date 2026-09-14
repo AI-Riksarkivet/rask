@@ -3558,6 +3558,12 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py`, which COMPUTES the window
   from the rendered policy and checks both edges — the too-short one and the one where backoff plus
   the handler's own time outruns the broker's 720s `ackWait`.
+  *RE-DRIVEN AFTER THE ROLL (helm revision 156) and it matches the design to 1.1 seconds:* attempts at
+  18:38:31.896 / 18:40:32.107 / 18:42:32.212 / 18:44:32.341 / 18:46:32.960, parked 18:46:32.992 —
+  steps of 120.211 / 120.105 / 120.129 / 120.619s with no jitter, **481.096s end to end against a
+  designed 480s**, and 134x the 3.584s it managed before. The roll alone was not enough: a Resiliency
+  edit reaches a sidecar only on restart, so all six subscriber app-ids were rollout-restarted and each
+  logged `Loading Resiliency configuration` before the re-drive.
   *The dangling pointer is rewritten* to `RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up`, the
   anchor the alerting rules already cite.
   *A finding the row did not anticipate is split out as [[LH-151]]:* a delivery that is not a valid
