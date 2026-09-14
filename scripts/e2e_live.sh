@@ -128,6 +128,15 @@ url() {  # url VARNAME HOST[/path] — export VARNAME=http://HOST... only if HOS
   local var="$1" host="$2" suffix="${3-}"
   if [ -n "$host" ]; then export "$var=http://$host$suffix"; else _missing="$_missing $var"; fi
 }
+# THE QUALITY MEASUREMENT IS A CHART TOGGLE, and two governed-union legs assert its output. The stage
+# runner only runs `assert_quality` — the sole producer of the `dataQualityAssertions` facet, and so the
+# only thing that ever sets `quality_passed` on a WROTE edge — when `medallion.quality` is on
+# (chart/values.yaml ships it FALSE). Read off the running pod rather than the values, because the pod
+# is what the suite will actually meet; absent, the legs skip with a reason instead of failing on a
+# NULL field, which is what they did before (measured 2026-09-14).
+QUALITY_ON="$(kubectl get deploy "$RELEASE-bronze-to-silver" -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="MEDALLION_QUALITY_ENABLED")]}{.value}{end}' 2>/dev/null || true)"
+[ "$QUALITY_ON" = "true" ] && export LANCE_E2E_QUALITY=1
+
 url LANCE_E2E_CATALOG_URL     "$CATALOG"
 url LANCE_E2E_LINEAGE_URL     "$LINEAGE"
 url LANCE_E2E_GATEWAY_URL     "$GATEWAY"

@@ -54,6 +54,19 @@ DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 FGA = os.environ.get("LANCE_E2E_FGA", "")
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
+#: Whether the estate MEASURES quality, exported by `scripts/e2e_live.sh` from the running stage runner.
+#: The two legs below assert `quality_passed` on a WROTE edge, and only `assert_quality` ever produces the
+#: `dataQualityAssertions` facet lineage writes that field from — guarded by `settings.quality_enabled`
+#: (`transform.py`), which the chart ships FALSE (`values.yaml medallion.quality`). Against a release
+#: running the default they asserted a field nothing populates and read as a broken gate; the gate is a
+#: DIFFERENT mechanism and fires either way ("the stage runner measures; it does not rule").
+QUALITY = os.environ.get("LANCE_E2E_QUALITY", "")
+
+#: Skips the two legs that need the measurement, naming the toggle rather than the symptom.
+requires_quality = pytest.mark.skipif(
+    not QUALITY,
+    reason="medallion.quality is off on this release, so no dataQualityAssertions facet is emitted and quality_passed is never set",
+)
 # The bronze→silver stage runner, for the quality-block direct drive (stage runners have no k8s Service — the make
 # target port-forwards the deployment) + its app token (the same guard its sidecar delivery carries).
 STAGE_RUNNER_URL = os.environ.get("LANCE_E2E_STAGE_RUNNER_URL", "")
@@ -478,6 +491,7 @@ def _produce(lance_ray: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+@requires_quality
 def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str], alice: dict[str, str]) -> None:
     lance_ray, lineage = stack
     token = _produce(lance_ray)
@@ -658,6 +672,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
 # --------------------------------------------------------------------------- #
 
 
+@requires_quality
 def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str], alice: dict[str, str]) -> None:
     if not (STAGE_RUNNER_URL and S3_ENDPOINT and S3_ACCESS_KEY and S3_SECRET_KEY):
         pytest.skip("set LANCE_E2E_STAGE_RUNNER_URL + LANCE_E2E_S3_* for the quality-block drive")
