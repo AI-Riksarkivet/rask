@@ -39,6 +39,8 @@ import lance
 import lance.optimize as lance_optimize
 from pydantic import BaseModel, ConfigDict
 
+from maintenance.core.config import shared_lance_session
+
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +156,7 @@ def _open_for_rewrite(uri: str, write_options: Mapping[str, str]) -> lance.Lance
     would re-read the manifest each time, and would be exactly where an ambient credential could
     creep back in unnoticed.
     """
-    return lance.dataset(uri, storage_options=dict(write_options) or None)
+    return lance.dataset(uri, storage_options=dict(write_options) or None, session=shared_lance_session())
 
 
 def _execute_one(task_json: str, dataset: lance.LanceDataset) -> str:

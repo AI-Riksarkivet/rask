@@ -23,7 +23,7 @@ from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
-from medallion.core.config import MedallionSettings
+from medallion.core.config import MedallionSettings, shared_lance_session
 from medallion.services import ray_submit
 from service_kit import dapr_publish
 from service_kit.governed import fga
@@ -119,7 +119,7 @@ def _resolve_version(settings: MedallionSettings, dataset: str) -> int:
     """The dataset's CURRENT Lance version (blocking read — call via threadpool)."""
     import lance
 
-    ds = lance.dataset(stage_uri_for(settings, dataset), storage_options=settings.storage_options())
+    ds = lance.dataset(stage_uri_for(settings, dataset), storage_options=settings.storage_options(), session=shared_lance_session())
     return int(ds.version)
 
 

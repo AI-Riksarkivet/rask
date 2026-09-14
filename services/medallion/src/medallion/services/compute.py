@@ -29,6 +29,7 @@ from lance.indices.builder import IndexConfig
 from pydantic import BaseModel, Field
 
 from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
+from medallion.core.config import shared_lance_session
 from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
 from service_kit.lakehouse import blobs, schema
 
@@ -132,7 +133,7 @@ def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFac
     Blocking Lance/S3 IO (callers use the threadpool). Cheap: the version is metadata and the chain is a
     single-row read of one column — the payload is never touched.
     """
-    ds = lance.dataset(from_uri, storage_options=storage_options)
+    ds = lance.dataset(from_uri, storage_options=storage_options, session=shared_lance_session())
     chain: list[LineageEdge] = []
     if _LINEAGE_COLUMN in ds.schema.names and ds.count_rows():
         cell = ds.to_table(columns=[_LINEAGE_COLUMN], limit=1).column(_LINEAGE_COLUMN)[0].as_py()
@@ -142,7 +143,7 @@ def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFac
 
 def measure(uri: str, storage_options: dict[str, str]) -> WriteResult:
     """Read the just-written dataset's version + exact output statistics (rows + on-disk bytes) + schema."""
-    ds = lance.dataset(uri, storage_options=storage_options)
+    ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
     # lance annotates ``DataStatistics.fields`` as a single ``FieldStatistics`` but returns a list at
     # runtime (upstream stub bug), so cast to the real shape before summing the per-field on-disk bytes.
     field_stats = cast("list[Any]", ds.stats.data_stats().fields)
@@ -174,8 +175,8 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
     full-sync merges 2026-09-06 and KEEP their indices (measured: an overwrite leaves `list_indices()` empty,
     a merge leaves `id_idx` standing); the Ray lane still overwrites, which is why this rebuild remains.
     """
-    upstream_schema = lance.dataset(from_uri, storage_options=storage_options).schema
-    target = lance.dataset(to_uri, storage_options=storage_options)
+    upstream_schema = lance.dataset(from_uri, storage_options=storage_options, session=shared_lance_session()).schema
+    target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
     # THE DATA COMMIT'S VERSION, captured BEFORE the index rebuild below — an index build commits a
     # `CreateIndex` version of its own, so measuring afterwards named it instead of the write. Measured
     # 2026-09-11: all 253 stage-authored producer edges in the estate sat on a `CreateIndex` version,
@@ -242,7 +243,7 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
         # the tier still means "this run's output IS the whole dataset" — a row the seed no longer
         # produces is removed, exactly as overwrite removed it. Measured on pylance 10.0.0: source
         # dropping id=3 deletes it while id=1 keeps `_rowid` 0. Same semantics, surviving identity.
-        lance.dataset(uri, storage_options=storage_options).merge_insert(
+        lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(table, dataset_id))
         # A merge carries ROWS, not schema metadata (see `ensure_declared_dataset_id`), so the stamp on
@@ -278,7 +279,7 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
     the DISTRIBUTED stage write, which overwrites and so drops the dataset's indices. The in-process stages
     merge and keep theirs, so this is a no-op re-create there rather than a repair.
     """
-    ds = lance.dataset(uri, storage_options=storage_options)
+    ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
     ds.create_scalar_index(
         _LINEAGE_COLUMN,
         IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": _LINEAGE_INDEX_PATH}),
@@ -297,7 +298,7 @@ def existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None:
     given a person's attention rather than a silent promote.
     """
     try:
-        return int(lance.dataset(uri, storage_options=storage_options).count_rows())
+        return int(lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).count_rows())
     except Exception as exc:  # noqa: BLE001 — any unreadable destination is "no predecessor", never a failure of the write
         # LOUD, because `None` is about to be read as FIRST_PROMOTION and asked about. Without this the
         # review says "first promotion" whether the dataset genuinely has no predecessor or we simply
@@ -333,7 +334,7 @@ def transform_stage(
     table demonstrably needs per-table fan-out AND the real Ray distributed-write path lands — see
     docs/DECISIONS.md #p21--single-base-cascade-write.
     """
-    ds = lance.dataset(from_uri, storage_options=storage_options)
+    ds = lance.dataset(from_uri, storage_options=storage_options, session=shared_lance_session())
     # BEFORE the overwrite: what the destination holds now is the band's only honest comparison point.
     previous_rows = existing_row_count(to_uri, storage_options)
     out, blob_payloads = _carry_forward(ds, stage)
@@ -361,7 +362,7 @@ def transform_stage(
     additive = _additive_columns(out, to_uri, storage_options)
     if additive is not None:
         if additive:
-            lance.dataset(to_uri, storage_options=storage_options).add_columns(out.select(additive))
+            lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).add_columns(out.select(additive))
         # `add_columns` changes no schema metadata either, and this branch returns before every write
         # below — so without this the fast path is the one that never declares its own name.
         ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options)
@@ -385,7 +386,7 @@ def transform_stage(
     # no longer depends on which branch a run happens to take.
     carried_base = blobs.external_base_of(ds)
     if _dataset_exists(to_uri, storage_options):
-        lance.dataset(to_uri, storage_options=storage_options).merge_insert(
+        lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).merge_insert(
             "id"
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
         ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options)
@@ -401,7 +402,7 @@ def transform_stage(
         )
     # Same rule as `measure_stage`: the edge must name the version the ROWS landed at, not the
     # `CreateIndex` the rebuild below commits.
-    data_version = int(lance.dataset(to_uri, storage_options=storage_options).version)
+    data_version = int(lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session()).version)
     if lineage is not None:
         _index_lineage(to_uri, storage_options)
     result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows, "version": data_version})
@@ -436,7 +437,7 @@ def _additive_columns(out: pa.Table, to_uri: str, storage_options: dict[str, str
     if _SOURCE_ROWID_COLUMN not in out.column_names:
         return None
     try:
-        target = lance.dataset(to_uri, storage_options=storage_options)
+        target = lance.dataset(to_uri, storage_options=storage_options, session=shared_lance_session())
         existing = set(target.schema.names)
         if not existing <= set(out.column_names) or _SOURCE_ROWID_COLUMN not in existing:
             return None
@@ -564,7 +565,7 @@ def _dataset_exists(uri: str, storage_options: dict[str, str]) -> bool:
     relative path (the same trap `ingest.catalog.ensure_at` documents).
     """
     try:
-        lance.dataset(uri, storage_options=storage_options)
+        lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
     except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "create"
         return False
     return True

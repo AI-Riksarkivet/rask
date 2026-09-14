@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from lineage.api.dependencies import SettingsDep
 from lineage.api.fga_deps import FilterDep
-from lineage.core.config import get_settings, storage_options
+from lineage.core.config import get_settings, shared_lance_session, storage_options
 from lineage.schemas import DemoDataset, DemoDatasets, DemoField, DemoVersion
 from service_kit.lakehouse import schema
 
@@ -109,7 +109,7 @@ def _stamp(entry: dict[str, Any]) -> str | None:
 
 def _read_dataset(cache: PeekCache, name: str, uri: str, opts: dict[str, str], max_versions: int) -> DemoDataset:
     try:
-        ds = lance.dataset(uri, storage_options=opts)  # the ONE per-tick open: the change probe
+        ds = lance.dataset(uri, storage_options=opts, session=shared_lance_session())  # the ONE per-tick open: the change probe
     except (OSError, ValueError, RuntimeError) as exc:
         # The dataset genuinely not existing yet (the cascade has not written this tier) is the common
         # case and is what exists=False reports — but so is an S3 outage, so it is logged rather than
@@ -132,7 +132,7 @@ def _read_dataset(cache: PeekCache, name: str, uri: str, opts: dict[str, str], m
             versions.append(hit)
             continue
         try:
-            at_version = lance.dataset(uri, storage_options=opts, version=number)
+            at_version = lance.dataset(uri, storage_options=opts, version=number, session=shared_lance_session())
             fields = [DemoField(name=f.name, type=schema.type_label(f)) for f in at_version.schema]
         except (OSError, ValueError, RuntimeError) as exc:
             # A single version failing to open (a pruned/compacted-away manifest, an S3 hiccup) drops

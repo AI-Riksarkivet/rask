@@ -13,6 +13,13 @@ raw-to-bronze stage runner anywhere in this config.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    # Type-only: `lance` is heavy and this module is read at boot.
+    import lance
+
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Self
@@ -93,6 +100,11 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # deliberately-bare ones (DAPR_HTTP_PORT, RAY_DASHBOARD_URL) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MEDALLION_", extra="ignore")
+    #: The bounded Lance caches this process holds ([[LH-096]]). Lance's own defaults are 1 GiB + 6 GiB,
+    #: which dwarf the 512 Mi limit every lakehouse pod runs under. Settings rather than literals because
+    #: a literal cannot track `resources.limits.memory`; `shared_lance_session` clamps them to the cgroup.
+    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MEDALLION_LANCE_METADATA_CACHE_MB")
+    lance_index_cache_mb: int = Field(default=256, ge=8, alias="MEDALLION_LANCE_INDEX_CACHE_MB")
 
     # --- shared Dapr wiring (same component + lineage topic as catalog/lineage) -----------------
     pubsub: str = Field(default="lineage-pubsub", alias="MEDALLION_PUBSUB")
@@ -631,3 +643,26 @@ def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | No
     if not settings.secrets_from_dapr:
         return None
     return _dedicated_token_resolver(settings.dapr_secret_store, settings.dapr_secret_key)
+
+
+def shared_lance_session() -> lance.Session:
+    """The process-wide bounded Lance session every medallion open threads ([[LH-096]]).
+
+    A bare `lance.dataset(uri)` takes Lance's default 1 GiB metadata + 6 GiB index ceilings, serves one
+    call and discards the cache WITH the handle — so inside the 512 Mi limit this pod runs under, the
+    process both carries caps describing a container it is not in and never caches anything. Measured:
+    repeated opens grow a shared session's `size_bytes` and leave a bare open's flat.
+
+    NOT A HANDLE CACHE. Caching a DATASET pins a version; a `Session`'s keys carry `(uri, version, etag)`,
+    so a compaction writes NEW keys and a stale read is not expressible — which is why this needs no
+    freshness contract. `service_kit.lakehouse.lance_session` records that and its thread-safety.
+
+    Clamped from the cgroup rather than by lowering the defaults, because a literal cannot track
+    `resources.limits.memory`. `rask-maintenance` was OOMKilled (exit 137) on 2026-09-10 before it
+    clamped, which is why this is the shape the estate already uses.
+    """
+    from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
+
+    settings = get_settings()
+    metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
+    return lance_session(metadata, index)

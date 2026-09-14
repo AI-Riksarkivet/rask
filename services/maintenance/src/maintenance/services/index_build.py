@@ -29,6 +29,7 @@ from typing import Any, Final, Literal, cast
 import lance
 from pydantic import BaseModel, ConfigDict
 
+from maintenance.core.config import shared_lance_session
 from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
 
 
@@ -85,7 +86,7 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     for it, and pylance's own defaults then apply (scalar replaces, vector refuses a duplicate name).
     Passing a value nobody chose would make this worker decide a semantics the door never offered.
     """
-    dataset = lance.dataset(item.uri, storage_options=dict(write_options) or None)
+    dataset = lance.dataset(item.uri, storage_options=dict(write_options) or None, session=shared_lance_session())
     # THE COLUMN IS CHECKED BEFORE THE BUILD, because the schema is already in hand and "does this
     # column exist" is a question with an answer rather than a failure to classify afterwards.
     # Measured on pylance 10.0.0: an absent column raises a bare `KeyError('nope not found in
@@ -109,7 +110,7 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     # RE-OPENED, because the build commits a new manifest and the handle above still describes the
     # version it started from. Reporting that one would tell a caller their index landed at a version
     # that does not contain it.
-    committed = lance.dataset(item.uri, storage_options=dict(write_options) or None)
+    committed = lance.dataset(item.uri, storage_options=dict(write_options) or None, session=shared_lance_session())
     log.info(
         "index_built",
         extra={

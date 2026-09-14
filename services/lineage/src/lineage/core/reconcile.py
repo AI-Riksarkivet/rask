@@ -17,6 +17,7 @@ from typing import Final, Protocol
 
 import lance
 
+from lineage.core.config import shared_lance_session
 from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.features import unsupported_features_from_open_error
@@ -83,7 +84,7 @@ def read_storage_version(uri: str, storage_options: dict[str, str]) -> int | Non
     if not _names_a_storage_location(uri):
         raise StorageUnreadable(f"{uri!r} names no storage location — a relative path cannot say whether the data is there")
     try:
-        return int(lance.dataset(uri, storage_options=storage_options).version)
+        return int(lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).version)
     except BaseException as exc:
         _swallow_dataset_error(exc)
         if reads_as_absent(exc):
@@ -101,7 +102,7 @@ def read_storage_schema(uri: str, storage_options: dict[str, str], version: int)
     edge. Best-effort — a read failure yields ``None`` and the edge stays schemaless.
     """
     try:
-        return facet_fields(lance.dataset(uri, storage_options=storage_options, version=version).schema)
+        return facet_fields(lance.dataset(uri, storage_options=storage_options, version=version, session=shared_lance_session()).schema)
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None
@@ -123,7 +124,7 @@ def read_storage_versions(uri: str, storage_options: dict[str, str]) -> list[int
     dataset has no versions", and every version the graph holds would then look like storage loss.
     """
     try:
-        return sorted(int(v["version"]) for v in lance.dataset(uri, storage_options=storage_options).versions())
+        return sorted(int(v["version"]) for v in lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).versions())
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None
@@ -170,7 +171,7 @@ def read_version_operations(uri: str, storage_options: dict[str, str], versions:
     predecessor whose manifest is gone, keeps the honest ``None``.
     """
     try:
-        dataset = lance.dataset(uri, storage_options=storage_options)
+        dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return dict.fromkeys(versions)
@@ -207,7 +208,7 @@ def read_dangling_blob_columns(uri: str, storage_options: dict[str, str]) -> lis
     finding): the version comparison already classifies missing/unreadable storage.
     """
     try:
-        return blobs.dangling_blob_columns(lance.dataset(uri, storage_options=storage_options))
+        return blobs.dangling_blob_columns(lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()))
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return []
@@ -222,7 +223,7 @@ def read_latest_write_age_hours(uri: str, storage_options: dict[str, str]) -> fl
     ``None`` when unreadable/empty — the version comparison already classifies those.
     """
     try:
-        versions = lance.dataset(uri, storage_options=storage_options).versions()
+        versions = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).versions()
         if not versions:
             return None
         latest = max(v["timestamp"] for v in versions)

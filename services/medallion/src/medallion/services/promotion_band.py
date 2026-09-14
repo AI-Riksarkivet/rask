@@ -35,6 +35,8 @@ from __future__ import annotations
 import logging
 from typing import Final
 
+from medallion.core.config import shared_lance_session
+
 
 #: The dataset had no previous version to compare against. §9.1's load-bearing clause: it fires once
 #: per dataset, so the band's exact width never decides whether anyone looks at a NEW table.
@@ -116,7 +118,7 @@ def previous_row_count(uri: str, storage_options: dict[str, str], *, version: in
     import lance
 
     try:
-        return int(lance.dataset(uri, storage_options=storage_options, version=version - 1).count_rows())
+        return int(lance.dataset(uri, storage_options=storage_options, version=version - 1, session=shared_lance_session()).count_rows())
     except Exception as exc:  # noqa: BLE001 — an unreadable history is "no predecessor", which ASKS
         # Same reason as the sibling in `compute.py`: the caller is about to read `None` as
         # FIRST_PROMOTION and raise a review, so a read that FAILED must be distinguishable in the log

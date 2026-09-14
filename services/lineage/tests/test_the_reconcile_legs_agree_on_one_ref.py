@@ -33,8 +33,13 @@ def test_the_storage_leg_reads_MAIN() -> None:
     """`lance.dataset(uri)` opens only main (`catalog/core/namespace.py::open_dataset` states it), so
     this leg is main by construction — asserted so a future `branch=` here has to face the other two."""
     source = inspect.getsource(reconcile_mod.read_storage_version)
-    assert "lance.dataset(uri, storage_options=storage_options)" in source, source
+    # THE PROPERTY, NOT THE CALL'S EXACT TEXT. This matched the literal
+    # `lance.dataset(uri, storage_options=storage_options)` until [[LH-096]] threaded a bounded session
+    # through every lakehouse open — a change that altered nothing about WHICH ref is read and still
+    # broke the assertion. What this leg must hold is that it names no ref: no `branch=`, no `version=`.
+    assert "lance.dataset(" in source, source
     assert "branch" not in source, "the storage leg became branch-aware while the others did not"
+    assert "version=" not in source, "the storage leg pinned a version; it must read whatever main is at"
 
 
 def test_the_repair_leg_records_a_MAIN_write() -> None:

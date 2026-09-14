@@ -15,6 +15,10 @@ DATASET HANDLE pins a version and needs a freshness contract; a `lance.Session`'
 `(uri, version, etag)`, so a compaction writes NEW keys and a stale read is not expressible. That is
 recorded in `service_kit.lakehouse.lance_session`, along with its thread-safety under concurrent opens.
 
+THE STRUCTURAL HALF LIVES IN `tests/unit/test_no_lakehouse_service_opens_lance_unbounded.py`, which
+holds all four lakehouse services to the rule at once — one gate rather than four copies that drift.
+What stays here is what is specific to the catalog's own session.
+
 THE BEHAVIOURAL TEST IS THE LOAD-BEARING ONE. Asserting that a `session=` kwarg is passed would pass
 for a session that is never reused — the defect in a different shape. So the test opens the same dataset
 repeatedly and asserts the session's `size_bytes` GROWS, and that the same call without a session leaves
@@ -23,15 +27,11 @@ it flat. That is the row's own measurement, and it is what proves the cache enga
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import lance
 import pyarrow as pa
 import pytest
-
-
-CATALOG_SRC = Path(__file__).resolve().parents[1] / "src" / "catalog"
 
 
 @pytest.fixture
@@ -46,35 +46,6 @@ def catalog_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
     config.get_settings.cache_clear()
-
-
-def _open_sites() -> list[str]:
-    """Every `lance.dataset(...)` call in the catalog, as `file:line`, with whether it passes a session."""
-    sites: list[str] = []
-    for path in sorted(CATALOG_SRC.rglob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not (isinstance(func, ast.Attribute) and func.attr == "dataset"):
-                continue
-            if not (isinstance(func.value, ast.Name) and func.value.id == "lance"):
-                continue
-            if not any(kw.arg == "session" for kw in node.keywords):
-                sites.append(f"{path.relative_to(CATALOG_SRC)}:{node.lineno}")
-    return sites
-
-
-def test_every_catalog_lance_open_threads_the_shared_session() -> None:
-    """A bare open mints 1 GiB + 6 GiB ceilings inside a 512 Mi pod and throws them away again.
-
-    Structural, and deliberately exhaustive rather than a sample: the cost of ONE missed site is a
-    request path that still mints the defaults, and the point of the conversion is that none remain.
-    """
-    bare = _open_sites()
-
-    assert not bare, f"these catalog opens do not pass session=: {bare}"
 
 
 def test_the_session_is_ONE_object_across_calls(catalog_env: None) -> None:
