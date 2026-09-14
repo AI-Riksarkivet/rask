@@ -86,11 +86,23 @@ def urls() -> tuple[str, str]:
     return LANCERAY.rstrip("/"), LINEAGE.rstrip("/")
 
 
-def _run_count(lineage: str) -> int:
-    """How many runs the lineage graph has recorded — the freshness baseline for the cascade."""
+def _run_ids(lineage: str) -> set[str]:
+    """The run ids the board is currently showing — the freshness baseline for the cascade.
+
+    IDS, NOT A COUNT, and the difference is the whole assertion. `/runs` is bounded at the query
+    (`runs.py:_RUNS_RETURN = 200`, which is both the default AND the `le=` maximum, because the board is
+    polled every two seconds and the graph has no run retention). So `len()` SATURATES: once the estate
+    passes 200 runs the count is 200 forever and "three more than before" can never be true. This drive
+    failed exactly that way — `runs 200->200, expected >= 203` — against a cascade that had completed to
+    gold, which the stage runners' own `medallion_stage_moved` lines confirm.
+
+    The CONTENT does not saturate, because the board is newest-first: a run created seconds ago is on
+    the page whatever the estate's total. So a set difference proves what the count was written to prove
+    — that THIS drive added runs — and keeps proving it as the estate grows.
+    """
     resp = requests.get(f"{lineage}/runs", headers=_LINEAGE_HEADERS, timeout=8)
     resp.raise_for_status()
-    return len(resp.json().get("runs", []))
+    return {run["run_id"] for run in resp.json().get("runs", []) if run.get("run_id")}
 
 
 def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
@@ -100,7 +112,7 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     # set-membership alone can't prove THIS trigger did anything — the graph would look identical if the
     # cascade silently no-op'd. A fresh produce mints a new run per stage (producer + 2 stage runners = +3), so a
     # strictly rising run count is the real "the cascade fired just now" signal.
-    before = _run_count(lineage)
+    before = _run_ids(lineage)
 
     # ACT — one trigger at the head of the pipeline (carrying the app-token when the stack enforces it).
     headers = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
@@ -152,14 +164,14 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
         resp = requests.get(f"{lineage}/datasets/{gold}/upstream", headers=_LINEAGE_HEADERS, timeout=8)
         if resp.status_code == 200:
             upstream = [ref["name"] for ref in resp.json().get("related", [])]
-            if chain <= set(upstream) and _run_count(lineage) >= before + 3:
+            if chain <= set(upstream) and len(_run_ids(lineage) - before) >= 3:
                 return
         else:
             refusal = f" [read door answered {resp.status_code}: {resp.text[:200]}]"
         time.sleep(3)
     pytest.fail(
-        f"{gold} cascade did not complete within 150s (upstream={upstream}, runs {before}->{_run_count(lineage)}, "
-        f"expected >= {before + 3}){refusal}{_projectless_diagnosis(lineage, upstream)}"
+        f"{gold} cascade did not complete within 150s (upstream={upstream}, "
+        f"new runs {len(_run_ids(lineage) - before)}, expected >= 3){refusal}{_projectless_diagnosis(lineage, upstream)}"
     )
 
 
@@ -172,9 +184,9 @@ def _projectless_diagnosis(lineage: str, upstream: list[str]) -> str:
 
     With `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
     carries a project because "the stage runner cannot resolve its tiers without it". So a PROJECTLESS produce
-    against a publish-driven estate publishes silver and gold never fires — and the bare run-count
-    message reports that as a broken cascade, which is what it did on the drive that produced
-    `runs 131->133, expected >= 134` against a cascade working perfectly for a tenant.
+    against a publish-driven estate publishes silver and gold never fires — and the bare new-run tally
+    reports that as a broken cascade. Measured: a drive that added two runs where three were wanted,
+    against a cascade working perfectly for a tenant.
 
     The signature is specific enough to name: no `LANCE_E2E_PROJECT`, and SILVER reached bronze while
     gold reached nothing. A genuinely broken cascade does not stop cleanly at exactly that boundary,
