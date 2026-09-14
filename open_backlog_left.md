@@ -3683,7 +3683,12 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `psycopg.OperationalError: consuming input failed: server closed the connection unexpectedly` —
   AGE backends are being OOM-killed (five `terminated by signal 9` events in 24h, `restartCount: 0`),
   which takes the whole graph into crash recovery and drops every in-flight connection. That is a
-  real, live defect and it is FIXED rather than filed: AGE asked `lance.resources` for a `comp="age"`
+  real, live defect, and it is FIXED AND OBSERVED (helm revision 157, `rask-age-0` recreated
+  20:34:10Z with limits 2Gi / requests 512Mi): a 3m15s lineage-heavy drive of
+  `test_lineage_e2e.py` + `test_medallion_e2e.py` came back **14 passed with ZERO
+  `server closed the connection` errors**, and the whole `lineage_e2e` suite — this flapper
+  included — is green. Given room the pod settles at **652Mi, above the old 512Mi limit**, so the
+  working set never fit and the kills were structural. Fixed rather than filed: AGE asked `lance.resources` for a `comp="age"`
   tier that did not exist and fell through to the stateless-app default (128Mi/512Mi) against a 385Mi
   steady state. `observability_e2e::test_distributed_trace_spans_catalog_to_lineage` is a DIFFERENT
   cause — a 500 from GreptimeDB's `/v1/sql`, whose pod has restarted 3 times — and still needs a

@@ -582,6 +582,11 @@ resources:
   # eight times in two hours, four of them reaching a caller as a 500 on `GET /runs` — and as one of
   # the two e2e legs that flip between consecutive runs ([[LH-109]]).
   #
+  # THE WORKING SET NEVER FIT, which the post-fix measurement settles: given room, this pod settles at
+  # 652Mi — ABOVE the old 512Mi limit. The 385Mi "steady" figure was a process being held under its
+  # ceiling by the kernel, not a process that wanted 385Mi, so the kills were structural rather than a
+  # bad-luck spike and no amount of load-shedding would have avoided them.
+  #
   # The request is raised as well as the limit: a database's working set is resident, not burstable, so
   # a 50m/128Mi request misdescribes it to the scheduler. Same shape as the `compute` tier above.
   age:
