@@ -125,10 +125,19 @@ def test_what_may_be_CHOSEN_is_always_a_subset_of_what_can_be_RESOLVED(tmp_path:
     chosen and not resolved is a stage that dies at submission — and equality made a Ray-OFF
     deployment unrepresentable.
     """
+    from medallion.services import ray_submit
     from medallion.services.engine_registry import hosted_engines as resolvable
+
+    # RUNNABLE, not RESOLVABLE. `hosted_engines()` reports only what an `Executor` adapter serves, and
+    # Ray has none — the cascade submits it through `ray_submit` (the Ray Jobs API). The `RayJobExecutor`
+    # that made the two sets equal had zero production callers and was deleted 2026-09-15 (owner
+    # decision), so comparing against adapters alone would now fail for the engine the estate runs most.
+    runnable = set(resolvable())
+    if callable(getattr(ray_submit, "submit_stage_job", None)):
+        runnable.add(engine_choice.RAY_ENGINE)
 
     choosable = engine_choice.hosted_engines(_settings(tmp_path, ray_enabled=ray_enabled))
 
-    assert choosable <= resolvable(), f"a stage may choose {sorted(choosable - resolvable())} which no adapter resolves"
+    assert choosable <= runnable, f"a stage may choose {sorted(choosable - runnable)} which nothing executes"
     assert engine_choice.IN_PROCESS_ENGINE in choosable, "the in-process engine needs no runtime and is always hosted"
     assert (engine_choice.RAY_ENGINE in choosable) is ray_enabled, "hosting the Ray lane is exactly whether this deployment starts its runtime"

@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from medallion.services.engine_names import IN_PROCESS_ENGINE, RAY_ENGINE
+from medallion.services.engine_names import IN_PROCESS_ENGINE
 from service_kit.lakehouse.executor import Executor
 
 
@@ -64,10 +64,6 @@ def executor_for(
         from medallion.services.inprocess_executor import InProcessExecutor
 
         return InProcessExecutor(_as_callable(storage_options))
-    if engine == RAY_ENGINE:
-        from medallion.services.rayjob_executor import RayJobExecutor
-
-        return RayJobExecutor(**dict(config or {}))
     raise UnknownEngineError(
         f"no executor is registered for engine {engine!r}; this deployment hosts {sorted(hosted_engines())}. "
         "A task registered for another engine belongs to another deployment and is refused rather than run here."
@@ -75,14 +71,22 @@ def executor_for(
 
 
 def hosted_engines() -> frozenset[str]:
-    """What this BUILD can actually RESOLVE — which adapters are here, a code fact.
+    """Which engines this registry resolves to an `Executor` — a code fact about the adapters present.
 
-    Deliberately separate from `engine_choice`, which asks what a stage may CHOOSE. That is two
-    questions, not one: `KNOWN_ENGINES` is the build's ceiling and must equal this set (a test asserts
-    it — an engine that can be chosen and not resolved is a stage that dies at submission, and one
-    that can be resolved and not chosen is a reachable path nobody reviewed), while
-    `engine_choice.hosted_engines(settings)` narrows the ceiling to what the DEPLOYMENT runs and is
-    therefore a SUBSET of this, never an equal. Requiring equality against the deployment set is what
-    made a Ray-OFF deployment unrepresentable.
+    **THIS IS NOT THE SET OF ENGINES THE ESTATE CAN RUN**, and conflating the two is what made the old
+    equality gate assert something false. Ray is a choosable engine and the cascade runs it every day,
+    but it is submitted through `ray_submit` (the Ray Jobs API) rather than through an `Executor`, so it
+    does not appear here. A `RayJobExecutor` that submitted a `RayJob` CR did exist and had ZERO
+    production callers; it was deleted (owner decision 2026-09-15) rather than kept as a second live
+    path nobody exercised.
+
+    The invariant that matters is "every choosable engine has SOME path that runs it", which
+    `test_every_choosable_engine_has_a_path_that_runs_it` states over both paths. Equality against
+    `KNOWN_ENGINES` would now be false for Ray, and would push the next person to re-add an adapter to
+    satisfy a test rather than because anything calls it.
+
+    Still deliberately separate from `engine_choice`, which asks what a stage may CHOOSE:
+    `engine_choice.hosted_engines(settings)` narrows the build's ceiling to what the DEPLOYMENT runs,
+    which is how a Ray-OFF deployment stays representable.
     """
-    return frozenset({IN_PROCESS_ENGINE, RAY_ENGINE})
+    return frozenset({IN_PROCESS_ENGINE})
