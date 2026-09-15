@@ -1368,6 +1368,29 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   two ungoverned of the 60 are removals either way: no door will answer for them. Pin that a corrected dataset keeps its `_rowid`s
   (`update_schema_metadata` is metadata-only, so that is provable), and pin separately that the
   94-count id's absence from the catalog is diagnosed rather than folded in here.
+- **RE-MEASURED 2026-09-15 on the live estate. Stated as MEASUREMENT, not as a root cause — two root
+  causes published earlier today had to be retracted, and this row is one where the obvious reading is
+  already recorded as wrong once.**
+  * Both stamps confirmed, with their exact values:
+    `s3://lance-catalog/medallion/lakehouse$bronze` carries `lineage.dataset_id = 'lakehouse$bronze$events'`
+    and `s3://lakehouse-wh/medallion/bronze` carries `'lakehouse-bronze$events'`. 8 rows each.
+  * **NEITHER NAME IS A CATALOG TABLE** — checked against the 381 tables `_tables_across` enumerates.
+    So the 404 is not "the id is malformed"; it is "the id names nothing", which is a different repair.
+  * Corroborated independently by the sweep: in a 30-minute window those two ids are the ONLY
+    `/compaction_plan` 404s (4 and 3 respectively), which is the same pair this row measured in a
+    400-row sample on 2026-09-11. The condition is stable, not drifting.
+- *And the estate carries TWO live naming conventions, which is what makes "the correct value" hard:*
+  `lakehouse$silver$features` and `lakehouse$silver-media$features` (nested, `$`-separated) sit beside
+  `lakehouse-silver$features` and `lakehouse-gold$catalog` (hyphen-qualified project prefix) — all four
+  are real tables. `lakehouse-bronze$events` follows the convention its OWN warehouse's siblings use
+  exactly, so it does not read as a malformed leftover; the table it names simply was never registered.
+- *What that does to this row's open question:* the repair source cannot come from the location
+  (already measured here), and it cannot be validated against the catalog either, because the target
+  does not exist. That points at the same unregistered-`medallion/<ns>`-dataset population as
+  [[LH-164]]'s remaining owner decision, so the two may resolve together — **may**, on today's
+  evidence, and this row does not assert it.
+- *Also connects [[LH-137]]:* that row's half (b) residue is these exact two ids, so it is this defect
+  seen from the compaction door rather than a separate fault.
 
 **LH-134 · ~~Credential vending accumulates one STS identity record per vend, and at ~100k the store cannot restart~~ — CLOSED AND OBSERVED 2026-09-11**
 `catalog, chart` · **HIGH** · filed 2026-09-11 · found by an outage, not by a review
