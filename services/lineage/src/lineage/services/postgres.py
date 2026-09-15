@@ -179,3 +179,26 @@ VERTEX_LOOKUP_KEYS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     # NON-UNIQUE, necessarily: many runs share an `event_time`, and it is not part of the MERGE key.
     ("Run", ("event_time",)),
 )
+
+# Endpoint indexes on every EDGE label a traversal walks. AGE stores each edge label as a plain Postgres
+# table whose `start_id`/`end_id` are REAL COLUMNS (not keys inside the `properties` agtype blob), so these
+# are ordinary btree indexes rather than the `agtype_access_operator` functional form the vertex keys need.
+#
+# Without them a walk costs O(every edge of that label) instead of O(the edges at this node). Measured on
+# the deployed graph 2026-09-15: no edge label carried ANY index, while all seven were traversed and none
+# was bounded — WROTE 7095, OF_JOB 6394, HAS_COLUMN 4236, READ 1424, CREATED 1324, DERIVED_FROM_COLUMN 380,
+# DERIVED_FROM 70. `LATEST_WRITE_VERSION` for ONE dataset read all 7,095 WROTE rows and all 7,109 Run rows,
+# and it runs inside the ingest transaction on every event via `_schema_is_current`.
+#
+# Verified on a prod-shaped graph in a throwaway AGE (Dagger, so the live graph was never written):
+# 6.778 ms seq-scanning 7,095 edges -> 1.783 ms on a bitmap index scan touching the node's own 457. The
+# change of ORDER is the point, not the 3.8x — `age.py` names an unbounded walk over a grown graph as why
+# a pooled connection cannot be pinned, and such a walk OOM-killed the AGE container on 2026-09-15.
+#
+# BOTH endpoints, because the traversals go both ways: `/upstream` walks end->start, `/downstream`
+# start->end. Indexing one leaves the other exactly as unbounded as it was.
+#
+# NON-UNIQUE, necessarily: a node has many edges of a label, and AGE permits parallel edges.
+EDGE_LOOKUP_KEYS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = tuple(
+    (label, ("start_id", "end_id")) for label in ("WROTE", "READ", "OF_JOB", "HAS_COLUMN", "CREATED", "DERIVED_FROM", "DERIVED_FROM_COLUMN")
+)

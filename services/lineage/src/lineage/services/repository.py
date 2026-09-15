@@ -1108,7 +1108,9 @@ class LineageRepository:
     async def ensure_graph_constraints(self) -> None:
         """Add the per-label indexes: UNIQUE on each ``pg.VERTEX_UNIQUE_KEYS`` MERGE key (a CONCURRENT MERGE
         can't slip in a duplicate vertex, item 6) + plain LOOKUP on ``pg.VERTEX_LOOKUP_KEYS`` (index-speed
-        MATCHes without the uniqueness churn — :Column, §4). Idempotent + safe on every replica boot:
+        MATCHes without the uniqueness churn — :Column, §4) + endpoint indexes on every
+        ``pg.EDGE_LOOKUP_KEYS`` label, which is what makes a TRAVERSAL cost the node's own degree rather
+        than the whole edge table (LH-006; measured 2026-09-15, no edge label carried any index at all). Idempotent + safe on every replica boot:
         ``create_vlabel`` materializes
         the label's table (suppressed if it already exists), then ``CREATE UNIQUE INDEX IF NOT EXISTS`` on
         the property-access expression. Best-effort — a per-label failure (e.g. pre-existing dup rows on an
@@ -1136,6 +1138,24 @@ class LineageRepository:
                     await conn.execute(index)
                 except Exception as exc:
                     log.warning("age_vertex_constraint_skipped", extra={"label": label, "error": str(exc)})
+
+            # The EDGE half. `start_id`/`end_id` are real columns on AGE's edge tables, so these are plain
+            # btree indexes — the property-access expression above would index nothing here. Same
+            # best-effort stance and the same `IF NOT EXISTS` idempotence as the vertex plans.
+            for label, columns in pg.EDGE_LOOKUP_KEYS:
+                with suppress(Exception):  # label already exists (a prior MERGE created it lazily) → fine
+                    await conn.execute(sql.SQL("SELECT create_elabel({}, {})").format(sql.Literal(self._graph), sql.Literal(label)))
+                for column in columns:
+                    edge_index = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+                        sql.Identifier(f"{self._graph}_{label.lower()}_{column}"),
+                        sql.Identifier(self._graph),
+                        sql.Identifier(label),
+                        sql.Identifier(column),
+                    )
+                    try:
+                        await conn.execute(edge_index)
+                    except Exception as exc:
+                        log.warning("age_edge_index_skipped", extra={"label": label, "column": column, "error": str(exc)})
 
     @asynccontextmanager
     async def reconcile_lock(self) -> AsyncIterator[bool]:
