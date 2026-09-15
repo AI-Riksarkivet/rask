@@ -4499,21 +4499,41 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   is the ONE serialization, so no adapter hand-rolls it" — the key deserves the same), with a test that
   fails if a code-version change does not change the key on either lane.
 
-**LH-158 · The `Executor` port is not the only door, so a third engine would silently run in-process**
+**LH-158 · The `Executor` port is declared, documented and used by neither lane**
 `medallion` · med · found 2026-09-15 by an adversarial workflow
 
-- *The defect:* `transform.py:828` decides with `use_ray = engine_for_async(...) == RAY_ENGINE` and
-  treats in-process as the implicit `else`. A task registered for a THIRD engine therefore does not
-  fail — it runs in-process, which is the "silently run by the wrong engine" outcome `engine_choice`
-  refuses at declaration time and this site then reintroduces at dispatch time.
+- **THE HEADLINE THIS ROW WAS FILED WITH WAS WRONG, AND IS CORRECTED RATHER THAN QUIETLY DROPPED.** It
+  claimed a task registered for a THIRD engine would silently run in-process because `transform.py:828`
+  treats in-process as the implicit `else`. Re-measured 2026-09-15 before working it, and the guard
+  already exists — twice:
+  * `engine_choice.engine_for` refuses any registration whose engine is outside
+    `hosted_engines(settings)`, with a message that distinguishes "this build has no adapter" from
+    "this deployment turned it off" and ends *"Refusing rather than running it on whichever engine
+    happens to be configured here."*
+  * and a third engine cannot be REGISTERED in the first place: `task_register.py:54` builds the
+    declarations as `[(task, RAY_ENGINE) for ...] + [(task, IN_PROCESS_ENGINE) for ...]`, so the
+    registry only ever stamps those two.
+  *Building the proposed guard would therefore have shipped a control that cannot fire* — the defect
+  class this estate keeps finding, arrived at from the opposite direction. Recorded because the finding
+  came from an adversarial workflow: agent output needs the same re-measurement as any other verdict,
+  and "8 agents agreed" is not evidence.
+- *What is actually true, and is the whole of this row:* the `Executor` port is honoured by NEITHER
+  lane. `transform.py:788` hand-builds `InProcessExecutor(settings.storage_options)` directly;
+  `transform.py:828` branches `use_ray` and dispatches the Ray lane to the workflow; and
+  `executor_for` has ZERO production callers. `docs/DECISIONS.md:1451` meanwhile describes "a port,
+  TWO adapters". This is requirement 2 of [[LH-159]] — clear abstractions — and it is the reason that
+  requirement does not hold.
 - *The related shape question, stated so the fix is scoped rather than drifting:* `executor_for` has
   ZERO production callers, `transform.py:786` still hand-builds `InProcessExecutor` directly, and since
   the RayJob adapter was deleted ([[LH-083]]) the registry has ONE implementation. So either dispatch
   routes through the port — wrapping `ray_submit` + `job_status` as a Jobs-API executor — or
   `engine_registry.py` is deleted outright. **Keeping it uncalled is the worst of the three**, because
   the decision record already claims a port with adapters that the code does not use.
-- *Closes when:* dispatch goes through one door that REFUSES an engine it cannot run, and the registry
-  is either used or gone. Pin the refusal with a task registered for an engine nobody hosts.
+- *Closes when:* dispatch goes through the port — one door, both lanes — OR `engine_registry.py` is
+  deleted and `DECISIONS.md` rewritten to describe the branch the code actually has. **Keeping an
+  uncalled port is the worst of the three**, because the decision record then documents an
+  architecture nothing implements. Do NOT add an engine-refusal guard: one already exists at
+  `engine_choice.engine_for` and a second would be unreachable.
 
 **LH-159 · THE BYO CONTRACT — what "bring your own workflow engine and compute engine" actually requires, and where rask is short of it**
 `medallion, service-kit` · **HIGH** · owner ruling 2026-09-15, evidence from an adversarial workflow the same day
