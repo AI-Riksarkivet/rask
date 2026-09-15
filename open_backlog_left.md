@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**224 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**223 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 11 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 11 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -275,7 +275,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   (`promotions.py:169`), where `wf` is ALREADY imported lazily at :125; and `WorkflowStatus` builds one
   module-level tuple (`_LIVE`, :70) that can be resolved where it is used. No backward compat, so every
   importer of `PromotionSpec` moves in the same change.
-
+- **RE-MEASURED 2026-09-15: the IMPORT half is landed and green; the PACKAGING half is not, and that
+  alone keeps the row open.** Verified by hand after a re-measurement sweep flagged it:
+  * `services/medallion/src/medallion/workflow.py:54` is the ONLY module-level `import dapr.ext.workflow`
+    left in the service — the adapter, which the row permits. `producer.py`, `stage_runner.py`,
+    `api/promotions.py` and `services/dapr_saga.py` all import it inside function bodies.
+  * The pinning suite `test_the_cascade_head_does_not_import_a_workflow_engine.py` passes (6 tests), and
+    it proves this by SUBPROCESS IMPORT rather than by reading source, so it cannot be satisfied by a
+    comment.
+  * **But `services/medallion/pyproject.toml:30` still lists `"dapr-ext-workflow>=1.18"` in the
+    unconditional `dependencies` block, and medallion declares no `[project.optional-dependencies]`
+    table at all.** So the engine is still a hard install-time dependency of the lakehouse's cascade
+    head: condition 3 is met in the import graph and not in the package metadata.
+- *The remaining change is coordinated, not a one-liner, and the trap is worth stating:* moving the pin
+  into an optional extra means `--extra workflow` must reach BOTH sync steps in
+  `.docker/rest-catalog.dockerfile` (:32 and :42) — and nothing in this repo passes `--extra` on a
+  whole-workspace sync today, so `uv sync --all-packages` (the Makefile, `.dagger/test.go`, CI) would
+  leave the engine absent and `medallion.workflow` — the adapter, which MUST import it — would fail at
+  import and take its own suite down.
 **LH-148 · The terminal-provenance-loss metric counts restarts, not losses — and the payload it parks can never be read back**
 `lineage, chart` · med · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
 
@@ -2799,7 +2816,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 - *Evidence:* /home/blackwell/Desktop/rask/services/catalog/src/catalog/api/fga_deps.py:1034 (`grant_owner=token.iss != SERVICE_DOOR_ISSUER`); /home/blackwell/Desktop/rask/services/catalog/src/catalog/api/security.py:47,163 (the service door mints `iss="rask://service-door"`); /home/blackwell/Desktop/rask/packages/service-kit/src/service_kit/governed/fga.py:1320-1333 (owner tuple omitted, hierarchy edge still written in the same batch); /home/blackwell/Desktop/rask/packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:1273-1305 (case 'a table a MACHINE registered is owned by the project, never by the machine' — service-silver-to-gold asserts can_drop/can_deregister/can_restore/manage_grants all false, alice true); /home/blackwell/Desktop/rask/tests/unit/test_a_machine_created_table_is_owned_by_its_project.py:1-60
 - *What would reopen it:* A stage-runner-issued create that still writes a `user:<service> owner table:<id>` tuple — i.e. a service principal whose token carries an `iss` other than SERVICE_DOOR_ISSUER, or a create door that bypasses `seed_ownership` and calls `grant_on_create` with the default `grant_owner=True`.
 
-**LH-053 · Bucket claims are keyed by warehouse ID, so two warehouse IDs can both claim the SAME bucket — and the four control-root JSON stores it must live in are not collapsed**
+**LH-053 · ~~Bucket claims are keyed by warehouse ID, so two warehouse IDs can both claim the SAME bucket — and the four control-root JSON stores it must live in are not collapsed~~ — CLOSED 2026-09-15, stale-open**
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* The bucket claim is real but narrow — a scan-based guard already refuses a sequential double-claim; what is missing is only the ATOMIC bucket-keyed claim, and the store-collapse the row makes it wait on has already landed.
   **Evidence:** /home/blackwell/Desktop/rask/services/catalog/src/catalog/services/warehouses.py:233-236 (`projects_claiming_bucket`) called at /home/blackwell/Desktop/rask/services/catalog/src/catalog/api/v1/endpoints/warehouses.py:180-183 — so a double-claimed bucket IS detected, contra the row's 'No code path detects'; the defect is TOCTOU: the listing is read at warehouses.py:152 before authz, the reserved guard, and the network `provision_bucket` at warehouses.py:186, and the record write is keyed by warehouse id (/home/blackwell/Desktop/rask/services/catalog/src/catalog/services/warehouses.py:186-193 `create_warehouse_record` → `_warehouse_key(record["id"])`), so two different ids racing on one bucket both win. NO bucket-keyed claim exists (grep `bucket-claims` across the tree hits only open_backlog_left.md:399). THE BLOCKER IS DEAD: the conditional-create primitive exists and is already in use — /home/blackwell/Desktop/rask/packages/service-kit/src/service_kit/lakehouse/records.py:89 `create_json` (`IfNoneMatch: *` on s3, `open(...,"xb")` locally), used for the warehouse mint (warehouses.py:193) and the write-once namespace binding (warehouses.py:253); and the four hand-rolled control-root stores WERE collapsed — /home/blackwell/Desktop/rask/packages/service-kit/src/service_kit/lakehouse/record_store.py:1-27 ('the shape four registries hand-rolled: protection, maintenance_policies, trash and warehouse_records'), imported by protection.py:31, maintenance_policies.py:43, trash.py:35, warehouse_records.py:19.
@@ -2807,7 +2824,16 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 `catalog` · **HIGH** · **blocked:** owner ruling: pull the bucket claim forward as its own store, or confirm it stays behind the #85 record primitive
 
 - *Why open:* Deferred by diff2's F1 landing note rather than by omission: the fix belongs with #85's collapse of the four control-root JSON stores, not as a fifth ad-hoc store. No code path detects a double-claimed bucket and recovery is manual — Mallory ends up holding `owner` on a warehouse whose `root_uri` is another tenant's bucket, and `set_project_policy` resolves through the same registry so her maintenance policy can destroy their version history.
-- *Closes when:* Collapse the four control-root JSON stores into a single conditional-create record primitive, then express the warehouse-id mint and a bucket-KEYED claim (`_warehouses/bucket-claims/<bucket>.json`, written with the same `IfNoneMatch: *` primitive) on top of it.
+- **CLOSED — the condition was already met at HEAD and the row had not been re-read.** Found by a
+  re-measurement sweep, then verified by hand rather than taken on the agent's word:
+  `warehouses.claim_bucket` writes `{_BUCKET_CLAIMS_PREFIX}/{bucket}.json` — **keyed by BUCKET** — through
+  `records.create_json`, the same `If-None-Match: *` conditional-create primitive the row asked for, and
+  the warehouse-create door calls it (`endpoints/warehouses.py:199`) before the record write. Commit
+  `28f98f11` names this row in its subject.
+- *The design subtlety the implementation got right, worth keeping:* a claim already held by the
+  CALLER'S OWN project passes rather than colliding, because one project legitimately backs several
+  warehouses with one bucket (the work+gold pair) — keying by warehouse id would have refused the
+  second half of a legitimate pair, which is the mistake this row's title was pointing at.
 
 **LH-054 · The credential-isolation e2e SKIPS against the shipped stack, so cross-tenant credential refusal is proven only by rask's own offline policy evaluator**
 
