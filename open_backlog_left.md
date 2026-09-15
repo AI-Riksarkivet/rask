@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**231 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 85 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4044,8 +4044,8 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Why open:* 22 candidates produced 53 verdicts (40 real) but the critic never ran, so the remaining rows are candidates, not a finished list. The stated reset (2026-09-04 06:00) has passed.
 - *Closes when:* Re-run the sweep's completeness critic and the 16 failed verify calls, then re-state the remaining rows as measured rather than candidate.
 
-**LH-120 · Both medallion entrypoints read settings at import time — `producer.py:170-171`, `producer.py:201` and `stage_runner.py:46`**
-`medallion` · low
+**LH-120 · ~~Both medallion entrypoints read settings at import time — `producer.py:170-171`, `producer.py:201` and `stage_runner.py:46`~~ — STRUCK 2026-09-15 (THE STATED COST DOES NOT REPRODUCE, and the fix does not improve the failure it names)**
+`medallion` · was low
 
 - *Why open:* Re-measured at HEAD 2026-09-09: the LOGGING half is false (neither entrypoint configures logging at module level), but the SETTINGS half stands at three sites, which is the half that matters — a config error fails at import rather than in the lifespan.
 - *RE-MEASURED 2026-09-11 — still true, and the citation drifted.* The module-level reads are
@@ -4053,8 +4053,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `producer.py:201` (`mount_lag_cron(app, get_settings().cascade_lag_binding_name)`), not `:202`,
   which is one past the end of a 201-line file. `stage_runner.py:46` is unchanged. So four sites,
   not three.
-- *Closes when:* Move the `get_settings()` reads at `producer.py:170-171` and `:201` and the
-  `_settings = get_settings()` bind at `stage_runner.py:46` into the lifespan/factory.
+- **DRIVEN 2026-09-15 rather than reasoned about, and the row's cost is half of what it claims.** The
+  four sites are real and still there; what is not is the consequence. Measured:
+
+      uv run python -c "import medallion.producer"            -> imports fine, app built
+      MEDALLION_QUALITY_ENABLED=not-a-bool  ... same import    -> ValidationError at import,
+                                                                 "1 validation error for MedallionSettings"
+
+  So a MISSING config does not fail at all — every field on `MedallionSettings` carries a default — and
+  the crash-loop-on-missing-config this row implies cannot happen. What remains is a MALFORMED value
+  raising a pydantic `ValidationError` that names the offending field, at startup, which is the
+  behaviour `writing-python`'s configuration reference explicitly asks for ("Fail fast at startup — a
+  clear error at startup beats a cryptic None mid-request").
+- *AND THE PRESCRIBED FIX CANNOT DELIVER WHAT THE ROW WANTS.* "Move them into the lifespan/factory"
+  has no lifespan option: `docs_enabled` and `audit_enabled` SHAPE the app (they decide whether the
+  docs routes and the audit middleware exist), so they must be read before `build_lance_service_app`
+  returns. A factory (`create_app()`, the shape `ingest` ships at `.docker/ingest.dockerfile:100`)
+  moves the read from import to construction — the same startup failure, one frame later. The genuine
+  gain would be importability without config, and that already holds.
+- *What would REOPEN it:* a required field with no default appearing on `MedallionSettings` (making a
+  missing value an import crash), or a test that needs to import an entrypoint while deliberately
+  holding invalid config. Neither exists: the estate's medallion tests import freely today.
 
 
 ---
