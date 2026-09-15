@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -906,8 +906,36 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   exactly the state the new `blind` report names. What is left is that a blind edge is a distinct
   state rather than an unreadable-edge warning, so "not measured" cannot look like "not lagging".
 
-**LH-146 · Run retention and the provenance back-fill undo each other — every real author and EVERY input edge becomes a synthetic `author='reconcile'` record, starting 2026-09-16**
+**LH-146 · ~~Run retention and the provenance back-fill undo each other — every real author and EVERY input edge becomes a synthetic `author='reconcile'` record, starting 2026-09-16~~ — FIXED, DEPLOYED AND OBSERVED 2026-09-15**
 `lineage` · **HIGH** · found 2026-09-11 by reading the two halves together; both are deployed and running
+
+
+- **CLOSED 2026-09-15 (`f6cda4b0`, corrected by `dad86232`), deployed on `main-3e858a70` and observed.**
+  Retention now refuses to prune any run belonging to a dataset whose newest write predates the cutoff,
+  so a dataset can never be left with zero `WROTE` edges, is never classified UNTRACKED, and the
+  back-fill that would mint `author='reconcile'` is never reached. Hole recovery is untouched.
+  *THE FIRST FIX HAD A HOLE AND IT IS RECORDED HERE BECAUSE THE SHAPE IS SEDUCTIVE.* `f6cda4b0`
+  exempted "a run that is some dataset's only writer", which asks about the graph as it stands rather
+  than as the batch will leave it: when every writer of a dataset is past the cutoff they each see two
+  or more writers and all are prunable, so one `DETACH DELETE` still took them. Measured on the
+  deployed graph at a probe cutoff — 10 datasets, 57 runs still stripped. Caught before the built image
+  was deployed; `dad86232` moved the question to the DATASET, which no batch composition can change.
+  *WHAT THE LIVE OBSERVATION DOES AND DOES NOT SHOW, stated because this row's own text warns that an
+  idle pruner and a broken one both report 0.* Confirmed: the exact committed COUNT and DELETE strings
+  execute against the deployed AGE (COUNT read-only, DELETE inside a rolled-back transaction), the
+  running pod carries the per-dataset predicate and not the per-run one, and the first reconcile tick
+  after the roll logged `pruned_runs=0 pruned_events=0` with no error. NOT yet seen: the exemption
+  firing on a real prune — the oldest run is `2026-08-16T14:24` against a cutoff of ~`12:30`, so
+  nothing is old enough yet. The next tick that prunes is the one that shows it.
+  *A note for whoever reads the query next:* the shapes that keep exactly ONE run per quiet dataset
+  need each run correlated against its siblings' timestamps, and that form OOM-KILLED the AGE container
+  on this graph rather than running slowly. A quiet dataset therefore keeps its whole history, which
+  costs rows and costs the 30-day window nothing — that window protects alert signal-to-noise, which is
+  driven by Dataset nodes, and an exempted dataset keeps its node either way.
+  *And the premise was checked rather than assumed:* the 30-day cutoff is NOT a compliance requirement.
+  `chart/values.yaml` records it as an owner ruling made so the reconcile's `storage_loss`/`unreadable`
+  warnings converge instead of firing every tick over dead rows; nothing in `docs/` states a compliance
+  basis. The window is unchanged by this fix.
 
 - *The mechanism, each step read out of the code rather than inferred:*
   1. `PRUNE_OLD_RUNS_TEMPLATE` is `MATCH (r:Run) WHERE r.event_time < $cutoff … DETACH DELETE r` —
