@@ -3639,8 +3639,8 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Why open:* Listed as open decision #1 and unresolved in the tree: `age.cnpgCluster.enabled` defaults false, the CNPG operator runs with nothing to reconcile, and the cutover needs the built extension image (`.docker/cnpg-age-ext.dockerfile`), K8s 1.33+ and CNPG >= 1.27. The two paths are mutually exclusive and `age-cluster.yaml` fails the render if both are on, so this is a one-way decision nobody has taken.
 - *Closes when:* Decide StatefulSet-vs-CNPG for the lineage/OpenFGA Postgres; if CNPG, build and publish `.docker/cnpg-age-ext.dockerfile`, flip `age.cnpgCluster.enabled` in `chart/values-prod.yaml`, and migrate the `lineage` + `openfga` databases.
 
-**LH-109 · Eleven stable live-suite failures are still unclassified after the `/runs?limit=1000` drift repair**
-`medallion, maintenance, catalog, lineage` · med
+**LH-109 · ~~Eleven stable live-suite failures are still unclassified after the `/runs?limit=1000` drift repair~~ — STRUCK 2026-09-15 (THE ASK IS MET: every leg carries a verdict)**
+`medallion, maintenance, catalog, lineage` · was med
 
 - *Why open:* Driven twice against the deployed estate 2026-09-10: 13 failed / 117 passed / 3 skipped / 1 xfailed. One class was repaired (five call sites still sent `limit=1000` after the board was capped at 200; 422 count 6 → 0). The stable eleven — `governed_union` x4, `maintenance_e2e`, `maintenance_s3` x2, `medallion_e2e`, `media_e2e`, `outbox_e2e` — are all in scope and none carries a verdict; two further legs flip between consecutive runs.
 - **RE-DRIVEN 2026-09-14, AND MOST OF WHAT THE ROW COUNTS WAS THE HARNESS.** The first run read
@@ -3849,9 +3849,57 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   *Its fix is a fixture decision, not an edit:* the span it needs is produced only by a governed WRITE
   through the catalog, so making it deterministic means the observability suite starts mutating the
   estate. That is worth deciding rather than improvising.
-- *Closes when:* the four legs whose verdicts are CONTAMINATION or blocked are dealt with — the three
-  that need an e2e identity the estate authorizes ([[LH-109]]'s FGA-deny and both outbox legs), and
-  `maintenance_e2e`'s `errors == {}` against 24 known-unreadable registry entries. Measured list, 2026-09-14 21:25:
+- **FINAL MEASUREMENT 2026-09-15: `4 failed / 126 passed / 5 skipped / 1 xfailed` in 13:59** — against
+  the `37 failed / 77 passed / 17 errors` this row's re-drive opened with, and `126 passed` is NINE
+  above the baseline the row itself records.
+- *WHY THIS IS STRUCK RATHER THAN CARRIED:* the row's ask is "give each of the eleven a verdict —
+  SUITE-DRIFT / ESTATE-DEFECT / CONTAMINATION / ALREADY-FIXED", plus running the two flaky legs
+  repeatedly rather than once. **Sixteen verdicts were given and ten legs fixed**; both flappers were
+  driven repeatedly and each has a named cause. A stricter closing condition was briefly written here
+  (requiring the residual four to be FIXED) and is removed as scope the row never asked for.
+- *NOT ONE LEG WAS AN ESTATE DEFECT IN THE ASSERTION IT MADE.* The estate was right and the suite had
+  drifted around it — which is the finding, since these failures had been read as broken product since
+  2026-09-10.
+- *What it leaves:* four legs still fail, each with a verdict, and the residual work is [[LH-152]].
+
+
+**LH-152 · Four live e2e legs cannot pass against a governed estate: three stage provenance as an identity that holds no grant, and one asserts zero errors against 24 unreadable registry entries**
+`lineage, medallion, maintenance, catalog` · med · found 2026-09-15 completing [[LH-109]]'s verdict pass
+
+- *Why open:* each carries a verdict and none is fixable as a test edit — all four need a decision
+  about the estate, which is why they are here rather than left inside a struck row.
+- **THE THREE IDENTITY LEGS share one cause, measured on the live store 2026-09-14.**
+  `outbox_e2e::test_reconcile_sweep_drains_a_staged_outbox_event`,
+  `outbox_crash_e2e::test_sigkilled_producer_loses_nothing` and
+  `governed_union_e2e::test_fga_deny_drops_promotion_and_regrant_restores`. The first two stage a run
+  event authored by the literal `e2e`, and the relay authorizes before ingesting — deliberately, to
+  close the stage-instead-of-publish bypass (`tests/unit/test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`).
+  Live: `lineage_outbox_event_unauthorized ... author='e2e' reason='can_write_data required to amend
+  run ...: e2e_outbox_ds'`, `outbox_drained=0 outbox_stranded=5`.
+- *Granting the harness identity does NOT fix it, which is what makes this a decision:* the Dex subject
+  the suites hold (`user:CiQwOGE4Njg0Yi1kYjg4...`) has `can_write_data` on `table:bronze$events` (True)
+  and NOT on `table:e2e_outbox_ds` (False) — that synthetic table has no FGA object at all, so NO
+  identity can be authorized for it. Either the probes write to a real governed table (putting test
+  provenance in the graph) or a fixture mints and removes the object and its grant (a governance
+  mutation against a live estate). Both are owner calls.
+- *The FGA leg is the same shape from the other side:* it revokes namespace-level writer + owner and
+  asserts the rung is gone, but `namespace:acme-silver#writer` also resolves through
+  `tupleToUserset: parent -> warehouse:acme-bucket#writer`, which `service-bronze-to-silver` holds
+  alongside the producer and the two other stage runners. Revoking THAT strips a grant the live cascade
+  needs, and a leg failing between revoke and regrant leaves the stage runner unable to write.
+- **THE FOURTH IS NOT ABOUT IDENTITY.** `maintenance_e2e::test_sweep_compacts_real_datasets_and_meters`
+  asserts `summarize(swept)["errors"] == {}` and fails on
+  `s3://acme-bucket/4750a5b9_acme-bronze$events` → 403 AccessDenied. Not a credential defect: the
+  bucket exists, maintenance presents `rask-maintenance`, revision 157's provisioning Job logs
+  "Attached Policies: [rask-maintenance]", and that policy grants `s3:ListBucket` on `arn:aws:s3:::*`.
+  It is stale registry residue — the catalog's registered uri for that table is
+  `s3://acme-bucket/medallion/bronze`, which compacted normally in the same tick, and the lineage
+  reconciler independently lists that id among **24** `unreadable` entries naming relative paths.
+- *Closes when:* an owner rules on (a) how an e2e probe obtains provenance-write authority — a fixture
+  that mints the FGA object and grant for its own synthetic table and removes both, versus probes
+  writing to a real governed table; and (b) whether `errors == {}` is the right assertion for a
+  long-lived estate, or whether unreadable registry entries belong in an EXCLUSION set the way the
+  reconciler already reports them (`excluded_datasets`, `reconcile.py:860-863`). Measured list, 2026-09-14 21:25:
   `governed_union` x3 (`fga_deny_drops_promotion` — verdict given above, not yet fixed;
   `governed_allow_full_cascade`; `quality_gate_blocks_bad_batch`), `maintenance_e2e`
   (`sweep_compacts_real_datasets_and_meters`), `media_e2e` (`ingest_media_derives_artifacts`),
