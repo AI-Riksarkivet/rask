@@ -24,15 +24,27 @@ override-dependencies = [
     # 2026-08-16 upgrade so the generated client cannot skew from the spec model.
     #
     # THE CEILING IS AS LOAD-BEARING AS THE FLOOR, and it was measured rather than assumed (2026-09-07).
-    # lance-namespace 0.12.0 types `MergeInsertIntoTableRequest.on` as `List[str]` and REJECTS a string;
-    # pylance 10.0.0's native backend types it as a string and raises
-    # `TypeError: unexpected type: 'list' object is not an instance of 'str'` from
-    # `lance/namespace.py:580`. The two are mutually incompatible, so `merge_insert` through the native
-    # path is broken with that pair for ANY value of `on` — not just a composite key.
+    # `MergeInsertIntoTableRequest.on` is where this pin bites. The vendored spec
+    # (`lance_docs/ns_catalog/spec.yaml:3063`) defines it as a COMPOSITE key — "Multiple fields form a
+    # composite match key", carried as a query parameter repeated once per field path — while
+    # lance-namespace 0.11 types it `Optional[str]`. So a composite merge key is spec-legal and
+    # unreachable here, and this pin is the reason.
     #
-    # The pylance bump is NOT the lever it looks like: 11.0.0 caps `lance-namespace` exactly as 10.0.0
-    # did, so moving the ceiling needs the native backend's own `on` handling to accept a list, which is
-    # a question about lance's Rust side rather than about this pin. Tracked as A10.
+    # WHERE THE REFUSAL ACTUALLY HAPPENS, measured on the pinned stack 2026-09-15 (lance-namespace
+    # 0.11.x + pylance 11.0.0, driven through `DirectoryNamespace.merge_insert_into_table`): a single
+    # string is ACCEPTED and merges; a list is refused by PYDANTIC — `ValidationError: Input should be
+    # a valid string` — inside the request model, before pylance or the Rust side sees it.
+    #
+    # That matters because it is not where this pin's older reasoning placed it. pylance 11.0.0's
+    # `merge_insert_into_table` (`lance/namespace.py:563-583`) now passes `request.model_dump()` straight
+    # to the Rust binding with no Python-side type handling of `on` at all, so the
+    # `TypeError: unexpected type: 'list' object is not an instance of 'str'` that this comment used to
+    # cite at `namespace.py:580` no longer exists — :580 is the `model_dump()` call.
+    #
+    # WHAT IS ACTUALLY UNKNOWN is therefore one experiment, not a design question: whether pylance
+    # 11.0.0's Rust side accepts a list once 0.12's model stops refusing one. 0.12 rejects a bare string,
+    # so bumping is all-or-nothing and cannot be probed from inside this resolution. Tracked as A10 /
+    # [[LH-022]].
     "lance-namespace>=0.11.0,<0.12",
     "lance-namespace-urllib3-client>=0.11.0,<0.12",
 ]

@@ -1991,6 +1991,21 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 `catalog` · med · **blocked:** upstream pylance/lance-namespace `on` type agreement
 
 - *Why open:* The 0.12.0 bump was made and reverted 2026-09-07: `MergeInsertIntoTableRequest.on` is `List[str]` in 0.12.0 while pylance's native `merge_insert_into_table` takes `str`, so merge through the native path breaks for any value of `on`. The 2026-09-09 pylance 10→11 bump did not lift the ceiling (11.0.0 declares the same `lance-namespace<0.9` cap). The `on: list[str]` door was likewise implemented and reverted because only the BRANCH path would have worked.
+- **RE-MEASURED 2026-09-15 AND THE BLOCKER MOVED — this is one experiment, not an owner ruling.**
+  Driven on the pinned stack (lance-namespace 0.11.x + pylance 11.0.0) through
+  `DirectoryNamespace.merge_insert_into_table`: a single-string `on` is ACCEPTED and merges; a list is
+  refused by **pydantic** inside the request model (`ValidationError: Input should be a valid string`),
+  before pylance or the Rust side ever sees it.
+  *The spec is not ambiguous about what should be possible.* `lance_docs/ns_catalog/spec.yaml:3063`
+  defines `on` as a composite match key — "Multiple fields form a composite match key", carried as a
+  query parameter repeated once per field path. So the estate's own vendored spec already answers the
+  "should we support this" question; nothing here needs an owner to decide it.
+  *And the pin's own stated mechanism was falsified and is now rewritten.* `pyproject.toml` cited a
+  `TypeError` from `lance/namespace.py:580`; on 11.0.0 that method passes `request.model_dump()` straight
+  to the Rust binding with no Python-side handling of `on`, and :580 is the `model_dump()` call.
+  *What remains unknown is exactly one thing:* whether pylance 11.0.0's Rust side accepts a list once
+  0.12's model stops refusing one. 0.12 rejects a bare string, so the bump is all-or-nothing and cannot
+  be probed from inside this resolution — it needs a scratch environment, not a decision.
 - *Closes when:* Establish how the pylance 11 Rust binding types `merge_insert_into_table(on=...)`, lift the `<0.12` ceiling on the nine pins with whatever pylance version accepts a list, then re-apply the `on: list[str]` door in `data.py`'s merge handler plus the per-column index coverage and re-run the catalog + integration suites.
 
 **LH-023 · A client-supplied `delimiter` is refused 400 rather than honoured on all 153 catalog ops**
