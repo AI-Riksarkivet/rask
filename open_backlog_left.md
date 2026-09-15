@@ -1882,32 +1882,30 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *For scale, measured the same day:* **381 catalog tables across 97 warehouse roots, 0 unreadable, and
   the reconciler's new `ungoverned_tables` category reports 0.** Every table the catalog knows is
   governed.
-- **HALF (a) IS ROOT-CAUSED, and it needed no driven hop — only the deployed env and the real
-  predicate.** The refusal is `uri_within(read_root, trigger.from_uri)`, and the two values cannot
-  match for a warehouse-backed tenant. Measured on the running `rask-silver-to-gold`:
-  `MEDALLION_FROM_URI = s3://lance-catalog/medallion/silver`, while bind86's silver table is
-  `bind86-silver$features` and lives in `s3://bind86-wh`. Driving the real predicate IN THAT POD:
+- **HALF (a) IS NOT ROOT-CAUSED. An earlier revision of this row claimed it was, and that claim was
+  produced by reading the wrong value — it is corrected here rather than left standing.**
+  The mistake: `uri_within(read_root, supplied)` was driven with `read_root` taken from
+  `MEDALLION_FROM_URI`, the pod's env. That is only the root for a trigger carrying NO project.
+  `_resolve_roots` RESOLVES the root per tenant — `if project: read_root = project_root(...)` — so the
+  env value is a neighbouring representation, not what the code receives.
+- *Driven properly, in the running `rask-silver-to-gold` with its secrets spliced the way boot splices
+  them:*
 
-      uri_within('s3://lance-catalog/medallion/silver', 's3://bind86-wh/..._bind86-silver$features')  -> False
-      uri_within('s3://lance-catalog/medallion/silver', 's3://research-bucket/..._research-silver$features') -> False
-      uri_within('s3://lance-catalog/medallion/silver', 's3://lance-catalog/medallion/silver/anything')      -> True
+      project=<none>    read_root=s3://lance-catalog/medallion/silver
+      project=bind86    read_root=s3://bind86-wh        uri_within(bind86 table) -> True
+      project=research  read_root=s3://research-bucket
 
-- *So it is not a bind86 problem and not a defect in the check — the check is doing exactly what it is
-  built to do.* **EVERY project with its own warehouse is structurally refused**, because the stage
-  runner's read root is the PLATFORM bucket path the chart renders while the catalog vends the
-  TENANT's own bucket. `research-bucket` fails identically. The refusal is correct in isolation and the
-  configuration around it is single-tenant.
-- *`transform.py` predicted this in its own docstring* — *"the vended `<catalog root>/<hash>_<ns>$<name>`
-  is OUTSIDE `MEDALLION_FROM_URI` unless the two happen to coincide … Making it WORK means resolving a
-  real storage root here — the catalog's connection root is the candidate, and it is not free, because
-  `lance.stageBucket` can zone a namespace into a bucket that root does not contain."* The cost it
-  names is why this is an owner decision and not a patch.
-- **IT IS THE SAME ROOT AS THE MEDALLION DOUBLE-HOME in [[LH-164]]**, which is why the two should be
-  decided together: the chart configures the cascade around `s3://<bucket>/medallion/<ns>` while the
-  catalog vends per-tenant warehouse locations. One answer settles both — either the cascade resolves
-  its read root through the catalog per trigger, or tenants' tiers live where the chart says they do.
-- *Closes when:* that decision is taken and a warehouse-backed project's silver→gold hop is observed
-  completing rather than parking on `dlq.silver-to-gold`.
+  A bind86 trigger that CARRIES its project resolves to bind86's own warehouse root and passes. So
+  "every warehouse-backed project is structurally refused" is false, and per-tenant routing works.
+- *What the refusal therefore requires:* a trigger whose `from_uri` is in a tenant bucket while the
+  trigger's `project` is absent or resolves elsewhere. Both publishers reference `project`
+  (`publication_trigger` states it always carries one; `ingest_trigger` names it too), so WHICH
+  publisher emitted the 8 refused triggers, and what they carried, is still unmeasured.
+- **SO THE ROW'S ORIGINAL ANSWER STANDS: it needs ONE bind86 silver→gold hop DRIVEN.** The refusal line
+  already carries `project` and `root` in its `extra`, and the deployed `DiagnosticFormatter` renders
+  extras — so a single new refusal names the project, the resolved root and the supplied URI together,
+  which is exactly the triple that settles it. The 2026-09-10 evidence cannot be recovered; a fresh
+  hop can.
 
 **LH-138 · ~~The reconcile TIP axis still stamps a `reconcile` edge on a maintenance version~~ — CLOSED 2026-09-11**
 `lineage` · was low
