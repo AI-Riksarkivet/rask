@@ -77,6 +77,25 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
+## The five conditions, MEASURED against the running estate (2026-09-15)
+
+Row counts say how much is written down; they do not say how close the goal is. Every line below was
+driven against the live estate or read from its authoritative store — never inferred from a setting or
+a docstring, which is how three claims had to be retracted the same day.
+
+| # | Condition | Status | The measurement |
+| --- | --- | --- | --- |
+| 1 | Provenance survives a write | **verified, one residual** | 7,107 `Run` nodes, 1,444 `Dataset`, 7,093 `WROTE` edges in AGE. `/runs` is governed on read: **0** rows for an identity holding no rung on the outputs, **10** for one that does (`transform` COMPLETE -> `acme-silver$dummy`, `compaction` COMPLETE -> `acme-gold$catalog`). Residual: [[LH-166]]. |
+| 2 | Catalog correct for lance-ns + authz | **partial** | 381 catalog tables across 97 warehouse roots, 0 unreadable. `ungoverned_tables` = 0 (every table the catalog knows carries tuples). `maintainer` now on all 97 warehouses — repaired by the boot backfill, `warehouses=96 tuples=1344 failures=0`. Spec conformance is covered by tests, NOT driven today. Residuals: [[LH-037]], [[LH-164]]. |
+| 3 | Not coupled to a workflow engine or Ray | **DONE and pinned** | In the running `rask-medallion-producer`: `dapr-ext-workflow` is absent from the unconditional `Requires-Dist` and present only as `extra == 'workflow'`; `import ray` FAILS in the image; zero module-level `import ray` across the four services; none declares `ray`/`ray-kit`. Both halves gated by `test_the_lakehouse_does_not_depend_on_a_workflow_engine.py`. |
+| 4 | Events are correct | **partial** | Streams healthy — LINEAGE 1,311 / MEDALLION 190 / CATALOG_CONTROL 908 / INGEST 32, all with recent traffic. DLQ is 9,887 msgs / 29 MiB, of which `dlq.lineage.events` is 9,856 and dominated by TEST identities (`data_eng` 30, `e2e` 14, `ray` 10 over 3 h against `service-stage-runner` 3 + `service-maintenance` 2). Residual: [[LH-166]], [[LH-148]]. |
+| 5 | Resilient | **partial** | Zero restarts across the whole lance plane. The cascade retry window is the shape that actually works — `pubsubDeliveryRetry` is `constant`, `duration=120s`, `maxRetries=4` (8 min), live in the CR and gated by `test_the_cascade_retry_window_is_the_one_the_chart_states.py`; the sidecars carry it because every stage runner was restarted after it applied. The sweep's 320 refusals are correctly classified — **315 are the shallow-clone protection working**. Residual: [[LH-148]]'s replay gap. |
+
+**One of five is finished. The other four are each one or two named rows from being finished**, and
+three of those rows wait on an owner decision rather than on work. That is a more useful statement of
+"how much is left" than the item count above, and it is the first time the goal itself has been
+measured rather than the backlog that serves it.
+
 **THE STALE-ROW SEAM IS DRAINED, measured 2026-09-15 — do not plan another sweep on the old base
 rate.** The standing instruction cites 2026-09-09, when 8 of 17 settled rows turned out already fixed,
 and that number has been used since to justify re-measuring before working anything. It is still the
