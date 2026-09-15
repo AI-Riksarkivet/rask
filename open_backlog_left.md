@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**221 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 10 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 9 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 11 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -3273,9 +3273,27 @@ caller — and the latent gap below.
     `ray.init("ray://…:10001")` — the Ray client protocol, which needs `ray` in the task image. rask
     refuses that deliberately (the stage runner is httpx-only, no `ray` package), so that path is closed
     by a choice already made.
-  * *And rask's path is one of Flyte's two sanctioned modes.* `submissionMode` accepts `HTTPMode`,
+  * *And rask's path is a sanctioned Flyte submission mode.* `submissionMode` accepts `HTTPMode`,
     described in Flyte's own config as "submits via HTTP to the head node; no submitter pod to get
     evicted". That is exactly what `ray_submit` does.
+- **THREE CLAIMS IN THE FIRST READING WERE WRONG AND ARE CORRECTED HERE, because an adversarial pass
+  (8 agents, 2026-09-15) was asked to REFUTE each one rather than confirm it — and killed three of
+  five.** The conclusion survived; these premises did not, and they are rewritten rather than left
+  standing beside it:
+  * *"One of Flyte's TWO sanctioned modes" is wrong three ways.* There are THREE — `K8sJobMode`,
+    `HTTPMode`, `SidecarMode`; `HTTPMode` is **Flyte 2 only** (added 2026-08-10, absent at v1.16.0);
+    and Flyte itself never posts to the dashboard — it stamps a mode onto a CR it always creates, and
+    KubeRay's operator does the POST (`dashboard_httpclient.go:232`).
+  * *"Flyte is cluster-per-job" is overstated.* `main` carries `ClusterPlugin` and the v2 SDK has a
+    `ReusePolicy` sharing one Flyte-created cluster across tasks. The accurate and narrower claim: Flyte
+    cannot attach to an EXTERNALLY-managed cluster by name, which is rask's case.
+  * *"Flyte base64-encodes `runtime_env` into the CR" is wrong in the direction that matters.* It lands
+    as PLAINTEXT YAML in `spec.runtimeEnvYAML`. The CR is therefore WORSE than the dashboard as a
+    credential surface, not merely equal to it — which strengthens the deletion rather than weakening it.
+- **THE DELETION LEFT PROSE BEHIND, and that is tracked rather than quietly fixed later.** Six places
+  still describe `RayJobExecutor` as live: `engine_names.py:24`, `engine_registry.py:13-16`,
+  `dapr_saga.py:4`, `ray_jobs_api.py:11-12`, `ray_submit.py:~183` and `docs/DECISIONS.md:1451-1486`
+  (which still says "a port, TWO adapters"). Filed as [[LH-156]].
 - *A worry raised while deciding, and retired by the same reading:* the Jobs API echoes `runtime_env`
   on an unauthenticated dashboard. The CR does not fix that — Flyte base64-encodes `runtime_env` into
   the CR, readable by anyone holding namespace RBAC. Both paths expose it, and the real answer is the
@@ -4463,6 +4481,40 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Closes when:* the delete re-checks registration immediately before acting (or takes a lease undrop respects),
   and the false docstring is rewritten — BEFORE `trashPurgeEnabled` is ever set true anywhere.
 
+**LH-157 · One `WorkOrder` carries TWO idempotency-key formulas, so an in-process build bump re-attaches to a stale outcome**
+`medallion` · **HIGH** · found 2026-09-15 by an adversarial workflow, verified first-hand before filing
+
+- *The defect:* `transform.py:753` builds the order's key as
+  `f"{to_namespace}:{token or 'notoken'}:{from_dataset}->{to_dataset}"` — **no `code_version`** — while
+  `ray_submit.py:181` derives its submission id as
+  `stage_submission_id(stage, token, from_uri, to_uri, code=code_version)`, which includes it.
+- *Why the asymmetry bites, confirmed by reading the consumer:* `inprocess_executor.py:98` states that
+  "the order's `idempotency_key` IS the handle, which makes a redelivered order re-attach". So on the
+  RAY path a code bump mints a new id and the work re-runs; on the IN-PROCESS path the key is unchanged
+  and the run **re-attaches to the previous build's outcome**. The same `WorkOrder`, two answers.
+- *Why it is HIGH despite the in-process lane being the quieter one:* the failure is silent and it is
+  the SUCCESS path — a stage reports COMPLETE against an artifact the current code never produced. No
+  counter moves, no log fires, and the lineage graph records a run that did not happen at this version.
+- *Closes when:* the key has ONE derivation, owned by `WorkOrder` (the module's own stated rule: "`to_env()`
+  is the ONE serialization, so no adapter hand-rolls it" — the key deserves the same), with a test that
+  fails if a code-version change does not change the key on either lane.
+
+**LH-158 · The `Executor` port is not the only door, so a third engine would silently run in-process**
+`medallion` · med · found 2026-09-15 by an adversarial workflow
+
+- *The defect:* `transform.py:828` decides with `use_ray = engine_for_async(...) == RAY_ENGINE` and
+  treats in-process as the implicit `else`. A task registered for a THIRD engine therefore does not
+  fail — it runs in-process, which is the "silently run by the wrong engine" outcome `engine_choice`
+  refuses at declaration time and this site then reintroduces at dispatch time.
+- *The related shape question, stated so the fix is scoped rather than drifting:* `executor_for` has
+  ZERO production callers, `transform.py:786` still hand-builds `InProcessExecutor` directly, and since
+  the RayJob adapter was deleted ([[LH-083]]) the registry has ONE implementation. So either dispatch
+  routes through the port — wrapping `ray_submit` + `job_status` as a Jobs-API executor — or
+  `engine_registry.py` is deleted outright. **Keeping it uncalled is the worst of the three**, because
+  the decision record already claims a port with adapters that the code does not use.
+- *Closes when:* dispatch goes through one door that REFUSES an engine it cannot run, and the registry
+  is either used or gone. Pin the refusal with a task registered for an engine nobody hosts.
+
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
 
 Shared machinery. The first group is what blocks the lakehouse and should be read as part of phase 1.
@@ -4839,6 +4891,19 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 
 
 ---
+
+**LH-156 · Six places still describe the deleted `RayJobExecutor` as live**
+`medallion, docs` · low · filed 2026-09-15 with the deletion that caused it
+
+- *Why open:* [[LH-083]] deleted the RayJob-CR adapter. The prose naming it did not go with it:
+  `engine_names.py:24`, `engine_registry.py:13-16`, `dapr_saga.py:4`, `ray_jobs_api.py:11-12`,
+  `ray_submit.py:~183` ("the port's Ray adapter renders `to_env()` into the CR's runtime_env") and
+  `docs/DECISIONS.md:1451-1486`, which still reads "a port, TWO adapters".
+- *Why it is worth a row rather than a sweep-when-convenient:* the estate's rule is that falsified prose
+  is REWRITTEN, and a decision record describing an architecture the code no longer has is exactly what
+  sends the next reader to re-derive a deleted class. It is low only because nothing branches on it.
+- *Closes when:* all six say what the code does, and `DECISIONS.md` records the deletion with its reason
+  rather than describing the old shape.
 
 ## PHASE 2 · COMPUTE
 
