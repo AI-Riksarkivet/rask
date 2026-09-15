@@ -1866,6 +1866,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `/compaction_plan` with a medallion tier id and fixing whichever of the id resolution or the route is
   wrong.
 
+- **RE-MEASURED 2026-09-15, and half (b)'s HEADLINE IS STALE IN THE ESTATE'S FAVOUR.** This row says
+  the distributed door "cannot be driven for exactly the datasets the cascade writes", citing 0
+  distributed commits against 24 in-pod fallbacks in 24 h. Measured over 30 minutes on the running
+  sweep: **655 `mode='distributed'` against 1288 `mode='in_pod'`**, with 604 of the distributed ones
+  reporting `compaction_distributed_nothing_to_do` — so the door is driven continuously and answers.
+- *And the in-pod majority is explained rather than suspicious:* **1112 of the 1288 in-pod lines carry
+  NO `table_id` at all, while 0 of the distributed ones lack one.** The distributed door is addressed
+  by catalog table id, so a dataset discovered by BUCKET SCAN with no catalog table behind it cannot
+  use it and falls back in-pod. That is the mechanism, not a fault.
+- *The residue of (b) is 7 refusals in that window, and they are [[LH-164]]'s class exactly:* `404` for
+  `lakehouse$bronze$events` and `lakehouse-bronze$events` — derived ids naming no registered table.
+  So (b) is not "the cascade's datasets are undrivable"; it is "a handful of derived ids name nothing",
+  and the fix belongs with the id derivation, not with the door.
+- *For scale, measured the same day:* **381 catalog tables across 97 warehouse roots, 0 unreadable, and
+  the reconciler's new `ungoverned_tables` category reports 0.** Every table the catalog knows is
+  governed.
+- **HALF (a) IS STILL UNSETTLED AND THE ABSENCE OF REFUSALS IS NOT EVIDENCE.** All three stage runners
+  logged ZERO `medallion_stage_from_uri_refused` and zero DLQ parks over 6 h — and zero
+  `medallion_stage_*` lines of any kind, so the cascade was idle for that whole window. A quiet log
+  from a stopped cascade says nothing about a confinement check. It still needs ONE bind86 silver→gold
+  hop DRIVEN, which the diagnostics tail will then name the refusing `from_uri` on.
+
 **LH-138 · ~~The reconcile TIP axis still stamps a `reconcile` edge on a maintenance version~~ — CLOSED 2026-09-11**
 `lineage` · was low
 
