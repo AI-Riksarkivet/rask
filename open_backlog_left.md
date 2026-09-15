@@ -721,10 +721,42 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Pinned by `tests/unit/test_every_lineage_walk_can_be_bounded.py`*, which checks the DOOR offers the
   parameter, the repository accepts it, AND the column methods route it through `bounded_walk` — the
   third assertion existing precisely because the second passes for an argument the query ignores.
-- *Closes when:* the remaining half — a `latest_version` property on the Dataset node maintained on
-  write, so the latest version is read off the node instead of aggregated from the WROTE history
-  (`cypher.py::LATEST_WRITE_VERSION`). Measured 2026-09-15: `latest_version` appears nowhere under
-  `services/lineage/` or `packages/lineage-kit/`, and `MERGE_DATASET` sets only `d.namespace`.
+- **THE REMAINING HALF IS CLOSED 2026-09-15, AND NOT BY THE PROPERTY THIS ROW NAMED.** The ask was a
+  `latest_version` on the Dataset node maintained on write, so the tip is read off the node instead of
+  aggregated from WROTE history. Measuring the aggregate first found a better root cause, and the
+  denormalization is no longer the right fix.
+  * `EXPLAIN ANALYZE` of `LATEST_WRITE_VERSION` against the estate's hottest dataset
+    (`acme-silver$features`, 457 WROTE edges) read **all 7,095 WROTE rows and all 7,109 Run rows**, in
+    8.3 ms. The cost was O(whole graph), not O(that dataset's edges) — and it runs INSIDE the ingest
+    transaction on every event, via `repository._schema_is_current`.
+  * `pg_indexes` over the deployed `lineage` schema returned **seven rows: five functional indexes on
+    VERTEX labels plus the two `_ag_label_*` primary keys. No edge label carried an index at all**,
+    while all seven are traversed and none is bounded — WROTE 7095, OF_JOB 6394, HAS_COLUMN 4236,
+    READ 1424, CREATED 1324, DERIVED_FROM_COLUMN 380, DERIVED_FROM 70.
+  * Verified on a prod-shaped graph (1,445 datasets / 7,109 runs / 7,095 edges, the same 457-edge skew)
+    built in a throwaway `apache/age` via Dagger, so the live graph was never written to:
+    **6.778 ms seq-scanning 7,095 edges -> 1.783 ms on a bitmap index scan touching the node's own 457.**
+    The change of ORDER is the point, not the 3.8x: the first plan grows with the estate, the second
+    with the node's degree.
+- *Why the index and not the property:* a maintained `latest_version` is the last-writer-wins stamp this
+  module already refused once — `cypher.py` records that a mutable `dropped` flag was rejected in review
+  because a redelivered event re-stamps a live dataset, and a back-filled or reordered write would stamp
+  a stale tip the same way. An index adds no write path and no drift, and it fixes EVERY walk rather
+  than one query. `latest_version` still appears nowhere, and `MERGE_DATASET` still sets only
+  `d.namespace` — deliberately.
+- *A SECOND, UNRELATED INDEX SHAPE IS STILL OPEN AND IS NOT PART OF THIS CLOSURE:* the vertex indexes
+  that DO exist are unreachable from the query form the code emits. AGE compiles the inline
+  `MATCH (d:Dataset {name:$name})` into a `properties @>` containment filter, which no B-tree on an
+  extracted property can serve. Measured on the live graph: inline form Seq Scan 0.420 ms, the
+  equivalent `MATCH (d:Dataset) WHERE d.name = $name` **Index Scan using `lineage_dataset_uniq`
+  0.053 ms**. `cypher.py` carries **39 rewritable `MATCH` statements** in the inline form (plus 6
+  `MERGE`, where the pattern IS the merge key and cannot be rewritten). Left for its own change: it is
+  59 call sites of semantics-preserving rewrite and deserves its own RED gate, not a rider on this one.
+- *Closed by `16dd2da6`*, gated by `tests/unit/test_every_traversed_edge_label_has_an_index.py` — a
+  DERIVED assertion reading the traversed labels out of `cypher.py`'s own source (a new edge label fails
+  the gate rather than silently shipping a full-table walk), plus a seam test driving
+  `ensure_graph_constraints` and reading the DDL it really emits, which is the only one of the four that
+  catches a builder-only mutation such as indexing one endpoint.
 
 **LH-007 · ~~`ray_stage_job.py` re-creates its target with `mode="overwrite"` every run, re-minting `_rowid` for the whole tier~~ — CLOSED 2026-09-11**
 `medallion` · was HIGH
