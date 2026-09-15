@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**222 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**223 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 76 | 11 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 12 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -422,6 +422,12 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   ingest without re-publishing. Until (b),
   `dapr.py`'s "recovery story stays replay-from-stream" should say what it actually means: a dead letter
   older than the stream's retention is lost.
+- **"NOT CURRENTLY BLEEDING" IS FALSE AS OF 2026-09-15 — see [[LH-166]].** The DLQ has grown from the
+  8,612 this row measured to **9,887**, with `dlq.lineage.events` at 9,856 and a delivery 11 minutes
+  before that reading. The cause is events naming an output that carries no FGA tuples, which no
+  principal can be authorized for, so they park on every redelivery. That is tracked separately
+  because it is a PRODUCER defect rather than the replay gap this row is about — but it also raises
+  this row's stakes: a replay door that re-presents those events would park them again.
 - **RE-MEASURED 2026-09-15: the interim doc clause is DONE, so (b) is the whole remainder.**
   `on_dead_letter`'s docstring now states it outright — *"That bounds what recovery can reach: a dead
   letter older than the stream's retention has no path back, because nothing re-ingests the DLQ stream
@@ -4998,6 +5004,45 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Residual, and it is [[LH-164]]'s to carry:* nothing yet REPORTS a warehouse missing the grant. The
   backfill now converges it on every catalog boot, which is a stronger answer than a report for this
   particular drift, but a table with no `parent` edge is still invisible to every detector.
+
+
+**LH-166 · The lineage DLQ is bleeding again — events naming an UNGOVERNED output can never be accepted, so they park forever**
+`lineage, medallion, maintenance` · **HIGH** · measured 2026-09-15 on the live estate
+
+- **[[LH-148]] SAYS "not currently bleeding" AND THAT IS NO LONGER TRUE.** It measured 8,612 DLQ
+  messages on 2026-09-13 with "zero since 2026-09-11". Measured now: the DLQ stream holds **9,887
+  messages / 29 MiB**, of which **`dlq.lineage.events` is 9,856** — roughly **+1,341 since that
+  reading** — and the last delivery was **11 minutes** before this row was written. The
+  `lineage-dlq-durable` consumer's last delivery timestamp agrees.
+- *The park reason, read off the service rather than guessed:* `lineage_event_unauthorized`, 53 parks
+  in one hour. Two samples with their authors:
+
+      author='service-maintenance'  reason='can_write_data or can_maintain required on outputs: m2proof_silver$m2-proof-1788537252'
+      author='<a dex user>'         reason='can_write_data required on outputs: e2e-ns$t74eff1b3'
+
+- **THE REFUSAL IS CORRECT AND THAT IS WHY IT NEVER CLEARS.** Both outputs carry **ZERO FGA tuples**
+  (read from the live store). `table.can_write_data`/`can_maintain` resolve through a direct tuple or
+  `... from parent`, so NO principal can hold either — the author cannot acquire the rung, redelivery
+  cannot change the answer, and the event parks on every attempt until retention drops it. A poison
+  message whose poison is an authorization fact.
+- *The two samples are DIFFERENT shapes and both matter:*
+  * `m2proof_silver$m2-proof-1788537252` — its NAMESPACE `m2proof_silver` has no tuples either, so the
+    whole chain is ungoverned.
+  * `e2e-ns$t74eff1b3` — its namespace IS governed (`owner` + `parent: warehouse:acme-bucket`); only the
+    TABLE is missing its edge. That is exactly [[LH-164]]'s shape, still arriving.
+- **AND IT EXPOSES A BLIND SPOT IN THE `ungoverned_tables` DETECTOR ADDED EARLIER TODAY**, which is
+  recorded here rather than quietly fixed: that category reports **0**, correctly by its own
+  definition, because it enumerates tables from the catalog's `__manifest` and these ids are not
+  catalog tables at all. It answers "does every table the catalog knows carry tuples", and the
+  question this defect needs is "does every output a lineage event NAMES carry tuples". Those differ
+  by exactly the population that is parking.
+- *Why it is HIGH:* it is condition 4 failing continuously — and condition 1 with it, since every
+  parked event is provenance for a run that completed. `dapr.py` already records that a dead letter
+  older than the stream's retention has no path back, so this is silent, ongoing provenance loss.
+- *Closes when:* the estate stops producing lineage events whose outputs cannot be governed — either
+  the writer registers its output before emitting, or the bus's authorization answers an ungoverned
+  output with something other than an unrepairable park — AND `dlq.lineage.events` stops growing,
+  measured over a window rather than at a point.
 
 
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
