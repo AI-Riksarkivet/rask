@@ -262,7 +262,45 @@ BACKFILL_RUN: Final = (
 # edges — that is what retention means (per-version schema/stats history goes with it); a dataset whose
 # only runs were pruned reads latest_write_version=None and the next sweep back-fills a fresh reconcile
 # run at the on-disk version, so the graph converges instead of dangling.
-COUNT_OLD_RUNS: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff RETURN count(r)"
+# A run old enough to prune AND not the last thing that says where a dataset came from.
+#
+# [[LH-146]] RETENTION AND THE BACK-FILL UNDO EACH OTHER WITHOUT THIS. Pruning by age alone takes a
+# dataset's final `WROTE` edge, which leaves it with no versioned write; the reconciler then reads that
+# as UNTRACKED, back-fills it, and MERGEs a synthetic `author='reconcile'` run carrying — its own
+# docstring — "no inputs". The graph does not shrink, it is REWRITTEN: the fact of each write survives
+# and the actor and the derivation do not, and nothing in the estate can rebuild them, because the
+# durable `/events` feed is retained 7 days while the graph reaches back 30. Forecast from the live
+# graph on 2026-09-11: 1 of 333 datasets stripped by 2026-09-16, 180 by 2026-09-30, all 333 by
+# 2026-10-11.
+#
+# `min(writers) <> 1` IS THE WHOLE EXEMPTION, and the shape is chosen for what each value means. For
+# every dataset this run wrote, count the runs that wrote it; keep the run when the smallest count is
+# 1, because a count of 1 can only be this run itself — it is that dataset's sole provenance. A run
+# that wrote nothing yields 0 and is prunable; a run whose datasets all have other writers yields >= 2
+# and is prunable. So the exemption costs exactly one run per dataset that would otherwise be stripped.
+#
+# EXEMPTING DOES NOT WEAKEN WHAT RETENTION IS FOR. The 30-day window exists so the reconcile's
+# `storage_loss` and `unreadable` warnings converge instead of firing every tick over dead rows
+# (chart/values.yaml, owner ruling 2026-09-08) — a signal-to-noise control, not a disk one. Measured
+# against the deployed graph 2026-09-15 at a probe cutoff: 310 candidate runs, 2 exempt, 308 still
+# pruned, and the three numbers reconcile exactly.
+#
+# WRITTEN AS `OPTIONAL MATCH` + `count`, NOT A NEGATED PATTERN, for the reason the orphan query below
+# carries: AGE 1.5.0 rejects `WHERE NOT (d)<-[:WROTE]-(:Run)` as a syntax error at the `:`, which no
+# string-asserting test can see. This predicate was EXECUTED against the deployed database before it
+# was written here — the same order the orphan query had to be fixed into after it shipped unparseable.
+#
+# ONE definition behind both the count and the delete: `prune_runs` sizes its batch loop from the count
+# and then deletes, so a predicate that differed between them would loop the wrong number of times.
+_PRUNABLE_RUNS: Final = (
+    "MATCH (r:Run) WHERE r.event_time < $cutoff "
+    "OPTIONAL MATCH (r)-[:WROTE]->(d:Dataset) "
+    "OPTIONAL MATCH (d)<-[w:WROTE]-(:Run) "
+    "WITH r, d, count(w) AS writers "
+    "WITH r, min(writers) AS fewest "
+    "WHERE fewest <> 1 "
+)
+COUNT_OLD_RUNS: Final = _PRUNABLE_RUNS + "RETURN count(r)"
 # BATCHED (one transaction per batch): a single all-or-nothing DETACH DELETE over a large backlog
 # would exceed the pool's statement_timeout → QueryCanceled → full rollback → retention never
 # converges (each tick retries the identical oversized delete). Batches keep every statement far under
@@ -273,7 +311,7 @@ COUNT_OLD_RUNS: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff RETURN count
 # makes PRUNE_BATCH_SIZE the SINGLE source for both the delete's LIMIT and the loop count in
 # `prune_runs` — the two used to be a baked 500 literal and a separate Python constant that could drift.
 # The interpolated value is a code-owned int constant, never caller input, so no injection surface.
-PRUNE_OLD_RUNS_TEMPLATE: Final = "MATCH (r:Run) WHERE r.event_time < $cutoff WITH r LIMIT {limit} DETACH DELETE r"
+PRUNE_OLD_RUNS_TEMPLATE: Final = _PRUNABLE_RUNS + "WITH r LIMIT {limit} DETACH DELETE r"
 PRUNE_BATCH_SIZE: Final = 500
 # A Dataset node no run refers to any more — the residue run retention LEAVES BEHIND, and the reason
 # retention alone does not converge the graph. Measured on the live estate 2026-09-08: 1,271 Dataset
