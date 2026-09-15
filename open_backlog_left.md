@@ -2589,6 +2589,28 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   — `} else if errors.Is(pErr, rtpubsub.ErrMessageDropped) {` / `// send dropped message to dead letter
   queue if configured` / `if route.DeadLetterTopic != "" { derr := s.sendToDeadLetter(...) }`. The HTTP
   postman returns that error for a `DROP` status (`postman/http/http.go:143-147`).
+- **RE-MEASURED ON THE LIVE STREAM 2026-09-15, AND OPTION C IS NOT IMPLEMENTABLE AS COSTED.** The
+  owner approved "annotate the DROP and route it separately" on 2026-09-15. Reading an actual parked
+  message off the `DLQ` JetStream stream (9,216 messages) shows there is nothing to annotate and
+  nothing to route on: the NATS headers are `Nats-Msg-Id` ALONE, and the body is the original
+  CloudEvent republished verbatim — keys `data, datacontenttype, id, pubsubname, source, specversion,
+  time, topic, traceid, traceparent, tracestate, type`. **No delivery count, no failure reason, no
+  dead-letter metadata of any kind.**
+  *So the DLQ handler cannot tell a deliberate refusal from a real exhaustion by inspection*, which is
+  what option C assumed. Dapr republishes the message it was given; it adds nothing.
+- **THE DISCRIMINATOR HAS TO BE MADE AT THE REFUSAL, NOT READ AT THE PARK**, which reshapes the option
+  rather than killing it. The only party that knows a refusal is deliberate is the handler returning
+  it, and it already counts one (`medallion_stage_refused_total{reason=...}`). The implementable form
+  of C is therefore: on a DETERMINISTIC refusal the handler publishes the message to its own
+  `refused.<lane>` topic and ACKs, so the payload is still retained for replay; `DROP` stays for
+  deliveries that are genuinely undeliverable, and the DLQ keeps meaning exhaustion.
+  *That is close to option B and must not be confused with it.* B acked refusals and published nothing,
+  which is why it retired the `_drop` verb across four producers and 32 assertions and was reverted on
+  2026-09-11 after nine failures. Keeping the payload is the difference that makes the alarm honest
+  without losing the record.
+- *Cost, stated before anyone starts:* a new topic per lane in the chart, a publish on the refusal
+  path, and the metric contract (`medallion_dlq_parked_total` stops tracking refusals). The 7,709
+  parked messages already accumulated are not reclassified by any of this.
 - *Closes when:* an owner decides the shape. The candidates are not equivalent: (a) subscribe
   `/dlq-event` with `rawPayload` handling so a parked envelope-failure is still logged and counted —
   smallest, but changes how every dead letter is parsed; (b) alert on the sidecar's
