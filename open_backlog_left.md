@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**225 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**226 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 12 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 52 | 11 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 80 | 12 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -4632,6 +4632,47 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   as a supported-combination matrix instead of being inferred from two independent-looking flags.
   A second engine that has actually run in-cluster is the evidence this row is really closed.
 
+**LH-163 · The sweep's base probe is permanently denied on `lance-catalog/models/`, and answers with a full traceback every pass**
+`maintenance, chart` · med · measured 2026-09-15 on the running `rask-maintenance`
+
+- *The mechanism:* `features.gather_compaction_bases` probes every base a manifest declares, and
+  `NOTHING HERE RAISES` by design — a failed probe is recorded as the unknown it is, and
+  "unknown resolves to refusal" because the cost of a wrong permit is a clone's whole reason to exist.
+  That part is correct and must stay.
+- *What is not correct is that the denial is PERMANENT and reported as an incident.* The sweep runs as
+  `rask-maintenance`, whose scoped credential cannot read `s3://lance-catalog/models/`, so the probe
+  can never succeed — yet each attempt logs `compaction_base_probe_failed` with `exc_info=True`.
+  **Measured: 240 denied probes and ~101 rendered tracebacks in 15 minutes**, all on the one base.
+- *Why it matters beyond noise:* a permanent, expected denial rendered identically to a transient store
+  fault is how a real fault stops being visible. It also means any dataset declaring that base can
+  never be compacted, and nothing says so in terms an operator can act on.
+- *The fix is a choice, not a patch:* either scope `minio.maintenanceAccessKey` to READ `models/` (the
+  probe is read-only, so this grants nothing else), or teach the probe that a denial it has already
+  seen for this base is a settled answer — logged once at WARNING without a traceback, and carried as
+  `probe_denied=True` exactly as today.
+- *Closes when:* a sweep pass over the live estate logs at most one line for this base, and the chosen
+  answer is recorded rather than inferred from the credential's shape.
+
+**LH-164 · ~16 datasets are refused compaction because the catalog answers 403 to their compaction plan**
+`maintenance, catalog` · med · measured 2026-09-15 on the running estate
+
+- *Measured, not inferred:* one sweep pass reports `datasets=552 skipped=0 refused=333`. **308 of those
+  refusals are CORRECT** — shallow-clone / multi-base sources the `base_refs` pre-pass exists to
+  protect, which is the control working. The residue is the finding: ~16 name
+  `the catalog REFUSED a compaction plan for <table> (403)`, across at least
+  `bind86-bronze$events`, `research-bronze$events`, `trackansb1bc9ea2$*` and
+  `<project>$conforming/partial_cla/read_ghost/refuse_quer`.
+- *Why it is a defect rather than policy:* a 403 here means the sweep cannot obtain a write credential
+  for a table it is supposed to maintain, so those datasets are never compacted, never have their
+  indices optimized and never have old versions reclaimed — silently, and forever. The sweep reports
+  them as `refused` beside 308 refusals that are correct, so the count alone hides them.
+- *Not yet diagnosed, and the row says so:* whether these tables are owned by a project the maintenance
+  identity holds no rung on, whether they are residue from earlier test runs that should be reaped, or
+  whether the vending path is wrong for them, is unmeasured. The 403 is the evidence; the cause is not.
+- *Closes when:* every 403 in that list is either explained as correct (and the sweep says so with a
+  reason distinct from a defect) or the credential path is fixed and the tables compact.
+
+
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
 
 Shared machinery. The first group is what blocks the lakehouse and should be read as part of phase 1.
@@ -5100,7 +5141,7 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   an owner records that a third-party subchart's own env handling is out of scope, which is a
   defensible answer but must be written rather than assumed.
 
-**LH-162 · `require_dapr_token` SKIPS the comparison when no token is configured, and one live service has none**
+**LH-162 · ~~`require_dapr_token` SKIPS the comparison when no token is configured, and one live service has none~~ — CLOSED 2026-09-15: an unconfigured door refuses, and the token it checks no longer travels through env**
 `service-kit` · **HIGH** · found 2026-09-15 while designing [[LH-160]]; confirmed against the running pod
 
 - *The mechanism:* `dapr_auth.py:137` is `if expected and not secrets.compare_digest(...)`. When
@@ -5143,8 +5184,13 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   tested separately — it derives which packages call `require_dapr_token` from the source tree and
   which Deployments run them from the render, so a service that starts guarding a door is covered the
   day it does.
-- *Closes when:* observed live — `rask-annotator` refuses a Dapr-guarded route to a caller presenting
-  no token, and its actor plane still answers, both against a real delivery rather than a boot log.
+- **OBSERVED LIVE on `main-3836adbc`, 2026-09-15**, driven against the running pod rather than read off
+  a boot log: no token -> `/dapr/config` **403**; a forged token -> **403**; the token resolved from the
+  Dapr secret store -> **200**, and `POST /api/jobs/apply` reaches body validation (422) with it. The
+  app container holds **no `APP_API_TOKEN`** — the secret does not travel through the environment at all.
+- *And the thing that would have broken did not:* daprd's own callback succeeds, so `actorRuntime` is
+  `RUNNING` with `AnnotationTaskActor`, `TenantProjectsActor` and `AnnotationProjectActor` all hosted,
+  and the sidecar logged zero errors after the roll. Ten workloads rolled, zero failed rollouts.
 
 ## PHASE 2 · COMPUTE
 
