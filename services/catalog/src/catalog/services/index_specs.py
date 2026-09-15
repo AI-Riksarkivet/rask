@@ -31,6 +31,7 @@ import json
 from typing import Any
 
 from lance.query import DocumentGranularity
+from lance_namespace import TableIndexNotFoundError
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse.work_items import SCALAR_INDEX, SCALAR_INDEX_TYPES, VECTOR_INDEX
@@ -69,12 +70,17 @@ _SCALAR_TYPE_BY_READBACK = {kind.replace("_", "").lower(): kind for kind in SCAL
 _DETAIL_VALUE_TYPES: dict[str, type] = {"document_granularity": DocumentGranularity}
 
 
-class IndexNotFoundForRebuildError(LookupError):
+class IndexNotFoundForRebuildError(TableIndexNotFoundError):
     """The named index is not on this dataset.
 
     Raised rather than defaulted: the caller asked to REPAIR a named index, so minting one from
     pylance's defaults would be the silent re-tune this module exists to prevent — and it would do it
     on a table where the operator believes an index already exists.
+
+    IT SUBCLASSES THE SPEC'S OWN ERROR so `install_problem_handlers` answers the 404 a generated client
+    dispatches on. As a bare `LookupError` it reached the catch-all and the deployed door answered 500
+    for a name that simply was not there (measured live 2026-09-15) — an internal error for a caller
+    mistake, which is the shape the estate's error contract exists to prevent.
     """
 
 
