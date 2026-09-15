@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 76 | 10 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 10 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -3248,9 +3248,40 @@ caller — and the latent gap below.
   it makes the Ray-OFF configuration honest.
 - *Closes when:* the roll observes it. There is nothing further to build.
 
-**LH-083 · `engine_registry.executor_for` has ZERO callers — the deployed stage lane still calls `ray_submit` directly at `workflow.py:495`**
+**LH-083 · ~~`engine_registry.executor_for` has ZERO callers — the deployed stage lane still calls `ray_submit` directly at `workflow.py:495`~~ — CLOSED 2026-09-15: one submission path, and it is the one Flyte sanctions**
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* The bypass is real and unchanged at workflow.py:495, but the row's second closing action is already done — `ray-kit` is no longer a medallion dependency.
+
+- **CLOSED 2026-09-15 (`b3a10799`), deployed on `main-b3a10799` and observed.** The `RayJobExecutor`
+  and its RayJob-CR path are deleted, with everything that named them: the `RAY` branch of
+  `executor_for`, two test files, `chart/templates/medallion-rayjob-rbac.yaml` and its only gate
+  `medallion.rayJobSubmission`. 697 lines. Observed after the roll: all three stage runners `2/2
+  Running`, zero `ModuleNotFound`/`ImportError` across their logs. The chart half is provably inert on
+  this release — `helm get manifest` never rendered that Role and `helm get values` never set the flag.
+- **THE DECISION WAS CHECKED AGAINST FLYTE AFTERWARDS, and the check is why this row can be struck
+  rather than merely closed.** Flyte is the reference workflow engine driving Ray, so "what does it do"
+  is a source question, not a preference. Read 2026-09-15 from `flyteplugins/go/tasks/plugins/k8s/ray/`,
+  `flyteidl2/plugins/ray.proto` and `flyte-sdk/plugins/ray`:
+  * *Flyte creates a RayJob CR* — `constructRayJob` returns `&rayv1.RayJob{...}`; there is no `net/http`
+    import and 8265 appears only as a container port. Status comes from watching
+    `rayJob.Status.JobDeploymentStatus`, never from polling the dashboard.
+  * *But the CR is there for CLUSTER LIFECYCLE, not for submission.* It always builds a
+    `rayClusterSpec` and defaults `shutdownAfterJobFinishes: true` / `ttlSecondsAfterFinished: 3600`;
+    **`ClusterSelector` is never populated.** Flyte provisions a whole Ray cluster per job. rask runs one
+    long-lived shared cluster and provisions nothing per job, so the CR's purpose does not apply here.
+  * *Flyte's own answer for an EXISTING cluster is neither CR nor Jobs API:* an `address` field feeding
+    `ray.init("ray://…:10001")` — the Ray client protocol, which needs `ray` in the task image. rask
+    refuses that deliberately (the stage runner is httpx-only, no `ray` package), so that path is closed
+    by a choice already made.
+  * *And rask's path is one of Flyte's two sanctioned modes.* `submissionMode` accepts `HTTPMode`,
+    described in Flyte's own config as "submits via HTTP to the head node; no submitter pod to get
+    evicted". That is exactly what `ray_submit` does.
+- *A worry raised while deciding, and retired by the same reading:* the Jobs API echoes `runtime_env`
+  on an unauthenticated dashboard. The CR does not fix that — Flyte base64-encodes `runtime_env` into
+  the CR, readable by anyone holding namespace RBAC. Both paths expose it, and the real answer is the
+  one this estate already built: `credential_ref` NAMES a secret and never carries one. Flyte documents
+  no credential handling for Ray at all.
+
   **Evidence:** BYPASS STANDS: services/medallion/src/medallion/workflow.py:486 imports `submit_stage_job` and :495 calls it directly inside the `submit_stage` activity; `executor_for`'s only callers are tests (services/medallion/tests/test_the_chosen_engine_is_the_engine_that_runs.py:67,69,77,80 — no production caller in `grep -rn executor_for services/ packages/`), and services/medallion/src/medallion/services/transform.py:779 still constructs `InProcessExecutor(settings.storage_options)` by hand while `RayJobExecutor` is constructed only at engine_registry.py:70. ALREADY DONE: services/medallion/pyproject.toml:7-36 lists no `ray-kit` (`grep -n ray` returns nothing), and uv.lock's `[[package]] name = "medallion"` dependency block has no ray-kit entry — the orphaned comment at pyproject.toml:11-13 is what remains of it. Smaller true fix: route workflow.py:495 through `engine_registry.executor_for(...)`; the pyproject edit is a no-op.
   **Reopen if:** A `ray-kit` line reappearing in services/medallion/pyproject.toml, or a production call to `executor_for` in workflow.py.
 `medallion, ray-kit` · **HIGH** · **blocked:** Q17-2 (the Ray adapter's fate)
