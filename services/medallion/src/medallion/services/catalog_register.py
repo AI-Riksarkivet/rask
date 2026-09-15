@@ -307,6 +307,11 @@ def ensure_stage_output(
     location from the CREATE's own response rather than re-asking a read door — `describe` answers 403
     for an absent table, so believing it is what made a new table impossible to create at all.
 
+    THAT SAME 403 IS ALSO HOW AN UNGOVERNED TABLE PRESENTS, which is why the create below asks for
+    `exist_ok`. A table carrying no FGA tuples denies every relation to everyone, so `describe` refuses
+    it exactly as it refuses an absent one, and a default-mode create then collides 409 with the table
+    that is really there. ExistOk makes the two cases converge on the same answer instead.
+
     ``schema`` only has to be A schema, not the output's: the empty table exists so the catalog mints
     and governs a URI, and the stage runner's `overwrite` replaces the schema wholesale afterwards. A stage
     does not know its output schema until it has computed, and does not need to.
@@ -327,8 +332,20 @@ def ensure_stage_output(
             return _vended(described, table_id)
 
         try:
+            # `mode=exist_ok`, NOT the default `Create`, and it is load-bearing rather than defensive.
+            # Reaching here means `describe` refused, and that has TWO causes which the door cannot
+            # tell apart: the table is absent (the ordinary case this seam exists for), or it exists
+            # and is UNGOVERNED — zero FGA tuples, so every relation on it resolves False and the read
+            # door denies exactly as it would for a missing table. Under the default mode the second
+            # case answers 409 and the stage dies, which is the state five of the estate's own tiers
+            # were measured in on 2026-09-15.
+            #
+            # ExistOk converges instead of colliding, and it CANNOT lose data: `table_create` computes
+            # pre-existence from a NATIVE check rather than the gated describe, keeps the existing
+            # table untouched, and writes the structural `parent` edge that was missing — the edge
+            # alone, never `owner`, so a no-op create can still not seize somebody's table.
             created = client.post(
-                f"/v1/table/{table_id}/create",
+                f"/v1/table/{table_id}/create?mode=exist_ok",
                 content=encode_arrow_stream(schema.empty_table()),
                 headers={**headers, "Content-Type": ARROW_STREAM_MEDIA_TYPE, "x-lance-table-id": delimiter.join(segments)},
             )

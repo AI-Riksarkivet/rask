@@ -109,3 +109,55 @@ class TestItAuthenticatesAsAService:
 
         for route in (describe, create):
             assert route.calls.last.request.headers["x-lance-service-identity"] == "service-bronze-to-silver"
+
+
+class TestAnUngovernedTableConvergesInsteadOfColliding:
+    """[[LH-164]] A table with NO FGA tuples presents exactly as an absent one, and then collides.
+
+    MEASURED 2026-09-15 on the live estate: `table:lakehouse$silver`, `$gold`, `$silver-media`,
+    `research-bronze$events` and `bind86-bronze$events` each held ZERO tuples — no `owner`, no
+    `parent`. Every relation on `table` resolves through a direct tuple or `X from parent`, so
+    `can_get_metadata` was False for EVERY principal including the cascade identities that write them,
+    and `describe` refused them exactly as it refuses a table that does not exist.
+
+    Under the default create mode the next call then answers 409 against a table that is really there,
+    so the seam could neither read it nor create it and the tier stayed ungoverned forever. `exist_ok`
+    is what turns that dead end into convergence: the table is kept untouched and its missing `parent`
+    edge is written.
+    """
+
+    @respx.mock
+    def test_a_refused_describe_creates_with_EXIST_OK(self, respx_allows_unused_routes) -> None:
+        """The whole fix, at the only place a test can see it: the mode on the create call."""
+        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(403, json={"detail": "denied"}))
+        create = respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(return_value=httpx.Response(200, json={"location": VENDED}))
+
+        assert _ensure() == VENDED
+
+        assert create.called
+        assert "mode=exist_ok" in str(create.calls[0].request.url), f"the create collides instead of converging: {create.calls[0].request.url}"
+
+    @respx.mock
+    def test_an_ALREADY_EXISTING_ungoverned_table_is_not_a_failure(self, respx_allows_unused_routes) -> None:
+        """The live shape end to end: describe refuses, the table is really there, ExistOk keeps it.
+
+        Asserting the vended location rather than a status code, because what the stage runner needs
+        from this seam is somewhere to write — and under the old mode it got a `RegisterError` instead.
+        """
+        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(403, json={"detail": "denied"}))
+        respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(return_value=httpx.Response(200, json={"location": VENDED, "version": 7}))
+
+        assert _ensure() == VENDED
+
+    @respx.mock
+    def test_a_GOVERNED_existing_table_still_short_circuits_on_describe(self, respx_allows_unused_routes) -> None:
+        """The steady state must not pay for the repair: a healthy table is still one call, not two.
+
+        This is what stops `exist_ok` from becoming a create-on-every-stage-run — the convergence only
+        runs on the path that was already failing.
+        """
+        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(200, json={"location": VENDED}))
+        create = respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(return_value=httpx.Response(200, json={}))
+
+        assert _ensure() == VENDED
+        assert not create.called

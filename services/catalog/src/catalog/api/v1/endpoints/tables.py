@@ -627,6 +627,19 @@ async def deregister_table(
     return response
 
 
+def _registration_points_at(registered: str, claimed: str) -> bool:
+    """Whether an existing ABSOLUTE registration is the location a register body CLAIMS.
+
+    The claim is relative (`8f3a_ns$t` or `t.lance`), the registration absolute
+    (`s3://bucket/8f3a_ns$t`), so this asks whether the claim is the registration's TAIL on a path
+    BOUNDARY. A bare `endswith` would accept `ns$t` against `s3://b/other_ns$t`, which is a different
+    table — and the whole point of the check is that a 409 at a different location is a genuine id
+    conflict this must not converge.
+    """
+    left, right = registered.rstrip("/"), claimed.rstrip("/")
+    return left == right or left.endswith("/" + right)
+
+
 def absolute_table_location(ns: LanceNamespace, segments: list[str], registered: str | None) -> str | None:
     """The table's ABSOLUTE location, falling back to what the register returned.
 
@@ -710,7 +723,39 @@ async def register_table(
     # its grants, so creating here would hand the new table the dead one's readers and writers.
     await fga_deps.require_no_live_trash(settings, segments)
     body.id = reconcile_body_id(segments, body.id)
-    response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
+    try:
+        response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
+    except TableAlreadyExistsError:
+        # CONVERGE THE STRUCTURAL EDGE, THEN REFUSE ANYWAY. The spec gives this door two modes —
+        # `Create` (409) and `Overwrite` — and no ExistOk, so the 409 is the correct and unchanged
+        # answer; what is wrong is leaving the id ungoverned while refusing it.
+        #
+        # A table registered whose seed never ran carries NO tuples at all, and every `table` relation
+        # resolves through a direct tuple or `X from parent` — so it denies every principal, including
+        # the identity that registered it, and no door can repair it because re-registering is exactly
+        # what lands here. Measured 2026-09-15: five of the estate's own tiers in that state, and the
+        # medallion's `register_written_dataset` re-enters this door on every run, converging on a
+        # location check that never asked whether the object was governed.
+        #
+        # ONLY WHEN THE LOCATION MATCHES. A 409 at a different location is a genuine id conflict —
+        # a different table living there — and writing an edge for it would attach somebody else's
+        # object to this caller's namespace. Same location means this IS that table, so the edge is a
+        # restatement of a fact the catalog already holds.
+        #
+        # The EDGE ALONE: `may_grant_owner=False`, so a caller cannot acquire a rung on a table it did
+        # not create by re-registering it — the ownership-seizure refusal that guards the ExistOk arm
+        # of `create` applies identically here.
+        # THE CLAIM IS CHECKED AS THE TAIL OF THE REGISTRATION, not by equality. The body carries a
+        # RELATIVE location — the dir backend refuses an absolute one on this door — while the
+        # registered one is absolute. Resolving both through `absolute_table_location` would be dead
+        # code that looks live: it PREFERS the described location over its argument, so both sides come
+        # back identical and the guard would admit every 409 regardless of where it pointed.
+        registered = await run_in_threadpool(absolute_table_location, ns, segments, None)
+        claimed = (body.location or "").strip("/")
+        if registered and claimed and _registration_points_at(registered, claimed):
+            await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments, may_grant_owner=False)
+            log.info("register_converged_governance", extra={"table": id, "location": registered})
+        raise
 
     async def _undo_register() -> None:
         # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to

@@ -4749,10 +4749,31 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   3. **`ensure_stage_output` asks for governance on its describe-200 branch.** Closest to the defect,
      furthest from the existing seams: it is the "asks" seam by design and has no way today to ask
      "is this governed".
-- *Closes when:* one of the three is chosen and landed, a cascade-registered tier carries its `parent`
-  edge the moment it is registered, the five are repaired through that same path rather than by hand,
-  the sweep's "not authorized" class reaches 0, and something REPORTS a catalog table with no parent
-  edge — the reconciler sees storage and registry drift today and is blind to this one.
+- **OWNER CHOSE ALL THREE (2026-09-15). Two landed; the third changed shape and the reason is recorded
+  rather than substituted silently.**
+  - *(2) landed WITHOUT the semantics change the option warned about.* The spec gives this door
+    `Create` (409) and `Overwrite` and no ExistOk, so the 409 stands — what was wrong was leaving the
+    id ungoverned while refusing it. `register_table` now converges the structural edge on an
+    already-exists whose location MATCHES, then re-raises the 409 unchanged. The location check is the
+    security boundary (a 409 elsewhere is a genuine id conflict) and is a tail match on a path
+    BOUNDARY, because a bare `endswith` accepts `other_silver$features` for `silver$features`.
+  - *(3) landed as one character of query string.* `ensure_stage_output` now creates with
+    `?mode=exist_ok`. A table with no tuples denies every relation to everyone, so `describe` refuses
+    it exactly as it refuses an ABSENT table — and the default create mode then collided 409 with the
+    table that was really there, which is why the seam could neither read nor create these five.
+    ExistOk converges instead, and cannot lose data: `table_create` computes pre-existence from a
+    NATIVE check rather than the gated describe, keeps the table, and writes the edge alone.
+  - *(1) is NOT "the backfill converges tables", and that shape is refused with a reason.* Converging
+    every table on every catalog boot means enumerating ~96 warehouses' tables at startup, and this
+    module's own docstring argues against making boot depend on that work. The value left after (2)
+    and (3) is not repair — those two repair all five on the next cascade tick — it is DETECTION for a
+    table no seam re-touches. So (1) becomes a reconciler category: the reconciler is the estate's
+    drift reporter and is forbidden from writing tuples, which is exactly the right contract here.
+    `_scan_tuples` already returns `counts_by_type['table']`, so the detector is a set difference —
+    what it needs is a table list, which `Sources` does not carry yet.
+- *Closes when:* the reconciler reports a catalog table carrying no `parent` edge (the one piece left),
+  and the sweep's "not authorized" class reaches 0 — the five repairing themselves through (2) and (3)
+  rather than by hand is the evidence that the seams, not the tuples, were the defect.
 
 **LH-165 · ~~NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none~~ — CLOSED 2026-09-15: observed live, and the boot backfill repaired the estate**
 `catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps
