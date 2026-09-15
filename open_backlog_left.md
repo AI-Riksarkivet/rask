@@ -4771,9 +4771,30 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     drift reporter and is forbidden from writing tuples, which is exactly the right contract here.
     `_scan_tuples` already returns `counts_by_type['table']`, so the detector is a set difference —
     what it needs is a table list, which `Sources` does not carry yet.
-- *Closes when:* the reconciler reports a catalog table carrying no `parent` edge (the one piece left),
-  and the sweep's "not authorized" class reaches 0 — the five repairing themselves through (2) and (3)
-  rather than by hand is the evidence that the seams, not the tuples, were the defect.
+- **THE LIVE OBSERVATION REFUTED THE EXPECTATION, and that is the most useful thing this row learned.**
+  (2) and (3) were expected to repair all five on the next cascade tick. Driven against the real door
+  on `main-dfd68383`, `POST /v1/table/lakehouse$silver/create?mode=exist_ok` answered **409
+  `ConcurrentModificationError` — "concurrently created by another operation"**, not the ExistOk
+  convergence. The door believed the table was ABSENT and attempted a real create.
+- **BECAUSE THERE IS A THIRD DEFECT UNDERNEATH: the namespace binding and the bytes disagree.** The
+  binding says `lakehouse -> s3://lakehouse-wh`, while the tier's bytes are at
+  `s3://lance-catalog/medallion/lakehouse$silver` — the platform root. The door resolves the namespace
+  to the warehouse root, `table_exists` finds nothing there, and every path that depends on
+  pre-existence (the ExistOk arm included) takes the absent branch. So these three tiers cannot be
+  resolved through the catalog AT ALL, which is also why their 403 came from the authz gate — that gate
+  runs BEFORE existence resolution, so the refusal never proved the catalog could find them.
+- *The two bronze heads are a different case and may still converge:* `research-bronze -> s3://research-bucket`
+  and `bind86-bronze -> s3://bind86-wh` both MATCH the bucket their bytes are in
+  (`<root>/medallion/bronze`), so (2)'s register convergence has a resolvable table to attach to.
+  Unverified live — the produce path was not driven.
+- *This is the reserved-bucket ruling surfacing as data:* the cascade writes its tiers into
+  `lance-catalog`, which is platform storage that may never back a warehouse, while their namespace is
+  bound to a tenant warehouse. The two facts cannot both be right, and nothing reconciles them.
+- *Closes when:* the binding-vs-location disagreement is resolved for the three `lakehouse$*` tiers
+  (either the cascade writes where the binding says, or the namespace stops claiming a warehouse root
+  it does not use), the register convergence is observed repairing the two bronze heads, the
+  reconciler reports a catalog table carrying no `parent` edge, and the sweep's "not authorized" class
+  reaches 0.
 
 **LH-165 · ~~NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none~~ — CLOSED 2026-09-15: observed live, and the boot backfill repaired the estate**
 `catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps
