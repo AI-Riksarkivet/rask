@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**222 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**224 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 12 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 9 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -5021,6 +5021,50 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   sends the next reader to re-derive a deleted class. It is low only because nothing branches on it.
 - *Closes when:* all six say what the code does, and `DECISIONS.md` records the deletion with its reason
   rather than describing the old shape.
+
+**LH-160 · 39 secrets are still delivered through the environment, and nothing stopped the count growing until now**
+`chart, service-kit` · **HIGH** · measured 2026-09-15 against the render AND the live cluster
+
+- *The rule, verbatim (owner):* *"Never secret through envs. Either from ESO, secret store dapr and STS
+  for zero trust."* A `secretKeyRef` is a Kubernetes Secret injected as an environment variable — the
+  banned path. **ESO does not fix it:** it changes where the value comes FROM (OpenBao, live and healthy)
+  and not how it is DELIVERED.
+- *Measured on the live cluster, 41 entries; on the render, 39. Split by the path each SHOULD take:*
+
+  | delivery today | count | sanctioned path for those pods |
+  |---|---|---|
+  | `APP_API_TOKEN` (10) + `MEDIA_S3_ACCESS_KEY_ID` (2) — pods WITH a Dapr sidecar | 12 | the Dapr secret store, already reachable in the pod |
+  | `LINEAGE_SERVICE_TOKEN` (8), `OIDC_CLIENT_SECRET` (7), `SESSION_SECRET` (7) — no sidecar | 22 | ESO-managed secret as a MOUNTED FILE |
+  | `OPENFGA_DATASTORE_URI`, `DAPRSTATE_PASSWORD`, `S3_SECRET`, 4x `RASK_LINEAGE_TOKEN_SERVICE_*` | 7 | file mount; the S3 one is STS's job |
+
+  **No STS-vended credential exists on any Deployment in the estate.**
+- **THE GATE LANDED FIRST, and the reason is why 39 accumulated.** Several tests already pinned SPECIFIC
+  `secretKeyRef` entries as CORRECT — the Ray pod's, the app token's — each guarding its own plane.
+  Nothing counted them estate-wide, so every local test stayed green while the total grew. That is the
+  same split this estate already paid for once, when two planes each pinned half of the Jobs-API secret
+  defect and it was fixed twice. `test_secret_env_delivery_only_shrinks.py` now ratchets the count: it
+  fails on the FORTIETH, and separately fails on a baseline left stale-HIGH, because a number not
+  lowered after a removal is unused budget the rule just won and gave back.
+- *Why a ratchet and not a ban:* a test demanding zero would be red the moment it landed and skipped
+  within a week. The 12 sidecar-bearing entries are counted separately because they are the cheapest —
+  the mechanism is already in the pod, so migrating them needs no chart plumbing at all.
+- *Closes when:* the baseline reaches 0 (excluding [[LH-161]]), with the sidecar-bearing twelve first.
+
+**LH-161 · The GreptimeDB subchart pulls a whole Secret into its environment via `envFrom`**
+`chart` · med · found 2026-09-15 by the [[LH-160]] gate
+
+- *The defect:* `release-name-greptimedb-standalone` declares `envFrom: {secretRef: rask-observability-s3}`
+  — every key in that Secret enters the process environment, which the rule names explicitly and which
+  is strictly worse than a keyed ref: a key added to that Secret for an unrelated consumer silently
+  lands here too.
+- *Why it is not simply fixed:* the `envFrom` is in a THIRD-PARTY subchart's own template, not in
+  `chart/templates/`. The fix is an upstream change or a values-level override, neither of which is an
+  edit the estate can make where the defect is.
+- *It is the ONLY one, and recorded by NAME rather than exempted by a wildcard*, so `envFrom` stays a
+  ban for every template the estate authors — a new one anywhere reds the gate.
+- *Closes when:* the subchart takes the credential by file or the estate overrides that template — or
+  an owner records that a third-party subchart's own env handling is out of scope, which is a
+  defensible answer but must be written rather than assumed.
 
 ## PHASE 2 · COMPUTE
 
