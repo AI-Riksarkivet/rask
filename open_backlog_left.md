@@ -4692,9 +4692,15 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   spec gives this door no ExistOk, so the status is not negotiable); and `ensure_stage_output` creates
   with `?mode=exist_ok`, because a tuple-less table denies every relation and so `describe` refuses it
   exactly as it refuses an ABSENT one, which the default create mode then turned into a 409 collision.
-- *Closes when:* the sweep reports a discovered dataset with no catalog table as UNGOVERNED rather than
-  as an authorization failure, with a message an operator can act on; and the owner rules on whether
-  the chart-path medallion datasets are residue to reap or data to register.
+- **THE MESSAGE HALF LANDED 2026-09-15.** Both refusal sites (`catalog_compaction`'s plan door and
+  `credentials`' vend door) now end with one shared `denial_remedy(...)`, which names BOTH causes and
+  says why they cannot be told apart — the gate runs before existence resolution, so "no rung" and
+  "no such table" are the same 403 on the wire. It no longer instructs a grant on an id that may be a
+  namespace; it asks the reader to check the id names a TABLE first. One function rather than a phrase
+  at two sites, because the two had already drifted apart once.
+- *Closes when:* the owner rules on whether the chart-path medallion datasets are residue to reap or
+  data to register. That is the only thing left here, it is a decision rather than a defect, and it
+  carries real risk either way — `bind86-wh/medallion/bronze` holds 500 rows.
 
 **LH-165 · ~~NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none~~ — CLOSED 2026-09-15: observed live, and the boot backfill repaired the estate**
 `catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps

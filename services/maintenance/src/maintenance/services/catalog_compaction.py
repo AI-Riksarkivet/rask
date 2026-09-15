@@ -25,7 +25,14 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from maintenance.services.compaction_executor import CommittedWork, CompactionPlaneUnavailable, DistributedCompactionError, MaintenanceDenied, PlannedWork
+from maintenance.services.compaction_executor import (
+    CommittedWork,
+    CompactionPlaneUnavailable,
+    DistributedCompactionError,
+    MaintenanceDenied,
+    PlannedWork,
+    denial_remedy,
+)
 
 
 if TYPE_CHECKING:
@@ -58,7 +65,7 @@ def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: Mainten
         # denied. `MaintenanceDenied` cannot be answered that way.
         raise MaintenanceDenied(
             f"the catalog REFUSED a compaction plan for {table_id} ({response.status_code}) — this rewrite is not "
-            f"authorized for {settings.catalog_service_identity!r}. Grant can_maintain on table:{table_id} if it should be."
+            f"authorized. {denial_remedy(table_id=table_id, identity=settings.catalog_service_identity)}"
         )
     if response.status_code >= 400:
         raise CompactionPlaneUnavailable(f"compaction plan unavailable for {table_id} ({response.status_code}): {response.text[:200]}")

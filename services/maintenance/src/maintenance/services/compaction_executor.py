@@ -104,6 +104,30 @@ class DistributedCompactionError(RuntimeError):
     """
 
 
+def denial_remedy(*, table_id: str, identity: str) -> str:
+    """The sentence a maintenance 403 ends with — naming BOTH causes, because the sweep cannot tell them apart.
+
+    The catalog's authorization gate runs BEFORE existence resolution, so "this identity holds no
+    `can_maintain`" and "no such table exists" are the SAME 403 on the wire. A message that names only
+    the first asserts the id is a table, and when it is not, the advice cannot be followed at all.
+
+    MEASURED 2026-09-15, which is why this is one function instead of a phrase repeated at two sites:
+    a sweep pass refused five datasets with *"Grant can_maintain on table:lakehouse$silver"* — and
+    `lakehouse$silver` is a NAMESPACE. `discover_datasets` finds datasets by BUCKET SCAN and derives an
+    id from the path, so a dataset that was never registered yields an id no table door can act on. The
+    tier the cascade actually governs is `lakehouse$silver$features`, and it maintains fine.
+
+    That mattered next to 315 refusals in the same pass that were CORRECT (the shallow-clone
+    protection): an instruction nobody can carry out, repeated beside them, is how a reader learns to
+    skip the whole category.
+    """
+    return (
+        f"Either {identity!r} holds no can_maintain on table:{table_id}, or no such table is registered "
+        f"and this dataset is ungoverned — the catalog answers both the same way, because its authorization "
+        f"gate runs before existence resolution. Check that the id names a TABLE before granting on it."
+    )
+
+
 class MaintenanceDenied(RuntimeError):
     """The catalog answered NO — this identity may not maintain this table.
 

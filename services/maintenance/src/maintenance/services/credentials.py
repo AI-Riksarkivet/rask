@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_credential_tier
 from maintenance.services.catalog_identity import service_headers
-from maintenance.services.compaction_executor import MaintenanceDenied
+from maintenance.services.compaction_executor import MaintenanceDenied, denial_remedy
 
 
 logger = logging.getLogger(__name__)
@@ -165,8 +165,8 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None
         # visible only as an INFO line nobody reads.
         raise MaintenanceDenied(
             f"the catalog REFUSED a write credential for {table_id} ({response.status_code}) — this rewrite is not "
-            f"authorized for {settings.catalog_service_identity!r}, and signing it with the ambient key would be a bypass. "
-            f"Grant can_maintain on table:{table_id} if this identity should maintain it."
+            f"authorized, and signing it with the ambient key would be a bypass. "
+            f"{denial_remedy(table_id=table_id, identity=settings.catalog_service_identity)}"
         )
     if response.status_code >= 400:
         logger.info("credential vending unavailable for %s (%s)", table_id, response.status_code)
