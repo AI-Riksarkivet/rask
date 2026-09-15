@@ -3381,7 +3381,26 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   precisely the flood the guard exists to prevent. Counting does not need a node per attempt — one node
   carrying an attempt COUNTER and a last-attempt timestamp answers "did it fail first, and how often"
   without multiplying nodes. That is a facet on the existing MERGE target, not a new id.
-- *Closes when:* Add attempt number and duration to the audit record — as a counter on the SINGLE
+- **THE DURATION HALF IS SHIPPED AND OBSERVED 2026-09-15.** `DatasetResult` gained
+  `duration_seconds`, timed at `_maintain_one`'s single choke point (every lane reaches it) around the
+  REWRITE rather than the whole span — the policy skip returns before a dataset is opened, and "how
+  long did this pass take" should mean the work. `perf_counter`, so a clock step mid-compaction cannot
+  corrupt it; `None` rather than `0.0` where nothing was attempted, because a decision that did no work
+  and a pass too fast to measure are different facts. It reaches both the `lance.audit` record and the
+  `compaction.compact` span.
+  *Measured on the deployed estate after the roll* — GreptimeDB auto-created
+  `span_attributes.lance.maintenance.duration_seconds`, which is itself proof the attribute is emitted,
+  and the values are real per-dataset work:
+
+      0.046  s3://regaud-wh/89014814_regaudns$t2
+      0.022  s3://e2e-wh-life/7cd4c28d_e2elifens$t_before
+      0.009  s3://cons9931-wh/5ca63792_cons9931ns$tbl
+
+  *The test that matters is on the shipped path:* the audit-record test runs against a double and can
+  only show the field TRAVELS, so the assertion that a pass is actually TIMED lives in
+  `test_a_work_item_is_self_contained.py`, on a run that really opens and rewrites a Lance dataset.
+  Mutation-proven — deleting the timing line reds that one while the double-based test stays green.
+- *Closes when:* the ATTEMPT half lands — a counter on the SINGLE
   deterministic FAIL node, not by minting one id per attempt — and make it FGA-gated per object so a
   tenant can query its own table's rewrites; then observe it on a dataset that actually has fragments to
   reclaim, measured through the running app or a door. Do NOT remove the deterministic run id without
