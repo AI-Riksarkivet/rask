@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**230 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**233 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 84 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 87 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4191,6 +4191,55 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 
 ---
+
+**LH-153 · The "compact now" button's in-process lane commits a Rewrite and emits no lineage event**
+`catalog` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 12) before that file was deleted
+
+- *Why open:* Re-measured 2026-09-15: `services/catalog/src/catalog/api/v1/endpoints/maintenance.py` returns
+  `CompactResult(**result)` off the `compact_now` path with no `emit_measured_write` anywhere in the module's
+  in-pod branch, while the sweep, this same door's QUEUED lane and the sibling `/compaction_commit` door all
+  emit. This is the lane the estate actually runs: `maintenance.workTopic` is `""` on the deployed values.
+- *Why it is only medium:* no row changes, the presser is audited at the FGA gate, and the version is in the
+  commit log — so the loss is the graph's account of WHO compacted and WHEN, not the fact of it.
+- *The fix is already shaped by the sibling door:* `emit_measured_write(..., operation=COMPACT_TABLE, pin_version=...)`.
+  No docstring, decision record or commit anywhere states the silence as intended, which is the reason this is
+  a defect rather than a choice.
+- *Closes when:* the in-pod branch emits COMPACT_TABLE like its three siblings, with a test that fails if the
+  emit is removed from the lane that has no work topic configured.
+
+**LH-154 · A failed outbox stage skips the publish entirely and is swallowed by both emitters**
+`service-kit, catalog, maintenance` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 14)
+
+- *Why open:* Re-measured 2026-09-15: `packages/service-kit/src/service_kit/lakehouse/outbox.py:361` runs
+  `stage_event` OUTSIDE the `try:` at :363 that wraps `publish_event`. A stage failure therefore raises past the
+  publish, and both callers catch and continue — `catalog/core/lineage_emit.py:706-708` and
+  `maintenance/core/lineage_emit.py:308-309`.
+- *Why it is only medium, stated so nobody re-rates it from the title:* it is WARN-logged and counted, zero
+  occurrences in 29,401 retained catalog log lines, and only a transient store failure landing between the Lance
+  commit and the PutObject reaches it at all.
+- *What makes it a defect anyway:* the counter has no alert rule and the outbox's four signals are blind to this
+  case by construction, so the one path that loses an event silently is the one nothing watches. Publishing
+  anyway on a failed stage strictly dominates — an unstaged event that reaches the bus is delivered, while an
+  unstaged event that is never published is gone.
+- *Distinct from [[LH-004]]*, which is about the kernel swallowing transport failures, not about staging order.
+- *Closes when:* a stage failure still attempts the publish, and a test drives a raising `stage_event` and
+  asserts the publish was attempted.
+
+**LH-155 · Undrop and trash purge race with no arbitration on either side — LATENT**
+`catalog, maintenance` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 9)
+
+- *Why open:* Re-measured 2026-09-15 and unchanged. `maintenance/services/purge.py:745` snapshots `live_ids`
+  once per tick, the estate-wide shallow-clone pre-pass follows at :752, and each record is then checked against
+  that stale snapshot at :604 through a pure `check()` that never re-reads `__manifest`. Undrop
+  (`catalog/.../tables.py:790-832`) does an unguarded `trash.get` -> `register_table` -> clear with no clock gate
+  by design. A grep for `lock|lease|CAS|compare_and|etag|if_match` across both files finds no arbitration.
+  Either interleaving yields a registered, ownerless, byte-less table answering 200 `table_undropped`.
+- *Why it is LATENT rather than live:* purge is OFF on every shipped values file and in the cluster
+  (`MAINTENANCE_TRASH_PURGE_ENABLED=false`), so nothing can race today. Turning purge on is what arms it.
+- *A docstring is currently false about this:* `purge.py:31-34` says the record is "re-checked immediately
+  before deleting". It is not.
+- *Closes when:* the delete re-checks registration immediately before acting (or takes a lease undrop respects),
+  and the false docstring is rewritten — BEFORE `trashPurgeEnabled` is ever set true anywhere.
 
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
 
