@@ -63,10 +63,15 @@ async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
     if not settings.fga_enabled:
         log.info("cascade_backfill_skipped", extra={"reason": "fga_disabled"})
         return (0, 0, [])
-    if not settings.fga_cascade_writers:
-        # Not an error: an estate with no stage runners configured has nothing to grant. Logged because a
-        # silent zero is the same shape as a broken run.
-        log.info("cascade_backfill_skipped", extra={"reason": "no_cascade_writers"})
+    if not (settings.fga_cascade_writers or settings.fga_maintainers):
+        # Not an error: an estate with no stage runners and no maintenance identity configured has
+        # nothing to grant. Logged because a silent zero is the same shape as a broken run.
+        #
+        # BOTH LISTS, because `cascade_tuples` now carries the sweep's `maintainer` grant alongside the
+        # cascade rungs. Guarding on the cascade list alone would make a maintenance-only estate skip
+        # the backfill entirely and report itself as having nothing to do — the same silent-skip shape
+        # that let the maintainer grant go unwritten in the first place.
+        log.info("cascade_backfill_skipped", extra={"reason": "no_cascade_writers_or_maintainers"})
         return (0, 0, [])
 
     # THE SAME BOOTSTRAP THE LIFESPAN USES, not a private copy of it — this is a hook Job that must

@@ -4721,9 +4721,38 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `tests/unit/test_bronze_is_governed_end_to_end.py::test_registering_seeds_the_ownership_tuples`), so
   they pin that the right arguments were passed, never that a tuple exists. Deleting the EFFECT of
   `parent_object` is invisible to every one of them. Add a gate that reads the store, not the mock.
-- *Closes when:* a cascade-registered tier carries `owner` and `parent` the moment it is registered,
-  the five tables above are repaired, the sweep stops refusing them, and a gate fails if a catalog
-  table object ever exists with no parent tuple.
+- **NARROWED TO EXACTLY FIVE, measured 2026-09-15 after [[LH-165]] shipped.** The sweep's
+  "not authorized" refusals fell 25 -> 5, and the five are precisely this row's tables. Nothing else
+  in the estate is ungoverned at the table rung, so the blast radius is known rather than estimated.
+- **AND IT IS NOT "UNMAINTAINABLE", IT IS UNGOVERNED OUTRIGHT.** Checked against the live evaluator
+  with the model id pinned: on `table:lakehouse$silver`, `$gold` and `research-bronze$events`,
+  `can_maintain`, `can_write_data` AND `can_get_metadata` are all **False** — for
+  `user:service-maintenance` and for the cascade identities that WRITE them
+  (`service-silver-to-gold`, `service-medallion-producer`). No principal holds any relation.
+- *Why the data path never noticed:* the cascade writes through vended STS credentials straight to
+  object storage, and only the catalog's own doors are FGA-gated. So the tier fills with data, lineage
+  records the runs, the UI lists the table — and the first door that ever asks it a permission question
+  is the sweep's `can_maintain`. A governance hole surfaced as a compaction statistic.
+- *The ExistOk half is FIXED and did not close this* (see the mechanism note above): that arm is never
+  taken by either medallion seam. What remains is the convergence branch, and the fix is a design
+  decision rather than a wiring job — the three candidate homes, none yet chosen:
+  1. **The register door converges.** `POST /v1/table/{id}/register` currently raises on an
+     already-registered id and never reaches the seed. Making an identical re-registration converge
+     (ensure the edge, answer 200) closes the `register_written_dataset` seam and repairs 2 of the 5
+     through a sanctioned door — but it changes a documented 409 into a 200, which is a spec
+     semantics call.
+  2. **The boot backfill converges tables, as it already does warehouses.** Symmetric with the
+     mechanism that just repaired 96 warehouses with zero hand-written tuples, and the `parent` edge is
+     a pure structural fact derivable from the id (`fga.parent_object`), so it can be recomputed rather
+     than remembered. Cost: it must enumerate tables per warehouse, which the backfill has no namespace
+     handle for today — its own docstring records why enumeration cannot come from OpenFGA.
+  3. **`ensure_stage_output` asks for governance on its describe-200 branch.** Closest to the defect,
+     furthest from the existing seams: it is the "asks" seam by design and has no way today to ask
+     "is this governed".
+- *Closes when:* one of the three is chosen and landed, a cascade-registered tier carries its `parent`
+  edge the moment it is registered, the five are repaired through that same path rather than by hand,
+  the sweep's "not authorized" class reaches 0, and something REPORTS a catalog table with no parent
+  edge — the reconciler sees storage and registry drift today and is blind to this one.
 
 **LH-165 · ~~NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none~~ — CLOSED 2026-09-15: observed live, and the boot backfill repaired the estate**
 `catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps
