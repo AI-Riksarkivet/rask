@@ -86,7 +86,7 @@ a docstring, which is how three claims had to be retracted the same day.
 | # | Condition | Status | The measurement |
 | --- | --- | --- | --- |
 | 1 | Provenance survives a write | **verified END TO END, one residual** | Driven literally: a real `POST /v1/table/{id}/create` (3 rows, Arrow IPC) answered 200 at `s3://lakehouse-wh/916cee62_lakehouse$prov-probe`, and the graph then held `(:Run {operation:'create_table'})-[:WROTE]->(:Dataset {name:'lakehouse$prov-probe'})` — the write's provenance survived the write. Probe table purged afterwards. Standing totals: 7,107 `Run`, 1,444 `Dataset`, 7,093 `WROTE`. `/runs` is governed on read: **0** rows for an identity holding no rung on the outputs, **10** for one that does. Residual: [[LH-166]]. |
-| 2 | Catalog correct for lance-ns + authz | **partial** | 381 catalog tables across 97 warehouse roots, 0 unreadable. `ungoverned_tables` = 0 (every table the catalog knows carries tuples). `maintainer` now on all 97 warehouses — repaired by the boot backfill, `warehouses=96 tuples=1344 failures=0`. **Spec conformance DRIVEN, not merely test-covered**: all **54/54** operations in the vendored `spec.yaml` are served by the running catalog (zero missing), beside 106 rask control-plane operations that are correctly not spec ops; and a stubbed one answers the spec's own status — `POST /v1/table/{id}/backfill_column` -> **406 `UnsupportedOperationError`** in RFC 9457 form. Residuals: [[LH-037]], [[LH-164]]. |
+| 2 | Catalog correct for lance-ns + authz | **partial** | 381 catalog tables across 97 warehouse roots, 0 unreadable. `ungoverned_tables` = 0 against a denominator of 381 — **and that parenthesis is load-bearing: it counts every table the CATALOG KNOWS, so a dataset that exists on storage and in lineage but was never REGISTERED is outside the count entirely** (re-measured 2026-09-16: `research-bronze$events` and `bind86-bronze$events` answer 404 at the catalog while carrying lineage nodes — see [[LH-144]]). `maintainer` now on all 97 warehouses — repaired by the boot backfill, `warehouses=96 tuples=1344 failures=0`. **Spec conformance DRIVEN, not merely test-covered**: all **54/54** operations in the vendored `spec.yaml` are served by the running catalog (zero missing), beside 106 rask control-plane operations that are correctly not spec ops; and a stubbed one answers the spec's own status — `POST /v1/table/{id}/backfill_column` -> **406 `UnsupportedOperationError`** in RFC 9457 form. Residuals: [[LH-037]], [[LH-164]]. |
 | 3 | Not coupled to a workflow engine or Ray | **DONE and pinned** | In the running `rask-medallion-producer`: `dapr-ext-workflow` is absent from the unconditional `Requires-Dist` and present only as `extra == 'workflow'`; `import ray` FAILS in the image; zero module-level `import ray` across the four services; none declares `ray`/`ray-kit`. Both halves gated by `test_the_lakehouse_does_not_depend_on_a_workflow_engine.py`. |
 | 4 | Events are correct | **partial, and the plane itself is healthy** | The bus DELIVERS, measured over two windows: **586 deliveries / 1 parked** in 20 min, **1,313 / 53** in 60 min — every one answering HTTP 200, because a park is an ACK (the DLQ route acks after logging, so 200 is the correct status for both outcomes and cannot be read as success on its own). Streams: LINEAGE 1,311 / MEDALLION 190 / CATALOG_CONTROL 908 / INGEST 32, all with recent traffic. DLQ is 9,887 msgs / 29 MiB, `dlq.lineage.events` 9,856, dominated by TEST identities (`data_eng` 30, `e2e` 14, `ray` 10 over 3 h against `service-stage-runner` 3 + `service-maintenance` 2). So the failure is a CLASS of message, not the transport. **And the DLQ's GROWTH is not a loss rate at all (measured 2026-09-16): the ingest consumer is ephemeral with `deliverPolicy: all`, so every lineage RESTART re-presents the retained stream, the gate refuses the same unrepairable events again, and each refusal appends a NEW DLQ message about an event already in it.** Driven deliberately — rolling lineage produced 49 parks inside two minutes of pod start and zero before it; run `188ab99f…` sits at seq 5000 parked 2026-09-10 and was parked again 2026-09-15. **No production event newer than 2026-09-14T19:14 has ever been parked.** So DLQ depth is restart-count x backlog-size over a roughly FIXED, OLD set — not an accelerating bleed. Residual: [[LH-166]], [[LH-148]]. |
 | 5 | Resilient | **partial** | Zero restarts across the whole lance plane. The cascade retry window is the shape that actually works — `pubsubDeliveryRetry` is `constant`, `duration=120s`, `maxRetries=4` (8 min), live in the CR and gated by `test_the_cascade_retry_window_is_the_one_the_chart_states.py`; the sidecars carry it because every stage runner was restarted after it applied. The sweep's 320 refusals are correctly classified — **315 are the shallow-clone protection working**. Residual: [[LH-148]]'s replay gap. |
@@ -1310,6 +1310,28 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   in projects whose other tiers ARE governed (`research-silver$features`, `research-gold$catalog`, and
   nine bind86 tables including seven other bronze ones). So this is not "a project nobody governed"; it
   is one table per project, at the head of the cascade, missing.
+- **RE-MEASURED 2026-09-16, AND THE POPULATION IS NOT WHAT THE RECONCILER COUNTS.** The sweep's
+  `ungoverned_tables` category reports **0** on the live estate against a denominator of 381 registered
+  tables — so it is not vacuous, and every table the CATALOG knows does carry tuples. That is a
+  different set from this row's, and the difference is the finding: asked of the catalog directly,
+
+      research-bronze$events    404   not a registered table
+      bind86-bronze$events      404   not a registered table
+      uiproof-gold$catalog      403   the no-existence-oracle answer
+      bind86-silver$features    200   registered and readable
+
+  Two of the three tables this row says "matter" are **not catalog tables at all**. They have lineage
+  `Dataset` nodes and bytes on storage, and the catalog has never heard of them.
+- *Which means the control cannot see the defect it looks like it covers.* `_ungoverned_tables` reads
+  the object MANIFEST (`object_type == 'table'`, `lance_docs/namespace.md:411,658`) and subtracts the
+  FGA tuple set, so its question is "does a REGISTERED table lack tuples". This row's question is
+  "does a dataset that exists lack a registration", and nothing answers that one — a 0 from the first
+  reads as an answer to the second. The sweep meets the same population from the other side and says so
+  in its refusal text ("or no such table is registered and this dataset is ungoverned"), which is a
+  message, not a report.
+- *So the scorecard line for condition 2 is true and narrower than it reads:* "`ungoverned_tables` = 0
+  (every table the catalog knows carries tuples)" — the parenthesis is doing load-bearing work, because
+  a dataset the catalog does NOT know is outside the count entirely.
 - **AND IT COSTS A MEASUREMENT, which is how the two rows connect.** An ungoverned source refuses
   exactly as an absent one does, so the cascade-lag detector reads those lanes as lanes nobody runs.
   Eight declared cells have an ungoverned source — but three of those sources were DROPPED (silence is
