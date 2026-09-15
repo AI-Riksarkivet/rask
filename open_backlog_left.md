@@ -1882,11 +1882,32 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *For scale, measured the same day:* **381 catalog tables across 97 warehouse roots, 0 unreadable, and
   the reconciler's new `ungoverned_tables` category reports 0.** Every table the catalog knows is
   governed.
-- **HALF (a) IS STILL UNSETTLED AND THE ABSENCE OF REFUSALS IS NOT EVIDENCE.** All three stage runners
-  logged ZERO `medallion_stage_from_uri_refused` and zero DLQ parks over 6 h — and zero
-  `medallion_stage_*` lines of any kind, so the cascade was idle for that whole window. A quiet log
-  from a stopped cascade says nothing about a confinement check. It still needs ONE bind86 silver→gold
-  hop DRIVEN, which the diagnostics tail will then name the refusing `from_uri` on.
+- **HALF (a) IS ROOT-CAUSED, and it needed no driven hop — only the deployed env and the real
+  predicate.** The refusal is `uri_within(read_root, trigger.from_uri)`, and the two values cannot
+  match for a warehouse-backed tenant. Measured on the running `rask-silver-to-gold`:
+  `MEDALLION_FROM_URI = s3://lance-catalog/medallion/silver`, while bind86's silver table is
+  `bind86-silver$features` and lives in `s3://bind86-wh`. Driving the real predicate IN THAT POD:
+
+      uri_within('s3://lance-catalog/medallion/silver', 's3://bind86-wh/..._bind86-silver$features')  -> False
+      uri_within('s3://lance-catalog/medallion/silver', 's3://research-bucket/..._research-silver$features') -> False
+      uri_within('s3://lance-catalog/medallion/silver', 's3://lance-catalog/medallion/silver/anything')      -> True
+
+- *So it is not a bind86 problem and not a defect in the check — the check is doing exactly what it is
+  built to do.* **EVERY project with its own warehouse is structurally refused**, because the stage
+  runner's read root is the PLATFORM bucket path the chart renders while the catalog vends the
+  TENANT's own bucket. `research-bucket` fails identically. The refusal is correct in isolation and the
+  configuration around it is single-tenant.
+- *`transform.py` predicted this in its own docstring* — *"the vended `<catalog root>/<hash>_<ns>$<name>`
+  is OUTSIDE `MEDALLION_FROM_URI` unless the two happen to coincide … Making it WORK means resolving a
+  real storage root here — the catalog's connection root is the candidate, and it is not free, because
+  `lance.stageBucket` can zone a namespace into a bucket that root does not contain."* The cost it
+  names is why this is an owner decision and not a patch.
+- **IT IS THE SAME ROOT AS THE MEDALLION DOUBLE-HOME in [[LH-164]]**, which is why the two should be
+  decided together: the chart configures the cascade around `s3://<bucket>/medallion/<ns>` while the
+  catalog vends per-tenant warehouse locations. One answer settles both — either the cascade resolves
+  its read root through the catalog per trigger, or tenants' tiers live where the chart says they do.
+- *Closes when:* that decision is taken and a warehouse-backed project's silver→gold hop is observed
+  completing rather than parking on `dlq.silver-to-gold`.
 
 **LH-138 · ~~The reconcile TIP axis still stamps a `reconcile` edge on a maintenance version~~ — CLOSED 2026-09-11**
 `lineage` · was low
