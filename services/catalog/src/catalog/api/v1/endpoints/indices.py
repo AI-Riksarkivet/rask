@@ -187,10 +187,27 @@ async def drop_table_index(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
+    body: DropTableIndexRequest | None = None,
+    branch: str | None = None,
 ) -> DropTableIndexResponse:
     """Drop a named index from a table — wraps the native ``drop_table_index`` op; emits a DROP_INDEX
-    lineage event at the new version."""
+    lineage event at the new version.
+
+    ``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door
+    beside it already carry — and this door is the one where getting it wrong destroys something.
+    `DropTableIndexRequest` has a `branch` field in the spec ("Branch to target. When not specified,
+    the main branch is used"), and the route accepted no body at all, so a spec-conformant client
+    asking to drop `work`'s index was answered 200 having dropped MAIN's. Its siblings were fixed for
+    exactly this shape on 2026-08-31 — they returned main's LIST for a branch's request — and this
+    one was missed, where the consequence is a write rather than a read.
+
+    Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
+    succeed against the wrong object.
+    """
     segments = parse_identifier(id, settings.delimiter)
+    if body is not None and "branch" in body.model_fields_set:
+        branch = body.branch
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
     req = DropTableIndexRequest(id=segments, index_name=index_name)
     response: DropTableIndexResponse = await run_in_threadpool(native.call, ns, "drop_table_index", req)
     await lineage_deps.emit_measured_write(

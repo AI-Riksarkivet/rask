@@ -331,6 +331,9 @@ export interface paths {
         /**
          * Get Producers
          * @description The runs that wrote ``name`` — who / when / how. Gated on ``can_get_metadata``.
+         *
+         *     Bounded like ``/readers`` beside it: newest-first, so the page a caller gets is the part that
+         *     answers "what wrote this", and the tail it loses is history the run board serves instead.
          */
         get: operations["get_producers_datasets__name__producers_get"];
         put?: never;
@@ -382,6 +385,13 @@ export interface paths {
          *     ``WROTE`` edge — surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim
          *     with no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the
          *     Lance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.
+         *
+         *     ``versions_without_lineage`` is the axis the version comparison cannot answer: it compares two
+         *     MAXIMA, so a write whose event was lost and which a later write superseded leaves both equal and the
+         *     dataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered
+         *     in_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here — this door
+         *     reports the holes and the cron sweep is what recovers them, so an operator asking a question never
+         *     mutates the graph as a side effect.
          */
         get: operations["get_reconcile_datasets__name__reconcile_get"];
         put?: never;
@@ -520,6 +530,49 @@ export interface paths {
          *     2026-07-11).
          */
         get: operations["get_events_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/projection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Events Projection
+         * @description The feed WITHOUT the per-dataset filter, for a caller that observes the estate (§ G1).
+         *
+         *     WHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is
+         *     right for a person: an event naming a table you cannot see must not disclose it. It is wrong for a
+         *     SERVICE that has to reconcile the whole estate, and the wrongness is silent in both directions —
+         *     measured on this estate 2026-09-09, a run that demonstrably exists answered **404** to a service
+         *     principal, and its inputs answered **200 with an empty list**. A walker sees "nothing here", and an
+         *     estate with no work looks identical to an estate it cannot see.
+         *
+         *     THE SERVICE IS NOT THE DISCLOSURE BOUNDARY, and that is what makes this sound rather than a hole.
+         *     A reconciler reads the feed to decide who to TELL; the telling is gated per subject at delivery
+         *     (`can_be_notified`), which is the check that actually protects a person's inbox. Filtering the
+         *     reconciler's own view protects nobody and only guarantees it cannot find the events it exists to
+         *     catch. `can_be_notified` stays the sole disclosure gate; this door moves the estate-read decision
+         *     to the rung that means "may observe the estate".
+         *
+         *     `can_observe_events` ON THE ROOT OBJECT — the same rung `POST /v1/projects` and `POST /v1/stores`
+         *     already gate on, so an estate privilege means one thing everywhere. It is `owner` on the root in
+         *     `model.fga`, so nobody holds it by accident and granting it is a deliberate act.
+         *
+         *     Identical shape to `/events` otherwise — same keyset cursor, same cap, same `summary` — so a caller
+         *     can move between the two without a second client. `oldest_seq` is reported here too: a walker whose
+         *     cursor falls below it lost a window to the prune, which is the one signal that distinguishes
+         *     "caught up" from "rows went past me".
+         */
+        get: operations["get_events_projection_events_projection_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1383,7 +1436,7 @@ export interface components {
          * @description Result of reconciling the lineage graph's recorded version against the on-disk Lance version.
          * @enum {string}
          */
-        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent" | "unreadable";
+        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent" | "unreadable" | "ungoverned";
         /**
          * ReconcileStatus
          * @description Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).
@@ -1414,6 +1467,8 @@ export interface components {
             storage_version?: number | null;
             /** Unreadable Reason */
             unreadable_reason?: string | null;
+            /** Versions Without Lineage */
+            versions_without_lineage?: number[];
         };
         /**
          * Run
@@ -1485,8 +1540,12 @@ export interface components {
          *     ``state`` is the latest run state (START→RUNNING→COMPLETE/FAIL), with progress + error.
          */
         RunStatus: {
+            /** Attempts */
+            attempts?: number | null;
             /** Author */
             author?: string | null;
+            /** Cascade Id */
+            cascade_id?: string | null;
             /** Consumed From Version */
             consumed_from_version?: number | null;
             /** Consumed To Version */
@@ -2051,7 +2110,9 @@ export interface operations {
     };
     get_producers_datasets__name__producers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -2334,6 +2395,43 @@ export interface operations {
         };
     };
     get_events_events_get: {
+        parameters: {
+            query?: {
+                after?: number | null;
+                limit?: number;
+                summary?: boolean;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Events"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_events_projection_events_projection_get: {
         parameters: {
             query?: {
                 after?: number | null;

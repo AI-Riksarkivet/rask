@@ -36,6 +36,7 @@ from lance_namespace import (
     DescribeNamespaceResponse,
     DescribeTableIndexStatsResponse,
     DescribeTransactionResponse,
+    DropTableIndexResponse,
     GetTableStatsResponse,
     ListTableIndicesResponse,
 )
@@ -110,6 +111,36 @@ def test_index_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMoc
     fake_ns.describe_table_index_stats.return_value = DescribeTableIndexStatsResponse(num_indexed_rows=0, num_unindexed_rows=0)
     resp = client.post("/v1/table/db$t/index/i1/stats", json={"branch": "work"})
     assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
+
+
+def test_drop_table_index_reaches_the_native_op_with_the_index_from_the_PATH(client: TestClient, fake_ns: MagicMock) -> None:
+    """The one door in this family nothing drove. [[LH-105]].
+
+    `index/list` and `index/{n}/stats` are covered above; the DROP had no test anywhere in the estate,
+    which matters more than a missing case usually would — it is half of the only repair path an index
+    has. A vector index cannot be rebuilt under its own name (`index_build.build_index` deliberately
+    passes no `replace`, and pylance refuses a duplicate vector name), so drop-then-create IS the
+    repair, and it rests on a door that was served and never exercised.
+
+    The index name is a PATH segment, like the id: the route grammar puts everything a proxy needs to
+    authorize in the path, so a handler reading it from the body would be routable and ungovernable.
+    """
+    fake_ns.drop_table_index.return_value = DropTableIndexResponse()
+
+    resp = client.post("/v1/table/db$t/index/vec_idx/drop", json={})
+
+    assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:200]}"
+    assert _sent(fake_ns.drop_table_index).index_name == "vec_idx", "the index name did not reach the native op from the path"
+
+
+def test_drop_table_index_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:
+    """Same refusal its two siblings above carry, and absent for the same reason they were: the branch
+    guard was wired per-door, so a door nobody tested is a door whose guard nobody checked."""
+    fake_ns.drop_table_index.return_value = DropTableIndexResponse()
+
+    resp = client.post("/v1/table/db$t/index/vec_idx/drop", json={"branch": "work"})
+
+    assert resp.status_code == 406, f"a branch in the BODY was answered {resp.status_code}; the refusal never fired"
 
 
 def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:

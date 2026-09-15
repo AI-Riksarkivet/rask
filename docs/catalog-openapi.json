@@ -6209,6 +6209,76 @@
         "title": "DropNamespaceResponse",
         "type": "object"
       },
+      "DropTableIndexRequest": {
+        "description": "DropTableIndexRequest",
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Branch to target. When not specified, the main branch is used. ",
+            "title": "Branch"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{\"header.Authorization\": \"Bearer abc\"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{\"header.x-request-id\": \"abc123\"}`. ",
+            "title": "Context"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Name of the index to drop",
+            "title": "Index Name"
+          }
+        },
+        "title": "DropTableIndexRequest",
+        "type": "object"
+      },
       "DropTableIndexResponse": {
         "description": "Response for drop index operation",
         "properties": {
@@ -25164,7 +25234,7 @@
     },
     "/v1/table/{id}/index/{index_name}/drop": {
       "post": {
-        "description": "Drop a named index from a table \u2014 wraps the native ``drop_table_index`` op; emits a DROP_INDEX\nlineage event at the new version.",
+        "description": "Drop a named index from a table \u2014 wraps the native ``drop_table_index`` op; emits a DROP_INDEX\nlineage event at the new version.\n\n``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door\nbeside it already carry \u2014 and this door is the one where getting it wrong destroys something.\n`DropTableIndexRequest` has a `branch` field in the spec (\"Branch to target. When not specified,\nthe main branch is used\"), and the route accepted no body at all, so a spec-conformant client\nasking to drop `work`'s index was answered 200 having dropped MAIN's. Its siblings were fixed for\nexactly this shape on 2026-08-31 \u2014 they returned main's LIST for a branch's request \u2014 and this\none was missed, where the consequence is a write rather than a read.\n\nRefused BEFORE `native.call`, because the whole point is that the native op would otherwise\nsucceed against the wrong object.",
         "operationId": "drop_table_index_v1_table__id__index__index_name__drop_post",
         "parameters": [
           {
@@ -25183,6 +25253,22 @@
             "schema": {
               "title": "Index Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch"
             }
           },
           {
@@ -25284,6 +25370,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DropTableIndexRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {

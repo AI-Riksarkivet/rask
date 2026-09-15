@@ -926,6 +926,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/outbox/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vend Outbox Credentials
+         * @description Vend a write-tier credential scoped to the estate's lineage outbox prefix.
+         *
+         *     Answers `server_mediated` when no outbox is configured or the vendor declines — the same shape the
+         *     table door uses, so a caller has one response contract rather than two. A caller that receives it
+         *     stages nothing and its events stay on the primary publish path, which is the honest degradation:
+         *     the backstop is absent, not silently broken.
+         */
+        post: operations["vend_outbox_credentials_v1_outbox_credentials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/project/{id}/gate/delete": {
         parameters: {
             query?: never;
@@ -2402,6 +2427,17 @@ export interface paths {
          * Drop Table Index
          * @description Drop a named index from a table — wraps the native ``drop_table_index`` op; emits a DROP_INDEX
          *     lineage event at the new version.
+         *
+         *     ``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door
+         *     beside it already carry — and this door is the one where getting it wrong destroys something.
+         *     `DropTableIndexRequest` has a `branch` field in the spec ("Branch to target. When not specified,
+         *     the main branch is used"), and the route accepted no body at all, so a spec-conformant client
+         *     asking to drop `work`'s index was answered 200 having dropped MAIN's. Its siblings were fixed for
+         *     exactly this shape on 2026-08-31 — they returned main's LIST for a branch's request — and this
+         *     one was missed, where the consequence is a write rather than a read.
+         *
+         *     Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
+         *     succeed against the wrong object.
          */
         post: operations["drop_table_index_v1_table__id__index__index_name__drop_post"];
         delete?: never;
@@ -3058,7 +3094,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Table Version */
+        /**
+         * Create Table Version
+         * @description Create one version entry for this table, from a manifest the table itself owns.
+         */
         post: operations["create_table_version_v1_table__id__version_create_post"];
         delete?: never;
         options?: never;
@@ -3120,6 +3159,16 @@ export interface paths {
          * List Table Versions
          * @description List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees
          *     latest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).
+         *
+         *     PAGED HERE, NOT DOWNSTREAM, because the backend cannot page. Driven against a `dir` namespace
+         *     2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,
+         *     and a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`
+         *     told a caller asking for three of seven that it had seen everything — truncation wearing
+         *     pagination's clothes, the shape `GET /v1/model` already names.
+         *
+         *     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
+         *     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
+         *     (measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.
          */
         post: operations["list_table_versions_v1_table__id__version_list_post"];
         delete?: never;
@@ -6385,6 +6434,32 @@ export interface components {
             transaction_id?: string[] | null;
         };
         /**
+         * DropTableIndexRequest
+         * @description DropTableIndexRequest
+         */
+        DropTableIndexRequest: {
+            /**
+             * Branch
+             * @description Branch to target. When not specified, the main branch is used.
+             */
+            branch?: string | null;
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: string[] | null;
+            identity?: components["schemas"]["Identity"] | null;
+            /**
+             * Index Name
+             * @description Name of the index to drop
+             */
+            index_name?: string | null;
+        };
+        /**
          * DropTableIndexResponse
          * @description Response for drop index operation
          */
@@ -7486,11 +7561,15 @@ export interface components {
             compact_interval_hours?: number | null;
             /** Index Columns */
             index_columns?: string[] | null;
+            /** Max Source Bytes */
+            max_source_bytes?: number | null;
             /**
              * Optimize Indices Enabled
              * @default true
              */
             optimize_indices_enabled: boolean;
+            /** Repack Mode */
+            repack_mode?: ("reencode" | "try_binary_copy" | "force_binary_copy") | null;
             /** Retain Versions */
             retain_versions?: number | null;
             /** Retention Days */
@@ -7522,6 +7601,8 @@ export interface components {
             id: string;
             /** Kind */
             kind: string;
+            /** Max Source Bytes */
+            max_source_bytes?: number | null;
             /**
              * Optimize Indices Enabled
              * @default true
@@ -7529,6 +7610,8 @@ export interface components {
             optimize_indices_enabled: boolean;
             /** Path */
             path: string;
+            /** Repack Mode */
+            repack_mode?: string | null;
             /** Retain Versions */
             retain_versions?: number | null;
             /** Retention Days */
@@ -7568,6 +7651,8 @@ export interface components {
         ProbeReport: {
             /** Checks */
             checks?: components["schemas"]["ProbeCheck"][];
+            /** Commit Safe */
+            commit_safe?: boolean | null;
             /** Enforced */
             enforced?: boolean | null;
             /**
@@ -8393,7 +8478,7 @@ export interface components {
              * @default inserted
              * @enum {string}
              */
-            kind: "inserted" | "updated";
+            kind: "inserted" | "updated" | "deleted";
         };
         /**
          * TableExistsRequest
@@ -9585,7 +9670,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9627,7 +9712,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10066,7 +10151,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10108,7 +10193,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10152,7 +10237,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10192,7 +10277,7 @@ export interface operations {
                 content?: never;
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10232,7 +10317,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10551,7 +10636,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10624,6 +10709,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vend_outbox_credentials_v1_outbox_credentials_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11571,7 +11692,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11611,7 +11732,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11651,7 +11772,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11935,7 +12056,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11979,7 +12100,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12021,7 +12142,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12063,7 +12184,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12148,7 +12269,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12190,7 +12311,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12230,7 +12351,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12488,7 +12609,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12539,7 +12660,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12583,7 +12704,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12627,7 +12748,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12710,7 +12831,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12754,7 +12875,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12800,7 +12921,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12849,7 +12970,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12892,7 +13013,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12936,7 +13057,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12976,7 +13097,7 @@ export interface operations {
                 content?: never;
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13018,7 +13139,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13104,7 +13225,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13117,6 +13238,7 @@ export interface operations {
     drop_table_index_v1_table__id__index__index_name__drop_post: {
         parameters: {
             query?: {
+                branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13133,7 +13255,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DropTableIndexRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -13145,7 +13271,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13189,7 +13315,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13235,7 +13361,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13426,7 +13552,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13709,7 +13835,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13754,7 +13880,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13800,7 +13926,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13845,7 +13971,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13891,7 +14017,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13934,7 +14060,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13976,7 +14102,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14018,7 +14144,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14094,7 +14220,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14136,7 +14262,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14178,7 +14304,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14298,7 +14424,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14342,7 +14468,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14384,7 +14510,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14426,7 +14552,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14469,7 +14595,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14511,7 +14637,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14553,7 +14679,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14595,7 +14721,7 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
-            422: {
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

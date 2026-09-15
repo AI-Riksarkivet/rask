@@ -1582,6 +1582,17 @@
       "RunStatus": {
         "description": "The *current* status of a run, folded from its OpenLineage lifecycle events.\n\nUnlike the provenance graph (terminal-only), this is the live \"where are we now\" view:\n``state`` is the latest run state (START\u2192RUNNING\u2192COMPLETE/FAIL), with progress + error.",
         "properties": {
+          "attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts"
+          },
           "author": {
             "anyOf": [
               {
