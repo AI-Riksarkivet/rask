@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**220 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 10 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 76 | 10 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4301,8 +4301,22 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Evidence:* CHART VALUE: /home/blackwell/Desktop/rask/chart/values.yaml:1693 `orphanScan: true`, with the 25-line rationale block at :1668-1692 recording exactly the gap this row names ('the chart rendered no env var for it, so the scan could not be turned on in a deployed estate by any means'). WIRED THROUGH BOTH TEMPLATES: /home/blackwell/Desktop/rask/chart/templates/maintenance.yaml:208 `- { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Values.maintenance.orphanScan false | quote }} }` and /home/blackwell/Desktop/rask/chart/templates/maintenance-worker.yaml:166 (identical). CODE DEFAULT UNCHANGED (still off absent the chart): /home/blackwell/Desktop/rask/services/maintenance/src/maintenance/core/config.py:299 `orphan_scan_enabled: bool = Field(default=False, alias="MAINTENANCE_ORPHAN_SCAN_ENABLED")`. Landed 2026-08-15, commit 81af086f 'fix(maintenance): #128a + #128d + #114 — the reclaimer could certify an estate it never scanned'.
 - *What would reopen it:* `helm template` the chart with `maintenance.orphanScan` set and find the env var absent from the rendered maintenance pod spec, or find a third maintenance workload that runs the reconciler and gets no `MAINTENANCE_ORPHAN_SCAN_ENABLED` row.
 
-**LH-118 · An unparseable `lance-catalog/_projects/_probe.json` that nothing writes keeps `registry:projects` in the reconcile report's `incomplete: 61`**
+**LH-118 · ~~An unparseable `lance-catalog/_projects/_probe.json` that nothing writes keeps `registry:projects` in the reconcile report's `incomplete: 61`~~ — CLOSED 2026-09-15: the object it asks to delete does not exist**
 `maintenance` · low · **blocked:** owner authorisation to delete an object from the live control root
+
+
+- **PREMISE FALSIFIED 2026-09-15 — there is nothing to delete, so there is nothing to authorize.**
+  Swept every bucket in the live object store with explicit credentials (108 buckets, full paginated
+  listing): NO object named `_probe.json` exists anywhere. The 110 keys matching "probe" are all e2e
+  fixture tables named `stockprobe` under `acme-bucket`, which are ordinary test data and not this
+  row's residue.
+  *This row was carried as blocked on owner authorisation to delete a live-estate object.* The
+  authorisation was given on 2026-09-15 and the delete was NOT performed, because re-measuring first —
+  the estate's own rule — showed the target absent. Acting on the ruling without the measurement would
+  have meant hunting for, and possibly deleting, some other object that merely looked like it.
+  *The code half was already true and stays true:* nothing in `services/`, `packages/`, `scripts/`,
+  `chart/` or `tests/` writes `_probe.json` — the repo-wide grep returns zero. Whatever wrote it is
+  gone, and so is what it wrote.
 
 - *Why open:* Measured live on pylance 11: char-0 JSONDecodeError, and nothing in the tree writes the file, so it is estate residue. `_list_json_records` reporting what it cannot parse is correct — the file is the defect. `incomplete` blocks `report_is_clean` and therefore the purge, but is not the sole blocker (13 real drift findings remain). Not acted on because deleting an object from the owner's live control root is not a change to make unasked.
 - *Closes when:* Owner authorises deleting `s3://lance-catalog/_projects/_probe.json` from the live control root; the other 60 `incomplete` rows are `depth limit reached` on the discovery walk, already recorded at `optimize.py:115`.
