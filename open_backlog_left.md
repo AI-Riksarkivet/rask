@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**226 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**227 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 80 | 12 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 81 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4653,24 +4653,54 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Closes when:* a sweep pass over the live estate logs at most one line for this base, and the chosen
   answer is recorded rather than inferred from the credential's shape.
 
-**LH-164 · ~16 datasets are refused compaction because the catalog answers 403 to their compaction plan**
-`maintenance, catalog` · med · measured 2026-09-15 on the running estate
+**LH-164 · The cascade's own governed tiers carry NO FGA tuples, so nothing can be granted on them and maintenance is refused**
+`medallion, catalog` · **HIGH** · measured 2026-09-15 against the live OpenFGA store and the running sweep
 
-- *Measured, not inferred:* one sweep pass reports `datasets=552 skipped=0 refused=333`. **308 of those
-  refusals are CORRECT** — shallow-clone / multi-base sources the `base_refs` pre-pass exists to
-  protect, which is the control working. The residue is the finding: ~16 name
-  `the catalog REFUSED a compaction plan for <table> (403)`, across at least
-  `bind86-bronze$events`, `research-bronze$events`, `trackansb1bc9ea2$*` and
-  `<project>$conforming/partial_cla/read_ghost/refuse_quer`.
-- *Why it is a defect rather than policy:* a 403 here means the sweep cannot obtain a write credential
-  for a table it is supposed to maintain, so those datasets are never compacted, never have their
-  indices optimized and never have old versions reclaimed — silently, and forever. The sweep reports
-  them as `refused` beside 308 refusals that are correct, so the count alone hides them.
-- *Not yet diagnosed, and the row says so:* whether these tables are owned by a project the maintenance
-  identity holds no rung on, whether they are residue from earlier test runs that should be reaped, or
-  whether the vending path is wrong for them, is unmeasured. The 403 is the evidence; the cause is not.
-- *Closes when:* every 403 in that list is either explained as correct (and the sweep says so with a
-  reason distinct from a defect) or the credential path is fixed and the tables compact.
+- *The sweep's own numbers:* `datasets=552 skipped=0 refused=333`. **308 of those refusals are
+  CORRECT** — shallow-clone / multi-base sources the `base_refs` pre-pass exists to protect, which is
+  the control working and must not be "fixed". **25 are this defect**, each reading
+  `this rewrite is not authorized for 'service-maintenance'`.
+- **THE TABLE IS THE BROKEN LINK, AND IT IS BROKEN FOR THE CASCADE'S OWN TIERS.** Read out of the live
+  OpenFGA store: `table:lakehouse$silver`, `table:lakehouse$gold`, `table:lakehouse$silver-media`,
+  `table:research-bronze$events` and `table:bind86-bronze$events` each have **ZERO tuples** — no
+  `owner`, no `parent`. Their PARENT namespaces are fine (`namespace:lakehouse` ->
+  `parent: warehouse:lakehouse-wh`, and so on), and the warehouses above them DO hold
+  `maintainer@user:service-maintenance`. So the chain is intact everywhere except the last hop.
+- *Why that is much worse than a compaction miss:* `table.maintainer` is
+  `[...] or owner or maintainer from parent`, so a table with no `parent` tuple is unreachable from
+  every container grant — and so is every other relation. Nothing can be granted on these tables, no
+  `_protection/` record can be authorized, no per-table policy can be set, and no person can be made
+  their owner. They are DATA THE GOVERNANCE MODEL CANNOT SEE, which is condition 2, while the
+  maintenance refusal is only the first symptom anyone happened to notice.
+- *It is not the reserved-bucket ruling.* That ruling says the cascade may hold no WAREHOUSE over
+  platform storage, and it stands. These tables are not asking for one: their namespaces already have
+  warehouse parents, so the ordinary table->namespace->warehouse cascade would reach them if the table
+  were seeded at all.
+- *Mechanism under trace 2026-09-15* — the suspect is the registration seam
+  (`medallion/services/catalog_register.py`: `ensure_stage_output` and `register_written_dataset`)
+  reaching a catalog door that does not seed, or seeding being skipped on the 409-as-convergence path.
+  **The measurement above is the finding; the mechanism is not yet confirmed and this row will not
+  claim one until it is.**
+- *Closes when:* a cascade-registered tier carries `owner` and `parent` the moment it is registered,
+  the five tables above are repaired, the sweep stops refusing them, and a gate fails if a catalog
+  table object ever exists with no parent tuple.
+
+**LH-165 · Four of 97 warehouses never got the `maintainer` grant, so every table beneath them is unmaintainable**
+`catalog` · med · measured 2026-09-15 against the live OpenFGA store
+
+- *Measured:* 93 of 97 warehouse objects carry `maintainer@user:service-maintenance`; the four that do
+  not are `e2e-iso-a`, `e2e-iso-b`, `lane-wh` and `trackab1bc9ea2-wh`. Unlike [[LH-164]] their tables
+  ARE correctly parented (`table:trackansb1bc9ea2$plain` -> `parent: namespace:trackansb1bc9ea2`), so
+  here the chain breaks at the TOP rung rather than the bottom one.
+- *The consequence is the same shape and the cause is not*, which is why it is split out rather than
+  folded in: one warehouse without the grant silently makes an entire tenant's data unmaintainable,
+  and it presents identically to LH-164 in the sweep log.
+- *The question this has to answer before it is fixed:* whether those four are HISTORICAL residue
+  (created before the grant was introduced, in which case the fix is a backfill plus a reconciler that
+  reports the drift) or whether a live create path still skips it (in which case the door is the fix).
+  Backfilling without knowing which would hide a live defect behind a one-off repair.
+- *Closes when:* the distinction above is measured, the live path is fixed if there is one, the four
+  are repaired, and the reconciler reports a warehouse missing the grant instead of nothing.
 
 
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
