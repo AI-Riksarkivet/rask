@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 80 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 80 | 12 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4653,148 +4653,48 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Closes when:* a sweep pass over the live estate logs at most one line for this base, and the chosen
   answer is recorded rather than inferred from the credential's shape.
 
-**LH-164 · The cascade's own governed tiers carry NO FGA tuples, so nothing can be granted on them and maintenance is refused**
-`medallion, catalog` · **HIGH** · measured 2026-09-15 against the live OpenFGA store and the running sweep
+**LH-164 · The sweep asks authz about datasets that are not catalog tables, and advises a grant that cannot be made**
+`maintenance` · med · measured 2026-09-15; **headline corrected after the live manifests were read**
 
-- *The sweep's own numbers:* `datasets=552 skipped=0 refused=333`. **308 of those refusals are
-  CORRECT** — shallow-clone / multi-base sources the `base_refs` pre-pass exists to protect, which is
-  the control working and must not be "fixed". **25 are this defect**, each reading
-  `this rewrite is not authorized for 'service-maintenance'`.
-- **THE TABLE IS THE BROKEN LINK, AND IT IS BROKEN FOR THE CASCADE'S OWN TIERS.** Read out of the live
-  OpenFGA store: `table:lakehouse$silver`, `table:lakehouse$gold`, `table:lakehouse$silver-media`,
-  `table:research-bronze$events` and `table:bind86-bronze$events` each have **ZERO tuples** — no
-  `owner`, no `parent`. Their PARENT namespaces are fine (`namespace:lakehouse` ->
-  `parent: warehouse:lakehouse-wh`, and so on), and the warehouses above them DO hold
-  `maintainer@user:service-maintenance`. So the chain is intact everywhere except the last hop.
-- *Why that is much worse than a compaction miss:* `table.maintainer` is
-  `[...] or owner or maintainer from parent`, so a table with no `parent` tuple is unreachable from
-  every container grant — and so is every other relation. Nothing can be granted on these tables, no
-  `_protection/` record can be authorized, no per-table policy can be set, and no person can be made
-  their owner. They are DATA THE GOVERNANCE MODEL CANNOT SEE, which is condition 2, while the
-  maintenance refusal is only the first symptom anyone happened to notice.
-- *It is not the reserved-bucket ruling.* That ruling says the cascade may hold no WAREHOUSE over
-  platform storage, and it stands. These tables are not asking for one: their namespaces already have
-  warehouse parents, so the ordinary table->namespace->warehouse cascade would reach them if the table
-  were seeded at all.
-- **MECHANISM, and the first answer was wrong in a way worth recording.** The `existok_kept_existing`
-  skip in `table_create.py` is a real hole and it is NOT this one: neither medallion seam sends `mode`,
-  so `CreateMode.parse(None)` is `CREATE` and that arm is never taken by the cascade. It was fixed on
-  its own merits (see below) and closed nothing here.
-- **THE LIVE MECHANISM IS THE CONVERGENCE BRANCH, on both seams.** Seeding is attached only to the arm
-  that performs the native create/register, and both seams report SUCCESS from an arm that never
-  reaches it: `ensure_stage_output` calls `describe` first and RETURNS the vended location on 200,
-  never opening `/create`; `register_written_dataset` treats 409 as convergence once a `describe`
-  confirms the location matches, and returns. Location is the whole contract on both paths — neither
-  ever asks whether a tuple exists — so a table registered without tuples is indistinguishable from a
-  healthy one on every call after the first.
-- *So the tuples are written exactly ONCE, at first creation, and nothing can write them afterwards.*
-  If that one moment missed — FGA off at the time, a crash in the dual-write window the code documents
-  as uncovered (*"a process CRASH between the write and the grant still strands the table"*), or the
-  `grant_on_create` early return that writes NOTHING when `grant_owner` is False and `parent_object` is
-  falsy (a root-level single-segment table a machine creates) — the state is permanent.
-- **It is SELF-SEALING rather than self-healing, which is why no repair has happened by accident.**
-  Every `table` relation in `model.fga` resolves through a direct tuple or `X from parent`, so zero
-  tuples denies everyone including the creator; the re-registration paths then take their own error
-  arms; and the reconciler is explicitly FORBIDDEN from writing tuples
-  (`tests/unit/test_reconcile_route.py` refuses `write_tuples`/`grant_on_create`/`seed_ownership`).
-  Nothing in the estate converges the state.
-- *And that is why a governance hole surfaced as a compaction refusal:* the first door that ever asks
-  one of these tables a permission question is the sweep's `can_maintain`.
-- *The guard is right about `owner` and wrong about `parent`, and the two are in one call.* Its comment
-  argues that an ExistOk which kept an existing table must not grant the caller `owner`, because that
-  would seize another user's table — correct, and audited CRITICAL. But the same skip drops the
-  `parent` EDGE, which is not an ownership question: it is a structural fact about where the table
-  lives, it is idempotent, and it grants nothing by itself.
-- *Commit `b23b1f87` had already drawn exactly this distinction and the caller defeats it.* Its message
-  states the design in its own words — *"that is why the parent edge is still written unconditionally,
-  and why `grant_owner` is a flag on the SAME batch rather than a second call — dropping the owner
-  tuple and dropping the edge look identical at the call site and are opposite in effect."* The flag
-  exists so the edge survives; `table_create.py` skips the call that carries both.
-- *Two further silences make it invisible*, and a fix that leaves them is half a fix: `seed_ownership`
-  returns None when `fga_enabled` is off, the token is None or the client is unwired, so a table with
-  zero tuples and a correctly seeded one are byte-identical to the caller (200 + a location); and the
-  drift IS detected in production by lineage's reconciler, classified `UNGOVERNED`, and emitted as a
-  bare `log.warning` with no alerting rule behind it.
-- *The gate that should have caught it asserts one frame too high.* The FGA-enabled door tests
-  monkeypatch `grant_on_create` and assert the CALL KWARGS
-  (`tests/integration/test_authz.py::test_create_table_seeds_owner_and_parent_tuples`,
-  `tests/unit/test_bronze_is_governed_end_to_end.py::test_registering_seeds_the_ownership_tuples`), so
-  they pin that the right arguments were passed, never that a tuple exists. Deleting the EFFECT of
-  `parent_object` is invisible to every one of them. Add a gate that reads the store, not the mock.
-- **NARROWED TO EXACTLY FIVE, measured 2026-09-15 after [[LH-165]] shipped.** The sweep's
-  "not authorized" refusals fell 25 -> 5, and the five are precisely this row's tables. Nothing else
-  in the estate is ungoverned at the table rung, so the blast radius is known rather than estimated.
-- **AND IT IS NOT "UNMAINTAINABLE", IT IS UNGOVERNED OUTRIGHT.** Checked against the live evaluator
-  with the model id pinned: on `table:lakehouse$silver`, `$gold` and `research-bronze$events`,
-  `can_maintain`, `can_write_data` AND `can_get_metadata` are all **False** — for
-  `user:service-maintenance` and for the cascade identities that WRITE them
-  (`service-silver-to-gold`, `service-medallion-producer`). No principal holds any relation.
-- *Why the data path never noticed:* the cascade writes through vended STS credentials straight to
-  object storage, and only the catalog's own doors are FGA-gated. So the tier fills with data, lineage
-  records the runs, the UI lists the table — and the first door that ever asks it a permission question
-  is the sweep's `can_maintain`. A governance hole surfaced as a compaction statistic.
-- *The ExistOk half is FIXED and did not close this* (see the mechanism note above): that arm is never
-  taken by either medallion seam. What remains is the convergence branch, and the fix is a design
-  decision rather than a wiring job — the three candidate homes, none yet chosen:
-  1. **The register door converges.** `POST /v1/table/{id}/register` currently raises on an
-     already-registered id and never reaches the seed. Making an identical re-registration converge
-     (ensure the edge, answer 200) closes the `register_written_dataset` seam and repairs 2 of the 5
-     through a sanctioned door — but it changes a documented 409 into a 200, which is a spec
-     semantics call.
-  2. **The boot backfill converges tables, as it already does warehouses.** Symmetric with the
-     mechanism that just repaired 96 warehouses with zero hand-written tuples, and the `parent` edge is
-     a pure structural fact derivable from the id (`fga.parent_object`), so it can be recomputed rather
-     than remembered. Cost: it must enumerate tables per warehouse, which the backfill has no namespace
-     handle for today — its own docstring records why enumeration cannot come from OpenFGA.
-  3. **`ensure_stage_output` asks for governance on its describe-200 branch.** Closest to the defect,
-     furthest from the existing seams: it is the "asks" seam by design and has no way today to ask
-     "is this governed".
-- **OWNER CHOSE ALL THREE (2026-09-15). Two landed; the third changed shape and the reason is recorded
-  rather than substituted silently.**
-  - *(2) landed WITHOUT the semantics change the option warned about.* The spec gives this door
-    `Create` (409) and `Overwrite` and no ExistOk, so the 409 stands — what was wrong was leaving the
-    id ungoverned while refusing it. `register_table` now converges the structural edge on an
-    already-exists whose location MATCHES, then re-raises the 409 unchanged. The location check is the
-    security boundary (a 409 elsewhere is a genuine id conflict) and is a tail match on a path
-    BOUNDARY, because a bare `endswith` accepts `other_silver$features` for `silver$features`.
-  - *(3) landed as one character of query string.* `ensure_stage_output` now creates with
-    `?mode=exist_ok`. A table with no tuples denies every relation to everyone, so `describe` refuses
-    it exactly as it refuses an ABSENT table — and the default create mode then collided 409 with the
-    table that was really there, which is why the seam could neither read nor create these five.
-    ExistOk converges instead, and cannot lose data: `table_create` computes pre-existence from a
-    NATIVE check rather than the gated describe, keeps the table, and writes the edge alone.
-  - *(1) is NOT "the backfill converges tables", and that shape is refused with a reason.* Converging
-    every table on every catalog boot means enumerating ~96 warehouses' tables at startup, and this
-    module's own docstring argues against making boot depend on that work. The value left after (2)
-    and (3) is not repair — those two repair all five on the next cascade tick — it is DETECTION for a
-    table no seam re-touches. So (1) becomes a reconciler category: the reconciler is the estate's
-    drift reporter and is forbidden from writing tuples, which is exactly the right contract here.
-    `_scan_tuples` already returns `counts_by_type['table']`, so the detector is a set difference —
-    what it needs is a table list, which `Sources` does not carry yet.
-- **THE LIVE OBSERVATION REFUTED THE EXPECTATION, and that is the most useful thing this row learned.**
-  (2) and (3) were expected to repair all five on the next cascade tick. Driven against the real door
-  on `main-dfd68383`, `POST /v1/table/lakehouse$silver/create?mode=exist_ok` answered **409
-  `ConcurrentModificationError` — "concurrently created by another operation"**, not the ExistOk
-  convergence. The door believed the table was ABSENT and attempted a real create.
-- **BECAUSE THERE IS A THIRD DEFECT UNDERNEATH: the namespace binding and the bytes disagree.** The
-  binding says `lakehouse -> s3://lakehouse-wh`, while the tier's bytes are at
-  `s3://lance-catalog/medallion/lakehouse$silver` — the platform root. The door resolves the namespace
-  to the warehouse root, `table_exists` finds nothing there, and every path that depends on
-  pre-existence (the ExistOk arm included) takes the absent branch. So these three tiers cannot be
-  resolved through the catalog AT ALL, which is also why their 403 came from the authz gate — that gate
-  runs BEFORE existence resolution, so the refusal never proved the catalog could find them.
-- *The two bronze heads are a different case and may still converge:* `research-bronze -> s3://research-bucket`
-  and `bind86-bronze -> s3://bind86-wh` both MATCH the bucket their bytes are in
-  (`<root>/medallion/bronze`), so (2)'s register convergence has a resolvable table to attach to.
-  Unverified live — the produce path was not driven.
-- *This is the reserved-bucket ruling surfacing as data:* the cascade writes its tiers into
-  `lance-catalog`, which is platform storage that may never back a warehouse, while their namespace is
-  bound to a tenant warehouse. The two facts cannot both be right, and nothing reconciles them.
-- *Closes when:* the binding-vs-location disagreement is resolved for the three `lakehouse$*` tiers
-  (either the cascade writes where the binding says, or the namespace stops claiming a warehouse root
-  it does not use), the register convergence is observed repairing the two bronze heads, the
-  reconciler reports a catalog table carrying no `parent` edge, and the sweep's "not authorized" class
-  reaches 0.
+- **THIS ROW SAID THE CASCADE'S GOVERNED TIERS HAD LOST THEIR TUPLES. THAT WAS WRONG.** Read from the
+  live warehouse manifest: `lakehouse$silver`, `lakehouse$gold` and `lakehouse$silver-media` are
+  **namespaces**, not tables. The cascade's actual stage outputs are `lakehouse$silver$features` and
+  `lakehouse$silver-media$features`, and they are HEALTHY — each carries its `parent` edge and an
+  `owner`, and `service-maintenance can_maintain` checks **True** against the live evaluator. The
+  governance chain works end to end for everything the cascade registers.
+- *What the sweep is actually refused on:* five UNREGISTERED datasets sitting at the chart's rendered
+  `s3://<bucket>/medallion/<ns>` paths — `medallion/lakehouse$silver` (8 rows, v12),
+  `medallion/lakehouse$gold` (8 rows, v18), `research-bucket/medallion/bronze` (8 rows),
+  `bind86-wh/medallion/bronze` (500 rows). They carry the real tier schema
+  (`id, payload, source_rowid, stage, lineage`), so they are medallion data — they were simply never
+  registered as catalog tables.
+- **THE DEFECT THAT REMAINS IS THE ADVICE, AND IT IS REAL.** `discover_datasets` finds these by BUCKET
+  SCAN, derives a table id from the path, and asks `can_maintain` on `table:lakehouse$silver`. The
+  answer is correctly False — no such table exists — but the sweep reports
+  *"this rewrite is not authorized for 'service-maintenance'. Grant can_maintain on
+  table:lakehouse$silver if it should be"*, which is advice nobody can follow: that id names a
+  NAMESPACE, and granting a table rung on it is impossible. A refusal that cannot be acted on trains
+  the reader to ignore the whole category, next to 315 refusals that are correct.
+- *So the fix is a CLASSIFICATION, not a grant:* a discovered dataset with no catalog table behind it
+  is UNGOVERNED, which is a different finding from UNAUTHORIZED and needs different words — and the
+  estate already has a name for it, since lineage's reconciler classifies exactly that condition.
+- *The second question is an owner call, not a code change:* whether that parallel medallion data
+  should exist at all. `chart/templates/medallion.yaml` renders `MEDALLION_BRONZE_URI` and the stage
+  runners' `MEDALLION_FROM_URI` from `s3://<bucket>/medallion/<ns>`, while `ensure_stage_output` vends
+  a DIFFERENT, governed location per tier — so each tier has two homes and only one of them is
+  governed. Reaping the wrong one destroys live rows (bind86 holds 500).
+- *What this row cost and what it bought:* two fixes landed on the way here that are correct on their
+  own merits and were NOT what these five needed — [[LH-165]]'s maintainer grant (which did close 20 of
+  the 25 refusals) and the two seam convergences below. Keeping them is right; the headline that
+  justified them was not.
+- **The seam fixes that landed, kept on their own merits:** `register_table` now converges a table's
+  structural edge on an already-exists whose location MATCHES and re-raises the 409 unchanged (the
+  spec gives this door no ExistOk, so the status is not negotiable); and `ensure_stage_output` creates
+  with `?mode=exist_ok`, because a tuple-less table denies every relation and so `describe` refuses it
+  exactly as it refuses an ABSENT one, which the default create mode then turned into a 409 collision.
+- *Closes when:* the sweep reports a discovered dataset with no catalog table as UNGOVERNED rather than
+  as an authorization failure, with a message an operator can act on; and the owner rules on whether
+  the chart-path medallion datasets are residue to reap or data to register.
 
 **LH-165 · ~~NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none~~ — CLOSED 2026-09-15: observed live, and the boot backfill repaired the estate**
 `catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps
