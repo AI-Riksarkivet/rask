@@ -253,6 +253,21 @@ class Settings(GovernedAuthSettings, BaseSettings):
     #: written verbatim (``user:service-bronze-to-silver``), because the catalog must not invent the
     #: naming convention of a plane it does not own.
     fga_cascade_writers: list[str] = Field(default_factory=list, alias="LANCE_FGA_CASCADE_WRITERS")
+
+    #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored.
+    #:
+    #: Separate from the cascade writers above because the rung is: a cascade identity moves data
+    #: between tiers and needs ``writer``/``publisher``/``validator``; maintenance compacts, optimizes
+    #: indices and reclaims versions, and must hold ``maintainer`` and nothing else. The model keeps the
+    #: two apart in both directions (``can_maintain`` neither implies nor is implied by
+    #: ``can_write_data``), so one list holding both would grant each of them the other's authority.
+    #:
+    #: Granted at the WAREHOUSE for the same reason the cascade rungs are: ``namespace`` and ``table``
+    #: both define ``maintainer ... or maintainer from parent``, so one tuple per tenant reaches every
+    #: tier and every table below it, and the sweep's reach stays enumerable.
+    #:
+    #: EMPTY BY DEFAULT, on the same terms: an estate declaring nothing keeps exactly today's tuples.
+    fga_maintainers: list[str] = Field(default_factory=list, alias="LANCE_FGA_MAINTAINERS")
     # When False (default), any authenticated caller may create a TOP-LEVEL namespace/
     # table and becomes its owner (the "users create their own workspaces" model). When
     # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated

@@ -30,6 +30,7 @@ model. The contracts asserted here (owned by the fga / fga_deps / endpoint agent
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -319,20 +320,24 @@ def test_create_table_checks_writer_on_parent_namespace(client: TestClient, fake
     assert captured[-1] == {"user": "alice", "relation": "can_create_table", "obj": "namespace:db1"}
 
 
-def test_existok_on_existing_table_does_not_seize_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """SECURITY (audit CRITICAL): an ExistOk create that KEEPS an already-existing table wrote nothing, so it
-    must NOT grant the caller ``owner`` — else any authenticated user (top-level, lock off) or any
-    namespace-writer could SEIZE ownership of another user's table via a no-op create (owner ⇒ can_read_data,
-    write-cred vending, drop, rename). This test FAILS on the pre-fix code, which seeded ownership
-    unconditionally."""
-    # The table PRE-EXISTS (describe succeeds → _table_exists True) and the facade returns its existing
-    # version (ExistOk kept it, wrote nothing).
+def _existok_over_an_existing_table(client: TestClient, fake_ns: MagicMock, monkeypatch) -> list[tuple[str, str, str]]:
+    """Drive `?mode=exist_ok` against a table that PRE-EXISTS, and return the tuples that reached OpenFGA.
+
+    Captured at ``write_tuples`` — the real tuple boundary — rather than at ``grant_on_create``. The
+    call happens either way and only its ``grant_owner`` argument differs, so asserting the call shape
+    passes against a flag that is threaded and then ignored, and asserting that the call did not happen
+    at all cannot tell an owner grant from a structural edge. [[LH-164]] is exactly that confusion.
+    """
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
     _stub_create(monkeypatch, response=CreateTableResponse(location="s3://x", version=7))
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))  # caller passes create-on-parent
-    grant = AsyncMock()
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
+    written: list[tuple[str, str, str]] = []
+
+    async def _capture(_client: object, tuples: Iterable[fga_module.ClientTuple], **_kw: object) -> None:
+        written.extend((t.user, t.relation, t.object) for t in tuples)
+
+    monkeypatch.setattr(fga_module, "write_tuples", _capture)
 
     resp = client.post(
         "/v1/table/db1$users/create?mode=exist_ok",
@@ -340,7 +345,40 @@ def test_existok_on_existing_table_does_not_seize_ownership(client: TestClient, 
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 200, resp.text
-    grant.assert_not_awaited()  # NO ownership seizure — the existing owner keeps it
+    return written
+
+
+def test_existok_on_existing_table_does_not_seize_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    """SECURITY (audit CRITICAL): an ExistOk create that KEEPS an already-existing table wrote nothing, so it
+    must NOT grant the caller ``owner`` — else any authenticated user (top-level, lock off) or any
+    namespace-writer could SEIZE ownership of another user's table via a no-op create (owner ⇒ can_read_data,
+    write-cred vending, drop, rename)."""
+    written = _existok_over_an_existing_table(client, fake_ns, monkeypatch)
+
+    assert [t for t in written if t[1] == "owner"] == [], f"an ExistNo-op seized ownership: {written}"
+
+
+def test_existok_on_existing_table_STILL_writes_the_parent_edge(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    """[[LH-164]] The other half, and this test asserted its opposite: that NOTHING was written.
+
+    The ownership refusal above was implemented by skipping the whole seed, which withheld the
+    structural ``parent`` edge along with the owner grant. The edge is not an ownership question — it
+    names where the table lives, it is idempotent, and it confers nothing by itself — while every
+    relation on ``table`` resolves through ``... from parent``. A table with no edge is unreachable
+    from every container grant: unmaintainable, ungrantable, unprotectable.
+
+    SCOPE, stated because the neighbouring defect looks identical and this does NOT close it. Five of
+    the cascade's own tiers were measured holding ZERO tuples on 2026-09-15 (`lakehouse$silver`,
+    `lakehouse$gold`, `lakehouse$silver-media`, `research-bronze$events`, `bind86-bronze$events`), and
+    they did not come through this arm: neither medallion seam sends `mode`, so `CreateMode.parse(None)`
+    is `CREATE` and `existok_kept_existing` is never true for them. Their hole is that both seams return
+    on a CONVERGENCE branch that never reaches the seed at all — `ensure_stage_output` on `describe`-200,
+    `register_written_dataset` on 409 — which is tracked separately. This test pins the arm a human
+    caller reaches, where the same confusion between an owner grant and a structural edge was live.
+    """
+    written = _existok_over_an_existing_table(client, fake_ns, monkeypatch)
+
+    assert ("namespace:db1", "parent", "table:db1$users") in written, f"the ExistOk kept the table and left it unreachable from its namespace: {written}"
 
 
 def test_create_table_seeds_owner_and_parent_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

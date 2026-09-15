@@ -1094,8 +1094,14 @@ async def seed_ownership(
     resource: str,
     segments: list[str],
     parent_object: str | None = None,
+    may_grant_owner: bool = True,
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object.
+
+    ``may_grant_owner=False`` writes the EDGE ALONE. The caller uses it when this request did not
+    create the object — an ExistOk that kept an existing table — where granting ``owner`` would seize
+    another caller's table, but the structural edge is still required and is safe: it names where the
+    table lives, it is idempotent, and it confers nothing by itself.
 
     No-op when FGA is off, the request is unauthenticated, or the client is unwired — so
     create endpoints call it unconditionally with one line. This is the ONE place the
@@ -1129,7 +1135,7 @@ async def seed_ownership(
     # renamed or an allowlist is edited.
     await fga.grant_on_create(
         client,
-        grant_owner=token.iss != SERVICE_DOOR_ISSUER,
+        grant_owner=may_grant_owner and token.iss != SERVICE_DOOR_ISSUER,
         user_sub=token.sub,
         resource=resource,
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
@@ -1182,6 +1188,7 @@ async def seed_ownership_or_compensate(
     segments: list[str],
     undo: Callable[[], Awaitable[None]] | None,
     parent_object: str | None = None,
+    may_grant_owner: bool = True,
 ) -> None:
     """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
 
@@ -1215,7 +1222,7 @@ async def seed_ownership_or_compensate(
     what the caller is told.
     """
     try:
-        await seed_ownership(client, settings, token, resource=resource, segments=segments, parent_object=parent_object)
+        await seed_ownership(client, settings, token, resource=resource, segments=segments, parent_object=parent_object, may_grant_owner=may_grant_owner)
     except Exception:
         if undo is not None:
             obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)
@@ -1445,8 +1452,17 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
 
     Granted at the WAREHOUSE, not per tier: `namespace` and `table` both define these rungs as
     `... or <rung> from parent`, so one tuple at the container reaches every tier and every table
-    under it (`optimize-tuples.md`). It is also what keeps the cascade's reach ENUMERABLE — one tuple
-    per tenant per rung, the same property the sweep's `maintainer` grant buys.
+    under it (`optimize-tuples.md`). It is also what keeps each identity's reach ENUMERABLE — one
+    tuple per tenant per rung.
+
+    THE SWEEP'S `maintainer` GRANT IS WRITTEN HERE TOO, and it is the reason this docstring changed.
+    It named that grant as precedent while no code in the estate wrote one: the create door emitted
+    these rungs, this backfill emitted these rungs, and the only committed writer of a `maintainer`
+    tuple was the Helm hook, on the single fixed object `warehouse:lance_catalog`. Measured 2026-09-15
+    — 93 of 97 warehouses carried the tuple because 92 were written BY HAND into the live store on
+    2026-09-08, and the 4 created since had none, so a tenant onboarded today was unmaintainable and
+    nothing said so. It belongs in this function rather than beside it because create and backfill
+    share it precisely so the two populations cannot differ.
 
     The creator's own grant is deliberately NOT here. It is the one tuple a backfill must never write
     — re-running the create path over an existing estate to repair it would make whoever ran the
@@ -1456,6 +1472,10 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     return [
         fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
         *(fga.ClientTuple(user=subject, relation=rung, object=obj) for subject in settings.fga_cascade_writers for rung in _CASCADE_RUNGS),
+        # `maintainer` ALONE, never beside a cascade rung. Maintenance rewrites how a dataset is
+        # stored and must not be able to drop it or change what it says, which is exactly the
+        # separation `can_maintain` was minted to express — so the two lists stay two lists.
+        *(fga.ClientTuple(user=subject, relation="maintainer", object=obj) for subject in settings.fga_maintainers),
     ]
 
 

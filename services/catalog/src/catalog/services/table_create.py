@@ -220,6 +220,7 @@ async def create_governed_table(
     # revoking on a non-owner path is what the audit flagged as an eviction vector (now gated out).
     if overwrote_existing:
         await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
+
     # Make the caller owner + link the new table to its parent so it inherits the cascade.
     # COMPENSATION (§4 dual-write): if the grant fails here (FGA outage → 503), the table exists on
     # storage but has NO owner tuple — the client's retry would hit "already exists", stranding it
@@ -237,23 +238,39 @@ async def create_governed_table(
     # table wrote nothing, so granting the caller `owner` would seize another user's table (audit: CRITICAL) —
     # the existing owner (or the /declare-r of a declared-only table) keeps ownership. Skipping the seed also
     # skips the compensation (there is nothing this request wrote to compensate).
-    if not existok_kept_existing:
+    async def _undo_create() -> None:
+        await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
 
-        async def _undo_create() -> None:
-            await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
-
-        # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
-        # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists
-        # for, it raised and the native drop never ran. Now they are independent best-effort steps and
-        # the drop — which needs no FGA — always gets its turn.
-        await fga_deps.seed_ownership_or_compensate(
-            client,
-            settings,
-            token,
-            resource="table",
-            segments=segments,
-            undo=_undo_create if compensation_allowed(create_mode, overwrote_existing) else None,
-        )
+    # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
+    # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists
+    # for, it raised and the native drop never ran. Now they are independent best-effort steps and
+    # the drop — which needs no FGA — always gets its turn.
+    #
+    # THE SEED IS UNCONDITIONAL AND THE OWNER GRANT IS THE FLAG, which is the distinction
+    # `grant_on_create` was given `grant_owner` for: dropping the owner tuple and dropping the `parent`
+    # EDGE look identical at a call site and are opposite in effect. An ExistOk that KEPT an existing
+    # table must not grant the caller `owner` — that is an ownership seizure, audited CRITICAL — but
+    # its edge is not an ownership question at all: it names where the table lives, it is idempotent,
+    # and it confers nothing alone. Skipping the whole call withheld both.
+    #
+    # Measured 2026-09-15: `ensure_stage_output` is describe-then-create-with-ExistOk, so once a table
+    # existed without an edge every later registration skipped the seed again and it could never
+    # acquire one. Five of the cascade's own governed tiers held ZERO tuples — no owner, no parent —
+    # and `table.maintainer`/`owner`/every other relation resolve through `... from parent`, so they
+    # were unreachable from every container grant: unmaintainable, ungrantable, unprotectable.
+    #
+    # `undo` stays conditional. Compensation undoes what THIS request created, and an ExistOk that kept
+    # an existing table created nothing to undo.
+    seeding_a_new_table = not existok_kept_existing
+    await fga_deps.seed_ownership_or_compensate(
+        client,
+        settings,
+        token,
+        resource="table",
+        segments=segments,
+        may_grant_owner=seeding_a_new_table,
+        undo=_undo_create if (seeding_a_new_table and compensation_allowed(create_mode, overwrote_existing)) else None,
+    )
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
     # canonical id keeps the lineage Dataset == the OpenFGA object id == the catalog table id; the

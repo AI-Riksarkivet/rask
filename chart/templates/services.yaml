@@ -279,6 +279,23 @@ spec:
               {{- $prefixed = append $prefixed (printf "user:%s" .) }}
             {{- end }}
             - { name: LANCE_FGA_CASCADE_WRITERS, value: {{ toJson $prefixed | quote }} }
+            {{- /* THE SWEEP'S OWN RUNG, and the reason it is a second list rather than another entry
+                   in the one above: a cascade identity moves data between tiers and holds
+                   writer/publisher/validator, while maintenance rewrites HOW a dataset is stored and
+                   must hold `maintainer` and nothing else. `can_maintain` neither implies nor is
+                   implied by `can_write_data`, so merging the lists would grant each the other's
+                   authority.
+                   GATED EXACTLY LIKE THE BOOTSTRAP HOOK'S OWN GRANT (`bootstrap-admin.yaml`), so an
+                   estate that vends no write credentials grants nothing — a standing tuple for a
+                   service that is not using it is the kind nobody remembers to revoke.
+                   Measured 2026-09-15: without this the catalog's list was empty in every deployment,
+                   so `cascade_tuples` wrote no maintainer grant, and the 93 warehouses that had one
+                   had it written by hand into the live store. */}}
+            {{- $maintainers := list }}
+            {{- if and $root.Values.maintenance.enabled $root.Values.maintenance.vendWriteCredentials }}
+              {{- $maintainers = append $maintainers (printf "user:%s" $root.Values.maintenance.catalogServiceIdentity) }}
+            {{- end }}
+            - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
             {{- /* DEDICATED CREDENTIALS for the identities that hold a rung above read.
                    `dapr_auth.py` binds a PRIVILEGED subject to its own `service-token-<identity>`;
                    everyone else authenticates with the estate's SHARED APP_API_TOKEN. That control was

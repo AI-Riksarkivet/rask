@@ -4676,10 +4676,30 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   platform storage, and it stands. These tables are not asking for one: their namespaces already have
   warehouse parents, so the ordinary table->namespace->warehouse cascade would reach them if the table
   were seeded at all.
-- **MECHANISM, traced and then re-read by hand 2026-09-15:** `table_create.py` guards the whole seed
-  with `if not existok_kept_existing:`. `ensure_stage_output` is describe-then-create-with-ExistOk, so
-  the FIRST call that finds the table already present skips seeding entirely — and every later one
-  skips it again. A table that misses its seed once can never acquire tuples through that door.
+- **MECHANISM, and the first answer was wrong in a way worth recording.** The `existok_kept_existing`
+  skip in `table_create.py` is a real hole and it is NOT this one: neither medallion seam sends `mode`,
+  so `CreateMode.parse(None)` is `CREATE` and that arm is never taken by the cascade. It was fixed on
+  its own merits (see below) and closed nothing here.
+- **THE LIVE MECHANISM IS THE CONVERGENCE BRANCH, on both seams.** Seeding is attached only to the arm
+  that performs the native create/register, and both seams report SUCCESS from an arm that never
+  reaches it: `ensure_stage_output` calls `describe` first and RETURNS the vended location on 200,
+  never opening `/create`; `register_written_dataset` treats 409 as convergence once a `describe`
+  confirms the location matches, and returns. Location is the whole contract on both paths — neither
+  ever asks whether a tuple exists — so a table registered without tuples is indistinguishable from a
+  healthy one on every call after the first.
+- *So the tuples are written exactly ONCE, at first creation, and nothing can write them afterwards.*
+  If that one moment missed — FGA off at the time, a crash in the dual-write window the code documents
+  as uncovered (*"a process CRASH between the write and the grant still strands the table"*), or the
+  `grant_on_create` early return that writes NOTHING when `grant_owner` is False and `parent_object` is
+  falsy (a root-level single-segment table a machine creates) — the state is permanent.
+- **It is SELF-SEALING rather than self-healing, which is why no repair has happened by accident.**
+  Every `table` relation in `model.fga` resolves through a direct tuple or `X from parent`, so zero
+  tuples denies everyone including the creator; the re-registration paths then take their own error
+  arms; and the reconciler is explicitly FORBIDDEN from writing tuples
+  (`tests/unit/test_reconcile_route.py` refuses `write_tuples`/`grant_on_create`/`seed_ownership`).
+  Nothing in the estate converges the state.
+- *And that is why a governance hole surfaced as a compaction refusal:* the first door that ever asks
+  one of these tables a permission question is the sweep's `can_maintain`.
 - *The guard is right about `owner` and wrong about `parent`, and the two are in one call.* Its comment
   argues that an ExistOk which kept an existing table must not grant the caller `owner`, because that
   would seize another user's table — correct, and audited CRITICAL. But the same skip drops the
