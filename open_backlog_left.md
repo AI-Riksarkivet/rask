@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**227 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**226 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 81 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 80 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4725,7 +4725,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   the five tables above are repaired, the sweep stops refusing them, and a gate fails if a catalog
   table object ever exists with no parent tuple.
 
-**LH-165 · NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none**
+**LH-165 · ~~NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none~~ — CLOSED 2026-09-15: observed live, and the boot backfill repaired the estate**
 `catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps
 
 - **THE COUNT IS INVERTED FROM HOW IT FIRST READ, and that inversion IS the finding.** 93 of 97
@@ -4756,9 +4756,23 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   and leaves the create door writing nothing — so the next warehouse reopens it and the repair reads
   as the fix. This row existed for one revision demanding that distinction be measured before acting;
   it was, and it inverted the answer.
-- *Closes when:* `cascade_tuples` (or the create door beside it) writes the maintainer grant so a new
-  warehouse is maintainable the moment it exists; the four are repaired through that same path rather
-  than by hand; and the reconciler reports a warehouse missing it, since nothing does today.
+- **OBSERVED LIVE on `main-94e86fe7`, 2026-09-15**, by driving the real door rather than reading a
+  render: a Dex bearer minted in-cluster, `POST /v1/projects` then `POST /v1/warehouses` -> 200, and
+  the new `warehouse:lh165probe-wh` carries `maintainer@user:service-maintenance` in the live store.
+  Probe project and warehouse deleted afterwards.
+- **AND THE ESTATE REPAIRED ITSELF, which is why the grant belonged IN `cascade_tuples`.** The
+  backfill runs in the catalog's own lifespan, so the rollout alone fixed every existing tenant:
+  `cascade_backfill_done warehouses=96 tuples=1344 failures=0`, and all four measured warehouses
+  (`e2e-iso-a`, `e2e-iso-b`, `lane-wh`, `trackab1bc9ea2-wh`) now hold the grant. Not one tuple was
+  written by hand — the failure mode this row was opened against.
+- *Measured at the consumer:* the sweep's refusals fell **333 -> 320**, and the breakdown is exact.
+  315 are the shallow-clone protection working, and the "not authorized for `service-maintenance`"
+  class fell from 25 to **5** — the five being precisely [[LH-164]]'s zero-tuple tiers
+  (`lakehouse$silver`, `lakehouse$gold`, `lakehouse$silver-media`, `research-bronze$events`,
+  `bind86-bronze$events`). Two defects, cleanly separated by the fix.
+- *Residual, and it is [[LH-164]]'s to carry:* nothing yet REPORTS a warehouse missing the grant. The
+  backfill now converges it on every catalog boot, which is a stronger answer than a report for this
+  particular drift, but a table with no `parent` edge is still invisible to every detector.
 
 
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
