@@ -744,14 +744,33 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   a stale tip the same way. An index adds no write path and no drift, and it fixes EVERY walk rather
   than one query. `latest_version` still appears nowhere, and `MERGE_DATASET` still sets only
   `d.namespace` — deliberately.
-- *A SECOND, UNRELATED INDEX SHAPE IS STILL OPEN AND IS NOT PART OF THIS CLOSURE:* the vertex indexes
-  that DO exist are unreachable from the query form the code emits. AGE compiles the inline
-  `MATCH (d:Dataset {name:$name})` into a `properties @>` containment filter, which no B-tree on an
-  extracted property can serve. Measured on the live graph: inline form Seq Scan 0.420 ms, the
-  equivalent `MATCH (d:Dataset) WHERE d.name = $name` **Index Scan using `lineage_dataset_uniq`
-  0.053 ms**. `cypher.py` carries **39 rewritable `MATCH` statements** in the inline form (plus 6
-  `MERGE`, where the pattern IS the merge key and cannot be rewritten). Left for its own change: it is
-  59 call sites of semantics-preserving rewrite and deserves its own RED gate, not a rider on this one.
+- **THE SECOND INDEX SHAPE IS ALSO CLOSED (`17e41ffb`), as its own change rather than a rider on the
+  first.** The vertex indexes that DO exist were unreachable from the query form the code emitted: AGE
+  compiles the inline `MATCH (d:Dataset {name:$name})` into a `properties @>` containment filter, which
+  no B-tree on an extracted property can serve. Measured live: inline Seq Scan 0.420 ms against
+  `MATCH (d:Dataset) WHERE d.name = $name` **Index Scan using `lineage_dataset_uniq` 0.053 ms**. All
+  **39** statements are rewritten; the 6 `MERGE` are untouched because there the pattern IS the merge
+  key, and `:User` keeps its inline form because it carries no index.
+- *Plans on the live graph after the roll:* `RUN_BY_ID` Seq Scan 2.086 ms -> Index Scan **0.124 ms**;
+  `SOURCE_URI` 0.291 -> **0.019**; `GET_DATASET_GOVERNANCE` 0.686 -> **0.264**; `DATASET_COLUMN_NODES`
+  1.943 -> 0.958; `PRODUCERS` 18.945 -> 16.287.
+- *EQUIVALENCE WAS MEASURED, NOT ARGUED,* because a semantic slip here damages provenance: the 17
+  read-only statements were driven against the LIVE graph in both forms and returned identical result
+  sets (16 over real data; `CREATOR` was empty for that dataset and was re-driven against one holding a
+  `CREATED` edge — `service-ingest` both ways). The 22 writing statements were driven in a throwaway
+  `apache/age` via Dagger, old form into one graph and new into another from an identical seed, then
+  compared by `EXCEPT` over the raw agtype properties of every label: **TOTAL DIFFERENCES 0**, every
+  label non-empty so no row passed vacuously.
+- *Three shapes were checked rather than assumed:* no `OPTIONAL MATCH` is among the 39 (the module has
+  nine, and that is the one shape where lifting a predicate out of the pattern changes the ANSWER, not
+  just the plan); none of the 39 contains `WITH`, `UNION`, `CALL` or `FOREACH`, so every one is a
+  single-part query where the `WHERE` can only bind to its own `MATCH`; and the `MERGE` exemption has
+  its own test, so a future tightening cannot turn the rule into one `MERGE` cannot satisfy.
+- *Observed on the roll:* 1,314 `POST /lineage-events` answered 200 — the ingest path runs the
+  rewritten `LATEST_WRITE_VERSION` inside every transaction — with graph totals unchanged.
+- *Gated by `tests/unit/test_an_indexed_lookup_uses_the_form_age_can_index.py`*, which imports the
+  module and inspects its constant VALUES rather than the source, so a statement split across literals
+  or built by `.replace()` (as `RUN_BY_ID` is) is checked as the string the database receives.
 - *Closed by `16dd2da6`*, gated by `tests/unit/test_every_traversed_edge_label_has_an_index.py` — a
   DERIVED assertion reading the traversed labels out of `cypher.py`'s own source (a new edge label fails
   the gate rather than silently shipping a full-table walk), plus a seam test driving
