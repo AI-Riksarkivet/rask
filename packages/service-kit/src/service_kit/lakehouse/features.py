@@ -437,6 +437,20 @@ class CompactionBases(BaseModel):
     data_resolves_through_a_base: bool | None = None
 
 
+#: Bases already reported as permission-denied, so the same permanent refusal is announced once rather
+#: than once per dataset that declares it. Process-scoped deliberately — see the branch that fills it.
+_REPORTED_BASE_DENIALS: set[str] = set()
+
+
+def forget_reported_base_denials() -> None:
+    """Drop the record of which denials have been announced — for tests, which need a cold process.
+
+    Exported rather than reached into, because a test poking a module-level set is a test that breaks
+    when the de-duplication changes shape, and this one is meant to survive that.
+    """
+    _REPORTED_BASE_DENIALS.clear()
+
+
 def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> CompactionBases:
     """The evidence :func:`describe_compaction_unsupported_flags` weighs, gathered off one open dataset.
 
@@ -468,7 +482,28 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
             probed: bool | None = probe(ref.path)
         except Exception as exc:
             denied = _is_permission_denial(exc)
-            log.warning("compaction_base_probe_failed", extra={"base": ref.path, "denied": denied}, exc_info=True)
+            if denied:
+                # REPORTED ONCE PER BASE, PER PROCESS, AND WITHOUT A STACK. A denial is configuration,
+                # not an incident: the S3 credential is resolved once at boot from the Dapr secret
+                # store, so it cannot change while this process lives and the answer for a given base
+                # is deterministic for its lifetime. A rotated credential arrives by rollout, which is
+                # a new process and therefore a fresh report.
+                #
+                # Measured on the running sweep 2026-09-15: 134 rendered tracebacks in ONE pass, every
+                # one `base='s3://lance-catalog/models/' denied=True` — the same base, the same key,
+                # the same answer. They sat beside 315 refusals that were CORRECT, which is how a
+                # reader learns to scroll past the category that refuses to sign a rewrite with the
+                # deployment's ambient key.
+                #
+                # The stack goes because the classification already names the cause completely; a
+                # traceback of an S3 403 adds nothing an operator can act on. A NON-denial keeps both
+                # its traceback and its repetition — an outage or a probe bug is precisely where the
+                # stack matters, and it is not deterministic for the life of the process.
+                if ref.path not in _REPORTED_BASE_DENIALS:
+                    _REPORTED_BASE_DENIALS.add(ref.path)
+                    log.warning("compaction_base_probe_denied", extra={"base": ref.path, "denied": True})
+            else:
+                log.warning("compaction_base_probe_failed", extra={"base": ref.path, "denied": False}, exc_info=True)
             probed = None
         bases.append(BaseEvidence(path=ref.path, declares_dataset_root=ref.is_dataset_root, probed_dataset_root=probed, probe_denied=denied))
     try:

@@ -4646,12 +4646,23 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Why it matters beyond noise:* a permanent, expected denial rendered identically to a transient store
   fault is how a real fault stops being visible. It also means any dataset declaring that base can
   never be compacted, and nothing says so in terms an operator can act on.
-- *The fix is a choice, not a patch:* either scope `minio.maintenanceAccessKey` to READ `models/` (the
-  probe is read-only, so this grants nothing else), or teach the probe that a denial it has already
-  seen for this base is a settled answer — logged once at WARNING without a traceback, and carried as
-  `probe_denied=True` exactly as today.
-- *Closes when:* a sweep pass over the live estate logs at most one line for this base, and the chosen
-  answer is recorded rather than inferred from the credential's shape.
+- **THE SECOND ANSWER WAS TAKEN, and the first is refused with a reason.** Widening
+  `minio.maintenanceAccessKey` to read `models/` would let the probe answer truthfully — and that
+  answer would be "not a dataset root", which PERMITS compaction on every dataset declaring that base.
+  A logging complaint is not a reason to move a gate in the permissive direction, so the credential
+  stays scoped and the refusal stays.
+- *Landed 2026-09-15:* a denial is reported ONCE per base per process and without a stack. The shape is
+  exact rather than merely quieter — the S3 credential is resolved once at boot from the Dapr secret
+  store, so it cannot change while the process lives and the answer for a given base is deterministic
+  for its lifetime; a rotated credential arrives by rollout, which is a new process and a fresh report.
+  A NON-denial keeps both its traceback and its repetition, because an outage or a probe bug is exactly
+  where the stack matters and is not deterministic.
+- *The guard is untouched and pinned:* `probed=None` and `probe_denied=True` still reach
+  `describe_compaction_unsupported_flags`, so "unknown resolves to refusal" holds. A de-duplication
+  that also dropped the evidence would silently PERMIT the rewrite these bases exist to refuse, which
+  is the failure direction that costs a clone its reason to exist — mutation-tested in both directions.
+- *Closes when:* observed on the live sweep — one line for that base per pass instead of 134 rendered
+  tracebacks.
 
 **LH-164 · The sweep asks authz about datasets that are not catalog tables, and advises a grant that cannot be made**
 `maintenance` · med · measured 2026-09-15; **headline corrected after the live manifests were read**
