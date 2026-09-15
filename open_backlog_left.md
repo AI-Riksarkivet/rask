@@ -5065,6 +5065,30 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   messages / 29 MiB**, of which **`dlq.lineage.events` is 9,856** — roughly **+1,341 since that
   reading** — and the last delivery was **11 minutes** before this row was written. The
   `lineage-dlq-durable` consumer's last delivery timestamp agrees.
+- **AND THE CONSUMER ALREADY INTENDS THE OPPOSITE OF WHAT IT GETS — `_DROP` IS WHAT PARKS THE EVENT.**
+  `consumer.handle_cloud_event` returns `_DROP` on `PermissionDeniedError`, and its own docstring gives
+  the reason: *"Redelivery cannot grant a permission, so retrying a refused event only burns the delivery
+  budget and then parks a permanent refusal on the dead-letter topic as if it were an outage."* The
+  intent is explicitly to AVOID parking. It is not achieved: the subscription declares a
+  `deadLetterTopic` (`api/dapr.py`), and for Dapr a DROP on a subscription with a dead-letter topic
+  ROUTES THE MESSAGE THERE. Measured on the live estate rather than read from a doc — the sidecar and
+  the app name the same CloudEvent id, back to back:
+
+      daprd  "DROP status returned from app while processing pub/sub event a4d65ffd-c7b5-4493-8ea7-739df9412387"
+      app    dapr_dead_letter_parked app='lineage' event_id='a4d65ffd-c7b5-4493-8ea7-739df9412387'
+      app    POST /lineage-dlq HTTP/1.1 200 OK
+
+  So the three ack outcomes collapse to two in practice: RETRY redelivers, and **both SUCCESS-less
+  outcomes park**. There is currently NO ack that says "refused, permanently, do not keep this" — which
+  is precisely the *"a bus answer that isn't an unrepairable park"* half of this row's open fix
+  direction, now located in one function rather than described in the abstract.
+- *Which makes the fix candidates concrete, and the choice is still the owner's:* (a) answer SUCCESS for
+  a structurally permanent refusal, so the event is acked and the refusal is recorded in the app's own
+  metric/log instead of the DLQ — cheap, stops the loop, and deliberately discards the event; (b) keep
+  parking but make it IDEMPOTENT, so an event already in the DLQ is not appended again — preserves the
+  record, needs a dedup key the park route can check; (c) fix it at the producer, so a role literal
+  never reaches `author.sub` at all — the only option that stops the events being unrepairable in the
+  first place, and the only one that helps the 10 of 49 parks that are NOT role literals.
 - **THE MECHANISM, MEASURED 2026-09-16: THE DLQ IS A FEEDBACK LOOP, AND ITS GROWTH IS NOT A LOSS
   RATE.** The "burst" above is real and its CAUSE is now known — it is a pod restart, not a wave of
   production traffic. The ingest consumer is ephemeral with `deliverPolicy: all` (the estate's recovery
