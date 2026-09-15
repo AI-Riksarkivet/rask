@@ -2884,6 +2884,18 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   stopped updating" about a quality gate doing exactly its job and holding the batch for a human. Every
   deterministic DROP in `transform.py` — malformed payload, authz denial, undeclared transform — has
   the same consequence.
+  **THE SAME SHAPE HAS A SECOND SITE, AND ITS COMMENT MADE THE SAME FALSE CLAIM — `lineage`, corrected
+  2026-09-16 (`8c44e7d8`).** `consumer.handle_cloud_event` returns `_DROP` on `PermissionDeniedError`
+  and its docstring gave the reason as avoiding exactly this: retrying "only burns the delivery budget
+  and then parks a permanent refusal on the dead-letter topic as if it were an outage". Its subscription
+  declares a `deadLetterTopic` too, so DROP is what parks. Measured the same way, sidecar and app naming
+  one CloudEvent id back to back: daprd *"DROP status returned from app while processing pub/sub event
+  a4d65ffd-…"*, then `dapr_dead_letter_parked event_id='a4d65ffd-…'`, then `POST /lineage-dlq` 200.
+  The comment is rewritten; the BEHAVIOUR is unchanged and waits on the same decision as `transform.py`.
+  *What lineage adds to the cost side:* its consumer is ephemeral with `deliverPolicy: all`, so every
+  restart re-presents the retained stream and re-parks the same unrepairable events. Two rolls measured
+  it — 49 parks inside two minutes of one pod start, and DLQ 9,949 -> 10,011 across the next, so **one
+  deploy appends 49-62 messages about events already in the queue** (the two rolls measured, by log count and by stream delta respectively). See [[LH-166]].
   *Verified at the source, not only measured:* `dapr/dapr` `pkg/runtime/subscription/subscription.go:365-368`
   — `} else if errors.Is(pErr, rtpubsub.ErrMessageDropped) {` / `// send dropped message to dead letter
   queue if configured` / `if route.DeadLetterTopic != "" { derr := s.sendToDeadLetter(...) }`. The HTTP
@@ -5110,9 +5122,15 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
       app    POST /lineage-dlq HTTP/1.1 200 OK
 
   So the three ack outcomes collapse to two in practice: RETRY redelivers, and **both SUCCESS-less
-  outcomes park**. There is currently NO ack that says "refused, permanently, do not keep this" — which
-  is precisely the *"a bus answer that isn't an unrepairable park"* half of this row's open fix
-  direction, now located in one function rather than described in the abstract.
+  outcomes park**. There is currently NO ack that says "refused, permanently, do not keep this" — the
+  *"a bus answer that isn't an unrepairable park"* half of this row's open fix direction.
+  **THIS IS A SECOND SITE OF A CLASS [[LH-151]] ALREADY RECORDED, NOT A NEW MECHANISM**, and saying so
+  matters because it changes who decides: that row measured the same DROP-parks shape in `medallion`'s
+  `transform.py` on 2026-09-14 and verified it at the Dapr source — `pkg/runtime/subscription/subscription.go:365-368`
+  routes `ErrMessageDropped` to the dead-letter topic, and the HTTP postman returns that error for a
+  `DROP` status. What lineage adds is a second unfixed instance carrying the same false comment (rewritten
+  2026-09-16, `8c44e7d8`; behaviour unchanged) plus the restart-loop cost quantified above. **Both sites
+  wait on ONE decision, not two.**
 - *Which makes the fix candidates concrete, and the choice is still the owner's:* (a) answer SUCCESS for
   a structurally permanent refusal, so the event is acked and the refusal is recorded in the app's own
   metric/log instead of the DLQ — cheap, stops the loop, and deliberately discards the event; (b) keep

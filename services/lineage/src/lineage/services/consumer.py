@@ -69,8 +69,14 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
       same unrepairable events again, and each refusal appends a NEW DLQ message about an event already
       in it. One roll produced 49 parks inside two minutes of pod start; one run sits in the DLQ twice,
       five days apart. **There is currently no ack meaning "refused, permanently, do not keep this"** —
-      SUCCESS would ack and discard it. Which of those the estate wants is an open decision
-      (`open_backlog_left.md`, LH-166), so this branch keeps the existing behaviour and states it.
+      SUCCESS would ack and discard it.
+
+      THIS IS THE SECOND SITE OF ONE CLASS, so the decision is shared rather than local: `medallion`'s
+      `transform.py` parks its deterministic DROPs the same way, and `open_backlog_left.md` LH-151
+      carries the class with the upstream confirmation (`pkg/runtime/subscription/subscription.go`
+      routes `ErrMessageDropped` to the dead-letter topic). LH-166 carries this site's cost. Both wait
+      on ONE owner decision, which is why this branch keeps its behaviour and states it rather than
+      diverging from its sibling.
     * **ANYTHING ELSE -> RETRY.** An unreachable authorization service is an outage, not a verdict, and
       dropping on one would silently delete provenance for the duration of the outage — the failure
       this whole lane exists to prevent. The absent-vs-unreadable rule, at the ack layer.
