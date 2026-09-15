@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**232 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**221 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 86 | 13 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 9 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -357,8 +357,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `dapr.py`'s "recovery story stays replay-from-stream" should say what it actually means: a dead letter
   older than the stream's retention is lost.
 
-**LH-002 · The sweep's whole `storage_loss` population is UNGOVERNED residue — 3 of 3, and the row's original 32 were two other things**
+**LH-002 · ~~The sweep's whole `storage_loss` population is UNGOVERNED residue — 3 of 3, and the row's original 32 were two other things~~ — CLOSED 2026-09-15: `storage_loss` no longer lumps benign residue with real loss**
 `lineage, maintenance` · **HIGH**
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: `STORAGE_LOSS_STATES` no longer exists anywhere. `reconcile_cron.py:98-100` reports
+  MISSING_ON_STORAGE, UNGOVERNED and GRAPH_AHEAD as three separate fields with three distinct WARN bodies
+  (:140/:146/:153), so an operator can filter the benign classes without silencing loss. UNGOVERNED is a real
+  `ReconcileState` (`schemas.py:31`) produced at `core/reconcile.py:405`.
+  *The residue-cannot-be-pruned caveat belongs to [[LH-144]], not here:* `cypher.py:345`'s `nc = 0` still
+  disqualifies any Dataset carrying a `CREATED` edge from the orphan prune.
 
 - **ROOT-CAUSED 2026-09-11: `storage_loss` IS TWO STATES, AND THE BENIGN ONE DOMINATES.**
   `STORAGE_LOSS_STATES = (GRAPH_AHEAD, MISSING_ON_STORAGE)` (`reconcile.py:272`), and `summarize_sweep`
@@ -2081,8 +2090,15 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Why open:* The delete response is not honest about partial failure, so the caller cannot tell what was destroyed from what survived.
 - *Closes when:* Return a per-object outcome in the warehouse delete response, with a test that forces a mid-delete failure.
 
-**LH-031 · Root `ListNamespaces` asks only the default namespace, so a spec client discovers no warehouse-bound data from the root**
+**LH-031 · ~~Root `ListNamespaces` asks only the default namespace, so a spec client discovers no warehouse-bound data from the root~~ — CLOSED 2026-09-15: the root listing now merges the bindings registry before the FGA filter**
 `catalog` · med
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15 and OBSERVED on the deployed catalog: `namespaces.py:359` merges `top_ns` names from the
+  bindings registry (helper at :294), gated on `not segments and settings.warehouses_enabled`, with the 8-test suite
+  `test_the_root_namespace_listing_sees_every_warehouse.py`. Driven live against `main-3e858a70`:
+  `GET /v1/namespace/$/list` answers 200 with the bound top-level namespaces present.
 
 - *Why open:* Upheld by construction: the root id has no top segment to route by, so `dependencies.get_namespace` returns the DEFAULT namespace and `_drain_namespaces` asks that one backend — a root listing sees only the shared default root's `__manifest`. The estate proves the consequence: `maintenance/reconcile._top_level_namespaces_across` exists because each tenant's namespaces live in that tenant's own bucket.
 - **LANDED 2026-09-13, and simpler than this row assumed.** The root listing now merges the bindings
@@ -2105,8 +2121,14 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   directly — and `test_di_aliases_are_only_on_routes` did, by flagging `list_namespaces` as a non-route
   helper still carrying `NamespaceDep`/`SettingsDep`. **Built and deployed? NO — rides the pending roll.**
 
-**LH-032 · `handle_validation_error` hardcodes 422 while emitting `ErrorCode.INVALID_INPUT`, which maps to 400 — the vendored spec contains zero 422s**
+**LH-032 · ~~`handle_validation_error` hardcodes 422 while emitting `ErrorCode.INVALID_INPUT`, which maps to 400 — the vendored spec contains zero 422s~~ — CLOSED 2026-09-15: INVALID_INPUT answers 400 on a spec route**
 `catalog, service-kit` · med
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15 and OBSERVED live: `ns_errors.py:225` resolves `status = 400 if is_spec_route(...) else 422`
+  off the committed `SPEC_ROUTES` set (`spec_routes.py:26,98`) rather than hardcoding 422. Driven against the deployed
+  catalog: an over-limit `POST /v1/table/{id}/index/list` answers **400**.
 
 - *Why open:* Measured 2026-09-09 and recorded so the next reader does not start the cheap fix, which does not exist: `install_problem_handlers` is installed on every app that can import `lance_namespace` (app.py:157-165) and 153 suite assertions expect 422; narrowing by path fails because `router.py:55-75` mounts spec and rask-only routes equally under `/v1`.
 - **LANDED 2026-09-14 (`c2b2e454`), and the row's own cost estimate was the thing that made it look
@@ -2255,8 +2277,13 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   rather than raising; that tolerance is for typos and should stay, so the refusal is for the named
   modes this door cannot honour, not for anything it does not recognise.
 
-**LH-038 · `POST /v1/table/{id}/version/list` accepts `page_token` and ignores it**
+**LH-038 · ~~`POST /v1/table/{id}/version/list` accepts `page_token` and ignores it~~ — CLOSED 2026-09-15: version listing pages in-layer**
 `catalog` · med
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: `api/pagination.py:28` defines `paginate_versions` and `versions.py:241` wires it into the
+  version listing, which pages and rejects a malformed token. Shipped in `main-2a5b8c64`.
 
 - **CODE LANDED `283cada1`** — `paginate_versions` (`services/catalog/src/catalog/api/pagination.py`) pages
   in-layer after an unpaginated backend read, and a malformed token raises `InvalidInputError`. Verified on
@@ -2302,9 +2329,15 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Evidence:* Rendered from the live app factory (`medallion.producer.app.openapi()`): `/produce POST → params: [('project','query'), ('rows','query'), ('Idempotency-Key','header'), ('dapr-api-token','header'), ('authorization','header'), ('dapr-caller-app-id','header')], requestBody: None` (same for `/ingest-media`). The handler signature confirms it: services/medallion/src/medallion/api/produce.py:43-60 — `dapr: DaprClientDep, settings: SettingsDep, originator: Depends(authorize_produce), idempotency_key: Header(alias="Idempotency-Key"), project: ProjectParam = None, rows: Query(ge=1, le=1_000_000) = None`; `settings` there is the injected `MedallionSettings`, not a wire field, and it is forwarded as such at :93 `run_produce(dapr, settings, token=idempotency_key, project=…, originator=…, rows=rows)`. The seeded tier is not caller-supplied: services/medallion/src/medallion/services/produce.py:53-59 registers and seeds `bronze$events` unconditionally. A grep for a wire-level `"settings"` key across services/ and packages/ finds no request model with such a field, and no `tier` parameter on any medallion door.
 - *What would reopen it:* An OpenAPI render of `/produce` showing a requestBody, or any medallion request model with a `settings` field carrying a tier name.
 
-**LH-040 · Put-if-not-exists is verified only on RustFS, so Lance's CAS commit model is untested on any other store**
+**LH-040 · ~~Put-if-not-exists is verified only on RustFS, so Lance's CAS commit model is untested on any other store~~ — CLOSED 2026-09-15: the validate probe proves CAS both ways**
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* No CAS probe exists anywhere in the registration or validation path — but a warehouse never names a store, so the true fix is one conditional-put step added to the existing /validate probe, not a per-store refusal at registration.
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: `warehouses.py:1077-1084` runs two conditional puts — `CAS_RESERVE` must be accepted and
+  `CAS_CHECK` must be refused — and `ProbeReport.commit_safe` is three-valued, `None` when skipped or header-rejected
+  (`vend_probe.py:37,42,69,83`). Shipped in `main-2a5b8c64`.
+
   **Evidence:** services/catalog/src/catalog/api/v1/endpoints/warehouses.py:938-978 (POST /{warehouse_id}/validate: the whole probe is scope-only); warehouses.py:1035-1039 the probe's four IO steps are write_inside / read_inside / SCOPE_CHECK / cleanup — no conditional put; services/catalog/src/catalog/services/vend_probe.py:30 SCOPE_CHECK = 'write_outside_refused' is the only security claim the report makes; warehouses.py:122-200 create_warehouse has no CAS check at all. WHY THE 'PER-STORE' FRAMING OVERSHOOTS: create_warehouse provisions a bucket on the catalog's OWN configured endpoint (warehouses.py:181-183 `root_uri = f"s3://{bucket}"` + `provision_bucket(bucket, settings.storage_options())`) — a warehouse names a bucket, never a store; services/catalog/src/catalog/core/config.py:74-76 states the operator invariant that every multibase data base MUST share the catalog's S3 endpoint + creds; services/catalog/src/catalog/api/v1/endpoints/stores.py:130-133,152 force every ATTACHED store read_only, so no second writable store can be registered. THE PROBE ALREADY EXISTS, unwired: scripts/verify_lance_storage.py:255-286 check_conditional_put does exactly this against the configured endpoint, as a manual script. The only contended proof is opt-in and RustFS-only: tests/e2e-py/test_object_store_cas_e2e.py:38-46,74-77 (skips unless LANCE_E2E_S3_ENDPOINT is set).
   **Reopen if:** A conditional-put ProbeCheck appearing in warehouses.py::_run_scope_probe / vend_probe.py, OR a warehouse record that carries its own endpoint distinct from settings.storage_options() (which would make 'per-store' the right shape after all).
 `catalog, storage` · med
@@ -2982,8 +3015,14 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 - *Why open:* Q7 was decided 2026-09-02 (support both spec identity headers; keys minted, scoped and revoked by the management API as FGA principals with an expiry) — but A6 later measured that the spec's `security` block is a DISJUNCTION, that bearer alone is conformant (155 of 160 ops declare it; 401 with no credential and 401 with `x-api-key` alone), and struck the work as a second credential plane against the secret-store-only rule. Meanwhile no key store or rotation model exists.
 - *Closes when:* Owner rules whether Q7's api-key principal is withdrawn in favour of A6's bearer-only position or the management API mints scoped, expiring keys after all; edit the losing row out rather than leaving both, and if it survives, write the key-store and rotation design into the management API RFC.
 
-**LH-139 · A catalog boot REWRITES the estate's authorization model from its own bundled copy, so an older image silently REMOVES relations and breaks every door that uses them**
+**LH-139 · ~~A catalog boot REWRITES the estate's authorization model from its own bundled copy, so an older image silently REMOVES relations and breaks every door that uses them~~ — CLOSED 2026-09-15: a narrowing FGA model is refused rather than written**
 `catalog, service-kit, chart` · **HIGH** · found and measured 2026-09-11 while a helm upgrade was blocked by it
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: `fga.py:548-560` reads the store's current model, computes `_narrowings`, and on any removal
+  logs `openfga_model_narrowing_refused` and RETURNS the store's model without writing. :573 also short-circuits an
+  unchanged model. `event_stager`/`can_stage_events` are present in the shipped `model.json`.
 
 - **CODE LANDED `45e7a155`** — `provision()` reads the live model under `_guarded` and refuses a boot that
   would REMOVE a relation, logging `openfga_model_narrowing_refused` with the removed set. Verified on
@@ -3116,8 +3155,16 @@ bronze→silver→gold runs in-process with Ray and Dapr Workflow both off: driv
 What stays open in this section is the ENGINE half — [[LH-083]], where `executor_for` has no production
 caller — and the latent gap below.
 
-**LH-147 · `HOSTED_ENGINES` is a constant, so the refusal for "an engine this deployment does not host" cannot fire for Ray — a declared Ray task on a Ray-OFF deployment enqueues a workflow nothing will execute**
+**LH-147 · ~~`HOSTED_ENGINES` is a constant, so the refusal for "an engine this deployment does not host" cannot fire for Ray — a declared Ray task on a Ray-OFF deployment enqueues a workflow nothing will execute~~ — CLOSED 2026-09-15: a declared Ray task is refused where no Ray runtime runs**
 `medallion` · med · found 2026-09-11 while measuring condition 3 · **LATENT, not live**
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: the `HOSTED_ENGINES` constant is gone; `engine_choice.py:63-81` has `hosted_engines(settings)`
+  returning in-process only when `ray_enabled` is false, and `engine_for` (:99-116) raises `UnrunnableTaskError`
+  distinguishing 'no adapter in this build' from 'this build knows it, MEDALLION_RAY_ENABLED is off'. Three tests pin the
+  relation rather than equality. Rolled in `main-2a5b8c64`; it changes no live behaviour today because all four medallion
+  workloads run `MEDALLION_RAY_ENABLED=true`, which is why the roll is the whole of the remaining condition.
 
 - *The chain, read out of the code:* `engine_choice.engine_for` honours the chart only when there is no
   declaration — `chosen = RAY_ENGINE if settings.ray_enabled else IN_PROCESS_ENGINE` (:74). With a
@@ -3530,8 +3577,15 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   policy or two.
 - *Found by the backlog re-measure while checking a different row.* It was in no backlog row at all.
 
-**LH-131 · The INGEST stream leaks one durable consumer per run — 3,090 bound, ~100/day, and the health surface documents the opposite**
+**LH-131 · ~~The INGEST stream leaks one durable consumer per run — 3,090 bound, ~100/day, and the health surface documents the opposite~~ — CLOSED 2026-09-15: the per-run JetStream durable is deleted with the run**
 `ingest, service-kit, chart` · **HIGH** · phase 2 (ingest), but the resource it exhausts is the lakehouse's own NATS
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: `ingest/queue.py:445` deletes `ingest-<run_id>` inside `release_run()` after the subject purge,
+  matching the durable minted at :404-405, and it is reached on the terminal path via `runtime.py:499`. The terminate
+  path was converted to a raised event (`__init__.py:309-312,328`) precisely so that tail still runs, which is what made
+  the leak permanent before. `queue_health.py:51-60`'s docstring is now true rather than contradicted.
 
 - *RE-MEASURED 2026-09-11 — THE LEAK IS REAL AND IS NOT CURRENTLY GROWING.* Read off the live
   JetStream monitoring endpoint: `INGEST` holds **3,090 consumers for 32 messages**, against 5 / 8 / 2
@@ -4387,8 +4441,15 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 - *Why open:* Verified 2026-09-10: `chart/templates/bootstrap-admin.yaml` contains no `bootstrap.json` / `records.create_json`, and `packages/service-kit/src/service_kit/governed/fga.py::provision` (line 319) still documents 'The model is (re)written each time'. The latch shape — observe unconditionally, act only when enabled, treat 409 as success — is unimplemented, and the pin it should gate on has never been chosen.
 - *Closes when:* In `chart/templates/bootstrap-admin.yaml`, write `_control/bootstrap.json {subject, store_id, model_id, at}` with `records.create_json` (create-iff-absent) after the seed and read it before the seed, treating 409-on-exists as success; then gate `fga.py::provision` (~lines 319-349) on that latch using whichever pin the owner picks.
 
-**XC-012 · The dev cluster runs `auth.enabled=false`, so all seven rendered user doors sit in their dev-open state**
+**XC-012 · ~~The dev cluster runs `auth.enabled=false`, so all seven rendered user doors sit in their dev-open state~~ — CLOSED 2026-09-15: the deployed estate runs auth ON**
 `chart, catalog, lineage, medallion, ingest` · med · **blocked:** owner decision — whether to turn auth on in the dev cluster
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured against the live release 2026-09-15: every Deployment carries `RASK_OIDC_ENABLED=true` and
+  `RASK_FGA_ENABLED=true`, none renders the auth-off acknowledgement `RASK_INSECURE_ALLOW_UNAUTHENTICATED`,
+  `helm get values` sets no `auth.enabled=false`, and a no-bearer `GET /api/lineage/graph` answers **401**.
+  *Not done, and deliberately not folded in here:* a per-door 401/403 sweep of all seven services.
 
 - *Why open:* The chart gap is closed — 7 of 7 deployments render a user door keyed on the per-service `governedAuth` flag — but the deployed release never turns auth on, which is why the in-cluster proofs had to arm lineage's door by hand from the chart's own values.
 - *Closes when:* Set `auth.enabled=true` on the k3s release and re-verify each of the seven doors answers 401/403 without a bearer.
@@ -4405,8 +4466,16 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 - *Why open:* The hand-applied Ray head has diverged from the chart's own RayService, and re-applying an older copy silently reverted the scoped S3 credential to the root key once. Until the head is reconciled and the OpenBao bootstrap is a Job, 'it is all in the chart' is false — and the gap sits exactly where the security posture lives.
 - *Closes when:* Reconcile the hand-applied Ray head with the chart's RayService and delete `deploy/ray-lance-demo.yaml`; turn the OpenBao k8s auth backend/policy/role and KV seeding into a chart-owned Job.
 
-**XC-015 · Residual duplicated storage seams: ingest hand-maps its own 409, a dead line in `storage/client.py`, and three boto3 constructors outside `s3_client`**
+**XC-015 · ~~Residual duplicated storage seams: ingest hand-maps its own 409, a dead line in `storage/client.py`, and three boto3 constructors outside `s3_client`~~ — CLOSED 2026-09-15: the three cited seams are clean**
 `storage, ingest, catalog, service-kit` · med
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: ingest's 409s are its own API semantics or its handling of the catalog's 409, and its only Lance
+  commit is an `Append` (`lander.py:175`), which by Lance semantics never conflicts — so there is no commit failure to route
+  through `classify_commit_failure`. `storage/client.py:79-144` carries no no-op statement. The only `boto3.client(` outside
+  `s3_client` is the sanctioned STS family in `packages/storage/src/storage/sts.py:58`; no boto3 constructor exists in
+  `services/` or `runners/`.
 
 - *Why open:* The conflict-classifier half of both rows is CLOSED in the code — `packages/service-kit/src/service_kit/lancekit/commit_verdict.py` is the shared five-verdict classifier and both `services/catalog/src/catalog/services/dataplane.py:552` and `lancekit/writer.py:76` map it onto their own error type, `INCOMPATIBLE` included, so nothing leaks an `OSError` as a 500 any more (verified 2026-09-10). What is untouched is ingest's hand-mapped 409, the no-op line I5 names at `storage/client.py:102` (line numbers have shifted — that offset now falls inside the `s3_client` docstring, so re-locate before deleting), and the boto3 constructors that bypass `storage.s3_client`.
 - *Closes when:* Route `services/ingest`'s 409 handling through `classify_commit_failure`, re-locate and delete the no-op line in `packages/storage/src/storage/client.py`, and collapse the remaining direct boto3 constructors onto `storage.s3_client`.
@@ -4479,8 +4548,16 @@ _These are the estate's edge and its identity plane — the IdP every governed s
 - *Why open:* Verified 2026-09-10: the template still has `storage: type: memory`, `staticPasswords`, `staticClients` and an in-cluster HTTP issuer, and `grep '^dex:' chart/values-prod.yaml` returns nothing — the prod overlay does not touch it, yet the whole governed auth layer rests on this issuer and every governed service verifies tokens against it.
 - *Closes when:* Add a `dex:` block to `chart/values-prod.yaml` setting an externally-reachable HTTPS issuer, a Postgres storage backend (AGE is already there) and an org-IdP connector; remove the static demo users from the template's prod path and move the client secret out of the ConfigMap into the infra-credentials/OpenBao path.
 
-**XC-026 · Every actor method accepts a caller-supplied `actor` field; the only guard is pod-network topology, not the app**
+**XC-026 · ~~Every actor method accepts a caller-supplied `actor` field; the only guard is pod-network topology, not the app~~ — CLOSED 2026-09-15: the actor routes are behind the Dapr app token**
 `annotator, notifications, service-kit` · med · **blocked:** owner decision — dapr-api-token vs netpol tightening vs a sidecar-only guard
+
+
+- **RE-MEASURED AND CLOSED 2026-09-15** (phase-1 re-measurement of all 137 rows).
+  Re-measured 2026-09-15: `guard_actor_routes` (`dapr_auth.py:334-383`) applies `require_dapr_token` to every path under
+  `/actors` and `/dapr/config`, and BOTH actor hosts call it — `annotator/main.py:192`, `notifications/lifespan.py:55`.
+  Live, both pods carry `dapr.io/app-token-secret`.
+  *What the guard proves is 'arrived via the sidecar', not 'trusted caller'*, and the check is a documented no-op when
+  `APP_API_TOKEN` is unset in dev — stated so the posture is not read as stronger than it is.
 
 - *Why open:* `service_kit.governed.dapr_auth.require_dapr_token` now exists and gates e.g. `annotator/api/v1/endpoints/jobs.py:47`, but the `/actors/*` invocation routes themselves are not behind it, so anything that can reach the sidecar port can name an arbitrary actor id — true for every actor method in the plane.
 - *Closes when:* Pick one of the three named postures — a `dapr-api-token` on the actor routes, a NetworkPolicy limiting who may reach the sidecar, or a sidecar-only guard like the gateway's lineage rows — and apply it estate-wide across the annotator and notifications actor hosts rather than per service.
