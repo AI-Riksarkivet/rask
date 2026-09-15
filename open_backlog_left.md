@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 12 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 11 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -5006,16 +5006,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   particular drift, but a table with no `parent` edge is still invisible to every detector.
 
 
-**LH-166 · The lineage DLQ is bleeding again — events naming an UNGOVERNED output can never be accepted, so they park forever**
-`lineage, medallion, maintenance` · **HIGH** · measured 2026-09-15 on the live estate
+**LH-166 · An event naming an UNGOVERNED output can never be accepted, so it parks forever — and the DLQ has grown past what [[LH-148]] recorded**
+`lineage, medallion, maintenance` · med · measured 2026-09-15 on the live estate
 
 - **[[LH-148]] SAYS "not currently bleeding" AND THAT IS NO LONGER TRUE.** It measured 8,612 DLQ
   messages on 2026-09-13 with "zero since 2026-09-11". Measured now: the DLQ stream holds **9,887
   messages / 29 MiB**, of which **`dlq.lineage.events` is 9,856** — roughly **+1,341 since that
   reading** — and the last delivery was **11 minutes** before this row was written. The
   `lineage-dlq-durable` consumer's last delivery timestamp agrees.
-- *The park reason, read off the service rather than guessed:* `lineage_event_unauthorized`, 53 parks
-  in one hour. Two samples with their authors:
+- **SCALE AND CHARACTER, corrected within minutes of first writing this row — it is a BURST FROM TEST
+  IDENTITIES, not the steady production bleed the first draft implied.** The park count is IDENTICAL at
+  60, 120 and 180 minutes (53 each), so all 53 fall inside one hour with nothing in the two before it.
+  By author over 3 h: `data_eng` 30, `e2e` 14, `ray` 10, `service-stage-runner` 3,
+  `service-maintenance` 2, a dex user 2. The refused outputs are fixture-shaped —
+  `acme-silver$features`, `silver$features`, `e2e_crash_ds`, `bronze$events`.
+- *So the honest split:* the MECHANISM is real and reaches production services (5 of 53 parks are
+  `service-stage-runner` + `service-maintenance`), while the VOLUME is dominated by test and demo
+  identities. The 9,856 backlog is mostly test traffic; the ongoing production loss is a trickle rather
+  than a flood. Both halves matter — a trickle of unrepairable provenance loss is still condition 1
+  failing, and a DLQ dominated by test noise is how the real ones stay invisible.
+- *The park reason, read off the service rather than guessed:* `lineage_event_unauthorized`. Two
+  samples with their authors:
 
       author='service-maintenance'  reason='can_write_data or can_maintain required on outputs: m2proof_silver$m2-proof-1788537252'
       author='<a dex user>'         reason='can_write_data required on outputs: e2e-ns$t74eff1b3'
@@ -5036,9 +5047,11 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   catalog tables at all. It answers "does every table the catalog knows carry tuples", and the
   question this defect needs is "does every output a lineage event NAMES carry tuples". Those differ
   by exactly the population that is parking.
-- *Why it is HIGH:* it is condition 4 failing continuously — and condition 1 with it, since every
-  parked event is provenance for a run that completed. `dapr.py` already records that a dead letter
-  older than the stream's retention has no path back, so this is silent, ongoing provenance loss.
+- *Why it still matters, stated at its measured size rather than at the size the first draft claimed:*
+  a production service emitting provenance that can NEVER be accepted is condition 4 failing and
+  condition 1 with it — `dapr.py` records that a dead letter older than the stream's retention has no
+  path back, so those runs lose their provenance silently. That is true at 5 events in 3 h exactly as
+  it would be at 5,000; what changes is the urgency, not the defect.
 - *Closes when:* the estate stops producing lineage events whose outputs cannot be governed — either
   the writer registers its output before emitting, or the bus's authorization answers an ungoverned
   output with something other than an unrepairable park — AND `dlq.lineage.events` stops growing,
