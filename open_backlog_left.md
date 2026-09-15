@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**223 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**222 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 11 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 76 | 11 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -197,7 +197,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   on the day someone enables the lane. Then surface per-consumer depth and `Active Interest` wherever the
   maintenance sweep already reports, so the next one is visible without a NATS client.
 
-**LH-149 · The cascade head hard-imports the workflow engine, so the lakehouse DEPENDS ON Dapr Workflow rather than being driven by it**
+**LH-149 · ~~The cascade head hard-imports the workflow engine, so the lakehouse DEPENDS ON Dapr Workflow rather than being driven by it~~ — CLOSED 2026-09-15, observed live**
 `medallion` · med · found 2026-09-13 while re-measuring condition 3 · **refines an earlier verdict that measured only two of the import sites**
 
 - *Condition 3 in the owner's words:* "Dapr Workflow and Ray are things the lakehouse can be driven BY,
@@ -311,9 +311,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Scope pinned too:* `ingest` and `flows` keep their own unconditional pins. They are FLEET services,
   and the goal statement names the lakehouse as catalog/lineage/medallion/maintenance — moving theirs
   would be a change nobody asked for.
-- *Closes when:* the image is built with the extra and the cascade is observed still running — the
-  producer and both stage runners import `medallion.workflow` at module scope, so a missing flag shows
-  up as a pod that will not start.
+- **OBSERVED LIVE on `main-926f9b16`, read out of the running `rask-medallion-producer`'s own
+  installed metadata rather than from the repo:**
+
+      dapr-ext-workflow installed  : 1.18.3          (the adapter still works)
+      medallion.workflow imports   : True
+      unconditional dep in METADATA: NONE            (the lakehouse no longer DEPENDS on it)
+      gated behind the extra       : ["dapr-ext-workflow>=1.18; extra == 'workflow'"]
+
+  Ten workloads rolled, zero failed rollouts — and the three that import the adapter at module scope
+  (the producer and both stage runners) starting at all is itself the proof the extra reached the image.
+- **AND THE RAY HALF OF CONDITION 3 WAS ALREADY CLEAN, measured the same way rather than assumed.**
+  The condition reads "a workflow engine OR RAY", and nobody had checked the second noun: none of
+  `catalog`, `lineage`, `medallion`, `maintenance` declares `ray`/`ray-kit` unconditionally, there is
+  not one module-level `import ray` across the four, and **`import ray` fails outright in the deployed
+  image** — the Ray lane reaches the cluster over the Jobs REST API rather than by importing a client.
+  Both halves are now pinned by `tests/unit/test_the_lakehouse_does_not_depend_on_a_workflow_engine.py`,
+  the Ray half starting green so its whole job is to stay that way: that coupling is one `uv add` away
+  and would break nothing visible.
 **LH-148 · The terminal-provenance-loss metric counts restarts, not losses — and the payload it parks can never be read back**
 `lineage, chart` · med · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
 

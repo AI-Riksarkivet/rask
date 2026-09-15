@@ -107,3 +107,49 @@ def test_the_fleet_services_keep_their_own_engine_dependency() -> None:
         with (_ROOT / "services" / service / "pyproject.toml").open("rb") as handle:
             deps = tomllib.load(handle)["project"]["dependencies"]
         assert any(_ENGINE in str(dep) for dep in deps), f"{service} stopped declaring its own workflow engine — that is a separate decision from [[LH-149]]"
+
+
+#: The four services the goal statement names as the lakehouse. Ray and the workflow engine are things
+#: it may be DRIVEN BY; neither may be something it needs in order to install.
+_LAKEHOUSE = ("catalog", "lineage", "medallion", "maintenance")
+
+
+def _unconditional_dependencies(service: str) -> list[str]:
+    with (_ROOT / "services" / service / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)["project"]
+    return [str(dep) for dep in project.get("dependencies", [])]
+
+
+def test_no_lakehouse_service_requires_RAY_to_install() -> None:
+    """The other half of condition 3, which reads "a workflow engine OR RAY" and was never pinned.
+
+    MEASURED 2026-09-15 in the running `rask-medallion-producer`: none of the four declares ray or
+    ray-kit unconditionally, and `import ray` fails in the image outright — the Ray lane reaches the
+    cluster over the Jobs REST API rather than by importing the client. So this gate starts GREEN and
+    its whole job is to stay that way: the coupling it refuses is one `uv add ray` away, and the
+    failure would be invisible because everything would still work.
+    """
+    coupled = {
+        service: [dep for dep in _unconditional_dependencies(service) if dep.split(">")[0].split("[")[0].split("=")[0].strip().lower() in {"ray", "ray-kit"}]
+        for service in _LAKEHOUSE
+    }
+    offenders = {service: deps for service, deps in coupled.items() if deps}
+
+    assert offenders == {}, f"a lakehouse service requires Ray to install, so the lakehouse DEPENDS ON it: {offenders}"
+
+
+def test_no_lakehouse_service_imports_ray_at_MODULE_scope() -> None:
+    """The metadata half is not enough on its own — an import can arrive without a manifest edit.
+
+    A transitive install (service-kit extras, a sibling package) can put `ray` on the path, and then a
+    module-level `import ray` couples the lakehouse to it while every pyproject still looks clean. The
+    import graph is where the previous half of this row actually lived, so it is checked here too.
+    """
+    offenders: list[str] = []
+    for service in _LAKEHOUSE:
+        for path in (_ROOT / "services" / service / "src").rglob("*.py"):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if line.startswith(("import ray", "from ray")):
+                    offenders.append(f"{path.relative_to(_ROOT)}:{number}: {line.strip()}")
+
+    assert offenders == [], f"a lakehouse module imports Ray at module scope — it must be driven BY Ray, not depend on it: {offenders}"
