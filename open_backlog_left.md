@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**221 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**220 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 10 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 10 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -3730,8 +3730,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Evidence:* services/medallion/src/medallion/services/compute.py:265-278 rebuilds the JSON scalar index over `lineage->run_id` after every distributed stage write; services/ingest/src/ingest/lander.py:244-250 creates BITMAP `partition_key` + BTREE `id` on every committed bronze dataset; services/catalog/src/catalog/api/v1/endpoints/indices.py:68-129 builds in-process (the `_queue_build` branch is skipped when no topic is set) and tests/e2e-py/test_track_a_acceptance.py:743-771 drives BOTH `create_scalar_index` and `create_index` against a governed table on the deployed catalog (measured live 2026-08-31). The queued J7 lane is OFF by default: chart/values.yaml:1585 `indexTopic: ""` and services/catalog/src/catalog/core/config.py:348 `maintenance_index_topic` default "", set in no values file including chart/values-prod.yaml. chart/values.yaml:1593 `indexAckWait: 3600s` is still a guess (its own comment at :1588-1592 reasons about it, cites no measurement). services/search/src/search/services/constants.py:13-25 still tunes VECTOR_NPROBES=20 / MAX=0.
 - *What would reopen it:* If `_index_lineage` at medallion/compute.py:265 were unreachable (no caller), and lander.py:244 were dead, and the track_a e2e index legs were skipped on every run, the headline claim would hold. The narrower true residual: nothing has ever driven `maintenance_index_topic` end to end in-cluster, so indexAckWait remains unmeasured — that smaller row is real.
 
-**LH-105 · No door anywhere in the estate rebuilds an index in place, so a mis-parameterised vector index is unrepairable through the API**
+**LH-105 · ~~No door anywhere in the estate rebuilds an index in place, so a mis-parameterised vector index is unrepairable through the API~~ — CLOSED, DEPLOYED AND OBSERVED 2026-09-15**
 `catalog, maintenance` · med
+
+
+- **CLOSED 2026-09-15** (`22d03e9f`, corrected by `2a5b8c64` and `5296f3dc`), deployed on `main-5296f3dc`
+  and observed on the running catalog.
+  `POST /v1/table/{id}/maintenance/reindex` reads the live index's parameterisation through BOTH calls
+  (`describe_indices()` for name/type/column/details, `index_statistics()` for the `num_partitions` the
+  first does not carry), merges `body.params` over it, and rebuilds under `replace=True` — queued onto
+  the index lane where a topic is configured, inline where it is not. Owner-gated: `maintenance/reindex`
+  maps to `can_drop` explicitly, because an unmapped table suffix falls through to `can_write_data`.
+  *TWO DEFECTS IN THE FIRST CUT, BOTH FOUND BY THE PROCESS RATHER THAN BY READING IT.* The new door
+  refused no branch — the exact pattern `ff9604be` had fixed on the drop door hours earlier — and
+  re-checking found its three `/maintenance/` siblings the same, since not ACCEPTING a parameter is not
+  refusing it (FastAPI drops an undeclared query parameter in silence). And a name that was simply not
+  there answered **500**: `IndexNotFoundForRebuildError` was a bare `LookupError` and reached the
+  catch-all. Both are fixed and gated — the branch gate derives its doors from the mounted ROUTES, so a
+  fifth verb inherits it without an edit, and the 404 is pinned through `ns_errors._STATUS` rather than
+  a literal.
+  *Observed on `main-5296f3dc`:* `{"index_name": "no_such_idx"}` -> **404**
+  `IndexNotFoundForRebuildError`; the same call with `?branch=work` -> **406**.
 
 - *Why open:* Nothing composes a rebuild. The capability exists one layer down — `replace=True` on
   pylance's own create call — and no service exposes it, so the repair for a corrupt or
