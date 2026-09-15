@@ -3400,7 +3400,41 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   only show the field TRAVELS, so the assertion that a pass is actually TIMED lives in
   `test_a_work_item_is_self_contained.py`, on a run that really opens and rewrites a Lance dataset.
   Mutation-proven — deleting the timing line reds that one while the double-based test stays green.
-- *Closes when:* the ATTEMPT half lands — a counter on the SINGLE
+- **THE ATTEMPT HALF IS SHIPPED AND OBSERVED 2026-09-15 — two of the three closing clauses.** `r.attempts` +
+  `r.last_attempt_at` live on the single node `MERGE_RUN` already targets — the node the deterministic
+  run id exists to make every tick converge onto — exposed on `RunStatus` and both read paths.
+  *The guard is the whole correctness, and a bare `coalesce(r.attempts,0)+1` would have been WRONG:*
+  `MERGE_RUN` runs on EVERY ingest while `/events` dedups redelivered FAIL rows on its partial-unique
+  `(run_id, event_type)` index, so an unguarded counter measures the sidecar's retry schedule rather
+  than the dataset. Guarded on `coalesce(r.last_attempt_at,'') < $tm`: a genuine attempt stamps a later
+  time, a redelivery replays the same one.
+  *Read straight out of AGE after the roll* (`cypher('lineage', MATCH (r:Run) WHERE r.attempts IS NOT
+  NULL ...`), driving one failing stage trigger:
+
+      attempts=1 -> 88 runs
+      attempts=4 ->  1 run
+      attempts=5 ->  2 runs
+
+  The 4s and 5s are the counter climbing across real retries, which proves the increment fires; that
+  they STOP at 5 proves the guard holds, because the sidecar's schedule is `constant 120s x 4` = five
+  attempts and an unguarded counter would have kept climbing on every broker redelivery.
+- *Tested as a drift gate, which is a stated limit rather than a shortcut:* `MERGE_RUN` cannot execute
+  without AGE and the estate has no AGE-backed fixture, which is why
+  `tests/unit/test_a_run_state_does_not_regress.py` reads the statement's source at all. Both guards
+  are mutation-proven there, and the behavioural proof is the measurement above.
+- *An integration trap the estate's own gates caught:* the board projection is POSITIONAL and three
+  column-count tests failed when `r.attempts` was appended while both readers still declared 17 — the
+  shape `_LIST_RUNS_BODY`'s own comment warns about ("the caller declares a column count and a mismatch
+  is a 500, not a short row"). Two of those three live in `services/lineage/tests`, which the
+  invariant+integration layers do not run; only the full configured suite does.
+- *WHAT IS STILL OPEN IS THE THIRD CLAUSE, and it is not a formality.* The counter is read here
+  straight out of AGE with `psql`, on a probe dataset that has nothing to reclaim — the row asks for it
+  "through the running app or a door", on a dataset that really has fragments. That is the difference
+  between "the property is written" and "a tenant can see it", and the FGA gate on `/runs` (a run is
+  shown only to a caller holding `can_get_metadata` on every dataset it wrote) is exactly the layer a
+  direct graph read skips.
+- *Closes when:* the counter is read through `/runs` by a governed caller, on a dataset with real
+  fragments to reclaim. The remaining shape of the original ask — a counter on the SINGLE
   deterministic FAIL node, not by minting one id per attempt — and make it FGA-gated per object so a
   tenant can query its own table's rewrites; then observe it on a dataset that actually has fragments to
   reclaim, measured through the running app or a door. Do NOT remove the deterministic run id without
