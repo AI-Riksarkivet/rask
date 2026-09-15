@@ -16,11 +16,11 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import open_dataset
-from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult
-from catalog.services import maintenance
+from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
+from catalog.services import index_specs, maintenance
 from service_kit import dapr_publish
 from service_kit.lakehouse import base_refs
-from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
+from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem, IndexWorkItem
 
 
 log = logging.getLogger(__name__)
@@ -161,3 +161,82 @@ async def compact_maintenance(
         protected=protected,
     )
     return CompactResult(**result)
+
+
+@router.post(
+    "/{id}/maintenance/reindex",
+    responses={
+        status.HTTP_202_ACCEPTED: {
+            "model": ReindexAccepted,
+            "description": "Enqueued onto the index lane; the rebuilt version does not exist yet.",
+        }
+    },
+)
+async def reindex_maintenance(
+    id: str,
+    body: ReindexRequest,
+    request: Request,
+    response: Response,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+) -> ReindexResult | ReindexAccepted:
+    """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
+    index that is there, and an unmapped suffix would fall through to the writer rung.
+
+    **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
+    than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
+    `create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name
+    vector rebuild is refused at the default — ``LanceError(Index): Index name 'x' already exists`` —
+    and accepted under ``replace=True``. So the vector index, the one that cannot repair itself
+    through the create doors, is repaired by a flag pylance already has. Dropping first would open a
+    window in which the table has NO index — a search silently degrading to a full scan — and would
+    leave it with none if the rebuild then failed, which is worse than the mis-parameterised index
+    being repaired.
+
+    **THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live
+    index's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`
+    merges OVER that reading for the caller who is deliberately changing something.
+
+    WHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service
+    reads, so the two cannot disagree about whether a worker exists. With a queue: publish one
+    `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
+    runs here.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    ds = await run_in_threadpool(open_dataset, ns, so, segments)
+    spec = await run_in_threadpool(index_specs.describe_index_for_rebuild, ds, body.index_name)
+    params = {**spec.params, **body.params}
+
+    publisher = getattr(request.app.state, "dapr_client", None)
+    item = IndexWorkItem(
+        uri=str(getattr(ds, "uri", "") or ""),
+        table_id=id,
+        column=spec.column,
+        kind=spec.kind,
+        index_type=spec.index_type,
+        name=spec.name,
+        replace=True,
+        params=params,
+    )
+    if settings.maintenance_index_topic and publisher is not None:
+        await dapr_publish.publish_event(
+            publisher,
+            timeout_seconds=settings.control_emit_timeout_seconds,
+            pubsub_name=settings.maintenance_index_pubsub,
+            topic_name=settings.maintenance_index_topic,
+            data=item.model_dump_json(),
+            data_content_type="application/json",
+        )
+        response.status_code = status.HTTP_202_ACCEPTED
+        return ReindexAccepted(
+            index_name=spec.name,
+            column=spec.column,
+            kind=spec.kind,
+            index_type=spec.index_type,
+            params=params,
+            transaction_id=item.unit_id,
+        )
+
+    outcome = await run_in_threadpool(maintenance.rebuild_index_now, ds, item)
+    return ReindexResult(index_name=spec.name, column=spec.column, kind=spec.kind, index_type=spec.index_type, version=outcome)

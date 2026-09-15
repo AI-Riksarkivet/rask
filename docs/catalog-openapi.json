@@ -10154,6 +10154,109 @@
         "title": "RegisteredTasksResponse",
         "type": "object"
       },
+      "ReindexAccepted": {
+        "description": "The 202 body: the rebuild was enqueued onto the index lane rather than performed here.\n\nIt reports no version because it has none \u2014 the worker that will produce it is another process,\nand inventing the current version would make an accepted request indistinguishable from a\ncompleted rebuild. The resolved shape IS returned: it is what the unit will be built from, and it\nis the only chance a caller gets to see that the readback found the parameters it expected.",
+        "properties": {
+          "accepted": {
+            "default": true,
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "column": {
+            "title": "Column",
+            "type": "string"
+          },
+          "index_name": {
+            "title": "Index Name",
+            "type": "string"
+          },
+          "index_type": {
+            "title": "Index Type",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "transaction_id": {
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index_name",
+          "column",
+          "kind",
+          "index_type",
+          "transaction_id"
+        ],
+        "title": "ReindexAccepted",
+        "type": "object"
+      },
+      "ReindexRequest": {
+        "description": "[[LH-105]] rebuild one named index in place, keeping the parameterisation it already has.\n\n``index_name`` is the only required field because the point of the door is REPAIR: the shape is\nread off the live index rather than restated by the caller, so a repair cannot silently re-tune\nwhat it repairs. ``params`` is the escape hatch for the case the readback cannot serve \u2014 a vector\nindex being deliberately re-partitioned, or one whose `num_partitions` could not be read \u2014 and is\nMERGED OVER the readback rather than replacing it, so overriding one value does not drop the rest.",
+        "properties": {
+          "index_name": {
+            "minLength": 1,
+            "title": "Index Name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "index_name"
+        ],
+        "title": "ReindexRequest",
+        "type": "object"
+      },
+      "ReindexResult": {
+        "description": "The 200 body: the rebuild ran in this pod and the index is already back.",
+        "properties": {
+          "column": {
+            "title": "Column",
+            "type": "string"
+          },
+          "index_name": {
+            "title": "Index Name",
+            "type": "string"
+          },
+          "index_type": {
+            "title": "Index Type",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index_name",
+          "column",
+          "kind",
+          "index_type",
+          "version"
+        ],
+        "title": "ReindexResult",
+        "type": "object"
+      },
       "RelationGrants": {
         "description": "One ``can_*`` action and every user subject holding it (``\"*\"`` = a public wildcard grant).",
         "properties": {
@@ -26027,6 +26130,148 @@
           }
         ],
         "summary": "Preview Maintenance",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
+    "/v1/table/{id}/maintenance/reindex": {
+      "post": {
+        "description": "Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) \u2014 it destroys the\nindex that is there, and an unmapped suffix would fall through to the writer rung.\n\n**IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather\nthan assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and\n`create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name\nvector rebuild is refused at the default \u2014 ``LanceError(Index): Index name 'x' already exists`` \u2014\nand accepted under ``replace=True``. So the vector index, the one that cannot repair itself\nthrough the create doors, is repaired by a flag pylance already has. Dropping first would open a\nwindow in which the table has NO index \u2014 a search silently degrading to a full scan \u2014 and would\nleave it with none if the rebuild then failed, which is worse than the mis-parameterised index\nbeing repaired.\n\n**THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live\nindex's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`\nmerges OVER that reading for the caller who is deliberately changing something.\n\nWHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service\nreads, so the two cannot disagree about whether a worker exists. With a queue: publish one\n`IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild\nruns here.",
+        "operationId": "reindex_maintenance_v1_table__id__maintenance_reindex_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReindexResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReindexAccepted"
+                    }
+                  ],
+                  "title": "Response Reindex Maintenance V1 Table  Id  Maintenance Reindex Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexAccepted"
+                }
+              }
+            },
+            "description": "Enqueued onto the index lane; the rebuilt version does not exist yet."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reindex Maintenance",
         "tags": [
           "maintenance"
         ]

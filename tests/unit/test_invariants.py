@@ -112,6 +112,13 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # trigger one and has the trigger answer: the caller holds the 202 and can re-click, and the hourly
     # cron backstop re-plans the dataset regardless.
     ("services/catalog/src/catalog/api/v1/endpoints/maintenance.py", "settings.maintenance_work_topic"): "trigger",
+    # [[LH-105]] `maintenance/reindex` onto the index lane — a TRIGGER, on the same reasoning as the two
+    # beside it: it instructs a worker to rebuild an index and describes no committed write, so staging
+    # it through the lineage outbox would re-ingest an instruction as a write. Its durability question
+    # has the trigger answer twice over — the caller holds the 202 and can re-click, and the rebuild is
+    # IDEMPOTENT by construction (`replace=True` over a named index), so a re-delivered or re-issued
+    # unit converges on the same index rather than accumulating a second one.
+    ("services/catalog/src/catalog/api/v1/endpoints/maintenance.py", "settings.maintenance_index_topic"): "trigger",
     # The index-build lane, and a TRIGGER for the same reason its compaction sibling is: it instructs a
     # worker to do work, and describes no committed write. The unit id is deterministic, so a
     # caller-retried publish names the same build rather than a second one.

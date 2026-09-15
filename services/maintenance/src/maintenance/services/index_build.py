@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any, Final, Literal, cast
+from typing import Any, Literal, cast
 
 import lance
 from pydantic import BaseModel, ConfigDict
 
 from maintenance.core.config import shared_lance_session
-from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
+from service_kit.lakehouse.work_items import SCALAR_INDEX, SCALAR_INDEX_TYPES, VECTOR_INDEX, IndexWorkItem
 
 
 log = logging.getLogger(__name__)
@@ -38,13 +38,6 @@ log = logging.getLogger(__name__)
 #: pylance types `create_scalar_index`'s `index_type` as a Literal union; this is that union, named so
 #: the narrowing above reads as one check against one list.
 ScalarIndexType = Literal["BTREE", "BITMAP", "LABEL_LIST", "INVERTED", "FTS", "NGRAM", "ZONEMAP", "BLOOMFILTER", "RTREE"]
-
-
-#: The scalar index types pylance accepts, as its own signature declares them. Held here so an unknown
-#: value arriving off a broker is a clean REFUSAL rather than a `TypeError` deep inside pylance — and
-#: so the narrowing that satisfies the typed signature is a real check rather than a cast that asserts
-#: something nobody verified.
-SCALAR_INDEX_TYPES: Final = frozenset({"BTREE", "BITMAP", "LABEL_LIST", "INVERTED", "FTS", "NGRAM", "ZONEMAP", "BLOOMFILTER", "RTREE"})
 
 
 class IndexOutcome(BaseModel):
@@ -82,9 +75,12 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     field names by the door that published the unit. This module has no opinion on them, the same rule
     a transform's params follow.
 
-    `replace` is deliberately not passed: the spec's request has no such field, so no caller can ask
-    for it, and pylance's own defaults then apply (scalar replaces, vector refuses a duplicate name).
-    Passing a value nobody chose would make this worker decide a semantics the door never offered.
+    `replace` is forwarded only when the unit SET it. Unset, pylance's own defaults apply, and they
+    differ by kind — `create_scalar_index` replaces, `create_index` refuses a duplicate name
+    (measured on 11.0.0) — so sending a value the producer never chose would flip the scalar lane's
+    semantics. The spec's create request carries no such field, so its doors always leave it unset;
+    the catalog's `maintenance/reindex` door sets it, because rebuilding a vector index in place is
+    impossible without it and dropping first would leave the table unindexed if the rebuild failed.
     """
     dataset = lance.dataset(item.uri, storage_options=dict(write_options) or None, session=shared_lance_session())
     # THE COLUMN IS CHECKED BEFORE THE BUILD, because the schema is already in hand and "does this
@@ -99,6 +95,8 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     kwargs: dict[str, Any] = dict(item.params)
     if item.name:
         kwargs["name"] = item.name
+    if item.replace is not None:
+        kwargs["replace"] = item.replace
     if item.kind == VECTOR_INDEX:
         dataset.create_index(item.column, index_type=item.index_type, **kwargs)
     elif item.kind == SCALAR_INDEX:

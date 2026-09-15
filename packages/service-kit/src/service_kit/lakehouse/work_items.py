@@ -106,6 +106,12 @@ class DatasetWorkItem(BaseModel):
 VECTOR_INDEX = "vector"
 SCALAR_INDEX = "scalar"
 
+#: The scalar index types pylance accepts, in the spelling its `create_scalar_index` signature
+#: declares them. Beside the two kind names for the same reason: the catalog normalises a readback
+#: INTO this vocabulary and the worker refuses anything outside it, so two private copies would let a
+#: producer stamp a type the consumer rejects, across a broker, with no type error on either side.
+SCALAR_INDEX_TYPES = frozenset({"BTREE", "BITMAP", "LABEL_LIST", "INVERTED", "FTS", "NGRAM", "ZONEMAP", "BLOOMFILTER", "RTREE"})
+
 
 class IndexWorkItem(BaseModel):
     """ONE index build, self-contained — the same shape as :class:`DatasetWorkItem`, different work.
@@ -149,6 +155,16 @@ class IndexWorkItem(BaseModel):
     #: forwards it and never branches on it, the same rule `transform_specs` states for a task.
     index_type: str = ""
     name: str = ""
+    #: Whether an index of this NAME may be overwritten, or ``None`` to leave pylance's own default
+    #: in force — which is not one default but two: `create_scalar_index` replaces, `create_index`
+    #: refuses a duplicate name (signatures and behaviour measured on pylance 11.0.0, 2026-09-15).
+    #:
+    #: TRI-STATE rather than a bool, and that is the whole point of the field. The spec's create
+    #: request has no ``replace``, so the spec doors must keep leaving it unset; collapsing this to
+    #: ``False`` would silently flip the scalar lane from replacing to refusing. Only a rask
+    #: control-plane door — the catalog's ``maintenance/reindex``, which exists to rebuild an index
+    #: that is already there — ever sets it, and a vector index cannot be repaired without it.
+    replace: bool | None = None
     #: pylance's OWN keyword arguments (``metric``, ``num_partitions``, ``base_tokenizer``, …),
     #: already translated from the spec request by the producer.
     #:

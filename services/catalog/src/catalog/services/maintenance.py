@@ -31,6 +31,7 @@ from service_kit.lakehouse.features import (
     manifest_feature_flags,
 )
 from service_kit.lakehouse.objectfs import dataset_root_probe
+from service_kit.lakehouse.work_items import VECTOR_INDEX, IndexWorkItem
 
 
 if TYPE_CHECKING:
@@ -348,3 +349,46 @@ def compact_now(
         "fragments_removed": int(getattr(metrics, "fragments_removed", 0) or 0),
         "fragments_added": int(getattr(metrics, "fragments_added", 0) or 0),
     }
+
+
+class IndexableDataset(Protocol):
+    """What a REBUILD needs: the two pylance create doors, plus the version they commit at.
+
+    Structural like its siblings above, and for the same reason — this module is pure over a dataset
+    handle so a fake `ds` can drive it. `version` is declared here and NOT re-read from the store:
+    measured on pylance 11.0.0 (2026-09-15), `create_index(..., replace=True)` advances the open
+    handle's own `version` to the committed one, matching a re-open.
+    """
+
+    @property
+    def version(self) -> int: ...
+
+    def create_index(self, column: str, *, index_type: str, **kwargs: Any) -> Any: ...  # noqa: ANN401 — pylance returns an untyped handle
+
+    def create_scalar_index(self, column: str, *, index_type: str, **kwargs: Any) -> Any: ...  # noqa: ANN401 — as above
+
+
+def rebuild_index_now(ds: IndexableDataset, item: IndexWorkItem) -> int:
+    """[[LH-105]] rebuild one index in this pod, and report the version it landed at.
+
+    The in-pod half of ``maintenance/reindex``, reached only where no index lane is configured — the
+    same queue-or-inline rule ``compact_now`` serves for compaction, and for the same reason: with no
+    worker subscribed, publishing a unit would accept work nothing will ever perform.
+
+    ``replace`` is forwarded FROM THE UNIT rather than decided here, so this path and the worker build
+    the same index from the same description; pylance's own defaults differ by kind, so a value
+    assumed at either end would make the two lanes disagree. The unit's ``params`` are pylance's own
+    keywords, read off the index being repaired — this function has no opinion on them, the rule the
+    work item already states.
+    """
+    kwargs: dict[str, Any] = dict(item.params)
+    if item.name:
+        kwargs["name"] = item.name
+    if item.replace is not None:
+        kwargs["replace"] = item.replace
+    if item.kind == VECTOR_INDEX:
+        ds.create_index(item.column, index_type=item.index_type, **kwargs)
+    else:
+        ds.create_scalar_index(item.column, index_type=item.index_type, **kwargs)
+    log.info("reindex_rebuilt_in_pod", extra={"table_id": item.table_id, "index": item.name, "column": item.column, "kind": item.kind})
+    return int(ds.version)

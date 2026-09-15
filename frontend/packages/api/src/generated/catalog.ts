@@ -2544,6 +2544,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/maintenance/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reindex Maintenance
+         * @description Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
+         *     index that is there, and an unmapped suffix would fall through to the writer rung.
+         *
+         *     **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
+         *     than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
+         *     `create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name
+         *     vector rebuild is refused at the default — ``LanceError(Index): Index name 'x' already exists`` —
+         *     and accepted under ``replace=True``. So the vector index, the one that cannot repair itself
+         *     through the create doors, is repaired by a flag pylance already has. Dropping first would open a
+         *     window in which the table has NO index — a search silently degrading to a full scan — and would
+         *     leave it with none if the rebuild then failed, which is worse than the mis-parameterised index
+         *     being repaired.
+         *
+         *     **THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live
+         *     index's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`
+         *     merges OVER that reading for the caller who is deliberately changing something.
+         *
+         *     WHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service
+         *     reads, so the two cannot disagree about whether a worker exists. With a queue: publish one
+         *     `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
+         *     runs here.
+         */
+        post: operations["reindex_maintenance_v1_table__id__maintenance_reindex_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/maintenance/run": {
         parameters: {
             query?: never;
@@ -8165,6 +8205,75 @@ export interface components {
             tasks?: components["schemas"]["RegisteredTaskResponse"][];
         };
         /**
+         * ReindexAccepted
+         * @description The 202 body: the rebuild was enqueued onto the index lane rather than performed here.
+         *
+         *     It reports no version because it has none — the worker that will produce it is another process,
+         *     and inventing the current version would make an accepted request indistinguishable from a
+         *     completed rebuild. The resolved shape IS returned: it is what the unit will be built from, and it
+         *     is the only chance a caller gets to see that the readback found the parameters it expected.
+         */
+        ReindexAccepted: {
+            /**
+             * Accepted
+             * @default true
+             */
+            accepted: boolean;
+            /** Column */
+            column: string;
+            /** Index Name */
+            index_name: string;
+            /** Index Type */
+            index_type: string;
+            /** Kind */
+            kind: string;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** Transaction Id */
+            transaction_id: string;
+        };
+        /**
+         * ReindexRequest
+         * @description [[LH-105]] rebuild one named index in place, keeping the parameterisation it already has.
+         *
+         *     ``index_name`` is the only required field because the point of the door is REPAIR: the shape is
+         *     read off the live index rather than restated by the caller, so a repair cannot silently re-tune
+         *     what it repairs. ``params`` is the escape hatch for the case the readback cannot serve — a vector
+         *     index being deliberately re-partitioned, or one whose `num_partitions` could not be read — and is
+         *     MERGED OVER the readback rather than replacing it, so overriding one value does not drop the rest.
+         */
+        ReindexRequest: {
+            /** Index Name */
+            index_name: string;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * ReindexResult
+         * @description The 200 body: the rebuild ran in this pod and the index is already back.
+         */
+        ReindexResult: {
+            /** Column */
+            column: string;
+            /** Index Name */
+            index_name: string;
+            /** Index Type */
+            index_type: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Version */
+            version: number;
+        };
+        /**
          * RelationGrants
          * @description One ``can_*`` action and every user subject holding it (``"*"`` = a public wildcard grant).
          */
@@ -13451,6 +13560,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GcPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reindex_maintenance_v1_table__id__maintenance_reindex_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReindexRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReindexResult"] | components["schemas"]["ReindexAccepted"];
+                };
+            };
+            /** @description Enqueued onto the index lane; the rebuilt version does not exist yet. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReindexAccepted"];
                 };
             };
             /** @description Validation Error */

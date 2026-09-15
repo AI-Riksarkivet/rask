@@ -427,6 +427,51 @@ class CompactAccepted(BaseModel):
     protected_by: str | None = None
 
 
+class ReindexRequest(BaseModel):
+    """[[LH-105]] rebuild one named index in place, keeping the parameterisation it already has.
+
+    ``index_name`` is the only required field because the point of the door is REPAIR: the shape is
+    read off the live index rather than restated by the caller, so a repair cannot silently re-tune
+    what it repairs. ``params`` is the escape hatch for the case the readback cannot serve — a vector
+    index being deliberately re-partitioned, or one whose `num_partitions` could not be read — and is
+    MERGED OVER the readback rather than replacing it, so overriding one value does not drop the rest.
+    """
+
+    index_name: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReindexResult(BaseModel):
+    """The 200 body: the rebuild ran in this pod and the index is already back."""
+
+    ok: bool = True
+    index_name: str
+    column: str
+    kind: str
+    index_type: str
+    #: The dataset version the rebuilt index was committed at, so a caller can tell a real rebuild
+    #: from a no-op.
+    version: int
+
+
+class ReindexAccepted(BaseModel):
+    """The 202 body: the rebuild was enqueued onto the index lane rather than performed here.
+
+    It reports no version because it has none — the worker that will produce it is another process,
+    and inventing the current version would make an accepted request indistinguishable from a
+    completed rebuild. The resolved shape IS returned: it is what the unit will be built from, and it
+    is the only chance a caller gets to see that the readback found the parameters it expected.
+    """
+
+    accepted: bool = True
+    index_name: str
+    column: str
+    kind: str
+    index_type: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    transaction_id: str
+
+
 # --------------------------------------------------------------------------- #
 # Maintenance policy (#50 / #76)
 # --------------------------------------------------------------------------- #

@@ -223,6 +223,12 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
         "maintenance/compact": "can_drop",
+        # [[LH-105]] rebuilding an index REPLACES the one that is there, so the index the table had is
+        # gone whether or not the new one lands — the drop rung, like every other verb under this
+        # sub-path. Mapped explicitly: the fall-through for an unmapped table suffix is `can_write_data`,
+        # which would let a plain data writer replace an owner's tuned index with a default-shaped one
+        # and leave the table answering queries the whole time.
+        "maintenance/reindex": "can_drop",
         # #73 deletion protection: arming/disarming the safety on an object is a statement about its
         # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
         # able to disarm protection they could never act on. (An unmapped suffix would fall through
