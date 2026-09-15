@@ -5048,6 +5048,29 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 - *Why a ratchet and not a ban:* a test demanding zero would be red the moment it landed and skipped
   within a week. The 12 sidecar-bearing entries are counted separately because they are the cheapest —
   the mechanism is already in the pod, so migrating them needs no chart plumbing at all.
+- **THE MECHANISM FOR THE SIDECAR TWELVE ALREADY EXISTS, AND THE BLOCKER IS ONE ACCESSOR — designed
+  2026-09-15 so the next pass starts from a measurement rather than a survey.**
+  `service_kit.governed.secrets.apply_dapr_secrets` is exactly the right shape and is already live for
+  four services: when `secrets_from_dapr` is on **the chart omits the value from env entirely** and the
+  service fetches the bundle from the local sidecar (`GET /v1.0/secrets/<store>/<key>`) at boot, as the
+  STRICT sole source, failing closed. It already RETURNS the whole bundle so a second field costs no
+  second fetch — that is how lineage's AGE password rides the same call.
+  *So `APP_API_TOKEN` is a bundle field plus a chart edit… except for one thing.*
+- **`DaprDoorSettings()` IS CONSTRUCTED PER CALL, which is what stops the splice reaching the door.**
+  `dapr_auth.py:134` and `:310` do `DaprDoorSettings().app_api_token` on EVERY request, reading the
+  environment each time; `apply_dapr_secrets` splices onto the object `get_settings()` cached, which
+  this never consults. Remove the env var today and the door reads `None` — and `:137`'s guard is
+  `if expected and not compare_digest(...)`, so a `None` expected value makes the comparison **skip
+  entirely**: every inbound Dapr call would be accepted unauthenticated. `assert_app_token_configured`
+  would catch it at boot (`:146`) only for services that call it.
+  *That is why this is not a chart edit.* The token must move to a boot-resolved accessor before the
+  env var is removed, and the two halves cannot ship in either order safely: removing env first opens
+  the door, changing the accessor first is inert but harmless. **Accessor first, then chart, then
+  observe** — and the observation must be a real Dapr delivery, not a boot log.
+- *NOT a bootstrap paradox, which is the obvious objection and is wrong:* the fetch is app->sidecar
+  (outbound, guarded by `dapr-api-token`), while `APP_API_TOKEN` guards sidecar->app (inbound). The
+  boot fetch completes in the lifespan before the first request is served, so there is no circularity —
+  only the accessor problem above.
 - *Closes when:* the baseline reaches 0 (excluding [[LH-161]]), with the sidecar-bearing twelve first.
 
 **LH-161 · The GreptimeDB subchart pulls a whole Secret into its environment via `envFrom`**
