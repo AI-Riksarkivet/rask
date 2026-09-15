@@ -46,6 +46,10 @@ class _Result:
     old_versions_removed = 5
     bytes_removed = 7567
     indices_optimized = 2
+    # THE DOUBLE CARRIES WHAT THE RECORD NAMES, and this field is why that rule is written above: the
+    # record gained `duration_seconds` ([[LH-098]]) and every test here failed with AttributeError
+    # rather than passing on a double that had quietly fallen behind the real model.
+    duration_seconds = 4.25
     # The app-log half of the funnel names the three NON-outcomes too, so a double that omits
     # them cannot reach the audit call below it.
     refused = ""
@@ -94,6 +98,10 @@ def test_a_rewrite_is_recorded_against_the_object_it_rewrote(caplog) -> None:
     assert getattr(rec, "audit.fragments_removed") == 3
     assert getattr(rec, "audit.old_versions_removed") == 5
     assert getattr(rec, "audit.bytes_removed") == 7567
+    # HOW LONG, not only how much ([[LH-098]]). A trail that says what a pass achieved and never how
+    # long it took cannot answer "was that compaction slow", which is the shape a tenant notices before
+    # anything fails — and counts alone cannot show it.
+    assert getattr(rec, "audit.duration_seconds") == 4.25
 
 
 def test_a_converged_dataset_records_NOTHING(caplog) -> None:

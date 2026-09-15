@@ -140,6 +140,15 @@ def test_the_reduced_verdict_still_REFUSES_a_dataset_another_manifest_resolves_t
     assert allowed.refused is None, f"an unprotected dataset was refused: {allowed.refused}"
     assert allowed.fragments_removed > 0, "the control did no work, so the refusal above proves nothing"
 
+    # HOW LONG THE PASS TOOK, measured on the shipped path rather than asserted on a double
+    # ([[LH-098]]: the trail recorded what a pass achieved and never its duration). Asserted HERE, on a
+    # run that really opened and rewrote a Lance dataset, because the audit-record test can only show
+    # the field TRAVELS — delete the timing and that one still passes on its double while this one
+    # reds. A positive float, not merely non-None: a timer wired to a constant would satisfy the
+    # weaker check.
+    assert allowed.duration_seconds is not None, "a real compaction reported no duration — the pass is not timed"
+    assert allowed.duration_seconds > 0, f"the pass reported a non-positive duration: {allowed.duration_seconds}"
+
 
 def test_the_planner_CARRIES_the_pre_passs_verdict_into_the_item(monkeypatch: object) -> None:
     """The reduction must actually happen, and nothing else in the suite notices if it stops.

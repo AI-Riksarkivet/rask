@@ -16,6 +16,7 @@ import random
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from time import perf_counter
 from typing import Any
 
 import lance
@@ -592,6 +593,11 @@ def _maintain_one(
             skipped_result = DatasetResult(uri=uri, skipped=plan.skipped)
             _record_dataset_outcome(skipped_result, subject=settings.catalog_service_identity)
             return skipped_result
+        # TIMED AROUND THE REWRITE ITSELF, not the whole span: the skip above returns before any
+        # dataset is opened, and [[LH-098]] wants "how long did this pass take" to mean the work, not
+        # the decision not to do it. `perf_counter` rather than wall time because this measures a
+        # DURATION — it is monotonic and immune to a clock step mid-compaction.
+        started = perf_counter()
         result = compact_one(
             uri,
             options,
@@ -612,6 +618,8 @@ def _maintain_one(
             auto_cleanup_interval_commits=plan.auto_cleanup_interval_commits,
             index_columns=plan.index_columns,
         )
+        result.duration_seconds = round(perf_counter() - started, 3)
+        span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
             span.set_attribute("lance.maintenance.refused", result.refused)
         if result.error is not None:
@@ -883,6 +891,10 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
         old_versions_removed=result.old_versions_removed,
         bytes_removed=result.bytes_removed,
         indices_optimized=result.indices_optimized,
+        # [[LH-098]]: what the pass ACHIEVED was recorded and how long it took was not, so a tenant
+        # asking "which compaction rewrote my table, and was it slow" had only the counts. Absent on a
+        # record whose pass was never timed rather than reported as 0.
+        duration_seconds=result.duration_seconds,
     )
 
 

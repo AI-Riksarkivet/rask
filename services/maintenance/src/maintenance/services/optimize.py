@@ -106,6 +106,13 @@ class DatasetResult(BaseModel):
     # Stable identifier for span aggregation (otel attributes.md: set `error.type` whenever the span
     # status is ERROR) — the exception CLASS name, never the message.
     error_type: str | None = None
+    #: Wall-clock seconds this dataset's pass took, or None when nothing was attempted (a refusal or a
+    #: trash exclusion decided WITHOUT opening the dataset). [[LH-098]]: the reclamation trail recorded
+    #: what a pass achieved and never how long it took, so "which compaction rewrote my table, and was
+    #: it slow" had no answer — and a pass that is slow rather than failing is the shape an operator
+    #: cannot see from counts alone. None rather than 0.0 because a decision that did no work and a
+    #: pass that took no measurable time are different facts, and 0.0 would merge them.
+    duration_seconds: float | None = None
 
 
 class Discovery(BaseModel):
