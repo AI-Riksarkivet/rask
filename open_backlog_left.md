@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**224 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**225 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 12 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 52 | 11 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -5088,6 +5088,38 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 - *Closes when:* the subchart takes the credential by file or the estate overrides that template — or
   an owner records that a third-party subchart's own env handling is out of scope, which is a
   defensible answer but must be written rather than assumed.
+
+**LH-162 · `require_dapr_token` SKIPS the comparison when no token is configured, and one live service has none**
+`service-kit` · **HIGH** · found 2026-09-15 while designing [[LH-160]]; confirmed against the running pod
+
+- *The mechanism:* `dapr_auth.py:137` is `if expected and not secrets.compare_digest(...)`. When
+  `expected` is falsy the comparison is **skipped entirely** and the request is accepted. So an absent
+  `APP_API_TOKEN` does not close the door — it opens it. The estate's posture everywhere else is
+  fail-CLOSED; this one seam fails open.
+- *The guard against that is per-service and two services do not call it.* `assert_app_token_configured`
+  refuses to boot when Dapr is on and the token is unset, but it is called by `catalog`, `compute`,
+  `lineage`, `maintenance`, `medallion` and `notifications` — while `annotator` and `ingest` also USE
+  `require_dapr_token` and never assert. A protection each caller must remember is one some caller will
+  not.
+- **CONFIRMED LIVE ON `rask-annotator`, 2026-09-15**, not inferred: the Deployment renders no
+  `APP_API_TOKEN` at all; in the running pod `DaprDoorSettings().app_api_token` is `None`; and
+  `GET /dapr/config` — a route `guard_actor_routes` applies `require_dapr_token` to — answers **200 with
+  no token**. The annotator is an ACTOR HOST, so its actor plane currently accepts any caller that can
+  reach the pod.
+- *Scope, stated so it is neither under- nor over-sold:* this is an IN-CLUSTER surface, not an internet
+  one — the ingress publishes `/api` through the gateway, not the actor routes. `ingest` does carry the
+  token, so it is guarded today by configuration rather than by code. The exposure is lateral movement
+  from any pod, which is precisely what the Dapr app token exists to stop.
+- **IT ALSO BLOCKS [[LH-160]], which is how it was found.** Migrating `APP_API_TOKEN` out of pod env
+  means `expected` becomes absent at exactly this line for every service — turning a secrets-hygiene
+  change into an estate-wide authentication bypass. The door must fail closed BEFORE the env var moves.
+- *The decision this needs, because the obvious fix has a cost:* failing closed on an absent token would
+  break any deployment that runs Dapr ingest without one — the `rask-dapr` skill records the skip as a
+  documented dev no-op. Either dev grows a token, or the no-op becomes explicit (an opt-in flag that
+  must be SET to allow an unauthenticated door, so the open state is chosen rather than inherited).
+  The second is the estate's usual shape and is the recommendation.
+- *Closes when:* an absent expected token refuses rather than accepts, `annotator` answers 401 on
+  `/dapr/config`, and the behaviour is pinned by a test that fails if the comparison is ever skipped.
 
 ## PHASE 2 · COMPUTE
 
