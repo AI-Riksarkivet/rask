@@ -32,5 +32,7 @@ def test_the_stage_runner_forward_header_comes_from_settings() -> None:
     """The sender-side header must track the settings object it is handed, not the process env."""
     settings = MedallionSettings.model_validate({"app_api_token": "tok-typed"})
     assert stage_runner_ops._app_token_header(settings) == {"dapr-api-token": "tok-typed"}
-    # The open dev default (no token configured) sends no header, matching the stage runner's no-op check.
+    # No token configured = no header, rather than an empty one: the receiving door refuses either way,
+    # and a blank `dapr-api-token` would read as a caller that tried and failed rather than one that
+    # never had a credential to send.
     assert stage_runner_ops._app_token_header(MedallionSettings.model_validate({"app_api_token": ""})) == {}

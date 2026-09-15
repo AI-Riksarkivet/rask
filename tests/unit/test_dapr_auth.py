@@ -26,10 +26,32 @@ from service_kit.lakehouse.ns_errors import problem_detail
 # --------------------------------------------------------------------------- #
 
 
-def test_open_when_token_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CONTRACT: no APP_API_TOKEN = the open dev default — any (or no) header passes.
-    ``assert_app_token_configured`` makes that a startup error once a sidecar route mounts."""
+def test_closed_when_token_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONTRACT ([[LH-162]], owner 2026-09-15): no APP_API_TOKEN = REFUSE, not the open dev default.
+
+    This test previously asserted the opposite, and it was pinning a live defect rather than a
+    behaviour: `assert_app_token_configured` turns an unset token into a startup error only for the
+    services that CALL it, and two did not. Measured on the deployed estate — `rask-annotator` carried
+    no token and answered 200 on a Dapr-guarded route to a caller presenting none.
+
+    The dev convenience did not disappear; it became explicit. `RASK_ALLOW_UNAUTHENTICATED_DAPR` still
+    permits an unconfigured door, so an open one is now chosen rather than inherited from an empty
+    variable — see `test_the_open_door_is_available_but_must_be_asked_for` below.
+    """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
+
+    with pytest.raises(PermissionDeniedError, match="not configured"):
+        require_dapr_token("anything")
+    with pytest.raises(PermissionDeniedError, match="not configured"):
+        require_dapr_token(None)
+
+
+def test_the_open_door_is_available_but_must_be_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dev path this file used to get for free, kept — and now costing one deliberate variable."""
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
+
     require_dapr_token("anything")
     require_dapr_token(None)
 

@@ -458,7 +458,22 @@ def test_the_dapr_door_reads_its_environment_through_a_settings_class() -> None:
     ]
     assert env_reads == [], f"dapr_auth still reads the environment outside its settings class: {env_reads}"
     declared = {name: field.alias for name, field in dapr_auth.DaprDoorSettings.model_fields.items()}
-    assert declared == {"app_api_token": "APP_API_TOKEN", "public_callers": "RASK_PUBLIC_CALLERS"}
+    assert declared == {
+        "app_api_token": "APP_API_TOKEN",
+        "public_callers": "RASK_PUBLIC_CALLERS",
+        # The explicit opt-in for an UNCONFIGURED door. Enumerated here rather than allowed by a
+        # wildcard, because this class is the door's whole environment surface and a field that can
+        # turn authentication off is exactly the one worth naming in a gate.
+        "allow_unauthenticated_dapr": "RASK_ALLOW_UNAUTHENTICATED_DAPR",
+        # WHERE THE EXPECTED TOKEN COMES FROM. `RASK_APP_TOKEN_FROM_STORE` switches the door onto the
+        # Dapr secret store so the token never travels through the environment, and the other three
+        # address the bundle. They are configuration, not credentials — the value stays in OpenBao —
+        # which is why naming them in a gate about the door's env surface is safe and useful.
+        "app_token_from_store": "RASK_APP_TOKEN_FROM_STORE",
+        "secret_store": "RASK_SECRET_STORE",
+        "secret_key": "RASK_DAPR_SECRET_KEY",
+        "app_token_field": "RASK_APP_TOKEN_FIELD",
+    }
 
 
 def test_the_secret_fetch_uses_the_injected_sidecar_port(monkeypatch: pytest.MonkeyPatch) -> None:

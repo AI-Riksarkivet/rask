@@ -96,14 +96,34 @@ def test_the_right_token_reaches_the_handler(monkeypatch: pytest.MonkeyPatch) ->
     assert response.status_code != 403, "a correctly-authenticated sidecar delivery was refused"
 
 
-def test_the_dev_default_still_reaches_the_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`APP_API_TOKEN` unset is the open dev default, and the token check is a no-op there.
+def test_an_UNCONFIGURED_door_refuses_every_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`APP_API_TOKEN` unset REFUSES — it is not the open dev default this test used to assert.
 
-    That is not a hole this test is blessing: `assert_app_token_configured` makes an unset token a
-    STARTUP error once Dapr ingest is enabled, so the no-op can only ever apply in dev — and the
-    public-caller refusal above still holds even here.
+    The blessing it used to carry rested on a claim that was false for this very service: that
+    `assert_app_token_configured` turns an unset token into a startup error. Annotator does not call
+    it, so the no-op was not confined to dev at all. Measured 2026-09-15 on the deployed estate —
+    `rask-annotator` rendered no `APP_API_TOKEN`, and this corpus-scale route answered a caller
+    presenting none.
+
+    The dev path is now `RASK_ALLOW_UNAUTHENTICATED_DAPR`, asserted below: an open door is chosen,
+    never inherited from an unset variable.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
+
+    response = _client().post("/api/jobs/apply", json=BODY)
+
+    assert response.status_code == 403
+
+
+def test_the_DELIBERATE_dev_default_still_reaches_the_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local loop keeps working without a token — once someone says so out loud.
+
+    The public-caller refusal above still holds even here, which is why the opt-in opens a door for a
+    sidecar delivery and never for a front-door proxy.
+    """
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
 
     response = _client().post("/api/jobs/apply", json=BODY)
 

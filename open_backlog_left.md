@@ -5067,6 +5067,17 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   env var is removed, and the two halves cannot ship in either order safely: removing env first opens
   the door, changing the accessor first is inert but harmless. **Accessor first, then chart, then
   observe** — and the observation must be a real Dapr delivery, not a boot log.
+- **THE ACCESSOR LANDED 2026-09-15, with [[LH-162]].** It is not the `apply_dapr_secrets` splice this
+  row designed: that writes onto the object `get_settings()` cached, which this door never consults.
+  `expected_app_token()` resolves at the door instead, cached per process through the bundle cache the
+  module already had — so the per-request cost stays a dict lookup and no service needs a lifespan
+  edit. `RASK_APP_TOKEN_FROM_STORE` is the per-deployment switch; on, the store is the STRICT sole
+  source and `APP_API_TOKEN` is not read at all, because a fallback would let a store outage promote a
+  stale env value back to authoritative.
+- *So the sidecar twelve are now a CHART FLIP, not a code change:* seed `dapr-app-token` (already
+  seeded into `secret/lance`), add `RASK_APP_TOKEN_FROM_STORE`, drop the `secretKeyRef` row — ten
+  `APP_API_TOKEN` entries off the baseline. `annotator` is the first and is the proof: it is on the
+  store path with no env row at all. The two `MEDIA_S3_ACCESS_KEY_ID` entries are a separate seam.
 - *NOT a bootstrap paradox, which is the obvious objection and is wrong:* the fetch is app->sidecar
   (outbound, guarded by `dapr-api-token`), while `APP_API_TOKEN` guards sidecar->app (inbound). The
   boot fetch completes in the lifespan before the first request is served, so there is no circularity —
@@ -5113,13 +5124,27 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 - **IT ALSO BLOCKS [[LH-160]], which is how it was found.** Migrating `APP_API_TOKEN` out of pod env
   means `expected` becomes absent at exactly this line for every service — turning a secrets-hygiene
   change into an estate-wide authentication bypass. The door must fail closed BEFORE the env var moves.
-- *The decision this needs, because the obvious fix has a cost:* failing closed on an absent token would
-  break any deployment that runs Dapr ingest without one — the `rask-dapr` skill records the skip as a
-  documented dev no-op. Either dev grows a token, or the no-op becomes explicit (an opt-in flag that
-  must be SET to allow an unauthenticated door, so the open state is chosen rather than inherited).
-  The second is the estate's usual shape and is the recommendation.
-- *Closes when:* an absent expected token refuses rather than accepts, `annotator` answers 401 on
-  `/dapr/config`, and the behaviour is pinned by a test that fails if the comparison is ever skipped.
+- **DECIDED (owner, 2026-09-15): the opt-in flag.** Failing closed outright would break any deployment
+  running Dapr ingest without a token — the `rask-dapr` skill records the skip as a documented dev
+  no-op — so the default is inverted rather than the behaviour removed: `RASK_ALLOW_UNAUTHENTICATED_DAPR`
+  must be SET for an open door, which makes an open one chosen and greppable.
+- **IT WAS NOT SHIPPABLE ALONE, and that is the whole reason [[LH-160]]'s accessor landed with it.**
+  `rask-annotator` carries `dapr.io/app-token-secret`, so daprd DOES stamp a valid header on every
+  callback it makes — including `GET /dapr/config`, which it calls to learn the app's actor types.
+  Closing the door while the app still had nothing to compare against would have 403'd daprd's own
+  callback and taken the annotator's actor plane down on the next roll. The token had to arrive first,
+  and it could not arrive as a `secretKeyRef` env row like its eleven siblings without taking the
+  banned path.
+- *Landed:* the door refuses an unconfigured state; `expected_app_token()` is one resolver for all
+  three consumers; `RASK_APP_TOKEN_FROM_STORE` switches it onto the Dapr secret store as the STRICT
+  sole source; an unreadable store answers 503 rather than 403 so a sidecar keeps retrying; and a
+  bundle answering without the field drops the cache, so the chart's seed Job and the pod may roll in
+  either order. `test_every_dapr_door_has_a_token_to_check.py` joins the two halves that were each
+  tested separately — it derives which packages call `require_dapr_token` from the source tree and
+  which Deployments run them from the render, so a service that starts guarding a door is covered the
+  day it does.
+- *Closes when:* observed live — `rask-annotator` refuses a Dapr-guarded route to a caller presenting
+  no token, and its actor plane still answers, both against a real delivery rather than a boot log.
 
 ## PHASE 2 · COMPUTE
 

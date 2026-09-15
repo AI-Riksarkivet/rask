@@ -90,10 +90,11 @@ def test_require_dapr_token_REFUSES_a_public_caller_even_with_a_valid_token(monk
 
 
 def test_require_dapr_token_REFUSES_a_public_caller_even_in_DEV(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unset APP_API_TOKEN is the open dev default for the TOKEN check — not for this one.
+    """The front-door refusal comes FIRST, so it holds whatever the token check would have answered.
 
-    With no token configured the token comparison is a no-op, so if the public-caller refusal were
-    conditional on it, dev would have no guard at all on routes that are sidecar-only by design.
+    Both branches refuse here, which is why the ORDER is what this pins: a deployment that has taken
+    the `RASK_ALLOW_UNAUTHENTICATED_DAPR` hatch still refuses a front door, and it can only do that if
+    the caller check runs before the token check rather than after it.
     """
     # `PermissionDeniedError`, not `HTTPException`: the guard raises a DOMAIN error now so its 403
     # wears the estate's problem+json envelope (open_fastapi-audit).

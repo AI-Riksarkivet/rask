@@ -123,6 +123,23 @@ spec:
             - { name: ANNOTATOR_CONTROL_EMIT_ENABLED, value: "true" }
             - { name: ANNOTATOR_CONTROL_PUBSUB, value: {{ $root.Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
             {{- end }}
+            {{- if and (eq $name "annotator") (include "lance.secretsViaDapr" $root) }}
+            # THE APP-API TOKEN, FROM THE STORE — never from env, which is the estate's rule and the
+            # reason this row exists at all. The annotator guards `/api/jobs/apply` and the whole
+            # `DaprActor` callback surface with `require_dapr_token`, and daprd stamps the header
+            # (`dapr.io/app-token-secret`, above) — but nothing ever told the APP what to compare
+            # against. Measured 2026-09-15 on the running pod: no `APP_API_TOKEN`, and `/dapr/config`
+            # answered 200 to a caller presenting no token.
+            #
+            # The eleven siblings close that hole with a `secretKeyRef` env row; this one does not,
+            # because a `secretKeyRef` IS a secret through the environment. `lance-secrets` is already
+            # scoped to `annotator` (verified against the live Component), so the sanctioned path was
+            # in the pod the whole time and only the accessor was missing.
+            #
+            # NOT a policy flag with a secret in it: the VALUE stays in OpenBao. What is rendered here
+            # is which source to read, which is configuration.
+            - { name: RASK_APP_TOKEN_FROM_STORE, value: "true" }
+            {{- end }}
             - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.explorer.readBackend | quote }} }
             - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.explorer.writeBackend | quote }} }
             - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.explorer.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }

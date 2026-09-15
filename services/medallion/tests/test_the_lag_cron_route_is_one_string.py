@@ -70,13 +70,12 @@ def test_it_answers_OPTIONS_as_well_as_POST() -> None:
 
 
 def test_the_door_REFUSES_a_front_door_invocation() -> None:
-    """The guard's UNCONDITIONAL half, and the only one a test can assert without a configured token.
+    """The guard's UNCONDITIONAL half: refused for WHO invoked, not for what it presented.
 
-    `require_dapr_token`'s token check is a no-op when `APP_API_TOKEN` is unset — the open dev default,
-    made a startup error by `assert_app_token_configured` once Dapr ingest is on. Asserting 401 here
-    would therefore be asserting the dev default, not the guard. The public-caller refusal is
-    deliberately NOT conditional on the token, because this route is sidecar-delivery-only by
-    construction and a front-door invocation of it is never legitimate in any environment.
+    The token check refuses an unconfigured door too, so a bare 401/403 here would not tell the two
+    apart. This case is pinned because it survives the `RASK_ALLOW_UNAUTHENTICATED_DAPR` hatch: this
+    route is sidecar-delivery-only by construction, so a front-door invocation of it is never
+    legitimate in any environment, including one deliberately running unauthenticated.
     """
     client, _ = _client("medallion-cascade-lag-cron")
     # `gateway` is the estate's declared public front door (`_DEFAULT_PUBLIC_CALLERS`). An ABSENT

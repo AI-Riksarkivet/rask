@@ -178,10 +178,11 @@ services:
     governedAuth: true
     lanceWriter: true
     # NOT a `daprIngest` service, and that distinction is the whole reason the flag exists. Here
-    # APP_API_TOKEN is a POLICY input the door reads per request (unset == dev-open), so it is armed
-    # only alongside the user door — the fleet.yaml block states both arms. A `daprIngest` service
-    # instead REFUSES TO START without it. Written out rather than left absent: absence is exactly what
-    # let this token ride `lanceWriter`, an unrelated storage flag, for a release.
+    # APP_API_TOKEN is read per request by `require_dapr_token`, which REFUSES when it is unset, so it
+    # is armed only alongside the user door — the fleet.yaml block states both arms. A `daprIngest`
+    # service instead refuses to START without it, which is the same answer given earlier and louder.
+    # Written out rather than left absent: absence is exactly what let this token ride `lanceWriter`,
+    # an unrelated storage flag, for a release.
     daprIngest: false
     env:
       # Lineage is both WRITTEN and READ here, and the two need different halves of one service.

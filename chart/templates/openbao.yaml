@@ -10,8 +10,11 @@
 # outage at first use, not a fallback): minio-secret-key, postgres-password, publisher-oidc-password,
 # publisher-oidc-client-secret (the Dex client secret — added 2026-08-08 when the last plaintext env
 # credential moved behind the guard; "the last" was wrong, see below), dapr-state-connection-string,
-# plus one service-token-<identity> per subject listed in any *_PRIVILEGED_SUBJECTS. The devMode seed
-# below is the authoritative list — keep this comment and that `bao kv put` in sync.
+# dapr-app-token (the app-API token, for any pod whose doors read it from here rather than from env —
+# it must equal the value the `dapr-app-token` Secret holds, since daprd stamps the header from that
+# Secret and the app compares against this field), plus one service-token-<identity> per subject listed
+# in any *_PRIVILEGED_SUBJECTS. The devMode seed below is the authoritative list — keep this comment and
+# that `bao kv put` in sync.
 #
 # TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
 # the MinIO StatefulSet's STS AssumeRoleWithWebIdentity config — there is one Dex client (`dex.clientId`),
@@ -170,6 +173,17 @@ spec:
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
                 publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
                 dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable" \
+                {{- /* THE APP-API-TOKEN, so a pod can authenticate its Dapr doors without the value
+                       passing through its environment. `dapr.io/app-token-secret` gives the SIDECAR the
+                       token; the APP has been getting it as a `secretKeyRef` env row, which is a
+                       Kubernetes Secret injected as an environment variable — the path the estate's
+                       secrets rule names and refuses. A pod with a sidecar can read this bundle, so
+                       `RASK_APP_TOKEN_FROM_STORE` points its doors here instead.
+                       SAME VALUE as the Secret `dapr-app-token.yaml` renders, and it has to be: daprd
+                       stamps the header from that Secret, and the app compares against this field. Two
+                       sources for one comparison is why they are both `.Values.dapr.appToken` rather
+                       than independently generated. */}}
+                dapr-app-token={{ .Values.dapr.appToken }} \
                 {{- /* THE COMPUTE PLANE'S SCOPED PAIR. `external-secrets.yaml` READS these two
                        properties out of this secret, and until 2026-09-09 nothing WROTE them — they
                        existed only in `infra-credentials.yaml`, which renders on the ESO-OFF path.

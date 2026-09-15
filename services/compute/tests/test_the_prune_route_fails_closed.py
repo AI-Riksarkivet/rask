@@ -1,10 +1,11 @@
 """The prune route's guard is real only when the app holds the token, and the app must refuse to boot without it.
 
-`require_dapr_token` compares the sidecar's `dapr-api-token` header against the app's `APP_API_TOKEN`
-and, by its own docstring, is a no-op when that variable is unset — "the open dev default", made safe
-because `assert_app_token_configured` "makes that a startup error once Dapr ingest is actually
-enabled, so the no-op can only apply in dev." Every sibling that hosts a sidecar-delivered route calls
-it at boot (catalog, lineage, maintenance, both medallion apps). `compute` did not.
+`require_dapr_token` compares the sidecar's `dapr-api-token` header against the app's `APP_API_TOKEN`.
+An unset variable is now refused at the door itself, but that is a per-request 403 on a route the
+sidecar expects to deliver to — a pod that boots into it is a pod whose binding silently stops working.
+`assert_app_token_configured` is the earlier and louder answer, and every sibling hosting a
+sidecar-delivered route calls it at boot (catalog, lineage, maintenance, both medallion apps).
+`compute` did not.
 
 Measured on the deployed estate, 2026-09-02: the compute pod's Dapr SIDECAR carried `APP_API_TOKEN`
 (so it stamps every delivery) while the APP container carried none — the chart renders the variable

@@ -664,6 +664,15 @@ def _chart_rendered_envs() -> set[str]:
 #: An entry here is a claim that the SHIPPED release is correct without the variable. It is not a
 #: parking space: a setting whose absence loses work belongs in `_UNWIRED_DEBT` below.
 _UNWIRED_BY_DESIGN: Final[dict[str, str]] = {
+    # NEVER RENDERED, AND THAT IS THE MECHANISM. [[LH-162]]: `require_dapr_token` now REFUSES when
+    # `APP_API_TOKEN` is unset — it used to skip the comparison and accept, which is how an actor host
+    # with no token answered 200 to a caller presenting none. This flag is the deliberate escape hatch
+    # for a deployment that genuinely wants an unauthenticated door.
+    #
+    # Wiring it from the chart would recreate exactly the defect it closes: an open door inherited from
+    # a rendered default nobody chose. It has to be set by hand, by somebody who means it, which is why
+    # its absence from every values file is the design rather than an oversight.
+    "RASK_ALLOW_UNAUTHENTICATED_DAPR": "an unauthenticated Dapr door must be chosen by hand, never rendered",
     # DERIVE. `Settings.registry_root` is `control_root or root`, so an unset control root puts the
     # warehouse registry in the catalog's own bucket — which is where a single-bucket estate wants it.
     "LANCE_CONTROL_ROOT": "empty derives the registry root from LANCE_REST_ROOT",

@@ -9,19 +9,23 @@ delivers. This dependency rejects any delivery whose header doesn't match.
 
 Defense-in-depth (the token is one layer): the ``pubsub.jetstream`` component is **scoped** to the
 trusted app-ids (only they can publish to the topic), the gateway **blocks** these routes from external
-traffic, and the route is only registered when Dapr is enabled. No ``APP_API_TOKEN`` set = the open dev
-default (documented); set it in any deployment that must be trusted.
+traffic, and the route is only registered when Dapr is enabled.
+
+**An unconfigured door REFUSES.** No ``APP_API_TOKEN`` means no caller can be authenticated, and a
+guard that cannot authenticate must not admit — ``RASK_ALLOW_UNAUTHENTICATED_DAPR`` is the one way to
+run open, and it has to be set by hand.
 """
 
 from __future__ import annotations
 
 import functools
+import logging
 import secrets
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Final
 
 from fastapi import FastAPI, Header, Request
-from lance_namespace import PermissionDeniedError
+from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.responses import Response
@@ -40,13 +44,16 @@ from starlette.responses import Response
 _DEFAULT_PUBLIC_CALLERS = "gateway"
 
 
+log = logging.getLogger(__name__)
+
+
 class DaprDoorSettings(BaseSettings):
     """Everything this module reads from the environment, in ONE declared place (SKG-10).
 
     It was four bare ``os.environ.get`` calls — three of them naming ``APP_API_TOKEN`` in three
     functions — so the variables this door depends on were discoverable only by grep, and a typo in
-    any one of them degraded silently to the open dev default rather than failing. A settings class
-    makes the set enumerable and each read one lookup against a declared field.
+    any one of them read as "unconfigured" at a different site than the one that was misspelt. A
+    settings class makes the set enumerable and each read one lookup against a declared field.
 
     Constructed PER READ, never cached. The process environment is the source of truth for both
     values and it is what the estate's tests and an operator manipulate; a module-level instance would
@@ -66,6 +73,40 @@ class DaprDoorSettings(BaseSettings):
     #: ``dapr.io/app-token-secret``; renaming it to ``RASK_*`` would simply mean the sidecar sets a
     #: variable nothing reads and this door authenticates against nothing.
     app_api_token: str | None = Field(default=None, alias="APP_API_TOKEN")
+
+    #: Permit an UNCONFIGURED door — never a wrong token. Owner decision 2026-09-15.
+    #:
+    #: THE LOCAL LOOP IS WHY AN OPEN DOOR EXISTS AT ALL: `make dev-micro` runs these apps with no
+    #: sidecar and no secret store, so every Dapr-guarded route would be unreachable without it. What
+    #: the flag buys over an implicit skip is that the decision is made by a person and is greppable —
+    #: an estate-wide search finds every deployment running open, which an absent variable cannot be.
+    #:
+    #: Measured 2026-09-15, which is why it is opt-IN rather than opt-out: `rask-annotator` carried no
+    #: `APP_API_TOKEN` and its sidecar-only `/dapr/config` answered 200 to a caller presenting none.
+    #: Nothing in the render, the chart or a probe distinguished that from a configured door.
+    allow_unauthenticated_dapr: bool = Field(default=False, alias="RASK_ALLOW_UNAUTHENTICATED_DAPR")
+
+    #: Resolve the expected token from the Dapr SECRET STORE rather than from the environment.
+    #:
+    #: The estate rule is that a secret never travels through env — not process env, not a k8s Secret
+    #: via `secretKeyRef`, which is what `APP_API_TOKEN` is today for eleven deployments. A pod with a
+    #: sidecar already has the sanctioned path in it (`GET /v1.0/secrets/<store>/<key>`), so this is a
+    #: per-deployment switch onto it rather than new plumbing.
+    #:
+    #: A MODE, NOT A FALLBACK CHAIN. On, the store is the STRICT sole source and `APP_API_TOKEN` is not
+    #: consulted at all — a chain would mean a store outage silently promoted a stale env value back to
+    #: authoritative, which is the failure the rule exists to prevent. Off, env, exactly as before. That
+    #: is the same shape `apply_dapr_secrets` already uses for the S3 credential.
+    app_token_from_store: bool = Field(default=False, alias="RASK_APP_TOKEN_FROM_STORE")
+
+    #: Which bundle holds it. The names match the per-service `*_DAPR_SECRET_STORE` / `*_DAPR_SECRET_KEY`
+    #: settings the lance services already carry, so a deployment configures ONE store, not two.
+    secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
+    secret_key: str = Field(default="lance", alias="RASK_DAPR_SECRET_KEY")
+    #: The field within the bundle. Hyphenated because that is how every other field in `secret/lance`
+    #: is spelled (`catalog-s3-secret-key`, `service-token-<identity>`) — an underscore here would read
+    #: as an env var, which is the one thing this value must never be.
+    app_token_field: str = Field(default="dapr-app-token", alias="RASK_APP_TOKEN_FIELD")
 
     #: The public front-door app-ids (comma-separated). ONE list for the whole estate — a per-service
     #: setting would let one deployment forget an edge the others know about, and the set is a
@@ -97,6 +138,51 @@ def is_public_caller(caller: str | None) -> bool:
     return caller.strip().lower() in public_callers()
 
 
+def expected_app_token() -> str | None:
+    """The token every door on this app authenticates against — from the store, or from env.
+
+    ONE resolver for all three consumers (`require_dapr_token`, `service_principal`,
+    `assert_app_token_configured`), because a deployment that moves its token to the store must move
+    every door with it: a service door still reading env while the Dapr door reads the store is a pod
+    where half the credentials are configured and nothing says which half.
+
+    Cached through `_secret_bundle` (per process, per store+key), so the store is read once and the
+    per-request cost is a dict lookup. An unreadable store RAISES rather than answering `None` — the
+    absent-vs-unreadable split the estate enforces everywhere else: `None` here would mean "this
+    deployment has no token", and a caller would be refused for a reason that is not true.
+    """
+    door = DaprDoorSettings()
+    if not door.app_token_from_store:
+        return door.app_api_token
+    token = dict(_secret_bundle(door.secret_store, door.secret_key)).get(door.app_token_field) or None
+    if token is None:
+        # DROP THE CACHE, because a bundle that answered WITHOUT the field is the one failure this
+        # cache turns permanent. `_secret_bundle` never caches an exception, so an unreadable store
+        # heals by itself — but a store that answers a bundle the seed has not written yet caches a
+        # successful miss, and every later request reads it for the life of the process. That is the
+        # live ordering: the chart's seed Job and this pod roll in the same `helm upgrade`, so a pod
+        # that wins the race would refuse every delivery until somebody restarted it, long after the
+        # field was there. Uncached is the correct cost while the field is missing: the state is
+        # broken, the refetch is one sidecar hop, and it stops the moment the seed lands.
+        _secret_bundle.cache_clear()
+    return token
+
+
+def missing_app_token_knob() -> str:
+    """Name the knob that is not set, for a refusal an operator can act on.
+
+    BOTH doors phrase it through here, because a message that names a variable the pod does not read
+    sends the reader to the one place the answer is correctly absent — a store-mode pod told to check
+    `APP_API_TOKEN` shows an env with no such row, and the honest conclusion from that is that the
+    door is lying. Naming the knob is the contract the service door's own tests pin, and it is only
+    worth pinning if the knob named is the real one.
+    """
+    door = DaprDoorSettings()
+    if door.app_token_from_store:
+        return f"{door.app_token_field!r} is absent from the Dapr secret store {door.secret_store}/{door.secret_key}"
+    return "APP_API_TOKEN is unset"
+
+
 def require_dapr_token(
     dapr_api_token: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id. Every route guarded by this dependency is delivered by the app's OWN
@@ -108,13 +194,15 @@ def require_dapr_token(
     match the app's ``APP_API_TOKEN`` (set by Dapr from ``dapr.io/app-token-secret``), and reject ANY
     invocation that arrived through a public front door.
 
-    The token check is a no-op when ``APP_API_TOKEN`` is unset — the open dev default;
-    ``assert_app_token_configured`` makes that a startup error once Dapr ingest is actually enabled,
-    so the no-op can only apply in dev.
+    An UNSET ``APP_API_TOKEN`` is a refusal, not a skip: the door cannot authenticate anybody, so it
+    admits nobody. ``RASK_ALLOW_UNAUTHENTICATED_DAPR`` reopens it for a deployment that means to run
+    open. ``assert_app_token_configured`` remains the earlier, louder version of the same rule — a
+    startup error beats a per-request 403 — but only the six services that CALL it get that, which is
+    why this door carries the check as well rather than relying on it.
 
     The public-caller refusal is deliberately NOT conditional on the token. These routes are
     sidecar-delivery-only by construction, so a front-door invocation of one is never legitimate in
-    any environment — and in dev, where the token is unset, it is the only guard there is.
+    any environment — including a deployment that has taken the unauthenticated hatch.
 
     Threading the caller costs nothing at the call sites: this is consumed exclusively as
     ``Depends(...)``, so FastAPI resolves the new header itself and every door it guards is fixed
@@ -131,10 +219,35 @@ def require_dapr_token(
     # directly, the fleet apps since `make_service_app` began installing the same translator.
     if is_public_caller(dapr_caller_app_id):
         raise PermissionDeniedError(f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller")
-    expected = DaprDoorSettings().app_api_token
+    door = DaprDoorSettings()
+    try:
+        expected = expected_app_token()
+    except SecretStoreUnreadable as outage:
+        # 503, NOT 403. A store that will not answer is an outage, and answering 403 would tell the
+        # sidecar its credential was rejected — so it would stop retrying a delivery that is going to
+        # start working again. `ServiceUnavailableError` is `lance_namespace`'s, which both planes'
+        # problem handlers map; the fleet's own `ServiceUnavailableError` is a different class and is
+        # mapped by only one of them.
+        raise ServiceUnavailableError(f"cannot authenticate this Dapr delivery: {outage}") from outage
+    # FAIL CLOSED WHEN UNCONFIGURED, which is the same answer `service_principal` below gives to the
+    # identical condition (`ServiceDoorClosed`). A guard with no expected value cannot distinguish a
+    # legitimate delivery from a forged one, so admitting is not leniency — it is the control being
+    # absent while every probe reports it present. Measured 2026-09-15: an actor host with no token
+    # answered 200 to a caller presenting none.
+    if not expected:
+        if not door.allow_unauthenticated_dapr:
+            remedy = "seed that field" if door.app_token_from_store else "wire dapr.io/app-token-secret + APP_API_TOKEN"
+            raise PermissionDeniedError(
+                f"this Dapr door is not configured: {missing_app_token_knob()}, so no caller can be authenticated. "
+                f"Either {remedy}, or set RASK_ALLOW_UNAUTHENTICATED_DAPR to accept an unauthenticated door deliberately."
+            )
+        # The hatch says "unconfigured is acceptable here", never "wrong tokens are acceptable" — a
+        # configured door below still refuses a forged one regardless of this flag.
+        log.warning("dapr_door_unauthenticated", extra={"caller": dapr_caller_app_id or "<unset>"})
+        return
     # compare_digest: the token is the only guard on these routes, so no timing side-channel; bytes
     # (not str) so a non-ASCII header value is a clean 403, never a TypeError.
-    if expected and not secrets.compare_digest((dapr_api_token or "").encode(), expected.encode()):
+    if not secrets.compare_digest((dapr_api_token or "").encode(), expected.encode()):
         raise PermissionDeniedError("invalid or missing Dapr app-api-token")
 
 
@@ -142,11 +255,29 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
     """Fail closed at startup: when Dapr ingest is enabled the delivery route is live and MUST be
     authenticated, so an unset/blank ``APP_API_TOKEN`` is a misconfiguration — not the dev default — and
     the pod must refuse to start rather than silently expose an unauthenticated ingest path (the security
-    audit's 'blanked token silently reopens the route' residual). No-op when Dapr ingest is off."""
-    if dapr_enabled and not DaprDoorSettings().app_api_token:
+    audit's 'blanked token silently reopens the route' residual). No-op when Dapr ingest is off.
+
+    `require_dapr_token` refuses an unconfigured door on its own, so this is no longer the only thing
+    standing between a blank token and an open route — it is the EARLIER and louder version of the same
+    answer, and a boot failure beats a per-request 403 on a route whose caller is a sidecar with no
+    person behind it.
+
+    In store mode it fetches with the BOOT retry budget rather than the request-path one: this runs in
+    a lifespan, where a store still seeding is the expected condition and waiting is the correct
+    response. The request path cannot afford that and uses `_secret_bundle`'s single attempt."""
+    if not dapr_enabled:
+        return
+    door = DaprDoorSettings()
+    if door.app_token_from_store:
+        from service_kit.governed.secrets import fetch_required_secrets  # imported here, not at module scope: keeps this module import-light
+
+        fetch_required_secrets(door.secret_store, door.secret_key, require=door.app_token_field)
+        return
+    if not door.app_api_token:
         raise RuntimeError(
             "APP_API_TOKEN must be set when Dapr ingest is enabled — the delivery route would otherwise be "
-            "unauthenticated. Wire dapr.io/app-token-secret + the APP_API_TOKEN env, or disable Dapr ingest."
+            "unauthenticated. Wire dapr.io/app-token-secret + the APP_API_TOKEN env, or set "
+            "RASK_APP_TOKEN_FROM_STORE to take it from the Dapr secret store instead."
         )
 
 
@@ -307,9 +438,9 @@ def service_principal(
     stays keyword-defaulted only so a deployment with an empty `privileged_subjects` need not build
     a resolver it will never call.
     """
-    expected = DaprDoorSettings().app_api_token
+    expected = expected_app_token()
     if not expected:
-        raise ServiceDoorClosed("the service door is not configured here: APP_API_TOKEN is unset")
+        raise ServiceDoorClosed(f"the service door is not configured here: {missing_app_token_knob()}")
 
     allowed = {s.strip() for s in allowed_subjects.split(",") if s.strip()}
     if not identity or identity not in allowed:
@@ -349,9 +480,9 @@ def guard_actor_routes(app: FastAPI) -> None:
     author facets or a project listing — it was never meant to carry access control.
 
     `require_dapr_token` is the right door rather than a stand-in: these paths are BY CONSTRUCTION
-    sidecar-delivered — daprd calls them back, presenting `dapr-api-token` when `APP_API_TOKEN` is set
-    — and the same dependency refuses a public front door outright, which is the half that still holds
-    in dev where the token is unset. It proves "arrived via Dapr", never "trusted caller".
+    sidecar-delivered — daprd calls them back presenting `dapr-api-token` — and the same dependency
+    refuses a public front door outright even where the token check has been waived. It proves
+    "arrived via Dapr", never "trusted caller".
 
     A middleware rather than a router dependency because the SDK adds these routes to the app itself:
     there is no `include_router` call to hang `dependencies=` on, and rewriting a mounted route's
