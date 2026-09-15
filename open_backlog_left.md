@@ -4582,9 +4582,26 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   own existing-cluster path is the client protocol, `ray.init("ray://…")`, which needs `ray` in the task
   image and is therefore closed to rask by an existing deliberate choice. Its `runtime_env` lands as
   PLAINTEXT YAML in `spec.runtimeEnvYAML`, so its credential posture is worse than rask's
-  `credential_ref`-names-never-carries. **rask should not adopt Flyte's shape; it should adopt its
-  discipline** — one declared config surface per engine, and a plugin boundary the core never branches
-  around.
+  `credential_ref`-names-never-carries.
+- **WHAT TO TAKE FROM FLYTE, ITEM BY ITEM (owner 2026-09-15: inspiration, and copy outright where it is
+  genuinely good).** "Do not copy Flyte" was too blunt; the test is whether a borrowed thing solves a
+  problem rask actually has.
+  * **COPY — `submissionMode` as a named config value.** Flyte does not branch on a boolean to decide
+    HOW it reaches Ray; the mode (`K8sJobMode` / `HTTPMode` / `SidecarMode`) is declared data on the
+    task and the plugin dispatches on it. That is exactly what [[LH-158]] needs in place of
+    `use_ray = engine_for_async(...) == RAY_ENGINE`: the record says which door, and the core stops
+    deciding. Worth copying in spirit, near-verbatim.
+  * **COPY THE SHAPE — `shutdown_after_job_finishes` + `ttl_seconds_after_finished` as first-class
+    fields.** rask has no way to express "this work's resources should be reclaimed after N seconds".
+    It needs none today against a standing cluster, which is why this is a shape to keep rather than a
+    field to add now — but a per-tenant ephemeral cluster would need exactly these two and nothing else.
+  * **TAKE AS DISCIPLINE — the plugin boundary.** One declared config message per engine, and a core
+    that never branches around it. rask's `Executor` port is the same idea already; the gap is that
+    nothing uses it, not that the idea is missing.
+  * **DO NOT COPY — `runtime_env` as plaintext YAML in the CR.** Strictly worse than
+    `credential_ref`-names-never-carries, which rask already has.
+  * **DO NOT COPY — always-create-a-cluster.** Correct for Flyte's per-job model and wrong for a
+    standing shared cluster, which is rask's.
 - *Closes when:* the port is the only door (a dispatch that REFUSES an unhosted engine — [[LH-158]]);
   the Ray lane reaches it as an adapter rather than bypassing it; `dapr-ext-workflow` is an extra rather
   than a hard dependency; and either the Ray/workflow product is decoupled or the limit is WRITTEN DOWN
