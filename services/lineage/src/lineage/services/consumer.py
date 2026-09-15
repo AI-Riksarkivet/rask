@@ -54,8 +54,23 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
     two failure kinds the way the sidecar needs them:
 
     * **DENIED -> DROP.** Redelivery cannot grant a permission, so retrying a refused event only burns
-      the delivery budget and then parks a permanent refusal on the dead-letter topic as if it were an
-      outage. Same reasoning the malformed branch above already uses.
+      the delivery budget. Same reasoning the malformed branch above already uses.
+
+      **DROP STOPS THE RETRIES, NOT THE PARK, AND THAT IS NOT A CHOICE THIS FUNCTION MAKES.** The
+      subscription declares a `deadLetterTopic` (`api/dapr.py`), and for Dapr a DROP on such a
+      subscription ROUTES the message there — so a permanent refusal still lands in the DLQ, just
+      without burning the budget first. Measured on the live estate 2026-09-15, the sidecar and the app
+      naming the same CloudEvent id back to back: daprd logged *"DROP status returned from app while
+      processing pub/sub event a4d65ffd-…"*, the app logged `dapr_dead_letter_parked
+      event_id='a4d65ffd-…'`, and `POST /lineage-dlq` answered 200.
+
+      The consequence is the DLQ's growth curve, not one event: the ingest consumer is ephemeral with
+      `deliverPolicy: all`, so every restart re-presents the retained stream, this branch refuses the
+      same unrepairable events again, and each refusal appends a NEW DLQ message about an event already
+      in it. One roll produced 49 parks inside two minutes of pod start; one run sits in the DLQ twice,
+      five days apart. **There is currently no ack meaning "refused, permanently, do not keep this"** —
+      SUCCESS would ack and discard it. Which of those the estate wants is an open decision
+      (`open_backlog_left.md`, LH-166), so this branch keeps the existing behaviour and states it.
     * **ANYTHING ELSE -> RETRY.** An unreachable authorization service is an outage, not a verdict, and
       dropping on one would silently delete provenance for the duration of the outage — the failure
       this whole lane exists to prevent. The absent-vs-unreadable rule, at the ack layer.
