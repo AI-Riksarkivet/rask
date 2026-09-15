@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**225 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**224 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 79 | 12 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 11 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4481,7 +4481,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Closes when:* the delete re-checks registration immediately before acting (or takes a lease undrop respects),
   and the false docstring is rewritten — BEFORE `trashPurgeEnabled` is ever set true anywhere.
 
-**LH-157 · One `WorkOrder` carries TWO idempotency-key formulas, so an in-process build bump re-attaches to a stale outcome**
+**LH-157 · ~~One `WorkOrder` carries TWO idempotency-key formulas, so an in-process build bump re-attaches to a stale outcome~~ — CLOSED 2026-09-15, observed live**
 `medallion` · **HIGH** · found 2026-09-15 by an adversarial workflow, verified first-hand before filing
 
 - *The defect:* `transform.py:753` builds the order's key as
@@ -4495,9 +4495,13 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Why it is HIGH despite the in-process lane being the quieter one:* the failure is silent and it is
   the SUCCESS path — a stage reports COMPLETE against an artifact the current code never produced. No
   counter moves, no log fires, and the lineage graph records a run that did not happen at this version.
-- *Closes when:* the key has ONE derivation, owned by `WorkOrder` (the module's own stated rule: "`to_env()`
-  is the ONE serialization, so no adapter hand-rolls it" — the key deserves the same), with a test that
-  fails if a code-version change does not change the key on either lane.
+- **CLOSED, and found stale-open by re-measuring rather than by new work.** `work_order.derive_idempotency_key`
+  is the one derivation; `transform.py` and `ray_submit.py` both call it; and
+  `tests/unit/test_one_work_order_has_one_idempotency_key.py` pins every documented axis — dropping
+  `code_version` from the derivation fails 2 of its 5, so it is not hollow.
+- **OBSERVED IN THE RUNNING `rask-bronze-to-silver` pod** on `main-df4582c4`, not inferred from the diff:
+  the same stage/token/from/to with `build-1` and `build-2` mint DIFFERENT keys, and both lanes import
+  the shared derivation. The in-process lane can no longer re-attach to a previous build's outcome.
 
 **LH-158 · The `Executor` port is declared, documented and used by neither lane**
 `medallion` · med · found 2026-09-15 by an adversarial workflow
