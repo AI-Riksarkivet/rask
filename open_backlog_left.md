@@ -2480,6 +2480,22 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   rather than in the drop. Whoever fixes it must answer the ordering question — an existence-aware
   refusal on a door that deliberately refuses before resolving existence, which the catalog skill
   records as a class rule (no existence oracle on destructive doors) rather than a per-door choice.
+- **THE ESTATE HAS MET THIS CLASS BEFORE AND ITS ANSWER DOES NOT TRANSFER, which is the useful part.**
+  `tables.py`'s drop carries the scar in its own comment: *"revoking here made undrop unreachable for
+  exactly that caller (found by driving the deployed catalog, not by a unit test — the unit tests run
+  FGA off)"*. The fix there was to NOT revoke on a RECOVERABLE drop, so the owner keeps the grant they
+  need to undrop, and the grants die with the bytes at purge.
+- *That answer cannot be reused here, and a measurement says why rather than an argument.* This estate
+  runs `trash_grace_days=7`, so drops ARE recoverable in general — 992 trash records exist. The probe's
+  drop wrote **none**: checked `_trash/` directly, there is no record for it, and all 992 are `table-*`.
+  A RESTRICT drop of an EMPTY namespace is deliberately unrecorded — it only ever removes an empty
+  manifest row — so it is non-recoverable, so it revokes, so `Skip` is unreachable on exactly the path
+  it exists for.
+- *So the remaining question is sharper than "make Skip work":* the recoverable path already keeps its
+  grants and needs nothing; the RESTRICT path is deliberately unrecorded and correctly revokes; and
+  `Skip` lives only on the second. Either the gate learns to admit an idempotent no-op against an id
+  with no tuples — which is the existence-oracle class rule, an owner call — or `Skip` is withdrawn from
+  this door as unimplementable and the row says so. Both are decisions; neither is a patch.
 - *Closes when:* the roll observes all three, and `Overwrite` on the namespace door is either
   implemented against an owner ruling on the cascade/trash interaction or stays refused.
   Note `modes.py` records a deliberate decision that an UNRECOGNISED mode falls through to `Create`
