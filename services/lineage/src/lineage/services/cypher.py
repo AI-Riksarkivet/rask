@@ -35,7 +35,7 @@ from typing import Final, LiteralString, cast
 MERGE_JOB: Final = "MERGE (j:Job {namespace:$ns, name:$nm}) RETURN 1"
 # Where the job's code lives (the standard sourceCodeLocation facet), as a JSON string scalar on the Job
 # node — SET only when the event carries it, so an event that omits it never clobbers a prior value.
-SET_JOB_SOURCE: Final = "MATCH (j:Job {namespace:$ns, name:$nm}) SET j.source_location=$src RETURN 1"
+SET_JOB_SOURCE: Final = "MATCH (j:Job) WHERE j.namespace = $ns AND j.name = $nm SET j.source_location=$src RETURN 1"
 #: The lifecycle states a run cannot leave. Kept byte-identical to ``postgres.TERMINAL_TYPES`` — the
 #: feed's dedup index keys off the same notion of "a run has at most one of these" — and pinned equal by
 #: ``tests/unit/test_a_run_state_does_not_regress.py``. Spelled as a Cypher list literal rather than
@@ -138,12 +138,12 @@ MERGE_RUN: Final = (
 )
 # Progress + outputs ride only some events (RUNNING carries progress; only the terminal event names
 # the outputs), so they are SET in their own conditional statements — never clobbered back to null.
-SET_RUN_PROGRESS: Final = "MATCH (r:Run {run_id:$rid}) SET r.progress_done=$pd, r.progress_total=$pt RETURN 1"
-SET_RUN_OUTPUTS: Final = "MATCH (r:Run {run_id:$rid}) SET r.outputs=$outs RETURN 1"
+SET_RUN_PROGRESS: Final = "MATCH (r:Run) WHERE r.run_id = $rid SET r.progress_done=$pd, r.progress_total=$pt RETURN 1"
+SET_RUN_OUTPUTS: Final = "MATCH (r:Run) WHERE r.run_id = $rid SET r.outputs=$outs RETURN 1"
 # What a run has ALREADY recorded writing — the object `enforce_output_authz` authorizes a MUTATION
 # of that run against. Empty (or no row) means the run does not exist yet, which is what keeps a
 # START event able to open a run it cannot authorize.
-RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
+RUN_OUTPUT_NAMES: Final = "MATCH (r:Run) WHERE r.run_id = $rid RETURN r.outputs"
 _LIST_RUNS_BODY: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
@@ -153,7 +153,7 @@ LIST_RUNS: Final = _LIST_RUNS_BODY
 #: ONE run's state, projected identically to the board so both answer the same shape. Built from the
 #: same body rather than written out, because a column added to the board must arrive here too — the
 #: caller declares a column count and a mismatch is a 500, not a short row.
-RUN_BY_ID: Final = _LIST_RUNS_BODY.replace("MATCH (r:Run)", "MATCH (r:Run {run_id:$rid})", 1)
+RUN_BY_ID: Final = _LIST_RUNS_BODY.replace("MATCH (r:Run)", "MATCH (r:Run) WHERE r.run_id = $rid", 1)
 #: The widest page `list_runs_page` will build. A ceiling on the interpolated value is what lets the
 #: `LiteralString` cast below be a statement about the value rather than a way past the checker.
 MAX_RUNS_FETCH: Final = 5000
@@ -205,11 +205,11 @@ LIST_ALL_COLUMNS: Final = "MATCH (:Dataset)-[:HAS_COLUMN]->(c:Column) RETURN c.d
 # job row). Folded into per-job output sets in Python — avoids parsing an agtype array from collect().
 LIST_JOBS: Final = "MATCH (j:Job) OPTIONAL MATCH (j)<-[:OF_JOB]-(:Run)-[:WROTE]->(d:Dataset) RETURN j.namespace, j.name, d.name"
 
-LINK_RUN_JOB: Final = "MATCH (r:Run {run_id:$rid}), (j:Job {namespace:$ns, name:$nm}) MERGE (r)-[:OF_JOB]->(j) RETURN 1"
+LINK_RUN_JOB: Final = "MATCH (r:Run), (j:Job) WHERE r.run_id = $rid AND j.namespace = $ns AND j.name = $nm MERGE (r)-[:OF_JOB]->(j) RETURN 1"
 MERGE_DATASET: Final = "MERGE (d:Dataset {name:$name}) SET d.namespace=$ns RETURN 1"
 # Storage location is SET only when the event carries it; tags are UNIONed into the node's set (#49 —
 # the property also holds human-curated governance tags, which a producer's facet must never clobber).
-SET_DATASET_SRC: Final = "MATCH (d:Dataset {name:$name}) SET d.source_uri=$src RETURN 1"
+SET_DATASET_SRC: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.source_uri=$src RETURN 1"
 # Terminal lifecycle (2026-07-11): dropped-ness is DERIVED AT READ TIME from run history — the most
 # recent SUCCESSFUL run that wrote the dataset being a drop_table means "deliberately dropped", so
 # the reconcile sweep skips it (absence on storage is the EXPECTED state, not storage loss — it
@@ -220,33 +220,31 @@ SET_DATASET_SRC: Final = "MATCH (d:Dataset {name:$name}) SET d.source_uri=$src R
 # redelivery-proof by construction. FAILed runs keep WROTE edges (producers() shows the attempt), so
 # the event_type=COMPLETE filter is load-bearing: a failed drop asserts nothing.
 DATASET_LAST_SUCCESS_OP: Final = (
-    "MATCH (r:Run)-[:WROTE]->(d:Dataset {name:$name}) WHERE r.event_type = 'COMPLETE' RETURN r.operation, r.event_time ORDER BY r.event_time DESC LIMIT 1"
+    "MATCH (r:Run)-[:WROTE]->(d:Dataset) WHERE d.name = $name AND r.event_type = 'COMPLETE' RETURN r.operation, r.event_time ORDER BY r.event_time DESC LIMIT 1"
 )
-SET_DATASET_TAGS: Final = "MATCH (d:Dataset {name:$name}) SET d.tags=$tags RETURN 1"
+SET_DATASET_TAGS: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.tags=$tags RETURN 1"
 # Governance metadata (#49) — human-curated tags + description on the Dataset node, with last-writer
 # attribution per field family. Standalone MATCH…SET statements bind params fine on AGE 1.5.0 (only a
 # post-MERGE SET drops them); tags stay the same comma-joined string the ingest path writes.
-GET_DATASET_GOVERNANCE: Final = (
-    "MATCH (d:Dataset {name:$name}) RETURN d.tags, d.description, d.tags_updated_by, d.tags_updated_at, d.description_updated_by, d.description_updated_at"
-)
-SET_GOVERNED_TAGS: Final = "MATCH (d:Dataset {name:$name}) SET d.tags=$tags, d.tags_updated_by=$by, d.tags_updated_at=$at RETURN 1"
-SET_DESCRIPTION: Final = "MATCH (d:Dataset {name:$name}) SET d.description=$desc, d.description_updated_by=$by, d.description_updated_at=$at RETURN 1"
-LINK_READ: Final = "MATCH (r:Run {run_id:$rid}), (d:Dataset {name:$name}) MERGE (r)-[:READ]->(d) RETURN 1"
+GET_DATASET_GOVERNANCE: Final = "MATCH (d:Dataset) WHERE d.name = $name RETURN d.tags, d.description, d.tags_updated_by, d.tags_updated_at, d.description_updated_by, d.description_updated_at"
+SET_GOVERNED_TAGS: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.tags=$tags, d.tags_updated_by=$by, d.tags_updated_at=$at RETURN 1"
+SET_DESCRIPTION: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.description=$desc, d.description_updated_by=$by, d.description_updated_at=$at RETURN 1"
+LINK_READ: Final = "MATCH (r:Run), (d:Dataset) WHERE r.run_id = $rid AND d.name = $name MERGE (r)-[:READ]->(d) RETURN 1"
 # The READ edge carries the Lance version this run CONSUMED, when the producer pinned it (the Ray TRAIN
 # job pins every feature — #115 D1). Same own-statement rule as SET_WROTE_VERSION below (AGE drops a
 # $param in a SET that follows an edge MERGE in the same statement). Unpinned reads leave it absent.
-SET_READ_VERSION: Final = "MATCH (r:Run {run_id:$rid})-[e:READ]->(d:Dataset {name:$name}) SET e.version=$ver RETURN 1"
+SET_READ_VERSION: Final = "MATCH (r:Run)-[e:READ]->(d:Dataset) WHERE r.run_id = $rid AND d.name = $name SET e.version=$ver RETURN 1"
 # The WROTE edge carries the Lance dataset version this run produced (from the OpenLineage
 # ``version`` facet), so two refinement passes over one table are distinguishable in producers().
-LINK_WROTE: Final = "MATCH (r:Run {run_id:$rid}), (d:Dataset {name:$name}) MERGE (r)-[:WROTE]->(d) RETURN 1"
+LINK_WROTE: Final = "MATCH (r:Run), (d:Dataset) WHERE r.run_id = $rid AND d.name = $name MERGE (r)-[:WROTE]->(d) RETURN 1"
 # AGE binds a ``$param`` in a standalone ``MATCH ... SET`` but silently drops one in a ``SET`` that
 # follows ``MERGE`` on an edge in the *same* statement (verified on AGE 1.5.0/PG16), so the version
 # is written in its own statement — mirroring how dataSource/tags are set on the Dataset node.
-SET_WROTE_VERSION: Final = "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.version=$ver RETURN 1"
+SET_WROTE_VERSION: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE r.run_id = $rid AND d.name = $name SET w.version=$ver RETURN 1"
 # The REF the write landed on (absent = main). Its OWN statement for the same AGE reason as the version
 # above, and separate from it because a write can carry a ref with no version (a failed run keeps the edge
 # and drops the version) — fusing them would make the ref conditional on success.
-SET_WROTE_REF: Final = "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.ref=$ref RETURN 1"
+SET_WROTE_REF: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE r.run_id = $rid AND d.name = $name SET w.ref=$ref RETURN 1"
 # Storage->graph reconciliation back-fill (B4) — a synthetic 'reconcile' run recording a Lance write whose
 # lineage event was lost (the outbox gap). Idempotent (MERGE on the reconcile run id), so re-running the
 # reconcile never duplicates; the WROTE version is stamped in its own statement (the AGE MERGE+SET quirk).
@@ -362,18 +360,18 @@ PRUNE_ORPHAN_DATASETS_TEMPLATE: Final = _ORPHAN_DATASETS + "WITH d LIMIT {limit}
 # a JSON **string** scalar — params are JSON-encoded and ``_parse`` json.loads each cell, so a scalar
 # round-trips cleanly; an array-in-SET is the risky path AGE 1.5.0 mishandles (same reason tags are a
 # comma-joined string). Own statement, like the version (AGE drops a $param in a post-MERGE SET).
-SET_WROTE_SCHEMA: Final = "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.schema=$schema RETURN 1"
+SET_WROTE_SCHEMA: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE r.run_id = $rid AND d.name = $name SET w.schema=$schema RETURN 1"
 # Runtime-measured output statistics ride the same WROTE edge (the rows + on-disk bytes the compute
 # actually wrote, from the standard ``outputStatistics`` facet). Both are plain int scalars set in a
 # standalone MATCH...SET (no MERGE-on-edge in this statement → AGE binds both $params, like SET_COL_EDGE).
-SET_WROTE_STATS: Final = "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.row_count=$rows, w.size_bytes=$size RETURN 1"
+SET_WROTE_STATS: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE r.run_id = $rid AND d.name = $name SET w.row_count=$rows, w.size_bytes=$size RETURN 1"
 # Quality-gate result rides the same WROTE edge: a ``quality_passed`` bool (the headline signal) + the
 # full assertions as a JSON **string** scalar (same scalar-round-trips-cleanly reasoning as the schema).
 # A passed=false edge with a real version is the auditable record of a batch the gate blocked.
 SET_WROTE_QUALITY: Final = (
-    "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.quality_passed=$passed, w.quality_assertions=$assertions RETURN 1"
+    "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE r.run_id = $rid AND d.name = $name SET w.quality_passed=$passed, w.quality_assertions=$assertions RETURN 1"
 )
-DERIVED_FROM: Final = "MATCH (o:Dataset {name:$on}), (i:Dataset {name:$inp}) MERGE (o)-[:DERIVED_FROM]->(i) RETURN 1"
+DERIVED_FROM: Final = "MATCH (o:Dataset), (i:Dataset) WHERE o.name = $on AND i.name = $inp MERGE (o)-[:DERIVED_FROM]->(i) RETURN 1"
 
 #: Widest hop count a caller may ask for. A bound this side of "the whole component" is the point of
 #: the parameter, so an absurd number is refused rather than honoured — it is the unbounded walk
@@ -408,14 +406,14 @@ def bounded_walk(query: LiteralString, depth: object) -> LiteralString:
     return cast("LiteralString", query.replace("*1..]", f"*1..{depth}]"))
 
 
-UPSTREAM: Final = "MATCH (d:Dataset {name:$name})-[:DERIVED_FROM*1..]->(u:Dataset) RETURN DISTINCT u.name, u.namespace"
+UPSTREAM: Final = "MATCH (d:Dataset)-[:DERIVED_FROM*1..]->(u:Dataset) WHERE d.name = $name RETURN DISTINCT u.name, u.namespace"
 # One run's direct inputs + the version it PINNED on each (the READ-edge version — #115's reproducibility
 # pin). Direct edges only (NOT the transitive DERIVED_FROM closure): "which versions did THIS run read"
 # is a property of the run's own reads, not of the dataset ancestry where a version has no meaning.
-RUN_INPUTS: Final = "MATCH (r:Run {run_id:$rid})-[e:READ]->(d:Dataset) RETURN DISTINCT d.name, e.version"
-DOWNSTREAM: Final = "MATCH (d:Dataset {name:$name})<-[:DERIVED_FROM*1..]-(x:Dataset) RETURN DISTINCT x.name, x.namespace"
+RUN_INPUTS: Final = "MATCH (r:Run)-[e:READ]->(d:Dataset) WHERE r.run_id = $rid RETURN DISTINCT d.name, e.version"
+DOWNSTREAM: Final = "MATCH (d:Dataset)<-[:DERIVED_FROM*1..]-(x:Dataset) WHERE d.name = $name RETURN DISTINCT x.name, x.namespace"
 PRODUCERS: Final = (
-    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) "
+    "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name "
     "RETURN r.run_id, r.author, r.event_time, r.event_type, w.version, r.producer, r.error_message, "
     "w.row_count, w.size_bytes, w.quality_passed, w.quality_assertions, r.operation, "
     # The RANGE this run consumed to produce the write. A run's property rather than the edge's, and
@@ -471,29 +469,31 @@ def producers_page(limit: int) -> LiteralString:
 # one; `core/reconcile.py` then compares that number against MAIN's on-disk version and classifies drift
 # from it. Writes recorded before the ref existed carry no property, so they read as main — which is what
 # they were.
-LATEST_WRITE_VERSION: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN max(toInteger(w.version))"
-SOURCE_URI: Final = "MATCH (d:Dataset {name:$name}) RETURN d.source_uri LIMIT 1"
+LATEST_WRITE_VERSION: Final = (
+    "MATCH (:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name AND w.version IS NOT NULL AND w.ref IS NULL RETURN max(toInteger(w.version))"
+)
+SOURCE_URI: Final = "MATCH (d:Dataset) WHERE d.name = $name RETURN d.source_uri LIMIT 1"
 # EVERY main-ref version the graph holds a WROTE edge for — the SET the tip comparison above cannot see.
 # `w.ref IS NULL` is the same main-only filter LATEST_WRITE_VERSION applies, and it is load-bearing for the
 # same reason: a branch carries its own version sequence, so a branch write at version N would otherwise
 # answer for main's version N and hide a real hole there.
-WRITE_VERSIONS: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version IS NOT NULL AND w.ref IS NULL RETURN DISTINCT w.version"
+WRITE_VERSIONS: Final = "MATCH (:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name AND w.version IS NOT NULL AND w.ref IS NULL RETURN DISTINCT w.version"
 # Per-version schema lookup (#24). Latest = the most-recent successful WROTE edge that carries a schema;
 # at-version pins the edge whose version matches. Both return the schema JSON string + its version.
 SCHEMA_LATEST: Final = (
-    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.schema IS NOT NULL AND w.ref IS NULL "
+    "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name AND w.schema IS NOT NULL AND w.ref IS NULL "
     "RETURN w.schema, w.version ORDER BY r.event_time DESC LIMIT 1"
 )
 SCHEMA_AT_VERSION: Final = (
-    "MATCH (r:Run)-[w:WROTE]->(d:Dataset {name:$name}) WHERE w.version=$ver AND w.schema IS NOT NULL "
+    "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE d.name = $name AND w.version=$ver AND w.schema IS NOT NULL "
     "RETURN w.schema, w.version ORDER BY r.event_time DESC LIMIT 1"
 )
 MERGE_USER: Final = "MERGE (u:User {name:$name}) RETURN 1"
 # Latest-create-wins: the CREATED edge carries the create event_time so creator() is deterministic
 # even when a table name is dropped+recreated by a different principal (the most recent create is
 # authoritative). A re-create updates this principal; drop-lineage GC is future work.
-LINK_CREATED: Final = "MATCH (u:User {name:$name}), (d:Dataset {name:$ds}) MERGE (u)-[c:CREATED]->(d) SET c.created_at=$tm RETURN 1"
-CREATOR: Final = "MATCH (u:User)-[c:CREATED]->(d:Dataset {name:$name}) RETURN u.name ORDER BY c.created_at DESC LIMIT 1"
+LINK_CREATED: Final = "MATCH (u:User {name:$name}), (d:Dataset) WHERE d.name = $ds MERGE (u)-[c:CREATED]->(d) SET c.created_at=$tm RETURN 1"
+CREATOR: Final = "MATCH (u:User)-[c:CREATED]->(d:Dataset) WHERE d.name = $name RETURN u.name ORDER BY c.created_at DESC LIMIT 1"
 
 # AGE rejects zero-length variable paths (``*0..``), so the connected node set is
 # assembled from the upstream + downstream traversals (``*1..``) plus the root itself,
@@ -522,31 +522,32 @@ GRAPH_WRITES: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE d.name IN $nam
 # ingested yet) sets ONLY namespace — never ``type`` — so it can't clobber a real type with null.
 MERGE_COLUMN: Final = "MERGE (c:Column {dataset:$ds, field:$fld}) SET c.namespace=$ns RETURN 1"
 MERGE_COLUMN_TYPED: Final = "MERGE (c:Column {dataset:$ds, field:$fld}) SET c.namespace=$ns, c.type=$type RETURN 1"
-LINK_HAS_COLUMN: Final = "MATCH (d:Dataset {name:$ds}),(c:Column {dataset:$ds, field:$fld}) MERGE (d)-[:HAS_COLUMN]->(c) RETURN 1"
+LINK_HAS_COLUMN: Final = "MATCH (d:Dataset),(c:Column) WHERE d.name = $ds AND c.dataset = $ds AND c.field = $fld MERGE (d)-[:HAS_COLUMN]->(c) RETURN 1"
 # Column-inventory GC (2026-07-11): a schema facet is the COMPLETE current column set by contract, so
 # after seeding it, HAS_COLUMN links to fields outside it are STALE inventory (an overwrite replaced
 # the schema — {a,b}→{x,y} used to leave a,b listed forever). Only the LINK is deleted: the :Column
 # node and its COL_DERIVED_FROM edges stay, so historical column lineage (and per-version schemas on
 # WROTE) are untouched — this prunes what dataset_column_graph() presents as CURRENT.
-UNLINK_STALE_COLUMNS: Final = "MATCH (d:Dataset {name:$ds})-[r:HAS_COLUMN]->(c:Column) WHERE NOT c.field IN $fields DELETE r RETURN 1"
+UNLINK_STALE_COLUMNS: Final = "MATCH (d:Dataset)-[r:HAS_COLUMN]->(c:Column) WHERE d.name = $ds AND NOT c.field IN $fields DELETE r RETURN 1"
 # DISTINCT label (NOT the dataset-level DERIVED_FROM): AGE's *1.. constrains only path ENDPOINTS, not
 # intermediate edge labels, so reusing DERIVED_FROM would let a column traversal silently cross onto the
 # dataset plane if the two ever connect. Direction output→input, mirroring dataset DERIVED_FROM.
-COL_DERIVED_FROM: Final = "MATCH (o:Column {dataset:$ods, field:$ofld}),(i:Column {dataset:$ids, field:$ifld}) MERGE (o)-[:DERIVED_FROM_COLUMN]->(i) RETURN 1"
+COL_DERIVED_FROM: Final = "MATCH (o:Column),(i:Column) WHERE o.dataset = $ods AND o.field = $ofld AND i.dataset = $ids AND i.field = $ifld MERGE (o)-[:DERIVED_FROM_COLUMN]->(i) RETURN 1"
 # Edge props are SET in their own statement (AGE 1.5.0 drops a $param in a SET fused to a MERGE-on-edge).
 # All scalars — masking is a plain bool; the multi-valued transformations[] is collapsed to type/subtype
 # at parse time precisely to avoid an array-in-SET (the path AGE mishandles).
 SET_COL_EDGE: Final = (
-    "MATCH (o:Column {dataset:$ods, field:$ofld})-[e:DERIVED_FROM_COLUMN]->"
-    "(i:Column {dataset:$ids, field:$ifld}) "
+    "MATCH (o:Column)-[e:DERIVED_FROM_COLUMN]->"
+    "(i:Column) "
+    "WHERE o.dataset = $ods AND o.field = $ofld AND i.dataset = $ids AND i.field = $ifld "
     "SET e.transformation_type=$tt, e.transformation_subtype=$st, e.masking=$mask, e.description=$desc, "
     "e.run_id=$rid, e.output_version=$ver RETURN 1"
 )
 COL_UPSTREAM: Final = (
-    "MATCH (c:Column {dataset:$ds, field:$fld})-[:DERIVED_FROM_COLUMN*1..]->(u:Column) RETURN DISTINCT u.dataset, u.field, u.namespace, u.type"
+    "MATCH (c:Column)-[:DERIVED_FROM_COLUMN*1..]->(u:Column) WHERE c.dataset = $ds AND c.field = $fld RETURN DISTINCT u.dataset, u.field, u.namespace, u.type"
 )
 COL_DOWNSTREAM: Final = (
-    "MATCH (c:Column {dataset:$ds, field:$fld})<-[:DERIVED_FROM_COLUMN*1..]-(x:Column) RETURN DISTINCT x.dataset, x.field, x.namespace, x.type"
+    "MATCH (c:Column)<-[:DERIVED_FROM_COLUMN*1..]-(x:Column) WHERE c.dataset = $ds AND c.field = $fld RETURN DISTINCT x.dataset, x.field, x.namespace, x.type"
 )
 # Per-dataset column view: the dataset's OWN columns (complete typed inventory via HAS_COLUMN, incl.
 # columns with no declared lineage) + every column edge touching the dataset (either endpoint).
@@ -555,7 +556,7 @@ COL_DOWNSTREAM: Final = (
 # hot column path). Two concurrent ingests that first-touch the same (dataset, field) can each MATCH-miss
 # and CREATE, leaving a duplicate :Column + duplicate HAS_COLUMN; DISTINCT collapses them so the inventory
 # lists each field once regardless. The upstream/downstream column walks already RETURN DISTINCT.
-DATASET_COLUMN_NODES: Final = "MATCH (d:Dataset {name:$ds})-[:HAS_COLUMN]->(c:Column) RETURN DISTINCT c.field, c.type ORDER BY c.field"
+DATASET_COLUMN_NODES: Final = "MATCH (d:Dataset)-[:HAS_COLUMN]->(c:Column) WHERE d.name = $ds RETURN DISTINCT c.field, c.type ORDER BY c.field"
 # The FRONTIER form, taking a list of datasets rather than one, so the column graph can be walked
 # outward a table at a time. The frontier is a BIND PARAMETER — unlike the table-level walk, whose
 # hop range is Cypher syntax and has to be interpolated, there is no string to sanitise here.
