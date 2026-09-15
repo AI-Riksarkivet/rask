@@ -2449,7 +2449,24 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   shape rung with a 400 naming why — replacing a registration would detach bytes this catalog does not
   own from the table that currently points at them — placed before `idem.begin`, so a request never
   attempted mints no idempotency record.
-  **Built and deployed? NO — all three ride the pending roll.**
+  **DEPLOYED AND OBSERVED 2026-09-15** on `main-4c762db2` — all three commits (`1d2c93e3`, `1e5f1c25`,
+  `8de2ec28`) are ancestors of the rolled tag, confirmed by `git merge-base --is-ancestor`.
+  `register_table` was driven against the live catalog with a real Dex bearer and answers **400** with
+  the reason intact: *"mode 'Overwrite' is not supported on this door: replacing a registration would
+  detach bytes this catalog does not own from the table that currently points at them."*
+- **BUT `Skip` IS UNREACHABLE FOR THE CALLER IT WAS BUILT FOR, measured rather than reasoned.** Driven
+  end to end — create a nested namespace (200), drop it (200), then retry the drop — both `mode=Skip`
+  and the default answer **403 `can_delete required`**, not the Skip no-op. The gate refuses before the
+  mode is ever consulted.
+  *Why:* the drop's `revoke_ownership` removes EVERY tuple on the id, the `parent` edge included, which
+  severs the cascade from its parent namespace. Read from the live store immediately after:
+  `namespace:lakehouse$lh037probe` -> **NONE**, against a live sibling `namespace:lakehouse$silver` ->
+  `owner` + `parent`. The revoke is deliberate and correct on its own terms — it is the reused-id
+  privilege-bleed guard — but it means the owner who just dropped an object cannot retry that drop,
+  which is precisely the "caller recovering from a partial failure" this row added `Skip` for.
+- *Stated narrowly on purpose:* what is measured is that the OWNER who dropped it is refused. Whether a
+  principal holding a rung from higher up (project admin, estate admin) still reaches the `Skip` path is
+  NOT measured, and this row does not claim it either way.
 - *Closes when:* the roll observes all three, and `Overwrite` on the namespace door is either
   implemented against an owner ruling on the cascade/trash interaction or stays refused.
   Note `modes.py` records a deliberate decision that an UNRECOGNISED mode falls through to `Create`
