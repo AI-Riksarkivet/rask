@@ -80,6 +80,7 @@ _TUPLE_PAGE_SIZE = 100
 #: happily destroy every one of them.
 MANIFEST_DIR = "__manifest"
 _MANIFEST_NAMESPACE_TYPE = "namespace"
+_MANIFEST_TABLE_TYPE = "table"
 
 #: The drift categories, in report order. `counts` carries exactly the ones that were CHECKED — an
 #: unavailable or skipped category is absent rather than zero, so a 0 can never read as "clean".
@@ -91,6 +92,7 @@ CATEGORIES: tuple[str, ...] = (
     "orphan_buckets",
     "dangling_bindings",
     "orphaned_annotation_tasks",
+    "ungoverned_tables",
     "orphan_files",
 )
 
@@ -117,7 +119,12 @@ CATEGORIES: tuple[str, ...] = (
 #: Adding a door for either is still worthwhile and is the strictly better fix — the drift is real. The
 #: two halves differ in risk and should not be built together: revoking an orphaned annotation task
 #: DELETES unreachable tuples, while binding a legacy namespace WRITES a registry record for live data.
-NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces"})
+#:   * `ungoverned_tables` — a catalog table carrying NO authorization tuples. Same test as the two
+#:     above and the same answer: it is an AUTHZ fact rather than a storage one (the bytes are intact
+#:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
+#:     on it would make the gate unsatisfiable again, which this comment already argues is not a safety
+#:     property.
+NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables"})
 
 
 # --------------------------------------------------------------------------- #
@@ -147,6 +154,28 @@ class UnboundNamespace(BaseModel):
     namespace: str
     #: The root it was found on — the shared default bucket, which is exactly where an unbound
     #: namespace silently resolves to.
+    root: str
+
+
+class UngovernedTable(BaseModel):
+    """A table the catalog knows and OpenFGA does not — no tuples at all on `table:<id>`.
+
+    WHY THIS CATEGORY EXISTS. Every `table` relation in `model.fga` resolves through a direct tuple or
+    `X from parent`, so a table carrying none denies EVERY principal, including the identity that
+    created it. Nothing in the product reports that: the reconciler compares the registry against
+    storage and against FGA at the project/warehouse rungs, and was blind at the table rung — so the
+    first door that ever asked such a table a permission question was the maintenance sweep's
+    `can_maintain`, and a governance hole surfaced as a compaction statistic.
+
+    NO TUPLES AT ALL is the test, deliberately narrower than "missing its parent edge". That is the
+    shape actually measured, it is unambiguous from a whole-store scan, and it cannot be produced by a
+    partial grant — whereas "has an owner but no parent" needs the scan to carry relations as well as
+    counts, which it does not. A narrower detector that never cries wolf beats a broader one nobody
+    trusts.
+    """
+
+    table: str
+    #: The root whose manifest recorded it — which bucket an operator goes and looks in.
     root: str
 
 
@@ -229,6 +258,7 @@ class ReconcileReport(BaseModel):
     ghost_warehouses: list[GhostObject] = Field(default_factory=list)
     unreferenced_projects: list[UnreferencedProject] = Field(default_factory=list)
     unbound_namespaces: list[UnboundNamespace] = Field(default_factory=list)
+    ungoverned_tables: list[UngovernedTable] = Field(default_factory=list)
     orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
     dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
@@ -334,6 +364,47 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, *, delimit
             if object_type == _MANIFEST_NAMESPACE_TYPE and object_id and delimiter not in str(object_id)
         }
     )
+
+
+def _tables(root: str, storage_options: StorageOptions) -> list[str]:
+    """Every TABLE id recorded on ``root``, sorted — the same manifest the namespace scan reads.
+
+    The FULL object id is kept, not just a leading segment: a table is recorded as
+    ``<namespace><delimiter><table>`` (and nests further), and that whole string is the catalog id an
+    FGA object is named after. Trimming it the way `_top_level_namespaces` trims a namespace would
+    produce an id that matches no tuple and report every table as ungoverned.
+
+    A root with no manifest yet is a fresh estate, not an error: it yields ``[]``.
+    """
+    fs, base = fs_and_base(root, storage_options)
+    if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
+        return []
+    manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
+    table = dataset.to_table(columns=["object_id", "object_type"])
+    return sorted(
+        {
+            str(object_id)
+            for object_id, object_type in zip(table.column("object_id").to_pylist(), table.column("object_type").to_pylist(), strict=True)
+            if object_type == _MANIFEST_TABLE_TYPE and object_id
+        }
+    )
+
+
+def _tables_across(roots: list[str], storage_options: StorageOptions) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """``(table, root)`` pairs across EVERY root, plus the roots that could not be read.
+
+    Per-root tolerance for the same reason `_top_level_namespaces_across` has it: one unreachable
+    tenant bucket must not blind the scan for the whole estate.
+    """
+    found: set[tuple[str, str]] = set()
+    unreadable: list[tuple[str, str]] = []
+    for root in roots:
+        try:
+            found |= {(name, root) for name in _tables(root, storage_options)}
+        except Exception as exc:  # noqa: BLE001 — one unreachable bucket must not blind the whole scan
+            unreadable.append((root, f"{type(exc).__name__}: {exc}"))
+    return sorted(found), unreadable
 
 
 def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions, *, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -461,6 +532,20 @@ def _orphaned_annotation_tasks(edges: Iterable[tuple[str, str]], project_ids: se
     return [OrphanedAnnotationTask(annotation_project=task_id, tenant=tenant_id) for task_id, tenant_id in sorted(set(edges)) if tenant_id not in project_ids]
 
 
+def _ungoverned_tables(tables: Iterable[tuple[str, str]], governed: dict[str, int]) -> list[UngovernedTable]:
+    """Catalog tables carrying NO authorization tuples at all.
+
+    ``governed`` is ``{object_id: tuple_count}`` for the ``table`` type out of the single whole-store
+    scan, so a table is ungoverned exactly when its id is absent from that map or maps to zero. Both
+    spellings are checked because the scan buckets by type and an empty bucket and a missing one are
+    the same fact arriving two ways.
+    """
+    return sorted(
+        (UngovernedTable(table=table, root=root) for table, root in tables if not governed.get(table)),
+        key=lambda finding: (finding.table, finding.root),
+    )
+
+
 def _unbound_namespaces(namespaces: Iterable[tuple[str, str]], bound: set[str]) -> list[UnboundNamespace]:
     """Top-level namespaces that no binding claims, each carrying the root it was actually found on."""
     return [UnboundNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in bound]
@@ -508,6 +593,8 @@ class Sources(BaseModel):
     bindings_error: str | None = None
     namespaces: list[tuple[str, str]] | None = None
     namespaces_error: str | None = None
+    tables: list[tuple[str, str]] | None = None
+    tables_error: str | None = None
     buckets: list[str] | None = None
     buckets_error: str | None = None
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -640,6 +727,13 @@ async def load_sources(
     if scanned is not None:
         sources.namespaces, unreadable_roots = scanned
         sources.incomplete.extend(IncompleteScan(source=f"catalog:namespaces:{root}", reason=reason) for root, reason in unreadable_roots)
+    # THE SAME ROOTS, read for their TABLE rows. One more pass over a manifest the scan above already
+    # opened is affordable, and the alternative — deriving tables from the namespace scan — cannot work:
+    # that one trims every id to its leading segment.
+    scanned_tables, sources.tables_error = await _read_blocking("catalog:tables", _tables_across, namespace_roots, storage_options)
+    if scanned_tables is not None:
+        sources.tables, unreadable_table_roots = scanned_tables
+        sources.incomplete.extend(IncompleteScan(source=f"catalog:tables:{root}", reason=reason) for root, reason in unreadable_table_roots)
     return sources
 
 
@@ -738,6 +832,15 @@ def build_report(
             inputs=(sources.namespaces_error, *bindings_and_warehouses),
             detect=lambda: _unbound_namespaces(sources.namespaces or [], {str(b["top_ns"]) for b in sources.bindings or []}),
         )
+
+    report.ungoverned_tables = _run_category(
+        report,
+        "ungoverned_tables",
+        # The tuple scan joins the guard: without it every table reads as ungoverned, which would turn
+        # an OpenFGA outage into a report naming the whole estate as drift.
+        inputs=(sources.tables_error, sources.tuples_error),
+        detect=lambda: _ungoverned_tables(sources.tables or [], _by_type(sources, "table")),
+    )
 
     report.orphan_buckets = _run_category(
         report,

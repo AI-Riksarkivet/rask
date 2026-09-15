@@ -4710,6 +4710,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   "no such table" are the same 403 on the wire. It no longer instructs a grant on an id that may be a
   namespace; it asks the reader to check the id names a TABLE first. One function rather than a phrase
   at two sites, because the two had already drifted apart once.
+- **THE DETECTION HALF LANDED 2026-09-15 as a reconciler category**, which is the owner's third
+  convergence point built in the shape the evidence supports rather than the one the option named.
+  Converging every table on every catalog boot means enumerating ~96 warehouses' tables at startup,
+  and `cascade_backfill`'s own docstring argues against making boot depend on that. What was genuinely
+  missing is DETECTION: the reconciler compared registry against storage and against FGA at the
+  project and warehouse rungs and was blind at the TABLE rung — which is why the first door ever to
+  ask one of these a permission question was the sweep's `can_maintain`.
+  `ungoverned_tables` now reads the same manifests the namespace scan already opens (`_tables_across`)
+  and set-differences them against `counts_by_type['table']` from the one whole-store tuple scan.
+  NON-GATING by the module's own rule rather than by preference — a category gates the #79 purge only
+  if it is a STORAGE fact with a door that clears it, and this is an authz fact with neither. It
+  degrades WITH OpenFGA, which is load-bearing: without the tuple scan every table reads as ungoverned,
+  so an outage would otherwise report the whole estate as drift.
 - *Closes when:* the owner rules on whether the chart-path medallion datasets are residue to reap or
   data to register. That is the only thing left here, it is a decision rather than a defect, and it
   carries real risk either way — `bind86-wh/medallion/bronze` holds 500 rows.
