@@ -216,9 +216,31 @@ type warehouse
     # must exist on BOTH `namespace` and `warehouse` — otherwise the check 400s ("relation not found") and
     # fails closed to a 503 for everyone. Same writer rung as can_create_table.
     define can_create_materialized_view: writer
-    # Estate-wide control-plane event feed (GET /v1/events): observing EVERY project's governance changes is
-    # a platform-admin privilege, checked ONLY on the root object (fga_root_object). Owner-tier, so a mere
-    # per-project admin can NOT read the estate feed — authz scope == data scope (the feed is estate-wide).
+    # THE ESTATE-ADMIN RUNG. Checked ONLY on the root object (`fga_root_object`), never on a
+    # caller-supplied one, so there is nothing to inject. Owner-tier: authz scope == data scope, and a
+    # per-project admin must not reach an estate-wide surface.
+    #
+    # **THE NAME UNDERSTATES IT, AND THAT IS THE THING TO KNOW BEFORE GRANTING IT.** This comment used
+    # to describe only `GET /v1/events`, which reads as "grant this and someone can watch a feed".
+    # Measured across the estate 2026-09-15, holding it also grants:
+    #   * `GET /v1/events` — every project's governance changes (`endpoints/events.py:59`)
+    #   * `POST /v1/projects` + the project list/get — i.e. CREATING TENANTS (`endpoints/projects.py:184,246`)
+    #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
+    #     (`endpoints/access_admin.py:199`)
+    #   * `POST /v1/stores` and its attach/detach siblings — naming a host the estate will talk to
+    #     (`endpoints/stores.py:105,135,197`)
+    #   * lineage's whole-estate projection (`api/fga_deps.py:144` in services/lineage)
+    #   * the `estate_admin` flag `/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather than
+    #     a door, listed because it is a consumer and the gate below derives its list from the code
+    # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
+    # this one for contrast, so they are deliberately absent.
+    # So this is not an observer rung wearing an admin's name — it IS the admin rung, and "observe" is
+    # the weakest thing it permits. Renaming it is [[LH-076]]'s other half and needs an owner call,
+    # because the string appears in seeded tuples; correcting what it CLAIMS needs nobody's permission.
+    #
+    # Pinned by `tests/unit/test_the_estate_rung_documents_everything_it_gates.py`, which derives the
+    # consumer list from the code rather than trusting this comment — the drift it closes is exactly
+    # the one that produced the old text.
     define can_observe_events: owner
     # Vending a WRITE credential for the estate's lineage outbox (`_lineage_outbox`), checked ONLY on
     # the root object like the two estate privileges around it. Owner-tier would be wrong here and the
