@@ -4529,6 +4529,30 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   routes through the port — wrapping `ray_submit` + `job_status` as a Jobs-API executor — or
   `engine_registry.py` is deleted outright. **Keeping it uncalled is the worst of the three**, because
   the decision record already claims a port with adapters that the code does not use.
+- **HALF LANDED 2026-09-15 (`30eef5ec`), deployed on `main-30eef5ec` and observed.** `RayJobsApiExecutor`
+  wraps the submission path the cascade actually uses, `executor_for` resolves BOTH engines, and the
+  live stage runner reports `['inprocess', 'ray']` with each satisfying the `Executor` protocol.
+  `WrongEngineError` moved onto the port, since `validate_task` promises to raise and two adapters
+  raising two types would break any caller catching one. The estate-wide Ray-secrets gate refused the
+  new seam until it was fed the same adversarial material, and it is clean under mutation.
+- **WHY THE IN-PROCESS LANE STILL BYPASSES THE PORT IS A DESIGN TENSION, NOT AN OVERSIGHT — this is the
+  finding that changes what the rest of the row costs.** `transform.py:788` hand-builds
+  `InProcessExecutor` because it then calls `executor.result(handle)` at :800, and **`result()` is not
+  on the port**. Its own docstring says why it is not: *"BEYOND the port, and only ever an optimisation:
+  the platform's contract is to re-derive what was written from the dataset, and a caller that ignores
+  this is not weaker for it."*
+  *But the caller does NOT ignore it — it raises when the value is absent*, so an optimisation is being
+  consumed as a requirement. Routing this lane through `executor_for` therefore forces a choice, and
+  none of the three is free:
+  1. **re-derive** with a second `measure(to_uri)` — rejected in a comment right above the call, which
+     records it as "a second stats read plus an upstream open, for numbers identical by construction";
+  2. **narrow back** to the concrete `InProcessExecutor` after resolving — which defeats the point of
+     resolving, and the estate forbids the `cast` that would hide it;
+  3. **widen the port** with an optional result capability — honest, but it is a `service-kit` change
+     that every future adapter inherits, and it needs an answer for what "the result" means to an engine
+     that writes asynchronously.
+  Option 3 is the only one that leaves the abstraction intact; it is also the only one that touches a
+  shared package, which is why it is a decision rather than an edit.
 - *Closes when:* dispatch goes through the port — one door, both lanes — OR `engine_registry.py` is
   deleted and `DECISIONS.md` rewritten to describe the branch the code actually has. **Keeping an
   uncalled port is the worst of the three**, because the decision record then documents an
