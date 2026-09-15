@@ -543,22 +543,29 @@ class LineageRepository:
             inputs=[RunInput(name=r[0], version=(r[1] or None)) for r in rows if r[0]],
         )
 
-    async def column_upstream(self, dataset: str, field: str) -> ColumnNeighbors:
+    async def column_upstream(self, dataset: str, field: str, depth: int | None = None) -> ColumnNeighbors:
         """The columns ``(dataset, field)`` was (transitively) derived from — field-level provenance. (#24)
 
         Every related column carries its owning ``dataset`` so the endpoint can drop columns the caller
         may not see. The distinct ``DERIVED_FROM_COLUMN`` label keeps the walk on the column plane.
+
+        ``depth`` bounds the walk, as on the dataset pair. `bounded_walk` was applied to the dataset
+        statements and never to these two, so the column plane had no ceiling available AT ALL — not a
+        default a caller could override, but no parameter to pass. Column lineage fans out per FIELD, so
+        it is the walk most able to multiply.
         """
-        rows = await fetch(self._pool, self._graph, cy.COL_UPSTREAM, {"ds": dataset, "fld": field}, columns=4)
+        rows = await fetch(self._pool, self._graph, cy.bounded_walk(cy.COL_UPSTREAM, depth), {"ds": dataset, "fld": field}, columns=4)
         return ColumnNeighbors(
             dataset=dataset,
             field=field,
             related=[ColumnRef(dataset=r[0], field=r[1], namespace=r[2], type=r[3]) for r in rows],
         )
 
-    async def column_downstream(self, dataset: str, field: str) -> ColumnNeighbors:
-        """The columns (transitively) derived from ``(dataset, field)`` — field-level impact. (#24)"""
-        rows = await fetch(self._pool, self._graph, cy.COL_DOWNSTREAM, {"ds": dataset, "fld": field}, columns=4)
+    async def column_downstream(self, dataset: str, field: str, depth: int | None = None) -> ColumnNeighbors:
+        """The columns (transitively) derived from ``(dataset, field)`` — field-level impact. (#24)
+
+        ``depth`` bounds the walk, on the same terms as :meth:`column_upstream`."""
+        rows = await fetch(self._pool, self._graph, cy.bounded_walk(cy.COL_DOWNSTREAM, depth), {"ds": dataset, "fld": field}, columns=4)
         return ColumnNeighbors(
             dataset=dataset,
             field=field,

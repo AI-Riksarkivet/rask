@@ -29,7 +29,14 @@ router = APIRouter(
 
 
 @router.get("/{name}/columns/{field}/upstream")
-async def get_column_upstream(name: str, field: str, repository: RepositoryDep, datasets: FilterDep, settings: SettingsDep) -> ColumnNeighbors:
+async def get_column_upstream(
+    name: str,
+    field: str,
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    settings: SettingsDep,
+    depth: Annotated[int | None, Query(ge=1, le=MAX_COLUMN_DEPTH)] = None,
+) -> ColumnNeighbors:
     """Column-level provenance (#24): the columns ``name.field`` was (transitively) derived from.
 
     Our deepest moat — field-to-field lineage a format-unaware catalog cannot derive. Gated on
@@ -37,17 +44,24 @@ async def get_column_upstream(name: str, field: str, repository: RepositoryDep, 
     see are dropped (a column has no ACL of its own — it inherits its table's), closing the same
     transitive-disclosure hole at column resolution. Auth off → pass-through.
     """
-    result = await repository.column_upstream(name, field)
+    result = await repository.column_upstream(name, field, depth)
     result.related = await governed(datasets, settings.fga_enabled, result.related, lambda r: {r.dataset})
     return result
 
 
 @router.get("/{name}/columns/{field}/downstream")
-async def get_column_downstream(name: str, field: str, repository: RepositoryDep, datasets: FilterDep, settings: SettingsDep) -> ColumnNeighbors:
+async def get_column_downstream(
+    name: str,
+    field: str,
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    settings: SettingsDep,
+    depth: Annotated[int | None, Query(ge=1, le=MAX_COLUMN_DEPTH)] = None,
+) -> ColumnNeighbors:
     """Column-level impact (#24): the columns (transitively) derived from ``name.field``. Gated +
     governed exactly like the column upstream view — related columns in datasets the caller can't see
     are dropped."""
-    result = await repository.column_downstream(name, field)
+    result = await repository.column_downstream(name, field, depth)
     result.related = await governed(datasets, settings.fga_enabled, result.related, lambda r: {r.dataset})
     return result
 

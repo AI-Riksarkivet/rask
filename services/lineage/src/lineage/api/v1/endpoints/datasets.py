@@ -27,22 +27,43 @@ router = APIRouter(
 
 
 @router.get("/{name}/upstream")
-async def get_upstream(name: str, repository: RepositoryDep, datasets: FilterDep) -> Neighbors:
+async def get_upstream(
+    name: str,
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    depth: Annotated[int | None, Query(ge=1, le=MAX_WALK_DEPTH)] = None,
+) -> Neighbors:
     """What ``name`` was derived from (provenance).
 
     Gated on ``can_get_metadata`` for ``name``; related datasets the caller may not see are
     dropped so the graph can't disclose tables outside its reach.
+
+    ``depth`` bounds the walk, the same shape and ceiling `/graph` already offers. The repository has
+    accepted it since the helper landed; only this door never declared it, so every request reached the
+    unbounded `*1..` statement whatever the caller wanted. Omitted it stays unbounded — the previous
+    behaviour, and what an un-rooted caller asks for — but it is now a caller's CHOICE rather than the
+    only thing the door can do. `age.py` names that unbounded path over a grown graph as the reason a
+    pooled connection cannot be pinned.
     """
-    result = await repository.upstream(name)
+    result = await repository.upstream(name, depth)
     visible = await datasets.visible([ref.name for ref in result.related])
     result.related = [ref for ref in result.related if ref.name in visible]
     return result
 
 
 @router.get("/{name}/downstream")
-async def get_downstream(name: str, repository: RepositoryDep, datasets: FilterDep) -> Neighbors:
-    """What derives from ``name`` (impact). Gated; non-visible related datasets are dropped."""
-    result = await repository.downstream(name)
+async def get_downstream(
+    name: str,
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    depth: Annotated[int | None, Query(ge=1, le=MAX_WALK_DEPTH)] = None,
+) -> Neighbors:
+    """What derives from ``name`` (impact). Gated; non-visible related datasets are dropped.
+
+    ``depth`` bounds the walk exactly as on `/upstream` — impact is the direction that fans OUT, so a
+    hub dataset is where an unbounded walk costs most.
+    """
+    result = await repository.downstream(name, depth)
     visible = await datasets.visible([ref.name for ref in result.related])
     result.related = [ref for ref in result.related if ref.name in visible]
     return result

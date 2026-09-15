@@ -415,10 +415,12 @@ class _FakeRepo:
         assert self.estate is not None
         return self.estate
 
-    async def column_upstream(self, dataset: str, field: str) -> ColumnNeighbors:
+    async def column_upstream(self, dataset: str, field: str, depth: int | None = None) -> ColumnNeighbors:
+        self.seen_depths["column_upstream"] = depth
         return ColumnNeighbors(dataset=dataset, field=field, related=self.col_related)
 
-    async def column_downstream(self, dataset: str, field: str) -> ColumnNeighbors:
+    async def column_downstream(self, dataset: str, field: str, depth: int | None = None) -> ColumnNeighbors:
+        self.seen_depths["column_downstream"] = depth
         return ColumnNeighbors(dataset=dataset, field=field, related=self.col_related)
 
     async def dataset_column_graph(self, name: str, depth: int = 1) -> ColumnGraph:
@@ -429,7 +431,8 @@ class _FakeRepo:
         self.seen_depths["graph"] = depth
         return self.lineage_graph or LineageGraph(root=name, nodes=[], edges=[])
 
-    async def upstream(self, name: str) -> Neighbors:
+    async def upstream(self, name: str, depth: int | None = None) -> Neighbors:
+        self.seen_depths["upstream"] = depth
         return Neighbors(dataset=name, related=[DatasetRef(name="a"), DatasetRef(name="b")])
 
 

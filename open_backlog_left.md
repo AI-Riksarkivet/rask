@@ -665,7 +665,31 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Attempted and reverted 2026-09-11:* a ceiling constant added in `repository.py` — a duplicate of
   `cypher.MAX_WALK_DEPTH` with a different value (25 vs 20), caught before commit. Two definitions of
   one bound is worse than the unbounded walk.
-- *Closes when:* Apply `cypher.with_depth` (or a validated integer literal) with a `Query(ge=1, le=N)` bound to the `UPSTREAM`, `DOWNSTREAM`, `COLUMN_UPSTREAM` and `COLUMN_DOWNSTREAM` statements, and add a `latest_version` property to the Dataset node maintained on write.
+- **THE FOUR STATEMENTS ARE BOUNDED AS OF 2026-09-15, and the two halves failed differently — which is
+  why "no door applies a ceiling" read as false while the defect was real.**
+  * `/upstream` and `/downstream` never DECLARED a `depth`, so although `repository.upstream/downstream`
+    have accepted one and applied `bounded_walk` since the helper landed, every request through the
+    door passed `None` and reached the unbounded `*1..`. The bound existed and was unreachable.
+  * `column_upstream`/`column_downstream` took no `depth` at all and handed `cy.COL_UPSTREAM` /
+    `cy.COL_DOWNSTREAM` to `fetch` RAW — so the column plane had no ceiling to reach, not a default to
+    override. That is the inert-argument shape, and no signature or type check can see it.
+  Both now take `Annotated[int | None, Query(ge=1, le=...)]` on the door and route through
+  `bounded_walk`, mirroring `/graph` and the column-graph walk exactly.
+- *THE DEFAULT IS DELIBERATELY UNCHANGED:* omitted, all six walks are still unbounded — the previous
+  behaviour and what an un-rooted caller wants. Silently truncating a provenance answer is a worse
+  failure than a slow one, and this row asked for a reachable bound rather than a new default.
+- *Why it is worth doing at all, rather than tidiness:* `age.py` names the unbounded walk over a grown
+  graph as the reason a pooled connection cannot be pinned, and an unbounded correlated walk against
+  the live graph OOM-killed the AGE container on 2026-09-15 (restart 0->1, recovered). Column lineage
+  is the walk most able to multiply, since it fans out per FIELD rather than per dataset — and it was
+  the one with no ceiling at all.
+- *Pinned by `tests/unit/test_every_lineage_walk_can_be_bounded.py`*, which checks the DOOR offers the
+  parameter, the repository accepts it, AND the column methods route it through `bounded_walk` — the
+  third assertion existing precisely because the second passes for an argument the query ignores.
+- *Closes when:* the remaining half — a `latest_version` property on the Dataset node maintained on
+  write, so the latest version is read off the node instead of aggregated from the WROTE history
+  (`cypher.py::LATEST_WRITE_VERSION`). Measured 2026-09-15: `latest_version` appears nowhere under
+  `services/lineage/` or `packages/lineage-kit/`, and `MERGE_DATASET` sets only `d.namespace`.
 
 **LH-007 · ~~`ray_stage_job.py` re-creates its target with `mode="overwrite"` every run, re-minting `_rowid` for the whole tier~~ — CLOSED 2026-09-11**
 `medallion` · was HIGH
