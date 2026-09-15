@@ -72,7 +72,7 @@ from service_kit.lakehouse.warehouse_registry import (
     project_gold_root,
     project_root,
 )
-from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
 
 
 log = logging.getLogger(__name__)
@@ -750,7 +750,9 @@ def _work_order(
         ),
         identity=WorkIdentity(run_id=lineage_doc.run_id, project=project, code_version=settings.ray_code_version),
         params=declared.params if declared else settings.ray_job_params,
-        idempotency_key=f"{settings.to_namespace}:{token or 'notoken'}:{identity.from_dataset}->{identity.to_dataset}",
+        idempotency_key=derive_idempotency_key(
+            stage=settings.to_namespace, token=token, from_uri=from_uri, to_uri=to_uri, code_version=settings.ray_code_version
+        ),
     )
 
 

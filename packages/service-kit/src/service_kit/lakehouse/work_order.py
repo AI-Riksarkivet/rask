@@ -27,6 +27,7 @@ make the submitter and the watcher disagree about the same run.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -118,7 +119,8 @@ class WorkOrder(BaseModel):
     #: A NAME the executor resolves against its own credential source. NEVER a credential value.
     credential_ref: str = ""
     #: Deterministic in (stage, token, from->to, code_version), so a redelivery re-attaches rather than
-    #: starting a second run.
+    #: starting a second run. **Derive it with :func:`derive_idempotency_key`** — see that function for
+    #: why a caller spelling it itself is the defect rather than the convenience.
     idempotency_key: str
 
     def to_env(self) -> dict[str, str]:
@@ -163,3 +165,34 @@ class WorkOrder(BaseModel):
         env.update({f"RASK_PARAM_{k}": v for k, v in self.params.items()})
         env.update(self.observability.otlp)
         return env
+
+
+def derive_idempotency_key(*, stage: str, token: str | None, from_uri: str, to_uri: str, code_version: str) -> str:
+    """The order's identity to an executor, derived in ONE place.
+
+    [[LH-157]] TWO CALL SITES SPELLED THIS DIFFERENTLY AND ONE DROPPED AN AXIS. `ray_submit` derived it
+    through `stage_submission_id(stage, token, from_uri, to_uri, code=code_version)` — all four axes —
+    while `transform` hand-rolled ``f"{stage}:{token or 'notoken'}:{from}->{to}"`` with no
+    ``code_version``. `inprocess_executor` uses this key AS the re-attach handle, so a rebuilt stage kept
+    its old key and re-attached to the PREVIOUS build's outcome: COMPLETE reported against an artifact
+    the current code never produced, with no counter moving and nothing in the log. The Ray lane, keying
+    on all four, re-ran correctly — so the two lanes disagreed about what "the same work" means.
+
+    THE ESTATE HAD ALREADY PAID FOR THIS ONE LANE OVER. `stage_submission_id`'s docstring records that it
+    was extracted because "a second inline copy of this expression is how the poller ends up watching an
+    id the submitter never used", and that ``code`` "must therefore reach BOTH calls". The hand-rolled key
+    was that second inline copy on the other lane. So the derivation lives on the ORDER: a caller that
+    cannot spell the key cannot spell it differently.
+
+    HASHED RATHER THAN CONCATENATED, and the reason is the absent token rather than length. The old inline
+    form rendered a missing token as the literal ``notoken`` — a spelling invented at one call site that
+    the other never knew — so two lanes could disagree about an order carrying no token at all. Hashing a
+    NUL-joined tuple makes absence its own value rather than a word a caller might also pass, and no
+    field's content can straddle the separator.
+
+    THIS IS NOT THE RAY JOB'S NAME. `stage_submission_id` still derives that, deliberately: the job id is
+    a live handle the poller re-derives to watch a running job, so changing its shape would orphan every
+    job in flight. Both now honour the same four axes; only this one is the order's identity.
+    """
+    parts = (stage, "\x00" if token is None else token, from_uri, to_uri, code_version)
+    return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:40]

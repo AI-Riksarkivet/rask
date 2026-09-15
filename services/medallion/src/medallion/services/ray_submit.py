@@ -32,7 +32,7 @@ from medallion.services import ray_jobs_api as rk
 from medallion.services.task_register import RAY_ENGINE
 from medallion.services.transform_spec import resolve_task_async, resolve_transform_async
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
-from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
 
 
 log = logging.getLogger(__name__)
@@ -197,7 +197,11 @@ async def submit_stage_job(
         stamp=WorkStamp(stage=stage, cardinality=cardinality, lineage_document=lineage_json),
         identity=WorkIdentity(run_id=run_id, project=project, originator=originator, code_version=code_version),
         params=job_params,
-        idempotency_key=submission_id,
+        # THE ORDER'S identity, not the JOB's. `submission_id` above stays the Ray job name — the poller
+        # re-derives it to watch a running job, so its shape cannot change without orphaning jobs in
+        # flight. The order's key is the shared derivation so both lanes agree on what "the same work"
+        # is; they honour the same four axes and differ only in which handle they are.
+        idempotency_key=derive_idempotency_key(stage=stage, token=token, from_uri=from_uri, to_uri=to_uri, code_version=code_version),
     )
     env_vars = {
         **order.to_env(),
