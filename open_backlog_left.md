@@ -5065,6 +5065,37 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   messages / 29 MiB**, of which **`dlq.lineage.events` is 9,856** — roughly **+1,341 since that
   reading** — and the last delivery was **11 minutes** before this row was written. The
   `lineage-dlq-durable` consumer's last delivery timestamp agrees.
+- **THE MECHANISM, MEASURED 2026-09-16: THE DLQ IS A FEEDBACK LOOP, AND ITS GROWTH IS NOT A LOSS
+  RATE.** The "burst" above is real and its CAUSE is now known — it is a pod restart, not a wave of
+  production traffic. The ingest consumer is ephemeral with `deliverPolicy: all` (the estate's recovery
+  story, and `fga_deps._is_replay` documents it), so **every lineage restart re-presents the whole
+  retained stream** to the authorization gate. The gate refuses the same unrepairable events again, and
+  **each refusal appends a NEW message to the DLQ about an event already in it.**
+  * Driven deliberately: rolling lineage to `main-16dd2da6` produced **49 parks inside two minutes of
+    pod start (21:53–21:54 UTC), zero before it**, and one more at 22:03 which was a probe of my own.
+  * The same event parks repeatedly across restarts. Run `188ab99f-f557-5e96-b311-4c5dd8f4d119` sits in
+    the DLQ at **seq 5000, parked 2026-09-10** — and was parked AGAIN at 21:53:50 on 2026-09-15, five
+    days later. Two independent sources agree (the stream body and the app log), and the second park is
+    a single refusal + a single park, not a retry storm.
+  * **No production event newer than 2026-09-14T19:14 has ever been parked.** Sampled across the whole
+    sequence range, every parked message carries an `eventTime` from 2026-09-06..09-14 while its park
+    time runs to 09-15 — gaps of one to five days. The newest entry in the stream (seq 11189) is the
+    probe.
+- *So the row's "+1,341 since that reading" is RE-PARKS OF THE SAME EVENTS, not 1,341 new losses*, and
+  [[LH-148]]'s "not currently bleeding" was closer to right than this row credited: the set of
+  unrecordable events is roughly FIXED and old, while the DLQ counting them grows with every restart.
+  **DLQ depth is therefore restart-count x backlog-size, and cannot be read as a production error
+  rate** — which is what made it look like an accelerating bleed.
+- *And it names the real hazard in [[LH-148]]'s replay door precisely:* replaying this DLQ re-presents
+  events the gate must refuse again, each refusal appending another DLQ message. The flood is not
+  hypothetical — it is the loop already running once per restart, driven faster.
+- *The author split is the same class the estate already refuses elsewhere:* `data_eng` 29, `ray` 8,
+  `analyst` 2 of the 49. `service_kit.lakehouse.subjects._NOT_A_PERSON` already classifies exactly
+  `data_eng`/`analyst`/`ray` as ROLE LITERALS — "TRUE statements about who acted and useless as an
+  address" — and the notifications plane refuses them for addressing. Lineage's authorization path
+  accepts one as a SUBJECT, where it can never hold `can_write_data`, because no tuple is ever written
+  for a role literal. The refusals name the governed tiers: `acme-silver$features` 21,
+  `silver$features` 14, `bronze$events` 5, `acme-bronze$events` 5.
 - **SCALE AND CHARACTER, corrected within minutes of first writing this row — it is a BURST FROM TEST
   IDENTITIES, not the steady production bleed the first draft implied.** The park count is IDENTICAL at
   60, 120 and 180 minutes (53 each), so all 53 fall inside one hour with nothing in the two before it.
