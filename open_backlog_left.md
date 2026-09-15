@@ -422,6 +422,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   ingest without re-publishing. Until (b),
   `dapr.py`'s "recovery story stays replay-from-stream" should say what it actually means: a dead letter
   older than the stream's retention is lost.
+- **RE-MEASURED 2026-09-15: the interim doc clause is DONE, so (b) is the whole remainder.**
+  `on_dead_letter`'s docstring now states it outright — *"That bounds what recovery can reach: a dead
+  letter older than the stream's retention has no path back, because nothing re-ingests the DLQ stream
+  itself."* Nothing else in the row has moved.
+- *So what is left is a FEATURE, not a correction, and it is worth saying so before someone picks it up
+  expecting a small one:* a replay door that ingests a parked `dlq.<appId>` delivery WITHOUT
+  re-publishing, idempotent on `run_id`. The trap is already documented above and is the reason the
+  obvious reuse is wrong — `reconcile_cron._drain_outbox` re-publishes after ingesting, deliberately,
+  because the cascade's `/bronze-arrival` reacts to that announcement, so routing a dead letter through
+  it would re-park the event and manufacture the very flood this row measured.
 
 **LH-002 · ~~The sweep's whole `storage_loss` population is UNGOVERNED residue — 3 of 3, and the row's original 32 were two other things~~ — CLOSED 2026-09-15: `storage_loss` no longer lumps benign residue with real loss**
 `lineage, maintenance` · **HIGH**
