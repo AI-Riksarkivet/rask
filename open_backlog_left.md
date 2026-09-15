@@ -3587,6 +3587,29 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   One live blocker first: the head is a HAND-APPLIED Deployment from `deploy/ray-lance-demo.yaml`
   (`kubectl get rayservice,raycluster` is empty and the chart renders 0 RayServices), so a chart-only
   fix cannot reach it. **Phase 2 — do not work ahead of the lakehouse.**
+- **RE-MEASURED IN THE RUNNING POD 2026-09-15, and the violation is wider than the row says.** It is
+  not only storage: `ray-lance-head` receives SIX secrets through env and no sidecar —
+  `S3_SECRET` plus five `RASK_LINEAGE_TOKEN_SERVICE_*`, every one a `secretKeyRef` into an env var,
+  with `S3_KEY=rask-ray-compute` a literal in the manifest. `envFrom` is null and the only mounts are
+  `/dev/shm` and the service-account token, so nothing arrives by a sanctioned path today.
+- **THE SANCTIONED PATH EXISTS END TO END AND IS UNBUILT, which is what makes this a wiring job rather
+  than a design question.** `vend_credentials` takes the caller's RAW BEARER JWT
+  (`web_identity_token`) and forwards it to the object store for `AssumeRoleWithWebIdentity`, returning
+  a triple scoped to bucket+prefix for 900 s — the STS posture the rule names. The Ray pod already
+  holds a credential of exactly that shape, delivered the right way: the projected service-account
+  token at `/var/run/secrets/kubernetes.io/serviceaccount/token`, a FILE rather than an env var. And
+  the pod can reach the door — measured from inside the container, `http://rask-catalog:2333` answers.
+  The blocker the row cited is also gone: `lance_storage_options` now carries `session_token`
+  (`objectfs.py:35`), so this lane can hold a vended triple.
+- *What is left is the trust wiring, in this order:* the catalog must accept the cluster's own OIDC
+  issuer for the Ray identity; that identity needs the FGA tuples a write-tier vend checks
+  (`can_write_data` or `can_maintain` on the table); the three job scripts must read
+  `RASK_CREDENTIAL_REF` + the token FILE instead of `S3_KEY`/`S3_SECRET`; and the manifest must drop
+  both env vars. The five service tokens move to a mounted file in the same pass — a `secretKeyRef`
+  into env is the banned path whether the value is a storage key or not.
+- *A SCOPED STATIC KEY IS NOT AN ACCEPTABLE INTERIM.* `rask-ray-compute` is already scoped and it is
+  still a static key in env; narrowing it further would look like progress and change nothing about
+  the rule it breaks.
 - *Closes when:* the Ray job vends its storage credential (the catalog's STS door, the same one
   `POST /v1/outbox/credentials` was added to) keyed on `RASK_CREDENTIAL_REF`, and `S3_KEY`/`S3_SECRET`
   leave the pod env; plus a gate over `work_order.to_env` asserting every emitted name has a consumer,
