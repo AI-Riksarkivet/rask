@@ -3625,10 +3625,13 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Evidence:* services/medallion/src/medallion/services/compute.py:265-278 rebuilds the JSON scalar index over `lineage->run_id` after every distributed stage write; services/ingest/src/ingest/lander.py:244-250 creates BITMAP `partition_key` + BTREE `id` on every committed bronze dataset; services/catalog/src/catalog/api/v1/endpoints/indices.py:68-129 builds in-process (the `_queue_build` branch is skipped when no topic is set) and tests/e2e-py/test_track_a_acceptance.py:743-771 drives BOTH `create_scalar_index` and `create_index` against a governed table on the deployed catalog (measured live 2026-08-31). The queued J7 lane is OFF by default: chart/values.yaml:1585 `indexTopic: ""` and services/catalog/src/catalog/core/config.py:348 `maintenance_index_topic` default "", set in no values file including chart/values-prod.yaml. chart/values.yaml:1593 `indexAckWait: 3600s` is still a guess (its own comment at :1588-1592 reasons about it, cites no measurement). services/search/src/search/services/constants.py:13-25 still tunes VECTOR_NPROBES=20 / MAX=0.
 - *What would reopen it:* If `_index_lineage` at medallion/compute.py:265 were unreachable (no caller), and lander.py:244 were dead, and the track_a e2e index legs were skipped on every run, the headline claim would hold. The narrower true residual: nothing has ever driven `maintenance_index_topic` end to end in-cluster, so indexAckWait remains unmeasured — that smaller row is real.
 
-**LH-105 · There is no reindex-from-scratch operation in `services/maintenance`**
-`maintenance` · med
+**LH-105 · No door anywhere in the estate rebuilds an index in place, so a mis-parameterised vector index is unrepairable through the API**
+`catalog, maintenance` · med
 
-- *Why open:* Carried as a one-phrase row, so a corrupt or mis-parameterised index can only be repaired by hand.
+- *Why open:* Nothing composes a rebuild. The capability exists one layer down — `replace=True` on
+  pylance's own create call — and no service exposes it, so the repair for a corrupt or
+  mis-parameterised index is a hand-run script against the bucket with the operator's own credentials,
+  outside authz and emitting no lineage.
 - **RE-MEASURED 2026-09-14 — the premise holds, it is SHARPER than stated, and the fix needs no new
   vocabulary.** `index_build.build_index` deliberately does not pass `replace`, and says why
   (`index_build.py:84-87`): the spec's request carries no such field, so no caller can ask for it and
@@ -3640,9 +3643,56 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `api/v1/endpoints/indices.py:180-195` over the native `drop_table_index` op with a `DROP_INDEX`
   lineage emit, and it is live on the deployed catalog (read off `/openapi.json` on port 2333,
   2026-09-14). A reindex is therefore drop-then-create against doors that both exist.
-- *Closes when:* Add a drop-and-rebuild-index operation to `services/maintenance` with a door, a task
-  record and a test — composed from the existing `DropTableIndex` + the index work unit rather than a
-  new primitive, and covering the vector case, which is the one that cannot repair itself today.
+- **RE-MEASURED 2026-09-15 AGAINST pylance 11.0.0 (the version the deployed catalog runs — local and
+  pod agree), AND IT CHANGES THE PRESCRIBED COMPOSITION. A REINDEX MUST NOT DROP FIRST.**
+  `LanceDataset.create_index` carries `replace: bool = False` and `create_scalar_index` carries
+  `replace: bool = True` — read off the signatures, then driven: a same-name vector rebuild is REFUSED
+  (`LanceError(Index): Index name 'vidx' already exists`) at the default and **ACCEPTED under
+  `replace=True`**; a scalar rebuild is accepted either way. So the vector case, which this row
+  correctly identifies as the one that cannot repair itself, is repaired by a flag pylance already
+  has — not by a drop.
+  *Drop-then-create is the WORSE composition, which is why this supersedes the ask rather than
+  refining it.* It opens a window in which the table has no index at all (a search silently degrades
+  to a full scan), and if the rebuild then fails the table is left with nothing — strictly worse than
+  the mis-parameterised index the operator was repairing. `replace=True` swaps the index in one
+  commit and has no such window.
+- **A FAITHFUL REBUILD IS POSSIBLE, AND IT TAKES TWO READS, NOT ONE.** Driven on 11.0.0 against an
+  `IVF_PQ(num_partitions=4, num_sub_vectors=2, metric='cosine')` index:
+  `describe_indices()` yields `.name`, `.index_type`, `.field_names` (so the column needs no separate
+  lookup), `.type_url` and `.details` — for a vector index `{"metric_type": "COSINE", "compression":
+  {"type": "pq", "num_bits": 8, "num_sub_vectors": 2}, "runtime_hints": {...}}`; for `Inverted` the
+  whole tokenizer record (`base_tokenizer`, `language`, `with_position`, `stem`, ...); for `BTree` and
+  `Bitmap` an EMPTY `{}`, which is full fidelity because they carry no build parameter beyond the
+  column.
+  **`num_partitions` is the one field `describe_indices()` does not carry** — measured absent from
+  `.details` and present as `indices[0].num_partitions` in `index_statistics(name)`. So a vector
+  rebuild that reads only the non-deprecated call silently re-partitions the index to pylance's
+  default. Both calls are required.
+  *Two traps checked and cleared:* `create_index(metric="COSINE")` is accepted, so the upper-case
+  spelling `.details` reports needs no normalising; and `create_scalar_index(index_type="BTree")` — the
+  mixed-case spelling `describe_indices()` reports — is accepted verbatim.
+  *And the vector/scalar discriminator is OBSERVABLE rather than guessed:* `.type_url` is
+  `/lance.index.pb.VectorIndexDetails` for a vector index and `/lance.table.<Kind>IndexDetails` for
+  every scalar one. `IndexWorkItem.kind`'s docstring objects that a worker "guessing between them would
+  build a different index than the caller asked for" — that objection does not reach this door, which
+  reads what exists instead of inferring from `index_type`.
+- **THE DOOR BELONGS ON THE CATALOG, NOT ON `services/maintenance`, and the row's placement is the one
+  part that cannot be honoured as written.** `services/maintenance` has NO human-facing HTTP surface:
+  `api/routes.py:282-294` mounts only the two cron bindings, each behind `require_dapr_token`, and
+  `api/index_work.py` / `api/work.py` / `api/arrival.py` are Dapr subscriptions under the same token.
+  Adding an operator door there is a new CLASS of surface for that service, not a new operation on it.
+  The catalog already carries exactly this shape: `api/v1/endpoints/maintenance.py` serves
+  `POST /v1/table/{id}/maintenance/{preview,run,compact}` — non-spec composite verbs under a
+  `/maintenance/` sub-path, owner-gated on `can_drop`, and `compact` already splits queue-or-inline on
+  `maintenance_work_topic` so the two services cannot disagree about whether a worker exists. A reindex
+  is that pattern with `maintenance_index_topic` and an `IndexWorkItem`. (An earlier note of mine
+  called a composite verb on a spec object's route grammar "a design decision with real downside";
+  that is materially weaker than stated — the precedent is established, sanctioned and three doors
+  wide, and this row needs no owner ruling to follow it.)
+- *Closes when:* `POST /v1/table/{id}/maintenance/reindex` on the catalog reads the live index's
+  parameterisation through BOTH calls above, refuses a branch like the twelve sibling doors, and
+  rebuilds under `replace=True` — queued onto the index topic where one is configured and inline where
+  it is not — with a test that covers the vector case and fails if the rebuild loses `num_partitions`.
 
 **LH-106 · Resilience rows exist only inline in `RESILIENCE.md`: the chaos harness was never automated, DLQ sidecar parking was never driven live, and lineage scale-0 restart-replay was never re-verified**
 `lineage, chart` · med
