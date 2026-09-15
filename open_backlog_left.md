@@ -2464,9 +2464,22 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   `owner` + `parent`. The revoke is deliberate and correct on its own terms — it is the reused-id
   privilege-bleed guard — but it means the owner who just dropped an object cannot retry that drop,
   which is precisely the "caller recovering from a partial failure" this row added `Skip` for.
-- *Stated narrowly on purpose:* what is measured is that the OWNER who dropped it is refused. Whether a
-  principal holding a rung from higher up (project admin, estate admin) still reaches the `Skip` path is
-  NOT measured, and this row does not claim it either way.
+- **AND IT IS UNREACHABLE FOR EVERYONE, not just for the owner — asked of the model directly rather
+  than inferred.** `ListUsers` for `can_delete` on the dropped id returns **0 principals**; the same
+  query on a live sibling returns 2. No project admin, no estate admin, nobody.
+- *The argument closes because `Skip` only ever applies to an ABSENT target, and every absent target is
+  unreachable for the same reason:*
+  * absent because it was DROPPED — `revoke_ownership` cleared its tuples, parent edge included;
+  * absent because it NEVER EXISTED — it has no tuples either (driven: `lh037absent` -> 403).
+  Every `namespace` relation resolves through a direct tuple or the parent chain, and an absent id has
+  neither, while the authorization gate runs BEFORE existence resolution. So the door can never reach
+  the branch: `Skip` is dead on this door as built.
+- *What that does NOT mean:* the `DropMode` vocabulary and the `drop_namespace` work are not wasted —
+  `Fail` is the reachable default and the subtree enumeration fix stands. What is unreachable is the
+  one mode added to make a retry idempotent, and it is unreachable for a reason that lives in the GATE
+  rather than in the drop. Whoever fixes it must answer the ordering question — an existence-aware
+  refusal on a door that deliberately refuses before resolving existence, which the catalog skill
+  records as a class rule (no existence oracle on destructive doors) rather than a per-door choice.
 - *Closes when:* the roll observes all three, and `Overwrite` on the namespace door is either
   implemented against an owner ruling on the cascade/trash interaction or stays refused.
   Note `modes.py` records a deliberate decision that an UNRECOGNISED mode falls through to `Create`
