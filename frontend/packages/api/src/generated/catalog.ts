@@ -2536,6 +2536,8 @@ export interface paths {
          * Preview Maintenance
          * @description Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
          *     gated (``can_drop``); never mutates.
+         *
+         *     ``branch`` is DECLARED only so it can be REFUSED — see the module header.
          */
         post: operations["preview_maintenance_v1_table__id__maintenance_preview_post"];
         delete?: never;
@@ -2597,6 +2599,8 @@ export interface paths {
          * Run Maintenance
          * @description Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
          *     (``can_drop``) — the same bar as scheduling it via the retention policy.
+         *
+         *     ``branch`` is DECLARED only so it can be REFUSED — see the module header.
          */
         post: operations["run_maintenance_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -13483,6 +13487,7 @@ export interface operations {
     compact_maintenance_v1_table__id__maintenance_compact_post: {
         parameters: {
             query?: {
+                branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13534,6 +13539,7 @@ export interface operations {
     preview_maintenance_v1_table__id__maintenance_preview_post: {
         parameters: {
             query?: {
+                branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13576,6 +13582,7 @@ export interface operations {
     reindex_maintenance_v1_table__id__maintenance_reindex_post: {
         parameters: {
             query?: {
+                branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13627,6 +13634,7 @@ export interface operations {
     run_maintenance_v1_table__id__maintenance_run_post: {
         parameters: {
             query?: {
+                branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };

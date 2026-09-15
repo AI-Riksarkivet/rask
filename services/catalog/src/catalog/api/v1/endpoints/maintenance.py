@@ -4,6 +4,20 @@ Both are owner-gated by the router (``maintenance/preview`` / ``maintenance/run`
 fga_deps — reclaiming version history is the drop rung, exactly like the retention policy that schedules it).
 The preview never mutates; the run reclaims old versions with the sweep's tag exemption. The heavy Lance
 work (open dataset, list versions, cleanup) runs in a threadpool so the event loop stays free.
+
+**EVERY DOOR HERE DECLARES ``branch`` ONLY SO IT CAN REFUSE IT**, and not accepting the parameter is
+not the same as refusing it: FastAPI drops an undeclared query parameter in silence, so a door that
+"takes no branch" is exactly the shape that answers 200 for a branch it ignored. None of these verbs
+can be scoped to a ref — ``open_dataset`` resolves main and nothing downstream carries one — so a
+caller who names a branch and is told 200 has been told their branch was reclaimed, rewritten or
+reindexed when MAIN was.
+
+The estate has paid for this twice. ``indices.py`` records why the spec index doors declare the field
+only to refuse it, and ``ff9604be`` fixed the destructive version: a branch-targeted
+``drop_table_index`` was destroying MAIN's index and answering 200. The reindex door added on
+2026-09-15 reintroduced the pattern on a new route the same day, which is why the gate
+(``test_the_maintenance_doors_refuse_a_branch_they_cannot_honour``) is derived from the mounted routes
+rather than written door by door — a fifth verb inherits it without an edit.
 """
 
 from __future__ import annotations
@@ -17,7 +31,7 @@ from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDe
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import open_dataset
 from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
-from catalog.services import index_specs, maintenance
+from catalog.services import dataplane, index_specs, maintenance
 from service_kit import dapr_publish
 from service_kit.lakehouse import base_refs
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem, IndexWorkItem
@@ -50,9 +64,12 @@ async def _base_refs(ds: object, so: dict[str, str]) -> maintenance.BaseRefs:
 
 
 @router.post("/{id}/maintenance/preview")
-async def preview_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> GcPreview:
+async def preview_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, branch: str | None = None) -> GcPreview:
     """Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
-    gated (``can_drop``); never mutates."""
+    gated (``can_drop``); never mutates.
+
+    ``branch`` is DECLARED only so it can be REFUSED — see the module header."""
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/preview")
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     result = await run_in_threadpool(
@@ -65,9 +82,12 @@ async def preview_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settin
 
 
 @router.post("/{id}/maintenance/run")
-async def run_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> GcRunResult:
+async def run_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, branch: str | None = None) -> GcRunResult:
     """Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
-    (``can_drop``) — the same bar as scheduling it via the retention policy."""
+    (``can_drop``) — the same bar as scheduling it via the retention policy.
+
+    ``branch`` is DECLARED only so it can be REFUSED — see the module header."""
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/run")
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     protected = await _base_refs(ds, so)
@@ -102,6 +122,7 @@ async def compact_maintenance(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    branch: str | None = None,
 ) -> CompactResult | CompactAccepted:
     """Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
@@ -117,6 +138,7 @@ async def compact_maintenance(
     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
     whose fragment count nobody bounded.
     """
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/compact")
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     protected = await _base_refs(ds, so)
@@ -180,6 +202,7 @@ async def reindex_maintenance(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    branch: str | None = None,
 ) -> ReindexResult | ReindexAccepted:
     """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
     index that is there, and an unmapped suffix would fall through to the writer rung.
@@ -203,6 +226,7 @@ async def reindex_maintenance(
     `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
     runs here.
     """
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/reindex")
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     spec = await run_in_threadpool(index_specs.describe_index_for_rebuild, ds, body.index_name)
