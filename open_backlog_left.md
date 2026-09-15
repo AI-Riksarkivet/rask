@@ -4676,11 +4676,31 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   platform storage, and it stands. These tables are not asking for one: their namespaces already have
   warehouse parents, so the ordinary table->namespace->warehouse cascade would reach them if the table
   were seeded at all.
-- *Mechanism under trace 2026-09-15* — the suspect is the registration seam
-  (`medallion/services/catalog_register.py`: `ensure_stage_output` and `register_written_dataset`)
-  reaching a catalog door that does not seed, or seeding being skipped on the 409-as-convergence path.
-  **The measurement above is the finding; the mechanism is not yet confirmed and this row will not
-  claim one until it is.**
+- **MECHANISM, traced and then re-read by hand 2026-09-15:** `table_create.py` guards the whole seed
+  with `if not existok_kept_existing:`. `ensure_stage_output` is describe-then-create-with-ExistOk, so
+  the FIRST call that finds the table already present skips seeding entirely — and every later one
+  skips it again. A table that misses its seed once can never acquire tuples through that door.
+- *The guard is right about `owner` and wrong about `parent`, and the two are in one call.* Its comment
+  argues that an ExistOk which kept an existing table must not grant the caller `owner`, because that
+  would seize another user's table — correct, and audited CRITICAL. But the same skip drops the
+  `parent` EDGE, which is not an ownership question: it is a structural fact about where the table
+  lives, it is idempotent, and it grants nothing by itself.
+- *Commit `b23b1f87` had already drawn exactly this distinction and the caller defeats it.* Its message
+  states the design in its own words — *"that is why the parent edge is still written unconditionally,
+  and why `grant_owner` is a flag on the SAME batch rather than a second call — dropping the owner
+  tuple and dropping the edge look identical at the call site and are opposite in effect."* The flag
+  exists so the edge survives; `table_create.py` skips the call that carries both.
+- *Two further silences make it invisible*, and a fix that leaves them is half a fix: `seed_ownership`
+  returns None when `fga_enabled` is off, the token is None or the client is unwired, so a table with
+  zero tuples and a correctly seeded one are byte-identical to the caller (200 + a location); and the
+  drift IS detected in production by lineage's reconciler, classified `UNGOVERNED`, and emitted as a
+  bare `log.warning` with no alerting rule behind it.
+- *The gate that should have caught it asserts one frame too high.* The FGA-enabled door tests
+  monkeypatch `grant_on_create` and assert the CALL KWARGS
+  (`tests/integration/test_authz.py::test_create_table_seeds_owner_and_parent_tuples`,
+  `tests/unit/test_bronze_is_governed_end_to_end.py::test_registering_seeds_the_ownership_tuples`), so
+  they pin that the right arguments were passed, never that a tuple exists. Deleting the EFFECT of
+  `parent_object` is invisible to every one of them. Add a gate that reads the store, not the mock.
 - *Closes when:* a cascade-registered tier carries `owner` and `parent` the moment it is registered,
   the five tables above are repaired, the sweep stops refusing them, and a gate fails if a catalog
   table object ever exists with no parent tuple.
