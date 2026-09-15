@@ -75,7 +75,20 @@ opening — and are not counted here.
 | **Low priority** (flows, search, viewer, annotator) | 28 | 1 |
 
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
-checks the HIGH column too, so neither can drift from the rows below. Items are numbered continuously; the ids in brackets are the source rows they came
+checks the HIGH column too, so neither can drift from the rows below.
+
+**THE STALE-ROW SEAM IS DRAINED, measured 2026-09-15 — do not plan another sweep on the old base
+rate.** The standing instruction cites 2026-09-09, when 8 of 17 settled rows turned out already fixed,
+and that number has been used since to justify re-measuring before working anything. It is still the
+right instinct per ROW and it is no longer a good bet in BULK: two adversarial sweeps re-measured **24
+unblocked lakehouse rows against the code** and found exactly **one** already satisfied ([[LH-053]],
+closed) plus one whose first half had landed ([[LH-149]], since finished and closed). Every other row
+came back OPEN or PARTIAL, with its remaining half named.
+
+So the cheap wins are gone: what is left in phase 1 is real work or an owner decision, and the
+sweeps' value from here is narrowing a row's ask rather than closing it outright. Re-measuring the
+single row you are about to touch stays mandatory — that is how [[LH-157]] was found closed and how
+two wrong root causes were caught the same day. Items are numbered continuously; the ids in brackets are the source rows they came
 from, kept so an old citation still resolves.
 
 
