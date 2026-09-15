@@ -95,3 +95,39 @@ def test_both_dialects_agree_on_what_terminal_means() -> None:
         "run states are terminal — the graph would refuse to leave a state the feed still dedups, or worse"
     )
     assert cypher_states, "neither definition parsed — the gate would pass vacuously"
+
+
+def test_the_attempt_counter_counts_FAILURES_and_not_every_event() -> None:
+    """[[LH-098]]. `attempts` answers "did this run fail first, and how often" on the ONE node the
+    deterministic-run-id flood guard makes every tick MERGE onto — so it must move only on a FAIL. An
+    unguarded increment would count COMPLETEs and RECONCILEDs too and report a healthy run as a
+    repeatedly-failing one.
+    """
+    assert "attempts" in _assignments(), "MERGE_RUN no longer assigns `attempts` — failures are structurally uncountable again"
+    # Asserted against the STATEMENT, not the parsed rhs: `_ASSIGNMENT`'s rhs group captures only the
+    # first token, because its question is "conditional or bare $param". Content checks in this file
+    # read `cy.MERGE_RUN` directly, as the two guards above do.
+    assert "r.attempts=(CASE WHEN $et = 'FAIL'" in cy.MERGE_RUN, (
+        f"the attempt counter is not gated on a FAIL event, so every COMPLETE would increment it: {cy.MERGE_RUN}"
+    )
+
+
+def test_the_attempt_counter_cannot_be_inflated_by_a_REDELIVERY() -> None:
+    """The correctness of the counter, and the reason it is not a bare `coalesce(...)+1`.
+
+    `MERGE_RUN` runs on EVERY ingest, while `/events` dedups redelivered FAIL rows on its partial-unique
+    `(run_id, event_type)` index. So an unguarded increment counts DELIVERIES rather than attempts, and
+    the sidecar's own retry schedule would inflate it on its own — the number would measure the
+    transport, not the dataset. A genuine attempt stamps a later `event_time`; a redelivery replays the
+    same payload with the same one, so the strict comparison counts the first and ignores the rest.
+    """
+    body = cy.MERGE_RUN
+
+    assert "r.attempts=(CASE WHEN $et = 'FAIL' AND coalesce(r.last_attempt_at, '') < $tm" in body, (
+        "the attempt counter is not guarded on a strictly newer timestamp, so a redelivery increments it"
+    )
+    # The stamp must advance under the SAME condition, or the guard leaks: a counter that increments
+    # without moving its watermark counts every later delivery too.
+    assert "r.last_attempt_at=(CASE WHEN $et = 'FAIL' AND coalesce(r.last_attempt_at, '') < $tm" in body, (
+        "`last_attempt_at` does not advance under the counter's own condition, so the guard cannot hold next time"
+    )

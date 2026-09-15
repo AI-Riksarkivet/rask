@@ -398,6 +398,10 @@ class RunStatus(BaseModel):
     job: str | None = None
     author: str | None = None
     state: str | None = None
+    #: How many times this run has FAILED, counted on the single node the deterministic-run-id flood
+    #: guard makes every tick MERGE onto ([[LH-098]]). None on a run that has never failed, and on one
+    #: recorded before the counter existed — absent and zero are different facts here.
+    attempts: int | None = None
     outputs: list[str] = Field(default_factory=list)
     progress_done: int | None = None
     progress_total: int | None = None

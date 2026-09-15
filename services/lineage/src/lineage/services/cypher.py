@@ -86,6 +86,23 @@ MERGE_RUN: Final = (
     # error_message rides the same gate rather than being sticky: a retry that genuinely succeeds later
     # MUST clear the earlier failure's message, and a stale FAIL must not re-attach one to a live run.
     "r.error_message=(CASE WHEN supersedes THEN $err ELSE r.error_message END), "
+    # ATTEMPTS: how many times this run has FAILED, counted on the node the flood guard already makes
+    # every tick MERGE onto ([[LH-098]]). `lineage_emit` derives a DETERMINISTIC run id per dataset
+    # precisely so a persistently failing dataset does not mint ~720 never-pruned nodes a day, which
+    # left attempts structurally uncountable — "did it fail first, and how often" had no answer. A
+    # counter on the single target answers it without multiplying nodes, which is what that guard's own
+    # comment asks for.
+    #
+    # GUARDED ON A STRICTLY NEWER TIMESTAMP, and that is the whole correctness of it. `MERGE_RUN` runs
+    # on EVERY ingest, while `/events` dedups redelivered FAIL rows on its partial-unique
+    # (run_id, event_type) index — so an unguarded `coalesce(r.attempts,0)+1` would count REDELIVERIES,
+    # not attempts, and the sidecar's retry schedule alone would inflate it. A genuine attempt stamps a
+    # later `event_time`; a redelivery replays the same payload with the same one, so `<` counts the
+    # first and ignores the rest.
+    "r.attempts=(CASE WHEN $et = 'FAIL' AND coalesce(r.last_attempt_at, '') < $tm "
+    "THEN coalesce(r.attempts, 0) + 1 ELSE r.attempts END), "
+    "r.last_attempt_at=(CASE WHEN $et = 'FAIL' AND coalesce(r.last_attempt_at, '') < $tm "
+    "THEN $tm ELSE r.last_attempt_at END), "
     # operation is STICKY: a later event of the same run that carries no lance facet
     # ($op='') must not erase the operation an earlier event declared (START stamps it, terminal may not).
     "r.job=$job, r.operation=(CASE WHEN $op = '' THEN r.operation ELSE $op END), "
@@ -130,7 +147,7 @@ RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
 _LIST_RUNS_BODY: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
-    "r.promotion_status, r.consumed_to_version, r.consumed_from_version, r.cascade_id"
+    "r.promotion_status, r.consumed_to_version, r.consumed_from_version, r.cascade_id, r.attempts"
 )
 LIST_RUNS: Final = _LIST_RUNS_BODY
 #: ONE run's state, projected identically to the board so both answer the same shape. Built from the

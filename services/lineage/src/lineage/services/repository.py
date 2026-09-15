@@ -527,7 +527,7 @@ class LineageRepository:
         question — and became WRONG once the board was bounded, because a run outside the newest page
         is absent from the response while being present in the graph.
         """
-        rows = await fetch(self._pool, self._graph, cy.RUN_BY_ID, {"rid": run_id}, columns=17)
+        rows = await fetch(self._pool, self._graph, cy.RUN_BY_ID, {"rid": run_id}, columns=18)
         return self._run_status_from(rows[0]) if rows else None
 
     async def run_inputs(self, run_id: str) -> RunInputs:
@@ -748,7 +748,7 @@ class LineageRepository:
         unbounded shape for callers that genuinely need the whole board.
         """
         query = cy.list_runs_page(limit) if limit is not None else cy.LIST_RUNS
-        rows = await fetch(self._pool, self._graph, query, columns=17)
+        rows = await fetch(self._pool, self._graph, query, columns=18)
         runs = [self._run_status_from(r) for r in rows]
         runs.sort(key=lambda run: run.updated_at or "", reverse=True)
         return Runs(runs=runs)
@@ -779,6 +779,12 @@ class LineageRepository:
             consumed_to_version=(r[14] if len(r) > 14 and isinstance(r[14], int) and r[14] >= 0 else None),
             consumed_from_version=(r[15] if len(r) > 15 and isinstance(r[15], int) and r[15] >= 0 else None),
             cascade_id=((r[16] or None) if len(r) > 16 else None),
+            # APPENDED, never inserted: this projection is positional and its own comment warns that a
+            # column added to the board must reach the point read too, because the caller declares a
+            # count and a mismatch is a 500 rather than a short row. Guarded on length like its
+            # neighbours, so a Run node written before the column existed reads as None rather than
+            # raising ([[LH-098]]).
+            attempts=(r[17] if len(r) > 17 and isinstance(r[17], int) and not isinstance(r[17], bool) and r[17] >= 0 else None),
         )
 
     async def list_all_columns(self) -> list[tuple[str, str]]:
