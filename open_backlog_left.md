@@ -282,7 +282,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *The test imports each module in a SUBPROCESS rather than reading source*, because by the time a
   suite reaches it an earlier test has already pulled the engine into the interpreter and an in-process
   check would pass regardless. That is also exactly why the earlier verdict was wrong.
-  **Built and deployed? NO — rides the pending roll.**
+  **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 - *What remains for condition 3 to be declared met:* `dapr-ext-workflow` is still an unconditional
   entry in `services/medallion/pyproject.toml`. Cutting the import edges is what makes an optional
   extra POSSIBLE; making it optional is the other half, and it is a packaging decision rather than a
@@ -430,8 +430,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   record `DEAD_LETTERED`, because a route that cannot ask must not answer "nothing was lost". Because
   the re-parks are what inflated the count, they stop counting as loss the moment the run heals, which
   is what collapses the two-order-of-magnitude gap. RED-first, 7 tests in
-  `tests/unit/test_a_park_the_graph_already_holds_is_not_terminal_loss.py`. **Built and deployed? NO —
-  rides the pending roll.**
+  `tests/unit/test_a_park_the_graph_already_holds_is_not_terminal_loss.py`. **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 
 - *Closes when:* (b) the DLQ stream becomes replayable — re-presenting `dlq.<appId>` to the ingest
   handler is idempotent on `run_id`. **It must NOT go through the outbox relay**, which was the obvious
@@ -678,10 +677,14 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   **THE CP-007 BLOCKER IS CLEARED (2026-09-11).** Ingest can write the outbox — the credential is vended through the catalog's outbox door and the whole path was observed end to end (`lineage_outbox_drained drained=1 stranded=0`), so staging is worth something now. What remains is the CONSOLIDATION, and it is a LATENT trap rather than present loss: `lineage_kit/emitter.py` swallows a transport failure with `log.warning("lineage_emit_failed")` and stages nothing, while the backstop that saves ingest (`_stage_undelivered`) lives in ingest rather than in the kernel. Today that costs nothing, because ingest is the kernel's only service importer. It costs a silently-lost event the day a second HTTP producer is added by someone who reasonably expects the emitter to be durable — which is precisely the duplication R10 exists to end.
 - *Closes when:* Delete `service_kit.lancekit.openlineage`/`lineage_emit` and the per-service `lineage_emit.py` copies, route every producer through `packages/lineage-kit`'s emitter and one `RunEvent` builder, and stage each event in an outbox before transport so a failed emit is retried rather than dropped.
 
-**LH-006 · `UPSTREAM`/`DOWNSTREAM`/column-lineage Cypher is unbounded `*1..`, and Dataset nodes carry no `latest_version`**
-`lineage` · med
+**LH-006 · ~~`UPSTREAM`/`DOWNSTREAM`/column-lineage Cypher is unbounded `*1..`, and Dataset nodes carry no `latest_version`~~ — CLOSED 2026-09-16**
+`lineage` · was med
 
-- *Why open:* The `/producers` and retention/index clauses closed; traversal depth did not. The query
+- **CLOSED BY THREE CHANGES, AND THE THIRD IS NOT THE ONE THIS ROW ASKED FOR.** The walks gained a
+  reachable bound (2026-09-15); every traversed EDGE label gained endpoint indexes (`16dd2da6`); and the
+  39 indexed LOOKUPS were rewritten into the form AGE can serve from an index (`17e41ffb`). The
+  `latest_version` property the row prescribed was NOT added, deliberately — see below.
+- *Why the original ask:* The `/producers` and retention/index clauses closed; traversal depth did not. The query
   CONSTANTS are `*1..`, and `age.py:44` names the unbounded path over a grown graph as why a pooled
   connection cannot be pinned.
 - **RE-MEASURED 2026-09-11 — "no door applies a ceiling" is FALSE, and the ask is a semantic change
@@ -1371,8 +1374,8 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   work: `seed_ownership_or_compensate` is measured here to be doing its job, and the 58 are not evidence
   against it.
 
-**LH-140 · A manifest-declared base path is granted READ with no check that the caller may read it**
-`catalog` · med · filed 2026-09-11 · **the writer-chosen escalation is CLOSED 2026-09-13; an operator-sanctioned residual remains**
+**LH-140 · ~~A manifest-declared base path is granted READ with no check that the caller may read it~~ — CLOSED 2026-09-16**
+`catalog` · was med · filed 2026-09-11 · code landed 2026-09-13 · **deployed and DRIVEN 2026-09-16**
 
 - *Why open:* `build_session_policy` appends a READ grant for every base path the table's manifest
   declares, and a base may legitimately live in its own bucket — so the grant is not confined to the
@@ -1401,7 +1404,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   input. RED-first, 16 tests in
   `services/catalog/tests/test_a_declared_base_cannot_reach_a_table_the_caller_never_opened.py`,
   including both near-misses (`lakehouse-evil`, `mine$t-evil`) that a bare prefix test would admit.
-  **Built and deployed? NO — rides the pending roll.**
+  **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
+
+  **And DRIVEN, not merely present.** `build_session_policy` was called inside the running catalog with
+  the pod's own empty `LANCE_MULTIBASE_DATA_BASES`:
+
+      own base       s3://lakehouse-wh/medallion/bronze/base    KEPT
+      foreign base   s3://other-tenant-wh/secret/table          DROPPED  (+ vend_base_path_unsanctioned)
+      same base, with sanctioned_bases=['s3://other-tenant-wh'] KEPT
+
+  The third line is what makes the second mean something: it shows the drop is a sanction TEST rather
+  than a blanket refusal, which a foreign-base-only probe would have passed either way.
 
 - *Why the allowlist rather than the per-base FGA check this row originally prescribed:* there is no
   location->table index in the catalog, so "resolve each base to a table id" costs either a walk of the
@@ -2374,7 +2387,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   between `@router.get("/{id}/list")` and `list_namespaces`, so the route was registered to the merge
   helper and the endpoint was gone. The LH-031 suite could not see it — those tests call the function
   directly — and `test_di_aliases_are_only_on_routes` did, by flagging `list_namespaces` as a non-route
-  helper still carrying `NamespaceDep`/`SettingsDep`. **Built and deployed? NO — rides the pending roll.**
+  helper still carrying `NamespaceDep`/`SettingsDep`. **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 
 **LH-032 · ~~`handle_validation_error` hardcodes 422 while emitting `ErrorCode.INVALID_INPUT`, which maps to 400 — the vendored spec contains zero 422s~~ — CLOSED 2026-09-15: INVALID_INPUT answers 400 on a spec route**
 `catalog, service-kit` · med
@@ -2407,7 +2420,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   on every validating operation and `docs/catalog-openapi.json` carries that to the frontend — measured,
   159 operations declaring 422 and NONE declaring 400. Serving 400 without moving it would relocate the
   disagreement rather than close it. After regeneration: spec routes `422=0/400=54`, rask-only
-  `422=105/400=0`. Mutation-proven both ways. **Built and deployed? NO — rides the pending roll.**
+  `422=105/400=0`. Mutation-proven both ways. **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 - *Unrelated drift absorbed in the same commit, stated so it is not read as caused by it:* the committed
   contracts had not been regenerated since 2026-09-10, so `ReconcileState`'s `ungoverned` and a schema's
   `versions_without_lineage` came in too — `make openapi-check` was ALREADY red, verified by
@@ -2481,7 +2494,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   mode still folds to `Create` — `modes.py` records that tolerance as deliberate for typos and it
   stays. RED-first, 9 tests in
   `tests/unit/test_a_namespace_create_mode_means_what_the_spec_says.py`, three of them pinning
-  unchanged behaviour. **Built and deployed? NO — rides the pending roll.**
+  unchanged behaviour. **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 - **AND THE IGNORED `mode` HAD A SECOND VICTIM, found while fixing this one.** `undrop_namespace`
   promises in its own docstring that "a rerun after a mid-recovery failure finishes the job instead of
   409-ing on what the first attempt already rebuilt". Half of that was earned: the TABLE loop catches
@@ -2661,7 +2674,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   accumulated one object per validate call. Cleaned now, and only when it landed: a correctly scoped
   credential is refused that delete too, and reporting the refusal as a cleanup failure would be a false
   alarm about the store that had just passed. RED-first, 5 tests, mutation-proven three ways.
-  **Built and deployed? NO — rides the pending roll.**
+  **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 - *Closes when:* the roll observes it. The `scripts/verify_lance_storage.py::check_conditional_put`
   script stays as the manual whole-store sweep; what changed is that a warehouse door now asks the
   question for the bucket it is about to govern.
@@ -3208,7 +3221,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   `model.json`, measured through the SDK deserializer `_canonical_model` is actually handed. **That
   equality did NOT hold as first shipped**, and the next entry is why: the original measurement used the
   REST JSON on both sides, which is not what the function receives. RED-first, 6 tests, two of which pin that the canonical form is neither always-equal
-  nor never-equal. **Built and deployed? NO — rides the pending roll.**
+  nor never-equal. **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 - **THE SKIP SHIPPED UNABLE TO FIRE, and an adversarial pass caught it (`12a77138`).** `_plain`
   called the SDK's `to_dict()`, and openfga_sdk's generated models render PYTHON attribute names unless
   asked otherwise — `attr = self.attribute_map.get(attr, attr) if serialize else attr` — so `to_dict()`
@@ -3445,8 +3458,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   because a diagnostic could not run is the wrong trade. Gated on `provision=True` so the nine services
   sharing the bundled model do not report the same divergence nine times.
   RED-first, 8 tests, mutation-proven in both halves: removing the `auth_lifespan` call reds the wiring
-  test, removing the comparison reds three rule tests. **Built and deployed? NO — rides the pending
-  roll.**
+  test, removing the comparison reds three rule tests. **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live.
 - *Closes when:* the above ships AND an owner takes the values decision — which is now a decision
   rather than a trap. **NOT TAKEN HERE, deliberately:** whether to pin, and whether
   `scripts/k3s-pins.sh` should capture the live store/model ids beside the image tags (it is the
@@ -3538,7 +3550,7 @@ caller — and the latent gap below.
   docstring described the first assertion while calling it the second), and two chooser tests declared
   ray while leaving `ray_enabled` at its default `False` — exercising this very path under another
   name. RED-first, 7 new tests, mutation-proven: restoring the constant reds three.
-  **Built and deployed? NO — rides the pending roll.** Still LATENT there: all four medallion workloads
+  **DEPLOYED 2026-09-16** (rode `main-16dd2da6` / `main-17e41ffb`, helm 160/161). Verified by reading the RUNNING pods rather than inferring it from the tag: the deployed source of catalog, lineage, medallion and maintenance is byte-identical to HEAD (md5 of each module's file inside the container against `git show HEAD:<path>`), so every fix committed before HEAD is live. Still LATENT there: all four medallion workloads
   run `MEDALLION_RAY_ENABLED=true` (re-measured 2026-09-13), so the roll changes no live behaviour —
   it makes the Ray-OFF configuration honest.
 - *Closes when:* the roll observes it. There is nothing further to build.
