@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**226 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**225 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 80 | 12 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 79 | 12 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4632,7 +4632,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   as a supported-combination matrix instead of being inferred from two independent-looking flags.
   A second engine that has actually run in-cluster is the evidence this row is really closed.
 
-**LH-163 · The sweep's base probe is permanently denied on `lance-catalog/models/`, and answers with a full traceback every pass**
+**LH-163 · ~~The sweep's base probe is permanently denied on `lance-catalog/models/`, and answers with a full traceback every pass~~ — CLOSED 2026-09-15, observed live**
 `maintenance, chart` · med · measured 2026-09-15 on the running `rask-maintenance`
 
 - *The mechanism:* `features.gather_compaction_bases` probes every base a manifest declares, and
@@ -4661,8 +4661,9 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `describe_compaction_unsupported_flags`, so "unknown resolves to refusal" holds. A de-duplication
   that also dropped the evidence would silently PERMIT the rewrite these bases exist to refuse, which
   is the failure direction that costs a clone its reason to exist — mutation-tested in both directions.
-- *Closes when:* observed on the live sweep — one line for that base per pass instead of 134 rendered
-  tracebacks.
+- **OBSERVED LIVE on `main-4fcfd969`:** rendered tracebacks per pass **134 -> 0**, lines for that base
+  **134 -> 1**, and the sweep's own result **unchanged at `datasets=552 skipped=0 refused=320`** — which
+  is the half that matters, because it shows the gate did not move while the noise did.
 
 **LH-164 · The sweep asks authz about datasets that are not catalog tables, and advises a grant that cannot be made**
 `maintenance` · med · measured 2026-09-15; **headline corrected after the live manifests were read**
