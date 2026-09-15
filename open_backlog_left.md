@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 81 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 81 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4685,22 +4685,40 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   the five tables above are repaired, the sweep stops refusing them, and a gate fails if a catalog
   table object ever exists with no parent tuple.
 
-**LH-165 · Four of 97 warehouses never got the `maintainer` grant, so every table beneath them is unmaintainable**
-`catalog` · med · measured 2026-09-15 against the live OpenFGA store
+**LH-165 · NO code writes a per-warehouse `maintainer` tuple — the 93 that have one were written by hand, and every warehouse created since gets none**
+`catalog` · **HIGH** · measured 2026-09-15 against the live store, the code and the registry timestamps
 
-- *Measured:* 93 of 97 warehouse objects carry `maintainer@user:service-maintenance`; the four that do
-  not are `e2e-iso-a`, `e2e-iso-b`, `lane-wh` and `trackab1bc9ea2-wh`. Unlike [[LH-164]] their tables
-  ARE correctly parented (`table:trackansb1bc9ea2$plain` -> `parent: namespace:trackansb1bc9ea2`), so
-  here the chain breaks at the TOP rung rather than the bottom one.
-- *The consequence is the same shape and the cause is not*, which is why it is split out rather than
-  folded in: one warehouse without the grant silently makes an entire tenant's data unmaintainable,
-  and it presents identically to LH-164 in the sweep log.
-- *The question this has to answer before it is fixed:* whether those four are HISTORICAL residue
-  (created before the grant was introduced, in which case the fix is a backfill plus a reconciler that
-  reports the drift) or whether a live create path still skips it (in which case the door is the fix).
-  Backfilling without knowing which would hide a live defect behind a one-off repair.
-- *Closes when:* the distinction above is measured, the live path is fixed if there is one, the four
-  are repaired, and the reconciler reports a warehouse missing the grant instead of nothing.
+- **THE COUNT IS INVERTED FROM HOW IT FIRST READ, and that inversion IS the finding.** 93 of 97
+  warehouses carry `maintainer@user:service-maintenance` and 4 do not, which invites "backfill the
+  four". The four are `e2e-iso-a`, `e2e-iso-b`, `lane-wh`, `trackab1bc9ea2-wh` — and sorted by the
+  registry's own `created_at` they are **the four NEWEST** (2026-09-10 ×3, 2026-09-14), while every
+  granted warehouse is older. Across all 96 registry records the cutoff is clean with zero exceptions:
+  newest granted `2026-09-06T04:42Z`, oldest ungranted `2026-09-10T08:36Z`.
+- **The reason is that NO CODE PATH WRITES THAT TUPLE.** Verified two ways: a repo-wide grep for a
+  `maintainer` relation being written across `services/`, `packages/` and `scripts/` returns NOTHING;
+  and `fga_deps.seed_warehouse` — the create door's only seeding — emits `owner@<caller>` plus
+  `cascade_tuples()`, which is the `project` edge and the writer/publisher/validator rungs for
+  `LANCE_FGA_CASCADE_WRITERS` (the medallion producer and its stage runners; never maintenance).
+  `backfill_cascade_grants` calls the SAME function, so the repair path writes the same empty set.
+  The one committed writer is the Helm hook `chart/templates/bootstrap-admin.yaml`, and it writes ONE
+  tuple on ONE fixed object: `FGA_ROOT_OBJECT` = `warehouse:lance_catalog`. `warehouse.maintainer` is
+  `[...] or owner` with no `from parent`, so a grant on the root warehouse reaches no other warehouse.
+- *So the 92 are the artefact and the 4 are the software.* They were written OUT OF BAND into the live
+  store on 2026-09-08, enumerated from the registry as it stood that day
+  (`tests/integration/test_the_maintainer_rung_opens_the_write_tier_vend.py`: *"MEASURED 2026-09-08:
+  `cd4697ab` deployed, 92 `maintainer` tuples written"*). 92 by hand + 1 from the chart hook = 93.
+  **Every warehouse created after that date has no grant and every future one will have none**, so
+  this is a live defect that grows by one per tenant onboarded, not a residue to sweep up.
+- *`cascade_tuples`' own docstring is the tell, and it should be corrected in the same change:* it
+  justifies granting at the warehouse with *"the same property the sweep's `maintainer` grant buys"* —
+  citing, as precedent, a grant that no code has ever written.
+- *Why backfilling first would have been the wrong move:* it repairs four rows, turns the sweep green,
+  and leaves the create door writing nothing — so the next warehouse reopens it and the repair reads
+  as the fix. This row existed for one revision demanding that distinction be measured before acting;
+  it was, and it inverted the answer.
+- *Closes when:* `cascade_tuples` (or the create door beside it) writes the maintainer grant so a new
+  warehouse is maintainable the moment it exists; the four are repaired through that same path rather
+  than by hand; and the reconciler reports a warehouse missing it, since nothing does today.
 
 
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
