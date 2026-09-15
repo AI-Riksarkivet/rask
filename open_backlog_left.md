@@ -3427,14 +3427,25 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   shape `_LIST_RUNS_BODY`'s own comment warns about ("the caller declares a column count and a mismatch
   is a 500, not a short row"). Two of those three live in `services/lineage/tests`, which the
   invariant+integration layers do not run; only the full configured suite does.
-- *WHAT IS STILL OPEN IS THE THIRD CLAUSE, and it is not a formality.* The counter is read here
-  straight out of AGE with `psql`, on a probe dataset that has nothing to reclaim — the row asks for it
-  "through the running app or a door", on a dataset that really has fragments. That is the difference
-  between "the property is written" and "a tenant can see it", and the FGA gate on `/runs` (a run is
-  shown only to a caller holding `can_get_metadata` on every dataset it wrote) is exactly the layer a
-  direct graph read skips.
-- *Closes when:* the counter is read through `/runs` by a governed caller, on a dataset with real
-  fragments to reclaim. The remaining shape of the original ask — a counter on the SINGLE
+- **READ THROUGH THE DOOR, not only out of the graph (2026-09-15).** The AGE reading above is `psql`,
+  which skips the gate that makes this a TENANT fact. Repeated properly: a Dex-minted bearer for
+  `alice@example.com` against `GET /runs` on the deployed lineage service returns runs carrying
+  `attempts` — `75daeba9-... attempts=5 state=FAIL` among them. `/runs` shows a run only to a caller
+  holding `can_get_metadata` on every dataset it wrote, so "FGA-gated per object so a tenant can query
+  its own table's rewrites" is satisfied by the board's existing governance rather than a second gate.
+- **THE LAST CLAUSE IS BLOCKED BY CONVERGENCE, and that is measured, not assumed.** It asks to observe
+  this "on a dataset that actually has fragments to reclaim". There is none: in the last sweep window
+  the deployed maintenance pod produced **2,615 dataset outcomes and ZERO with material work**
+  (`fragments_removed=0` on every one). The audit record is emitted only when `_did_material_work`, so
+  on a converged estate it correctly never fires — which is why the duration is observable today on the
+  `compaction.compact` SPAN and not yet on a `compact_dataset` audit row.
+  *`test_maintenance_s3_e2e` does not settle it either,* and that was checked: it builds multi-fragment
+  fixtures but runs `run_sweep` IN-PROCESS against live S3, so its audit records go to the test
+  process's logger and never through the deployed pod.
+- *Closes when:* one reclaimable dataset exists in a registered, swept warehouse long enough for a
+  deployed tick to compact it, and the resulting `compact_dataset` audit row is read carrying its
+  `duration_seconds`. Manufacturing that is an estate mutation with cleanup, not an observation, which
+  is why it is named here rather than improvised. The remaining shape of the original ask — a counter on the SINGLE
   deterministic FAIL node, not by minting one id per attempt — and make it FGA-gated per object so a
   tenant can query its own table's rewrites; then observe it on a dataset that actually has fragments to
   reclaim, measured through the running app or a door. Do NOT remove the deterministic run id without
