@@ -958,8 +958,44 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   cause the seed/fetch path rather than the door — and the AMBIENT fallback is surfaced as a counter or
   refusal rather than an INFO line, so "every rewrite is root-signed" cannot be the quiet state again.
 
-**LH-143 · The cascade-lag detector cannot report a hop that NEVER RAN — the one case it exists for — because an absent destination is indistinguishable from a forbidden one**
-`medallion, lineage` · low · found 2026-09-11 by reading the estate's own warnings
+**LH-143 · ~~The cascade-lag detector cannot report a hop that NEVER RAN — the one case it exists for — because an absent destination is indistinguishable from a forbidden one~~ — CLOSED 2026-09-16**
+`medallion, lineage` · was low · found 2026-09-11 by reading the estate's own warnings
+
+- **THE MECHANISM IS FIXED, DEPLOYED AND OBSERVED; THE WORKED EXAMPLE THAT MOTIVATED THE ROW IS
+  REFUTED.** Both halves were re-measured 2026-09-16 against the running estate.
+- *The detector works.* Live ticks, stable across consecutive runs:
+
+      cascade_lag_tick edges=270 published=14 failed=0 unmeasurable=255 skipped=0 destination_invisible=0 stores_disagree=1
+      cascade_lag_edge_blind edge='silver->gold' project='bind86' reason='stores_disagree' published=3
+
+  (`unmeasurable=255` / `skipped=0` is the `AbsentEdgeMemo` re-probing after a pod restart — this row
+  already records that inversion, and it is not a change in what is known.)
+- **THE `advref31` CLAIM IS FALSE, and it was the row's whole worked example.** The row said *"The
+  tenant's silver is published and its gold was never written — a real, reportable first-hop lag that
+  the detector reports as nothing."* Driven through `published_reader` itself, inside the medallion pod,
+  rather than read off a neighbouring store:
+
+      advref31   published('silver->gold') = None
+      bind86     published('silver->gold') = 3
+
+  The catalog answers **200** for `advref31-silver$features` with `{'tags': {}}` — readable, and
+  carrying no `published` tag at all. So there is no lag: publishing never happened, the gold hop was
+  never due, and `unmeasurable` is the CORRECT answer rather than a lost one. The detector's own live
+  reads show the path taken — `tags/list` 200 then `/producers` 403 — which is the
+  `published_version is None` short-circuit, reached before the 403 can matter.
+  *An earlier attempt at this measurement read `d.tags` off the lineage graph and would have reported
+  the same conclusion for the wrong reason:* `published_reader` reads the CATALOG's `tags/list`, and
+  the graph property is a neighbouring representation ([[feedback-verify-what-the-code-receives]]).
+- *What remains TRUE and is now precisely bounded:* `destination_invisible` still cannot be reached for
+  a destination that was never written, because `/producers` is gated before existence resolution. It
+  is unobserved because reaching it needs a tenant with a PUBLISHED source AND an absent destination,
+  and advref31 — the only candidate this row ever named — is not one. That is a latent gap in a control,
+  not a live loss, and it is recorded here rather than left as an open row asserting a loss that is not
+  happening.
+- *The residual this refutation exposes is [[LH-167]]:* `advref31-silver$features` carries **8 `WROTE`
+  edges** and zero tags — written repeatedly, never published.
+
+- *Original filing follows.*
 
 - **NOT CLOSED, AND THE DEPLOY MADE IT QUIETER RATHER THAN BETTER.** This row was marked closed on
   2026-09-11 on the strength of `cascade_lag_edge_unreadable` going to zero. It went to zero because
@@ -2846,6 +2882,31 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   [[LH-023]], whose per-request delimiter support `docs/DECISIONS.md` row 6 consciously skipped for the
   neighbouring reason (an endpoint-only delimiter would let the router-level FGA gate authorize a
   differently-parsed object).
+
+**LH-167 · A tenant's silver tier has been WRITTEN eight times and PUBLISHED never, and nothing reports a tier that stopped mid-cascade**
+`medallion, catalog` · low · found 2026-09-16 while refuting [[LH-143]]'s worked example
+
+- *Why open:* `advref31-silver$features` has **8 `WROTE`** edges in the lineage graph and the catalog
+  answers its `tags/list` **200 with `{'tags': {}}`** — the table exists, is readable, has been written
+  repeatedly, and carries no `published` tag. Its `advref31-gold$catalog` has no `Dataset` node at all,
+  so the lane stopped at silver. Measured through the readers the code uses, not a neighbouring store:
+  `published_reader('silver->gold', 'advref31')` returns `None` while the same call for `bind86`
+  returns `3`.
+- **NOTHING REPORTS THIS, and that is the row rather than the unpublished tier itself.** The cascade-lag
+  detector is CORRECT to stay silent — [[LH-143]] — because a source that never published has nothing
+  to fall behind, so `unmeasurable` is the honest answer. But that means a tier which was written eight
+  times and then stopped is indistinguishable, from every surface the estate has, from a lane nobody
+  ever ran. One of those is fine and the other is a stalled cascade.
+- *What is NOT yet known, and should be established before any fix is designed:* whether the publish was
+  ATTEMPTED and held (the quality gate's third answer, `promotions`), or never attempted at all. The
+  retained log window carries no `advref31` promotion or hold record, which distinguishes neither —
+  absence of a log over a window is not absence of the event.
+- *Why it is low and not med:* no data is lost and no wrong answer is served; the gap is observability
+  of a mid-cascade stop. It becomes med the moment a tenant expects gold and nothing says why it is
+  absent.
+- *Closes when:* the publish state of a written-but-unpublished tier is established (held vs never
+  attempted), and whichever surface should name it — the lag detector's own report, the promotions
+  door, or the tier board — does.
 
 **LH-151 · The DLQ parking plane assumes every park is retry exhaustion, and Dapr parks on at least two other paths — one invisibly, one as a false page**
 `medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2
