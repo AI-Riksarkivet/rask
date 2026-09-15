@@ -28,6 +28,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 
 from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -183,6 +184,19 @@ async def create_warehouse(
     rival_claims = warehouses.projects_claiming_bucket(records, bucket) - {project}
     if rival_claims:
         raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse")
+
+    # [[LH-053]] AND THE SCAN ABOVE IS NOT ENOUGH, which is why both are here rather than one replacing
+    # the other. `records` was listed before the gate, the provision below is a network round trip, and
+    # the record write is further down still — so two concurrent creates naming one bucket under
+    # different projects each scan a listing taken before the other existed, both pass, and both write.
+    # The claim is WRITE-ONCE AT THE STORE (`If-None-Match: *`), so the loser is refused regardless of
+    # what its caller read. It is taken BEFORE `provision_bucket`: provisioning an existing bucket is a
+    # silent no-op, so a rival that provisioned first and lost the claim would otherwise have already
+    # touched the victim's storage.
+    #
+    # The scan stays because it answers a different question cheaply and with a listing already in hand;
+    # this arbitrates the one case it structurally cannot see.
+    await run_in_threadpool(partial(warehouses.claim_bucket, settings.registry_root, so, bucket=bucket, project=project, warehouse_id=warehouse_id))
 
     root_uri = f"s3://{bucket}"
     await run_in_threadpool(warehouses.provision_bucket, bucket, so)

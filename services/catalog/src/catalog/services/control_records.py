@@ -90,6 +90,19 @@ class BindingRecord(_Record):
     warehouse_id: str = Field(min_length=1)
 
 
+class BucketClaimRecord(_Record):
+    """Which PROJECT owns a bucket, written once so the store arbitrates rival claims.
+
+    Keyed by bucket and carrying the project rather than the warehouse id, because one project
+    legitimately backs several warehouses with one bucket (the work+gold pair) — the same asymmetry
+    `projects_claiming_bucket` encodes by subtracting the caller's own project.
+    """
+
+    bucket: str = Field(min_length=1)
+    project: str = Field(min_length=1)
+    warehouse_id: str = Field(min_length=1)
+
+
 class ProjectRecord(_Record):
     """A tenant. Existence lives in the record, so the id is the whole of its identity."""
 

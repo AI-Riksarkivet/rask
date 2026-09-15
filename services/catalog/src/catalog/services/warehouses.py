@@ -23,7 +23,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
-from catalog.services.control_records import BindingRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
+from catalog.services.control_records import BindingRecord, BucketClaimRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -32,6 +32,9 @@ log = logging.getLogger(__name__)
 
 _REGISTRY_PREFIX = "_warehouses"
 _BINDINGS_PREFIX = "_warehouses/bindings"
+#: Where a bucket's owning project is recorded, write-once. Beside the bindings because it is the same
+#: kind of fact — an immutable routing claim the store arbitrates rather than a mutable record.
+_BUCKET_CLAIMS_PREFIX = "_warehouses/bucket-claims"
 
 
 def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
@@ -234,6 +237,54 @@ def projects_claiming_bucket(records: list[dict[str, str]], bucket: str) -> set[
     """Every project with a warehouse record claiming ``bucket`` (any lifecycle status — a deactivated
     warehouse still owns its bucket's data, so its claim still blocks a rival registration)."""
     return {str(r["project"]) for r in records if r.get("bucket") == bucket and r.get("project")}
+
+
+def bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: str) -> dict[str, str] | None:
+    """Who owns ``bucket``, or ``None`` when nobody has claimed it.
+
+    ``None`` rather than an exception so a caller can distinguish "unclaimed" from "claimed by someone"
+    without control flow, the same shape `warehouse_for_namespace` answers with.
+    """
+    key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
+    record = read_json(control_root, storage_options, key)
+    if record is None:
+        return None
+    return {str(k): str(v) for k, v in validated_or_refuse(record, BucketClaimRecord, event="bucket_claim_malformed", path=key).items()}
+
+
+def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, warehouse_id: str) -> None:
+    """Record that ``project`` owns ``bucket``, or refuse because another project already does.
+
+    [[LH-053]] THE LISTING SCAN CANNOT CLOSE THIS AND A BETTER SCAN WOULD NOT EITHER. `create_warehouse`
+    reads the warehouse listing, checks it for a rival claim, provisions a bucket over the network and
+    only then writes its record — so two concurrent creates naming one bucket under different projects
+    each scan a listing taken before the other existed, both pass, and both write. The result is the
+    cross-tenant takeover the scan was added to prevent: a project policy set through the second
+    warehouse governs, and can destroy version history in, the first project's data.
+
+    So the STORE picks the winner, exactly as `bind_namespace` does for a namespace binding: a
+    conditional create (`If-None-Match: *` on S3, `O_CREAT|O_EXCL` locally) whose loser surfaces as
+    `RecordExistsError` instead of last-writer-wins.
+
+    KEYED BY BUCKET, CARRYING THE PROJECT. One project legitimately backs several warehouses with one
+    bucket — the work+gold pair — which is why a claim already held by the caller's own project is a
+    pass rather than a collision, and why keying this by warehouse id would refuse the second half of a
+    legitimate pair. It is also what keeps `create_warehouse`'s partial-failure retry idempotent.
+    """
+    key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
+    payload = {"bucket": bucket, "project": project, "warehouse_id": warehouse_id}
+    try:
+        create_json(control_root, storage_options, key, payload)
+    except RecordExistsError:
+        # VALIDATED rather than compared raw, the rule every singular read of this registry follows: on
+        # a record nobody can parse the comparison merely fails, which would refuse the create (right)
+        # while naming a competing project that may not exist (wrong), and send an operator looking for
+        # a tenant that is not there.
+        existing = read_json(control_root, storage_options, key)
+        parsed = validated_or_refuse(existing, BucketClaimRecord, event="bucket_claim_malformed", path=key) if existing is not None else None
+        if parsed is not None and parsed.get("project") == project:
+            return  # this project already owns the bucket — a second warehouse, or a retry
+        raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse") from None
 
 
 def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: str, warehouse_id: str, root_uri: str) -> None:
