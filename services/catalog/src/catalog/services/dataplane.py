@@ -1713,6 +1713,45 @@ _REF_FAILURE_RE = re.compile(r"ref (?P<failure>not found|conflict) error:\s*(?P<
 _REF_INVALID_MARKER = "ref is invalid:"
 
 
+#: The default ref. It is not in `branches.list()` on any dataset — the default is implicit — so the
+#: create door's collision pre-check cannot see it, and pylance answers a request to create it with its
+#: own bug-report text (measured on 11.0.0, 2026-09-15).
+MAIN_BRANCH = "main"
+
+
+def refuse_a_branch_name_the_backend_cannot_use(name: str) -> None:
+    """Refuse the three branch names whose backend failure is not readable, with the spec's own codes.
+
+    [[LH-046]] LANCE OWNS THE GRAMMAR AND THIS IS NOT A SECOND COPY OF IT. Most bad names — a space,
+    `~ ^ : ? * [ ]`, `@`, a trailing `/`, a `.lock` suffix, a literal backslash — arrive as
+    ``Ref is invalid: …`` and `_classify_ref_error` already maps that marker to InvalidInput. Widening
+    this guard to duplicate that rule would create two grammars that drift, and the copy here is the one
+    nobody re-tests against a new pylance. Driven on 11.0.0: `work`, `feature/x`, `dot.name`, `UPPER`
+    and `-lead` are all ACCEPTED, so a hand-written pattern would have refused names that work.
+
+    THREE CASES CARRY NO READABLE MARKER, and they are the ordinary ones:
+
+    * ``main`` — absent from `branches.list()`, so the collision pre-check misses it and pylance answers
+      ``Encountered internal error. Please file a bug report``. Answered as the spec's 23 rather than 13,
+      because main does always exist; "already exists" is the true statement.
+    * ``""`` — the spec marks `name` required but sets no `minLength`, so an empty string passes model
+      validation and reaches pylance, which answers the same bug-report text.
+    * a traversal segment — refused by the object-store PATH parser before Lance's ref validation runs,
+      so the message is ``LanceError(IO): Error parsing Path …`` with no marker.
+
+    Refused HERE rather than by matching those messages: the first two are pylance's bug-report text,
+    which is not a stable discriminator, and the day upstream fixes that panic a matcher keyed on it
+    would silently report Internal again. That is the same reasoning `create_branch` already gives for
+    establishing a collision by reading the branch list instead of matching a message.
+    """
+    if name == MAIN_BRANCH:
+        raise TableBranchAlreadyExistsError(f"branch {name!r} always exists and cannot be created")
+    if not name.strip():
+        raise InvalidInputError("branch name must not be empty")
+    if ".." in name.split("/"):
+        raise InvalidInputError(f"invalid branch name {name!r}: a path-traversal segment is not a branch name")
+
+
 def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
     """Map a pylance tag/branch failure onto the Lance Namespace spec's coded error.
 
@@ -1855,6 +1894,9 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
     So the door reads the branch list, and confirms by RE-READING when the create still fails, which
     also answers the create/create race the pre-check alone would lose.
     """
+    # Names the backend cannot use are refused BEFORE the listing read: `main` is absent from
+    # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
+    refuse_a_branch_name_the_backend_cannot_use(req.name)
     table_id = _table_id(req)
     dataset = open_dataset(ns, so, table_id)
     branches = dataset.branches.list()
