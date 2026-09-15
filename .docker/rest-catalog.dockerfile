@@ -29,9 +29,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
+# `--extra workflow` IS REQUIRED HERE, and only here, because THIS image runs the cascade.
+# `dapr-ext-workflow` moved out of medallion's unconditional dependencies so the lakehouse may be
+# DRIVEN BY a workflow engine without DEPENDING on one (goal condition 3, now expressed in package
+# metadata rather than only in the import graph). Measured: `uv export --package medallion` names the
+# engine 0 times, and with `--extra workflow` 2 times — so a per-package sync like this one drops it
+# unless asked. `medallion/workflow.py` is the adapter and imports it at module scope, so without this
+# flag the producer and both stage runners die at import with the image looking perfectly built.
     uv sync --frozen --no-dev --no-install-workspace --no-editable \
         --package catalog --package lineage --package medallion --package maintenance \
-        --package viewer --package search --package annotator
+        --package viewer --package search --package annotator \
+        --extra workflow
 
 # Step 2: COPY real sources and install the workspace members as wheels (--no-editable →
 # they land in site-packages; the final stage needs only the venv).
@@ -41,7 +49,8 @@ COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
         --package catalog --package lineage --package medallion --package maintenance \
-        --package viewer --package search --package annotator
+        --package viewer --package search --package annotator \
+        --extra workflow
 
 # Strip residual setuid/setgid bits before the venv leaves the builder.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true

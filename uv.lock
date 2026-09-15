@@ -1909,7 +1909,6 @@ source = { editable = "services/medallion" }
 dependencies = [
     { name = "dapr" },
     { name = "dapr-ext-fastapi" },
-    { name = "dapr-ext-workflow" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lance-namespace" },
@@ -1931,11 +1930,16 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.optional-dependencies]
+workflow = [
+    { name = "dapr-ext-workflow" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "dapr", specifier = ">=1.18.1" },
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
-    { name = "dapr-ext-workflow", specifier = ">=1.18" },
+    { name = "dapr-ext-workflow", marker = "extra == 'workflow'", specifier = ">=1.18" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
@@ -1956,6 +1960,7 @@ requires-dist = [
     { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
+provides-extras = ["workflow"]
 
 [[package]]
 name = "mmh3"

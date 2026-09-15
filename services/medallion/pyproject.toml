@@ -23,11 +23,6 @@ dependencies = [
     "lance-namespace>=0.11.0,<0.12",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
-    # S1's stage watcher (`medallion/workflow.py`): the Ray lane waits for a submitted job to reach a
-    # terminal state on a DURABLE timer, which is Dapr Workflow. Executes in the daprd sidecar the
-    # chart already injects, on the actor state store `values.yaml` scopes to this app-id — same
-    # reasoning as ingest and flows, which each declare it for their own workflow.
-    "dapr-ext-workflow>=1.18",
     "opentelemetry-distro>=0.65b0",
     "opentelemetry-exporter-otlp>=1.44.0",
     "opentelemetry-instrumentation-fastapi>=0.65b0",
@@ -35,6 +30,30 @@ dependencies = [
     "opentelemetry-instrumentation-grpc>=0.65b0",
     "opentelemetry-instrumentation-logging>=0.65b0",
 ]
+
+# THE WORKFLOW ENGINE IS OPTIONAL, AND THAT IS GOAL CONDITION 3 EXPRESSED IN METADATA rather than
+# asserted in prose: the lakehouse may be DRIVEN BY Dapr Workflow and must not DEPEND ON it.
+#
+# The import graph already said so — `medallion/workflow.py` is the only module-level
+# `import dapr.ext.workflow` in the service and every other site imports inside a function body,
+# pinned by `tests/test_the_cascade_head_does_not_import_a_workflow_engine.py`, which proves it by
+# SUBPROCESS IMPORT rather than by reading source. The package metadata did not: the engine sat in the
+# unconditional `dependencies` block, so `uv sync --package medallion` installed it whether or not the
+# deployment ran a workflow, and nothing could tell the two apart.
+#
+# EVERY SYNC THAT NEEDS THE ADAPTER PASSES `--extra workflow`. That is the two syncs in
+# `.docker/rest-catalog.dockerfile` (the image runs the cascade) and the whole-workspace dev/CI syncs
+# (medallion's own suite imports the adapter). The extra NAME is what keeps that safe on a workspace
+# sync: `uv sync --all-packages --extra workflow` applies only to members declaring an extra called
+# `workflow`, so it cannot drag in service-kit's `governed`/`lakehouse`/`lancekit` — which the
+# architecture rules keep out of a base install on purpose.
+[project.optional-dependencies]
+# S1's stage watcher (`medallion/workflow.py`): the Ray lane waits for a submitted job to reach a
+# terminal state on a DURABLE timer, which is Dapr Workflow. Executes in the daprd sidecar the chart
+# already injects, on the actor state store `values.yaml` scopes to this app-id — same reasoning as
+# ingest and flows, which each declare it for their own workflow. Those two are NOT moved here: they
+# are fleet services rather than lakehouse ones, so condition 3 does not speak about them.
+workflow = ["dapr-ext-workflow>=1.18"]
 
 [build-system]
 requires = ["hatchling"]

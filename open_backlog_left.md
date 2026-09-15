@@ -287,12 +287,33 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     unconditional `dependencies` block, and medallion declares no `[project.optional-dependencies]`
     table at all.** So the engine is still a hard install-time dependency of the lakehouse's cascade
     head: condition 3 is met in the import graph and not in the package metadata.
-- *The remaining change is coordinated, not a one-liner, and the trap is worth stating:* moving the pin
-  into an optional extra means `--extra workflow` must reach BOTH sync steps in
-  `.docker/rest-catalog.dockerfile` (:32 and :42) — and nothing in this repo passes `--extra` on a
-  whole-workspace sync today, so `uv sync --all-packages` (the Makefile, `.dagger/test.go`, CI) would
-  leave the engine absent and `medallion.workflow` — the adapter, which MUST import it — would fail at
-  import and take its own suite down.
+- **THE PACKAGING HALF LANDED 2026-09-15, and the feared blast radius was measured away rather than
+  paid.** The concern above was that `uv sync --all-packages` (Makefile ×3, `.dagger/main.go`, CI ×3)
+  would lose the engine and take medallion's suite down, making this a 7-site build change. Measured
+  with the real resolver, neither half of that holds:
+  * `--extra <name>` is a bare NAME, so `uv sync --all-packages --extra workflow` could only ever apply
+    to members declaring an extra of that name — it cannot drag in service-kit's
+    `governed`/`lakehouse`/`lancekit`, which the architecture rules keep out of a base install.
+  * And no whole-workspace change was needed at all: `ingest` and `flows` declare the engine
+    unconditionally for their OWN workflows, so `--all-packages` still installs it. Verified by driving
+    the sync both ways.
+  So the change is TWO sites, both in `.docker/rest-catalog.dockerfile`, plus the manifest.
+- *Proven with the resolver rather than by reading the manifest:* `uv export --frozen --no-dev
+  --package medallion` names `dapr-ext-workflow` **0** times; the same command with `--extra workflow`
+  names it **2**. A per-package sync — which is exactly what the image does — now drops the engine
+  unless asked, so condition 3 holds in the package metadata and not only in the import graph.
+- *The two halves drift apart silently, so both are pinned* by
+  `tests/unit/test_the_lakehouse_does_not_depend_on_a_workflow_engine.py`: making the dependency
+  optional WITHOUT teaching the image to ask for it yields a build that succeeds and a service that
+  dies at import, because `medallion/workflow.py` imports the engine at module scope. The gate parses
+  the dockerfile's sync COMMANDS across their line continuations — two earlier drafts counted
+  substrings and failed on a correct file, once on a comment and once on the prose explaining the flag.
+- *Scope pinned too:* `ingest` and `flows` keep their own unconditional pins. They are FLEET services,
+  and the goal statement names the lakehouse as catalog/lineage/medallion/maintenance — moving theirs
+  would be a change nobody asked for.
+- *Closes when:* the image is built with the extra and the cascade is observed still running — the
+  producer and both stage runners import `medallion.workflow` at module scope, so a missing flag shows
+  up as a pod that will not start.
 **LH-148 · The terminal-provenance-loss metric counts restarts, not losses — and the payload it parks can never be read back**
 `lineage, chart` · med · found 2026-09-13 while re-measuring [[LH-127]] · **not currently bleeding**
 
