@@ -3219,6 +3219,22 @@ caller — and the latent gap below.
 `medallion, ray-kit` · **HIGH** · **blocked:** Q17-2 (the Ray adapter's fate)
 
 - *Why open:* Corrected with `ast` rather than grep: exactly one in-scope bypass remains, `workflow.py:495` (`submit_stage_job`, the deployed stage lane) — `train.py:280` is the TRAIN lane and `ray_submit.py:318,425` are the adapter's own calls. The load-bearing half is the opposite error: nothing resolves an engine through the port, `transform.py:778` constructs `InProcessExecutor` by hand and `RayJobExecutor` is constructed by nothing. Migrating `transform.py` would be cosmetic; `workflow.py:495` is the site that CHOOSES an engine.
+- **RE-MEASURED 2026-09-15, AND THE "NARROW FIX" ON OFFER IS NOT NARROW — it is the cutover this row
+  is blocked on, wearing a refactor's clothes.** The bypass is real and unchanged: `workflow.py:487`
+  imports `submit_stage_job` and calls it at :496, and `executor_for` still has ZERO production callers.
+  But routing :496 through `executor_for(RAY_ENGINE)` does not wrap that call — it returns
+  `RayJobExecutor`, which submits a **RayJob CR** against the Kubernetes API
+  (`rayjob_executor.py:81-105`), while `submit_stage_job` posts to the **Ray Jobs API** on the
+  dashboard. Two different submission mechanisms, not one seam over one mechanism.
+  *The live estate runs the Jobs API:* `helm get values` pins `medallion.rayAddress=http://ray-lance-head:8265`
+  (the dashboard), and no `RayService`/`RayCluster` CR exists despite the CRDs and the kuberay-operator
+  being installed. So the "one-line" change would switch every cascade submission from the Jobs API to
+  CRs on a cluster that has never run one.
+  *Recorded because the cheap-looking version is the trap:* an audit pass on 2026-09-15 proposed it as
+  independent of Q17-2. It is not — it IS Q17-2. The row stays blocked, and the blocker is correctly
+  stated.
+  *What genuinely is independent and still undone:* the second ask — no `ray` line in
+  `services/medallion/pyproject.toml` — is already satisfied.
 - *Closes when:* Route `workflow.py:495`'s stage submission through `engine_registry.executor_for(...)` once the Ray adapter's fate is decided, then drop `ray-kit` from `services/medallion/pyproject.toml`.
 
 **LH-084 · ~~`BAKED_JOBS_DIR`/`BAKED_CLUSTER_JOBS` live in the shared library and the catalog enforces them, so a non-Ray lane cannot be declared and the word 'Ray' reaches every API client via the published OpenAPI~~ — CLOSED BY MEASUREMENT 2026-09-11**
