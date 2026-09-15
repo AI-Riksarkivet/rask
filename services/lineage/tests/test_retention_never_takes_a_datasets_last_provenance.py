@@ -39,19 +39,40 @@ def test_the_count_and_the_delete_ask_the_same_question() -> None:
     assert cy.PRUNE_OLD_RUNS_TEMPLATE.startswith(cy._PRUNABLE_RUNS)
 
 
-def test_the_pruner_exempts_a_dataset_whose_only_writer_is_the_run_being_pruned() -> None:
-    """The exemption itself: keep a run when some dataset it wrote has exactly one writer.
+def test_the_exemption_asks_about_the_dataset_not_about_the_run() -> None:
+    """The rule is per-DATASET, and this is the property that survives a batch.
 
-    ``min(writers) <> 1`` is the whole rule. A count of 1 can only be this run itself, so 1 means sole
-    provenance; 0 means the run wrote nothing and >= 2 means another run still speaks for every dataset
-    it touched. Asserted on the predicate rather than on either query, because both inherit it.
+    ``min(newest) >= $cutoff`` is the whole rule: for every dataset the run wrote, take that dataset's
+    newest write and prune only when the oldest of those is still inside the window. A run that wrote
+    nothing yields NULL and is prunable.
+
+    A PER-RUN RULE LOOKS EQUIVALENT AND IS NOT — this is the bug this test exists to prevent, and it
+    was nearly shipped. "Keep a run that is some dataset's only writer" asks about the graph as it
+    stands rather than as the batch will leave it: when every writer of a dataset is past the cutoff,
+    each one sees two or more writers and is individually prunable, so a single ``DETACH DELETE`` takes
+    them all. Measured against the deployed graph at a probe cutoff, that shape still stripped 10
+    datasets of 57 runs. Asking about the dataset's newest write is a fact no batch composition can
+    change.
     """
     predicate = cy._PRUNABLE_RUNS
 
-    assert "OPTIONAL MATCH (r)-[:WROTE]->(d:Dataset)" in predicate, "the exemption has to know what this run wrote"
-    assert "OPTIONAL MATCH (d)<-[w:WROTE]-(:Run)" in predicate, "and how many other runs wrote the same dataset"
-    assert "min(writers) AS fewest" in predicate, "the smallest per-dataset writer count is what decides it"
-    assert "WHERE fewest <> 1" in predicate, "a sole-provenance run must be KEPT, not pruned"
+    assert "OPTIONAL MATCH (r)-[:WROTE]->(d:Dataset)" in predicate, "the rule has to know what this run wrote"
+    assert "max(any.event_time) AS newest" in predicate, "and when each of those datasets was last written"
+    assert "min(newest) AS oldest_tip" in predicate, "the least-recently-written of them is what decides it"
+    assert "WHERE oldest_tip IS NULL OR oldest_tip >= $cutoff" in predicate, "a quiet dataset's runs must be KEPT; a run that wrote nothing is prunable"
+
+
+def test_the_exemption_does_not_decide_on_a_count_of_current_writers() -> None:
+    """A negative pin on the shape that fails under batching, so it cannot come back as a simplification.
+
+    Counting writers reads naturally and is wrong for the reason above. Pinned separately from the
+    positive rule because the two would otherwise be one assertion that a rewrite could satisfy in the
+    broken direction.
+    """
+    predicate = cy._PRUNABLE_RUNS
+
+    assert "count(w)" not in predicate, "a count of current writers cannot survive a batch that deletes several of them"
+    assert "fewest <> 1" not in predicate
 
 
 def test_the_pruner_still_bounds_itself_by_age() -> None:
@@ -83,4 +104,4 @@ def test_the_batch_limit_is_still_applied_after_the_exemption() -> None:
     """
     delete = cy.PRUNE_OLD_RUNS_TEMPLATE.format(limit=cy.PRUNE_BATCH_SIZE)
 
-    assert delete.index("WHERE fewest <> 1") < delete.index(f"LIMIT {cy.PRUNE_BATCH_SIZE}")
+    assert delete.index("WHERE oldest_tip") < delete.index(f"LIMIT {cy.PRUNE_BATCH_SIZE}")

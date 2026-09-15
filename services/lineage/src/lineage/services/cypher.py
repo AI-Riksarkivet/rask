@@ -262,44 +262,55 @@ BACKFILL_RUN: Final = (
 # edges — that is what retention means (per-version schema/stats history goes with it); a dataset whose
 # only runs were pruned reads latest_write_version=None and the next sweep back-fills a fresh reconcile
 # run at the on-disk version, so the graph converges instead of dangling.
-# A run old enough to prune AND not the last thing that says where a dataset came from.
+# A run old enough to prune, belonging to no dataset that would be left speaking for itself.
 #
 # [[LH-146]] RETENTION AND THE BACK-FILL UNDO EACH OTHER WITHOUT THIS. Pruning by age alone takes a
-# dataset's final `WROTE` edge, which leaves it with no versioned write; the reconciler then reads that
-# as UNTRACKED, back-fills it, and MERGEs a synthetic `author='reconcile'` run carrying — its own
-# docstring — "no inputs". The graph does not shrink, it is REWRITTEN: the fact of each write survives
-# and the actor and the derivation do not, and nothing in the estate can rebuild them, because the
-# durable `/events` feed is retained 7 days while the graph reaches back 30. Forecast from the live
-# graph on 2026-09-11: 1 of 333 datasets stripped by 2026-09-16, 180 by 2026-09-30, all 333 by
-# 2026-10-11.
+# dataset's final `WROTE` edge. The dataset then has no versioned write, so `reconcile` classifies it
+# UNTRACKED (`core/reconcile.py:258`, `graph_version is None`), which is in `BACKFILLABLE_STATES`; the
+# sweep back-fills it and MERGEs a synthetic run with `author='reconcile'` carrying — its own docstring
+# — "no inputs". The graph does not shrink, it is REWRITTEN: the fact of each write survives and the
+# actor and the derivation do not, and nothing can rebuild them, because the durable `/events` feed is
+# retained 7 days while the graph reaches back 30. Forecast from the live graph 2026-09-11: 1 of 333
+# datasets stripped by 2026-09-16, 180 by 2026-09-30, all 333 by 2026-10-11.
 #
-# `min(writers) <> 1` IS THE WHOLE EXEMPTION, and the shape is chosen for what each value means. For
-# every dataset this run wrote, count the runs that wrote it; keep the run when the smallest count is
-# 1, because a count of 1 can only be this run itself — it is that dataset's sole provenance. A run
-# that wrote nothing yields 0 and is prunable; a run whose datasets all have other writers yields >= 2
-# and is prunable. So the exemption costs exactly one run per dataset that would otherwise be stripped.
+# THE RULE IS PER-DATASET, NOT PER-RUN, AND THAT IS THE CORRECTION THAT MATTERS. Keeping "the run that
+# is a dataset's only writer" is not enough, because it asks about the graph as it stands rather than
+# as the batch will leave it: when EVERY writer of a dataset is past the cutoff they each see two or
+# more writers, so each is individually prunable and one `DETACH DELETE` takes them all. Measured
+# against the deployed graph 2026-09-15 at a probe cutoff, that shape still stripped 10 datasets of
+# 57 runs. So the question asked here is about the DATASET — has anything written it since the cutoff?
+# — which no batch composition can change.
+#
+# `min(newest) >= $cutoff` IS THE WHOLE RULE. For every dataset this run wrote, take that dataset's
+# newest write; prune only when the oldest of those is still inside the window. A run that wrote
+# nothing yields NULL and is prunable. A dataset that has gone quiet keeps its whole history, which is
+# more than the one run strictly needed — deliberately, because the alternative shapes that keep
+# exactly one require correlating each run against its siblings' timestamps, and that form OOM-killed
+# the AGE container outright on this graph (7,108 runs, 1,444 datasets) rather than running slowly.
 #
 # EXEMPTING DOES NOT WEAKEN WHAT RETENTION IS FOR. The 30-day window exists so the reconcile's
 # `storage_loss` and `unreadable` warnings converge instead of firing every tick over dead rows
-# (chart/values.yaml, owner ruling 2026-09-08) — a signal-to-noise control, not a disk one. Measured
-# against the deployed graph 2026-09-15 at a probe cutoff: 310 candidate runs, 2 exempt, 308 still
-# pruned, and the three numbers reconcile exactly.
+# (`chart/values.yaml`, owner ruling 2026-09-08) — a signal-to-noise control, not a disk one. That
+# noise is driven by DATASET nodes, and a dataset exempted here keeps its node either way, so retaining
+# its runs costs rows without costing signal. Measured at the probe cutoff: 310 candidates, 251 still
+# pruned, 59 kept across 12 quiet datasets.
 #
-# WRITTEN AS `OPTIONAL MATCH` + `count`, NOT A NEGATED PATTERN, for the reason the orphan query below
-# carries: AGE 1.5.0 rejects `WHERE NOT (d)<-[:WROTE]-(:Run)` as a syntax error at the `:`, which no
-# string-asserting test can see. This predicate was EXECUTED against the deployed database before it
-# was written here — the same order the orphan query had to be fixed into after it shipped unparseable.
+# WRITTEN AS `OPTIONAL MATCH` + AGGREGATION, NOT A NEGATED PATTERN, for the reason the orphan query
+# below carries: AGE 1.5.0 rejects `WHERE NOT (d)<-[:WROTE]-(:Run)` as a syntax error at the `:`, which
+# no string-asserting test can see. Both forms here were EXECUTED against the deployed database before
+# being written — the same order the orphan query had to be fixed into after it shipped unparseable.
 #
 # ONE definition behind both the count and the delete: `prune_runs` sizes its batch loop from the count
 # and then deletes, so a predicate that differed between them would loop the wrong number of times.
 _PRUNABLE_RUNS: Final = (
     "MATCH (r:Run) WHERE r.event_time < $cutoff "
     "OPTIONAL MATCH (r)-[:WROTE]->(d:Dataset) "
-    "OPTIONAL MATCH (d)<-[w:WROTE]-(:Run) "
-    "WITH r, d, count(w) AS writers "
-    "WITH r, min(writers) AS fewest "
-    "WHERE fewest <> 1 "
+    "OPTIONAL MATCH (d)<-[:WROTE]-(any:Run) "
+    "WITH r, d, max(any.event_time) AS newest "
+    "WITH r, min(newest) AS oldest_tip "
+    "WHERE oldest_tip IS NULL OR oldest_tip >= $cutoff "
 )
+
 COUNT_OLD_RUNS: Final = _PRUNABLE_RUNS + "RETURN count(r)"
 # BATCHED (one transaction per batch): a single all-or-nothing DETACH DELETE over a large backlog
 # would exceed the pool's statement_timeout → QueryCanceled → full rollback → retention never
