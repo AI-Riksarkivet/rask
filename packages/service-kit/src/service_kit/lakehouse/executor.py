@@ -101,6 +101,20 @@ def may_resubmit(state: RunState, *, capabilities: frozenset[Capability]) -> boo
     return state is RunState.UNKNOWN and Capability.DURABLE_RECORD not in capabilities
 
 
+class WrongEngineError(ValueError):
+    """The task belongs to another executor.
+
+    Refused rather than run: a declaration meant for a different plane must not be executed here on the
+    grounds that this engine happens to be available, which is how the wrong program rewrites a tenant's
+    data while every status says success.
+
+    IT LIVES ON THE PORT RATHER THAN IN AN ADAPTER because `validate_task` promises to RAISE, so the
+    exception type is part of the contract: two adapters raising two different types would break any
+    caller that catches one of them. It moved here when the Ray lane gained its own adapter and the
+    second implementation made the shared-ness visible.
+    """
+
+
 @runtime_checkable
 class Executor(Protocol):
     """One compute engine, as the platform sees it.

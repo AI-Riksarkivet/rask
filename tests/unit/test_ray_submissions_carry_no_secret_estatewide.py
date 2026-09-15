@@ -30,6 +30,7 @@ import json
 import pathlib
 from typing import Any
 
+import httpx
 import pytest
 
 
@@ -150,6 +151,13 @@ _REPRESENTED = {
     # takes the body as an argument. The callers are the seams. If it ever grows an env-building
     # helper it stops being a shipper, and it already has a test here to grow into.
     "services/medallion/src/medallion/services/ray_jobs_api.py",
+    # The `Executor`-port adapter for the same Jobs API ([[LH-158]]). It BUILDS a body — `runtime_env`
+    # from `order.to_env()` — so it is a seam in its own right, not a shipper like the kernel above.
+    # Its safety is structural rather than filtered: `WorkOrder` has no field that can hold a
+    # credential (`credential_ref` NAMES one), so there is nothing for a filter to miss. That is a
+    # stronger property than either mechanism this file was written to reconcile, and it is exactly
+    # why it still has to be fed the same material: a structural claim nobody tests is a claim.
+    "services/medallion/src/medallion/services/rayjobs_api_executor.py",
 }
 
 
@@ -168,6 +176,51 @@ def _submission_seams_in_tree() -> set[str]:
             if "submit_job(" in text or "submit_or_reattach(" in text:
                 seams.add(str(path.relative_to(REPO)))
     return seams
+
+
+@pytest.mark.asyncio
+async def test_the_executor_port_seam_is_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The `Executor` adapter builds its own body, so it is fed the same material as every other seam.
+
+    [[LH-158]]. This one is expected to be clean STRUCTURALLY rather than by filtering — a `WorkOrder`
+    has no field a credential can occupy, because `credential_ref` names one and never carries it. The
+    test exists anyway: the twice-fixed P0 this file records was not a missing filter but a seam nobody
+    fed adversarial material to, and "it cannot leak by construction" is the same shape of claim the
+    plane-local tests made before they drifted.
+    """
+    from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
+    from service_kit.lakehouse.executor import TaskRegistration
+    from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
+
+    for name, value in MATERIAL.items():
+        monkeypatch.setenv(name, value)
+
+    captured: dict[str, object] = {}
+
+    async def _capture(_client: object, _sub_id: str, body: dict[str, object], **_kw: object) -> str:
+        captured["body"] = body
+        return "submitted"
+
+    from medallion.services import ray_jobs_api
+
+    monkeypatch.setattr(ray_jobs_api, "submit_or_reattach", _capture)
+
+    order = WorkOrder(
+        task="silver",
+        source=WorkSource(uri="s3://a/bronze", table_id="bronze$events"),
+        destination=WorkDestination(uri="s3://a/silver", table_id="silver$events"),
+        stamp=WorkStamp(stage="silver", cardinality="1:1", lineage_document="{}"),
+        identity=WorkIdentity(run_id="r1", project="p", code_version="build-1"),
+        idempotency_key=derive_idempotency_key(stage="silver", token="t1", from_uri="s3://a/bronze", to_uri="s3://a/silver", code_version="build-1"),
+    )
+    # A real client, never used: `submit_or_reattach` is patched above, so this only satisfies the
+    # adapter's injection seam. `object()` would type-error, and typing the seam loosely to accept it
+    # would weaken the production signature to make a test convenient.
+    async with httpx.AsyncClient(base_url="http://ray.invalid") as client:
+        await RayJobsApiExecutor(client=client).submit(order, TaskRegistration(task="silver", engine="ray", command="python job.py"))
+
+    assert "body" in captured, "the submission was never captured — the seam moved and this pin is checking nothing"
+    _assert_clean("rayjobs_api_executor.submit", captured["body"])
 
 
 def test_every_submission_seam_is_represented_here() -> None:

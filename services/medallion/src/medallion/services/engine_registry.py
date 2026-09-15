@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from medallion.services.engine_names import IN_PROCESS_ENGINE
+from medallion.services.engine_names import IN_PROCESS_ENGINE, RAY_ENGINE
 from service_kit.lakehouse.executor import Executor
 
 
@@ -64,6 +64,14 @@ def executor_for(
         from medallion.services.inprocess_executor import InProcessExecutor
 
         return InProcessExecutor(_as_callable(storage_options))
+    if engine == RAY_ENGINE:
+        from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
+
+        # `config` is not forwarded: this adapter submits to the STANDING cluster the lane's pooled
+        # client already addresses, so there is no per-engine deployment fact to interpret. A CR-shaped
+        # adapter would need one (namespace, queue, cluster selector) — this one does not, and taking a
+        # config it ignores would advertise a knob that does nothing.
+        return RayJobsApiExecutor()
     raise UnknownEngineError(
         f"no executor is registered for engine {engine!r}; this deployment hosts {sorted(hosted_engines())}. "
         "A task registered for another engine belongs to another deployment and is refused rather than run here."
@@ -73,20 +81,14 @@ def executor_for(
 def hosted_engines() -> frozenset[str]:
     """Which engines this registry resolves to an `Executor` — a code fact about the adapters present.
 
-    **THIS IS NOT THE SET OF ENGINES THE ESTATE CAN RUN**, and conflating the two is what made the old
-    equality gate assert something false. Ray is a choosable engine and the cascade runs it every day,
-    but it is submitted through `ray_submit` (the Ray Jobs API) rather than through an `Executor`, so it
-    does not appear here. A `RayJobExecutor` that submitted a `RayJob` CR did exist and had ZERO
-    production callers; it was deleted (owner decision 2026-09-15) rather than kept as a second live
-    path nobody exercised.
-
-    The invariant that matters is "every choosable engine has SOME path that runs it", which
-    `test_every_choosable_engine_has_a_path_that_runs_it` states over both paths. Equality against
-    `KNOWN_ENGINES` would now be false for Ray, and would push the next person to re-add an adapter to
-    satisfy a test rather than because anything calls it.
+    Both engines resolve here again, and by a different route than before. A `RayJobExecutor` that
+    submitted a `RayJob` CR was deleted (owner decision 2026-09-15) because it had ZERO production
+    callers and the CR's purpose — provisioning a cluster per job — does not apply to a standing shared
+    cluster. `RayJobsApiExecutor` replaces it by wrapping the submission path the cascade ACTUALLY uses,
+    so the port is honoured by the lane that runs rather than by one that never did.
 
     Still deliberately separate from `engine_choice`, which asks what a stage may CHOOSE:
     `engine_choice.hosted_engines(settings)` narrows the build's ceiling to what the DEPLOYMENT runs,
     which is how a Ray-OFF deployment stays representable.
     """
-    return frozenset({IN_PROCESS_ENGINE})
+    return frozenset({IN_PROCESS_ENGINE, RAY_ENGINE})

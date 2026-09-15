@@ -36,7 +36,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from medallion.services import engine_names
 from medallion.services.compute import transform_stage
-from service_kit.lakehouse.executor import Capability, RunFailure, RunHandle, RunState, SubmitOutcome
+from service_kit.lakehouse.executor import Capability, RunFailure, RunHandle, RunState, SubmitOutcome, WrongEngineError
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkOrder
 
@@ -48,15 +48,6 @@ log = logging.getLogger(__name__)
 #: this executor runs, and the chooser and the runner disagreeing about that spelling would route work
 #: to an engine that then refuses it.
 IN_PROCESS_ENGINE = engine_names.IN_PROCESS_ENGINE
-
-
-class WrongEngineError(ValueError):
-    """The task belongs to another executor.
-
-    Refused rather than run: a declaration meant for a different plane must not be executed here on
-    the grounds that this engine happens to be available, which is how the wrong program rewrites a
-    tenant's data while every status says success.
-    """
 
 
 class InProcessExecutor:
