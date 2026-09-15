@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**221 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**222 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 11 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 78 | 12 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 9 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4514,6 +4514,62 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   the decision record already claims a port with adapters that the code does not use.
 - *Closes when:* dispatch goes through one door that REFUSES an engine it cannot run, and the registry
   is either used or gone. Pin the refusal with a task registered for an engine nobody hosts.
+
+**LH-159 · THE BYO CONTRACT — what "bring your own workflow engine and compute engine" actually requires, and where rask is short of it**
+`medallion, service-kit` · **HIGH** · owner ruling 2026-09-15, evidence from an adversarial workflow the same day
+
+- **THE RULING, in the owner's own terms (2026-09-15):** *"it would be good if dapr is well integrated
+  to run any compute engine. But Ray is first citizen ofc and dapr aswell. But clear abstractions and
+  no coupling between lakehouse and/or BYO stuff like workflow engine and compute engine."*
+  Three requirements, and they are not the same requirement:
+  1. **No coupling** — the lakehouse (catalog, lineage, medallion, maintenance) must not DEPEND on a
+     workflow engine or a compute engine. This is condition 3 of the goal.
+  2. **Clear abstractions** — the seam between the lakehouse and a BYO engine is explicit and is the
+     ONLY door, rather than a branch that happens to pick one.
+  3. **First-class citizens, not the only citizens** — Dapr Workflow and Ray are the shipped choices
+     and may be the best-integrated ones; they must not be the only ones the code can express.
+- **WHERE THE ESTATE STANDS, measured 2026-09-15 rather than assumed (8-agent adversarial workflow,
+  0 errors).** Requirement 1 HOLDS. Requirements 2 and 3 do NOT.
+  * *No coupling — verified empirically, and it is genuinely true.* No service in the four lakehouse
+    services imports `ray` or `ray_kit`; the only Ray contact is httpx against the Jobs REST API
+    (`ray_submit.py`, `ray_jobs_api.py`). Both medallion entrypoints BOOT with `ray`, `ray_kit`,
+    `dapr.ext.workflow` and `durabletask` all blocked. The in-process engine is a real second engine,
+    not a fallback, and its tests are green.
+  * *Clear abstractions — NO.* `service_kit.lakehouse.executor.Executor` is the declared port, and the
+    Ray lane does not go through it: `transform.py:828` branches `use_ray = engine_for_async(...) ==
+    RAY_ENGINE` and dispatches to the workflow directly, while `transform.py:786` hand-builds
+    `InProcessExecutor`. `executor_for` has ZERO production callers. So the port exists, is documented
+    in `docs/DECISIONS.md` as "a port, TWO adapters", and is honoured by neither lane. Tracked as
+    [[LH-158]].
+  * *Not-the-only-citizens — NO, and this is the sharp end.* Because in-process is the implicit `else`
+    at `transform.py:828`, a task registered for a THIRD engine does not fail — it silently runs
+    in-process. An estate that cannot REFUSE an engine it does not host cannot honestly claim to
+    support bringing your own.
+- **TWO COUPLINGS THAT ARE REAL AND ARE NOT CONDITION-3 VIOLATIONS**, recorded so they are not
+  mistaken for either:
+  * `services/medallion/pyproject.toml:30` hard-depends on `dapr-ext-workflow`. INSTALL-time coupling,
+    not import-time — the service boots without it. Fixable as an optional extra; until then "BYO
+    workflow engine" costs a dependency you may not use.
+  * **The Ray lane runs ONLY through Dapr Workflow.** "Ray without a workflow engine" is not a
+    supported combination today. That is a genuine limit on requirement 3 and is invisible from the
+    code's shape, because each axis reads independent while the product of them is not.
+- *Also worth knowing before designing this:* the deployed default is engine-ON (`chart/values.yaml:1299`),
+  and the in-process lane is exercised by unit tests but has **never run in-cluster**. So the "second
+  engine" that proves the abstraction has no live evidence behind it.
+- **WHAT FLYTE DOES, checked because it is the reference BYO engine and the answer is NOT "copy it".**
+  Flyte reaches Ray by stamping a `submissionMode` onto a KubeRay `RayJob` CR it always creates, and it
+  cannot attach to an externally-managed cluster by name (`ClusterSelector` is never populated) — its
+  own existing-cluster path is the client protocol, `ray.init("ray://…")`, which needs `ray` in the task
+  image and is therefore closed to rask by an existing deliberate choice. Its `runtime_env` lands as
+  PLAINTEXT YAML in `spec.runtimeEnvYAML`, so its credential posture is worse than rask's
+  `credential_ref`-names-never-carries. **rask should not adopt Flyte's shape; it should adopt its
+  discipline** — one declared config surface per engine, and a plugin boundary the core never branches
+  around.
+- *Closes when:* the port is the only door (a dispatch that REFUSES an unhosted engine — [[LH-158]]);
+  the Ray lane reaches it as an adapter rather than bypassing it; `dapr-ext-workflow` is an extra rather
+  than a hard dependency; and either the Ray/workflow product is decoupled or the limit is WRITTEN DOWN
+  as a supported-combination matrix instead of being inferred from two independent-looking flags.
+  A second engine that has actually run in-cluster is the evidence this row is really closed.
 
 ## PHASE 1 · CROSS-CUTTING — service-kit, storage, chart, build, tests
 
