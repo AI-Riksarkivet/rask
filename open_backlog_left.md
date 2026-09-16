@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**217 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -6040,11 +6040,18 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 - *Why open:* The chart-owned Kueue CRDs carry `app.kubernetes.io/managed-by: Helm` / `helm.sh/chart: kueue-0.18.1` with their conversion webhook pointing at `rask-kueue-webhook-service` in `default`, while `kueue-system/kueue-controller-manager` — 43 days old — is owned by nothing in this repo; a CA bundle written by whichever reconciled last is exactly what produces the `x509: certificate signed by unknown authority ... 'kueue-ca'` spam. Neither source is rask code, but the first is loud enough to hide something that is. (The spam rate rests on a refuter's measurement — `journalctl -u k3s` returned zero lines for the auditor.)
 - *Closes when:* The cluster operator removes the non-chart `kueue-system` Kueue install (or the chart-owned one) so a single controller writes the CRD conversion-webhook CA bundle; separately repair the two failing otel-collector scrape targets.
 
-**XC-050 · `chart/values-prod.yaml` never sets `observability.environment`, so every OTel resource attribute labels prod telemetry with the chart default**
+**XC-050 · ~~`chart/values-prod.yaml` never sets `observability.environment`, so every OTel resource attribute labels prod telemetry with the chart default~~ — CLOSED 2026-09-16**
 `chart` · low
 
 - *Why open:* Verified: `chart/values.yaml:2779` defaults `environment: rask` with the comment 'override per deploy (dev / staging / prod)', and `grep environment chart/values-prod.yaml` returns nothing — so every trace and metric in prod, the cascade's included, carries the wrong `deployment.environment.name`.
-- *Closes when:* Add `observability.environment: prod` to `chart/values-prod.yaml`.
+- **CLOSED.** Measured on the prod RENDER before and after, because the attribute is what ships and the
+  value is only how it gets there: `deployment.environment.name=rask` -> `=prod`. The dev render still
+  says `rask`, so nothing else moved.
+- *Gated in `scripts/prod_render_check.sh`*, which greps the rendered attribute rather than the values
+  file — and its failure message prints what DID render, since "prod telemetry is mislabelled" is
+  useless without the label. Mutation-proven by the before-measurement: `=rask` fails the grep.
+- *Why it was worth more than a one-line diff:* prod and dev telemetry share one GreptimeDB, so an
+  alert firing on "the estate" could not say which estate — including for the cascade.
 
 **XC-052 · A helm-LABELLED Deployment that the release does not own will fail the next upgrade that touches it**
 `chart` · med · found 2026-09-16 by the backlog audit, verified live

@@ -227,6 +227,11 @@ ingress:
 # /greptime/ locations; the nginx gateway is deleted and no Ingress path routes them, so the
 # telemetry UIs are cluster-internal. GreptimeDB auth + Perses OIDC stay the follow-on if re-exposed.
 observability:
+  # The resource attribute every trace and metric carries. values.yaml defaults it to `rask` with the
+  # note "override per deploy" and this overlay never did, so prod telemetry — the cascade's included —
+  # was indistinguishable from dev in GreptimeDB. Measured on this render 2026-09-16:
+  # `deployment.environment.name=rask`. An alert that fires on "the estate" cannot say which one.
+  environment: prod
   # Alerting engine ON (P3b): vmalert evaluates the proven rules against GreptimeDB + routes via Alertmanager.
   # Set webhookUrl (Slack/PagerDuty) out-of-band to actually page — empty groups alerts but pages nowhere.
   alerting:

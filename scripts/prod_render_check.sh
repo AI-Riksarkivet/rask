@@ -239,4 +239,12 @@ grep -q "sidecarDropALLCapabilities" "$OUT" \
   || grep -q "drop:" "$OUT" \
   || fail "prod must drop the daprd sidecar's capabilities (dapr.sidecarRestricted + sidecarDropALLCapabilities) — a pod is only as restricted as its loosest container"
 
+# TELEMETRY PROVENANCE. `observability.environment` is the `deployment.environment.name` resource
+# attribute on every trace and metric; values.yaml defaults it to `rask` and says "override per deploy",
+# which this overlay did not do until 2026-09-16 — so prod telemetry was indistinguishable from dev in
+# the same GreptimeDB, and an alert firing on "the estate" could not say which one. Asserted on the
+# RENDER, because the attribute is what ships, not the value.
+grep -q "deployment.environment.name=prod" "$OUT" \
+  || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
+
 echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, alerting on, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
