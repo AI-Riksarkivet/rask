@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**217 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**216 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 17 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 74 | 17 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -2491,11 +2491,25 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   be probed from inside this resolution — it needs a scratch environment, not a decision.
 - *Closes when:* Establish how the pylance 11 Rust binding types `merge_insert_into_table(on=...)`, lift the `<0.12` ceiling on the nine pins with whatever pylance version accepts a list, then re-apply the `on: list[str]` door in `data.py`'s merge handler plus the per-column index coverage and re-run the catalog + integration suites.
 
-**LH-023 · A client-supplied `delimiter` is refused 400 rather than honoured on all 153 catalog ops**
+**LH-023 · ~~A client-supplied `delimiter` is refused 400 rather than honoured on all 153 catalog ops~~ — STRUCK 2026-09-16 (PREMISE FALSIFIED: the refusal is a RECORDED decision, and honouring it is the hazard that decision names)**
 `catalog` · med
 
 - *Why open:* Only the silent half closed: a router-level guard now refuses an unsupported delimiter with code 13 instead of reporting a real table as 404. Honouring it means threading the delimiter through both `parse_identifier` AND `fga.canonical_object_id`, and authorizing against a differently-spelled object was judged worse than the bug being fixed — so the design was deferred, not done.
-- *Closes when:* Add a request-scoped delimiter dependency feeding `core/identifiers.py::parse_identifier` (lines 59-63) and `fga.canonical_object_id` so identifier splitting and FGA canonicalisation agree, declare `delimiter` on the served ops, and replace the refusal guard.
+- *What is true now:* the row says "the design was deferred, not done". It was decided.
+  `docs/DECISIONS.md:294` row 6 records it as **consciously skipped**, with the reason this row's own
+  closes-when would walk into: "honoring it per-request would have to thread through the router-level
+  FGA gate too (endpoint-only support would let the gate authorize a differently-parsed object — an
+  authz-drift hazard)".
+- *And the hazard is now PRICED, not just named* ([[LH-150]], measured 2026-09-16): the delimiter is
+  deploy-fixed at `$`, and of 1000 stored OpenFGA objects **715 carry `$` and 0 carry anything else**.
+  A request that spelled an identifier differently would canonicalise to an object none of those 715
+  grants covers — denying fail-closed, per request, with nothing naming the cause.
+- *One scope nuance, stated rather than papered over:* row 6's SUBJECT is list ops, while its REASON is
+  general — the FGA gate parses every op's identifier, not only a listing's. The ruling should be
+  widened to match its own reasoning rather than re-argued per door.
+- *What would reopen it:* an `fga.canonical_object_id` that no longer derives the object id from the
+  request's delimiter (making identifier spelling and authorization independent), or a ruling that
+  supersedes DECISIONS.md row 6. Either restores the row; neither is true at HEAD.
 
 **LH-024 · ~~Every Q13 `LANCE CLAIM` verdict was measured on pylance 10.0.0 and is unverified against the locked 11.0.0~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
