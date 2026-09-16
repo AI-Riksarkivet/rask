@@ -3070,12 +3070,24 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   is missing is that the value is immutable after bootstrap.
 - *What landed now:* the consequence is stated at both documented sites (`naming.py`, `catalog/core/config.py`),
   so the change is an informed one rather than an invited one. That is prose, and prose is not a control.
-- *Closes when:* an owner decides whether this warrants a mechanism — the shape would be recording the
-  delimiter in a bootstrap record on the control root and refusing a boot that disagrees, which is new
-  estate state for a knob nobody has changed, so it is a decision rather than an obvious fix. Related:
-  [[LH-023]], whose per-request delimiter support `docs/DECISIONS.md` row 6 consciously skipped for the
-  neighbouring reason (an endpoint-only delimiter would let the router-level FGA gate authorize a
-  differently-parsed object).
+- **MEASURED 2026-09-16, AND IT PRICES THE CHANGE THE ROW WARNS ABOUT.** The live catalog Deployment
+  sets `LANCE_NS_DELIMITER=$` explicitly, and the authorization store agrees without exception: of
+  **1000 stored objects, 715 carry `$` in the id and 0 carry `.`**. So the knob has never been changed,
+  and changing it would orphan 715 existing grants at once — every one of them denying, fail-closed,
+  with no message naming the cause.
+- **WHICH REMOVES THE ROW'S OWN OBJECTION TO A MECHANISM.** It defers the fix because a bootstrap record
+  would be "new estate state for a knob nobody has changed". No new state is needed: the stored tuples
+  ARE the record. A boot can read one governed object id out of OpenFGA and refuse to serve if its
+  delimiter disagrees with `settings.delimiter` — comparing against state the estate already keeps,
+  rather than inventing a second source of truth that could itself drift from the tuples.
+- *Two honest limits on that shape:* a FRESH estate has no tuples to compare, so the check must no-op on
+  an empty store rather than refuse the first boot; and it needs a governed object (a `table:`/
+  `namespace:` id), not a `user:` subject, whose local part is an IdP `sub` and carries no delimiter.
+- *Closes when:* an owner rules — but the decision is now between "refuse a boot whose delimiter
+  disagrees with the tuples already stored" and "document the delimiter as bootstrap identity and stop
+  presenting it as an operator knob", not between a fix and new estate state. Related: [[LH-023]], whose
+  per-request delimiter support `docs/DECISIONS.md` row 6 consciously skipped for the neighbouring reason
+  (an endpoint-only delimiter would let the router-level FGA gate authorize a differently-parsed object).
 
 **LH-167 · A tenant's silver tier has been WRITTEN eight times and PUBLISHED never, and nothing reports a tier that stopped mid-cascade**
 `medallion, catalog` · low · found 2026-09-16 while refuting [[LH-143]]'s worked example
