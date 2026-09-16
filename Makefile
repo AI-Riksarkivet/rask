@@ -711,7 +711,7 @@ k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (se
 # (7c2171f0) until 2026-08-23, and the whole target failed with `/bin/sh: @#: not found` plus a
 # `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
 # it documents is worse than no comment; keep prose out of the continuation.
-k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
+k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
 	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \
@@ -762,6 +762,18 @@ seed-medallion-namespaces: ## Provision the cascade's TOP-LEVEL catalog namespac
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
+
+k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag ([[LH-169]])
+	@# A PREREQUISITE OF k3s-up, not a courtesy target. The chart carries ONE tag per image stem and ten
+	@# workloads share `lance-rest-catalog`, so a `kubectl set image` on part of a stem leaves the release
+	@# pinning the other half — and the next `helm upgrade`, even one with byte-identical values, silently
+	@# reverts whatever was rolled forward. Measured 2026-09-16: six on main-3803cc1d against four on
+	@# main-9e5ff5b3, while the image carrying the fixes was deployed nowhere.
+	@#
+	@# The detection already existed inside `k3s-pins.sh` and was reachable only by asking for a pin file.
+	@# Same script, `--check-only`: one implementation, and it now stands in FRONT of the destructive
+	@# operation instead of beside it.
+	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only
 
 k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yaml (#135)
 	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a

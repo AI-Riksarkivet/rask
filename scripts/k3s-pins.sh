@@ -10,16 +10,24 @@
 # So: read the truth out of the cluster and hand it to helm. `helm upgrade -f <this>` then changes
 # only what you meant to change. It is a CAPTURE, not a source of truth — the fix for a stale pin is
 # to rebuild that image and re-run this, never to hand-edit the file.
+#
+# `--check-only` runs the divergence guard below and writes nothing. [[LH-169]]: the guard was reachable
+# only by asking for a pin file, so an upgrade from a split estate proceeded in silence and reverted
+# whichever half of the stem had been rolled forward. `make k3s-up` runs this mode before helm, so the
+# refusal now stands in front of the destructive operation rather than beside it.
 set -euo pipefail
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+CHECK_ONLY=""
+if [[ "${1:-}" == "--check-only" ]]; then CHECK_ONLY=1; shift; fi
 OUT="${1:-chart/values-live-pins.yaml}"
 KUBECTL="${KUBECTL:-kubectl}"
+export CHECK_ONLY
 # The staging file is removed on ANY exit, so a refused run leaves neither a truncated $OUT (see the
 # `mv` at the end) nor a half-written sibling for the next reader to mistake for output.
 trap 'rm -f "$OUT.tmp"' EXIT
 
 "$KUBECTL" get deploy,statefulset -o json | python3 -c '
-import json, sys
+import json, os, sys
 
 tags, digests = {}, {}
 # component -> {tag_or_digest: [workloads running it]}. The chart has ONE tag per image stem, so a stem
@@ -69,6 +77,12 @@ if split:
     sys.stderr.write("\nRebuild one image from a commit carrying every change, roll the whole stem, re-run.\n")
     sys.exit(1)
 
+if os.environ.get("CHECK_ONLY"):
+    # The guard is the whole point of this mode; emitting the pin body as well would hand `k3s-up` a
+    # values file it never asked for.
+    sys.stderr.write("stems converged: " + str(len(sources)) + " first-party images, one tag each\n")
+    sys.exit(0)
+
 def block(label, mapping):
     if not mapping:
         return f"  {label}: {{}}\n"
@@ -88,6 +102,7 @@ sys.stdout.write(
 # refusal into "your record of what the cluster runs is now an empty file". Committed and pushed once
 # (2026-08-16) before anyone noticed; an upgrade reading a 0-byte pin file supplies no image tags at
 # all. Write to a sibling and move only on success, so a refusal costs nothing.
+if [[ -n "$CHECK_ONLY" ]]; then exit 0; fi
 mv "$OUT.tmp" "$OUT"
 
 echo ">> wrote $OUT"

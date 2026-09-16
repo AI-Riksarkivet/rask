@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**213 open items**, deduped from 325 raw rows mined out of the seven files above. A further 94 rows
+**212 open items**, deduped from 325 raw rows mined out of the seven files above. A further 95 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 72 | 16 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -771,7 +771,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   committed version eventually in the graph, with a measured upper bound on lateness), which is
   assertable in a way "we accept the window" is not.
 
-**LH-169 · A `kubectl set image` on part of an image stem arms the next `helm upgrade` to revert it, and nothing fails when a stem is split**
+**LH-169 · ~~A `kubectl set image` on part of an image stem arms the next `helm upgrade` to revert it, and nothing fails when a stem is split~~ — CLOSED 2026-09-16 (stem converged and the upgrade now refuses a split)**
 `chart, catalog, lineage, medallion, maintenance` · **HIGH** · found 2026-09-16 by the backlog audit's completeness critic, which looked for defects no row covered
 
 - *Why open:* TEN deployments share the `lance-rest-catalog` image stem, and the dev loop rolls them with
@@ -796,6 +796,26 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Closes when:* The stem converges (one image from a commit carrying every change, all ten rolled), and a
   GATE makes a split loud rather than leaving it to a script's exit code — the natural home is beside the
   pin generation the chart already depends on, so an upgrade cannot be attempted from a split estate.
+- **CLOSED — both halves done and observed 2026-09-16.**
+  * *The stem converged.* `main-fd3999f4` built with Dagger (`scripts/dagger-image.sh --name rest-catalog
+    --push`) from a commit carrying BOTH pending changes — `6d923a40`'s vend-door sanctioned-bases fix and
+    [[LH-141]]'s crossing guard — and all ten stem-mates rolled to it by container NAME, never `*`
+    (a wildcard `set image` overwrites init containers too, which is how `rask-lineage` was wedged
+    `Init:0/1` earlier today). `kubectl get deploy` now reads **10 x main-fd3999f4**, and
+    `scripts/k3s-pins.sh` answers *"stems converged: 25 first-party images, one tag each"* where it
+    refused before. `chart/values-live-pins.yaml` regenerated, so an upgrade carries the new tag.
+  * *The gate landed in front of the destructive operation.* `make k3s-up` now has `k3s-stem-check` as a
+    PREREQUISITE, which runs `scripts/k3s-pins.sh --check-only` — the same detection the pin generation
+    already had, reachable before only by asking for a pin file. Pinned by
+    `tests/unit/test_an_upgrade_cannot_be_attempted_from_a_split_image_stem.py`, which drives the script
+    against a fake `kubectl` so the rule is exercised without a cluster, and asserts the refusal names
+    both tags and both owner sets — an operator cannot act on "something diverged".
+- **What the roll bought, measured on the live estate immediately after:**
+  * `vend_base_path_unsanctioned` in the catalog: **~2,500/hour -> 0**. The maintenance sweep's
+    *"not permitted to read the base at `s3://lance-catalog/models/`"* refusal is gone from every tick.
+  * Sweep refusals fell **320 -> 255** on the first tick.
+  * **Zero rewrites now sign with the ambient key**: 220 SCOPED vend decisions, 0 AMBIENT, against 137
+    SCOPED + 3 silent-ambient writes before. See [[LH-141]] for the four crossings this exposed.
 
 **LH-006 · ~~`UPSTREAM`/`DOWNSTREAM`/column-lineage Cypher is unbounded `*1..`, and Dataset nodes carry no `latest_version`~~ — CLOSED 2026-09-16**
 `lineage` · was med
@@ -1885,6 +1905,23 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   landing; it does not correct a single stamp or a single relative `source_uri`. The 58 governed
   relative-URI datasets and the composed stale stamps still need option 1 or option 3 above, and
   option 3 is still blocked on [[LH-146]]'s ruling about a synthetic assertion.
+- **DEPLOYED AND OBSERVED FIRING 2026-09-16** — built with Dagger as `main-fd3999f4`, rolled to all ten
+  stem-mates ([[LH-169]], now closed), first sweep tick on the new image:
+
+      the dataset at s3://bind86-wh/medallion/silver           declares 'bronze$events'       catalog: s3://lance-catalog/medallion/bronze
+      the dataset at s3://lance-catalog/medallion/gold         declares 'bronze$events'       catalog: s3://lance-catalog/medallion/bronze
+      the dataset at s3://lance-catalog/medallion/silver       declares 'silver$features'     catalog: s3://bind86-wh/medallion/silver
+      the dataset at s3://acme-bucket/4750a5b9_acme-bronze$events  declares 'acme-bronze$events'  catalog: s3://acme-bucket/medallion/bronze
+
+  **The fourth is new and it is a FLAT layout**, which the row's own framing did not predict: its id is
+  derived from the path and parses perfectly, and the catalog holds that table somewhere else in the
+  same bucket. So two directories claim one table id, and the crossing is not confined to the composed
+  `medallion/<tier>` population — checking the vend where the path CAN answer is load-bearing, not
+  belt-and-braces.
+- **THE ESTATE NO LONGER SIGNS A REWRITE WITH THE AMBIENT KEY.** Same tick: **220 SCOPED vend decisions,
+  0 AMBIENT**, against 137 SCOPED + 3 silent ambient writes before. 56 datasets optimized an index,
+  exactly the 56 that were properly vended before — so nothing that used to be maintained stopped being
+  maintained, and the three that were being written under the root-reaching key are now refused by name.
 - *Also connects [[LH-137]]:* that row's half (b) residue is these exact two ids, so it is this defect
   seen from the compaction door rather than a separate fault.
 
