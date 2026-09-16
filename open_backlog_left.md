@@ -4959,6 +4959,18 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
      that writes asynchronously.
   Option 3 is the only one that leaves the abstraction intact; it is also the only one that touches a
   shared package, which is why it is a decision rather than an edit.
+- **RE-MEASURED 2026-09-16 — all three facts still hold, and one candidate fix was checked and
+  refuted.** `executor_for` still has ZERO production callers (the only match outside tests is a
+  docstring naming it); `transform.py:788` still hand-builds `InProcessExecutor(settings.storage_options)`;
+  and there is no `def result` anywhere in `service-kit`, so `result()` is still off the port.
+  *The refuted candidate, recorded so it is not re-proposed:* `transform.py:793` discards an outcome —
+  `handle, _outcome = await executor.submit(...)` — which looks like the port already returning what
+  `result()` gives, making a fourth, free option. It does not: `SubmitOutcome` is a SUBMITTED/REATTACHED
+  enum, and the measurement is stashed in `InProcessExecutor._results` for `result()` to read. The three
+  options stand.
+- *The decision record no longer overstates this.* `DECISIONS.md`'s 2026-09-15 entry now says
+  explicitly that neither lane goes through the port and names this row as the open decision — a first
+  draft of that entry claimed "neither is constructed by hand", which `transform.py:788` falsifies.
 - *Closes when:* dispatch goes through the port — one door, both lanes — OR `engine_registry.py` is
   deleted and `DECISIONS.md` rewritten to describe the branch the code actually has. **Keeping an
   uncalled port is the worst of the three**, because the decision record then documents an

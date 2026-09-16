@@ -1877,4 +1877,14 @@ port doing its job.
 **The count did not change and the shape did.** There are still two adapters — `InProcessExecutor` and
 `RayJobsApiExecutor` — but the Ray one is now the lane that runs, so "a port with a dead adapter is a
 decoupling claim, not a decoupled system" stopped being true of this estate rather than being argued
-away. `engine_registry` resolves both names; neither is constructed by hand.
+away. `engine_registry` resolves both names.
+
+**WHAT THIS ENTRY DOES NOT CLAIM: that both lanes go through the port.** They do not. `executor_for`
+still has ZERO production callers, and `transform.py` hand-builds `InProcessExecutor` because it then
+reads `executor.result(handle)` — and `result()` is deliberately NOT on the port, its own docstring
+calling it "only ever an optimisation" while that caller raises when the value is absent. So an
+optimisation is consumed as a requirement, and routing the in-process lane through the port forces a
+choice between re-deriving (a second stats read for numbers identical by construction), narrowing back
+to the concrete type (which defeats resolving), or widening the port with an optional result capability
+(honest, and a `service-kit` change every future adapter inherits). That is an open decision, tracked as
+LH-158, not a thing this entry settles.
