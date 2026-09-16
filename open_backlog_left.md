@@ -3634,7 +3634,26 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 `catalog, chart` · med
 
 - *Why open:* The doors are done and observed end to end 2026-09-08 (`read_data` rows queryable by SQL); the Collector's half is missing, so the trail grows unbounded and filters scan.
-- *Closes when:* Set retention on the audit table and add an index on the dataset column in the GreptimeDB/OTel Collector configuration in `chart/`.
+- **THE RETENTION HALF IS NOW VERIFIED LIVE, closing this row's own reopen condition.** It said the
+  applied TTL was "UNVERIFIED here beyond the in-repo observation note". Queried against the running
+  GreptimeDB 2026-09-16: `SHOW CREATE TABLE opentelemetry_logs` carries **`ttl = '14days'`**. The trail
+  does not grow unbounded, in fact and not only in the chart.
+- **AND THE INDEX HALF NAMES A COLUMN THAT DOES NOT EXIST.** `DESC TABLE opentelemetry_logs` returns 14
+  columns — `timestamp, trace_id, span_id, severity_text, severity_number, body, log_attributes,
+  trace_flags, scope_name, scope_version, scope_attributes, scope_schema_url, resource_attributes,
+  resource_schema_url` — and **none of them is `dataset`**. The audit's dataset is a key INSIDE the
+  `log_attributes` JSON column, so "an index on the dataset column" cannot be written as stated.
+- *What the numbers say the fix actually is* (measured live): the table holds **105,390,492 rows**, of
+  which **6,463,147 are `lance.audit`** — 6.1%. So the cheap, real win is an index on `scope_name`,
+  which is the only first-class column separating the audit stream from the other 99 million rows; a
+  per-dataset filter costs a JSON extraction over whatever that leaves. Indexing the dataset itself
+  first requires PROMOTING it out of `log_attributes` into a column, which is an OTel Collector
+  transform, not a DDL hook.
+- *Closes when:* an index on `scope_name` lands in the same hook shape as `greptimedb-ttl-job.yaml`,
+  and a ruling on whether the audit's dataset is promoted to a real column (Collector transform, then
+  index it) or left as a JSON key filtered after the scope narrowing. The retention clause is DONE and
+  verified live; do not re-work it. The separate point this row already records — that 14d is short for
+  a compliance trail and is estate-wide — remains its own item ([[XC-003]]).
 
 **LH-076 · `can_observe_events` is the estate-admin bar under a name that says 'read the feed', and its comment names one of its four consumers**
 `catalog, service-kit` · med · **blocked:** the comment half is unblocked; the rename half needs an owner ruling on repointing live checks + reseeding
