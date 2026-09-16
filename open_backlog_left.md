@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**223 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 77 | 11 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 74 | 11 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 50 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |

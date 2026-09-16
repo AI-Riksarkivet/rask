@@ -67,6 +67,11 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("services/medallion", "medallion.core.config", "MedallionSettings"),
     ("services/notifications", "notifications.api.settings", "IngressSettings"),
     ("services/catalog", "catalog.core.config", "Settings"),
+    # The two Lance cache ceilings, split OUT of `Settings` so opening a dataset needs no credential:
+    # `shared_lance_session` read two defaulted integers by building a model that REQUIRES
+    # `LANCE_S3_ACCESS_KEY_ID`, which coupled every local `dir`-backend open to a credential it never
+    # uses. `Settings` inherits it, so the aliases below are checked once and defined once.
+    ("services/catalog", "catalog.core.config", "LanceSessionCaps"),
     ("services/maintenance", "maintenance.core.config", "MaintenanceSettings"),
     # These three reach `populate_by_name` by declaring it next to a GovernedAuthSettings mixin, which
     # is why grepping for the flag on a `class X(BaseSettings)` line misses them.
