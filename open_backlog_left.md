@@ -4680,6 +4680,26 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   act on, and the purge is gated on `report_is_clean`, which an `incomplete` list of 3 currently blocks.
   Naming the chain rather than asserting it: a second tick over time is what separates "these stopped
   growing" from "these are still accumulating".
+- **ROOT-CAUSED 2026-09-16, AND IT IS THE ESTATE'S OWN BACKUPS.** Making the incomplete list say WHY —
+  it logged the SOURCE only, three entries all reading `storage:lance-catalog`, which an operator cannot
+  act on — produced the answer immediately:
+
+      storage:lance-catalog: depth limit reached at s3://lance-catalog/_backups/control/20260914T163435Z
+      storage:lance-catalog: depth limit reached at s3://lance-catalog/_backups/control/20260914T164046Z
+      storage:lance-catalog: depth limit reached at s3://lance-catalog/_backups/control/20260914T164519Z
+
+  `control_root_backup.py` writes `_backups/control/<timestamp>/…`, which nests past
+  `discovery_max_depth`. The walk records an `IncompleteScan`; `report_is_clean` refuses to certify an
+  estate with anything incomplete; the #79 purge is gated on `report_is_clean`. **So the estate's own
+  backup snapshots were blocking reclamation of 932 orphan files across 8 datasets.**
+- *The fix is one entry in a list that already existed.* `_CONTROL_PREFIXES` skips the control-plane
+  registries because "no dataset ever lives under them"; `_backups` is exactly that kind of directory
+  and was missing. Gated by `tests/unit/test_the_backup_directory_does_not_gate_reclamation.py`, which
+  also pins the half that must NOT regress: a governed dataset nested past the bound is a real coverage
+  gap and is still reported, because the `truncated` field exists for the day that went silent.
+- *What this does NOT settle:* whether the 932 then get reclaimed. The purge has its own report-first
+  posture and `MAINTENANCE_TRASH_PURGE_ENABLED` default, so the next measurement is whether
+  `report_is_clean` now goes true and what the purge does with it.
 - **`maintenance_refused_protected_base` is still half the estate's warnings — re-measured: 738 of
   1,356 WARN-or-worse lines in 25 minutes, 54%.** The row's 2026-09-11 position (10,461 of 20,740)
   holds unchanged on a different image and a different window, so it is structural rather than a spike.
