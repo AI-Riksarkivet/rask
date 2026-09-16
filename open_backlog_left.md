@@ -2662,6 +2662,30 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   guard is applied to `batch_create_table_versions`, whose entries carry the identical field.
 - *Why open:* Version routes at `endpoints/versions.py` are mounted and FGA-gated (`_BATCH_PATHS`, `_action_relation` → `can_write_data`) but nothing else runs on them, and `managed_versioning` is never advertised in `DescribeTable`, so a stock Lance client's commit bypasses the whole governance chain. `batch_commit_tables` is `UnsupportedOperationError` on the dir backend and always will be.
 - *Closes when:* Owner acknowledges R1 (the governed commit path IS the spec's managed-versioning path); then attach lineage emit, the quality gate, the replay marker and protection to `CreateTableVersion` in `endpoints/versions.py`, advertise `managed_versioning=true` in `DescribeTable`, alias then remove `/commit` (data.py:326-364, dataplane.py:556-637), and back `batch_commit_tables` with rask's own staged-manifest KV.
+- **R1 ACKNOWLEDGED 2026-09-16 (owner: the R-series stands), and the LINEAGE HALF LANDED.**
+  `POST /v1/table/{id}/version/create` now emits `CREATE_TABLE_VERSION` after the native call, pinned to
+  the version just minted — the same shape as `restore_table`, for the same reason: the version state
+  changed and the graph has to be able to say who changed it. Until this, a version minted through the
+  SPEC's own commit door left no provenance while the same table's `/commit` door emitted: two doors
+  onto one table, one of them silent.
+  *The gate is route-derived* (`services/catalog/tests/test_a_version_door_that_mints_one_records_who_did_it.py`):
+  every route in the module is classified as minting a version or not, so a ninth cannot be added
+  without someone deciding which kind it is — and `batch_create_table_versions` is deliberately in the
+  NO column, because it is 406 on this backend and an emit there would be provenance for work that
+  never happened.
+- **DEPLOYED `main-b2d08df6` and the door was DRIVEN — but the emit itself is NOT yet observed, and the
+  difference matters.** Against the deployed catalog: a table created, `version/describe` answered 200
+  with `manifest_path` `…/_versions/18446744073709551614.manifest`, and `version/create` with the spec's
+  relative form reached the BACKEND — answering `400 InvalidInputError: Staging manifest not found …
+  for version 2`, which is a real domain answer rather than a routing or signature failure. So the async
+  door with its new dependencies is live and behaving; what is unproven is the emit, because it runs
+  only on SUCCESS and a successful version-create needs a genuinely staged manifest (the client-direct
+  write path), which this drive did not construct. Catalog logs: 0 errors since the roll.
+- *What is left of this row, with the dangerous clauses struck:* the replay marker, and the
+  `/commit` alias-then-remove. **`managed_versioning=true` is NOT to be advertised** — the row's own
+  re-measure says it invites clients onto a catalog-mediated commit pointer, the Iceberg shape the
+  permanent LANCE-ONLY ruling exists to avoid — and `batch_commit_tables` stays 406 rather than being
+  backed by a rask-only staged-manifest KV.
 
 **LH-019 · rask-only governance side effects still run inside spec handlers (warehouse-scoped namespace refusal, trash soft-delete, protection 409, lineage keys in schema metadata, implicit BTREE, insert pre-coercion, maintenance 503 on POST reads)**
 `catalog` · **HIGH** · **blocked:** the management-API carve, plus an owner ruling on the protection error code
