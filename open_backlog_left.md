@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 72 | 16 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -676,6 +676,62 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   consolidation — it needs a durable producer, and the architecture has no DB to give it.
   **THE CP-007 BLOCKER IS CLEARED (2026-09-11).** Ingest can write the outbox — the credential is vended through the catalog's outbox door and the whole path was observed end to end (`lineage_outbox_drained drained=1 stranded=0`), so staging is worth something now. What remains is the CONSOLIDATION, and it is a LATENT trap rather than present loss: `lineage_kit/emitter.py` swallows a transport failure with `log.warning("lineage_emit_failed")` and stages nothing, while the backstop that saves ingest (`_stage_undelivered`) lives in ingest rather than in the kernel. Today that costs nothing, because ingest is the kernel's only service importer. It costs a silently-lost event the day a second HTTP producer is added by someone who reasonably expects the emitter to be durable — which is precisely the duplication R10 exists to end.
 - *Closes when:* Delete `service_kit.lancekit.openlineage`/`lineage_emit` and the per-service `lineage_emit.py` copies, route every producer through `packages/lineage-kit`'s emitter and one `RunEvent` builder, and stage each event in an outbox before transport so a failed emit is retried rather than dropped.
+- **MEASURED 2026-09-16 AT HEAD, AND R10's PRESCRIPTION IS WRONG FOR THIS ESTATE.** R10 reads "every
+  producer stages before transport", and the row derived from it that the kernel should carry the
+  backstop. It cannot: ingest's `_stage_undelivered` stages through `_outbox_storage_options()`, which
+  VENDS an STS credential from the catalog because "this service holds no key"
+  (`services/ingest/src/ingest/lineage.py:253-262`). Moving that into `lineage-kit` couples the kernel
+  to the catalog, and `lineage-kit` runs inside sealed Ray runners that have no catalog access. The
+  kernel's own comment already states the hook is injected "NOT BUILT IN" for this reason
+  (`test_an_undelivered_event_reaches_a_recovery_hook.py:13-15`). So the durable half is a
+  PER-PRODUCER obligation, not a kernel one, and any consolidation must keep the hook injectable.
+- **THE DEFECT THE SILENCE HID, found while measuring and fixed.** `runs.py` read
+  `if self.emitter.emit(event) or self._on_undelivered is None: return` — a producer with no recovery
+  hook took a SILENT return, byte-identical in behaviour to a successful emit. Four of the five
+  production construction sites pass no hook (`actor.py:52`, `actor.py:83`, `stage.py:48`,
+  `runs.py:276` — the actor mixin, the `@stage` decorator and the offline `run()` block, i.e. every
+  Ray-runner path); only ingest passes one. That path now logs `lineage_event_unrecoverable` at ERROR
+  with run id, job and state. Deliberately NO new counter: the emitter already records the TRANSPORT
+  drop, so a second would double-count one event — what was missing was severity and finality.
+- **THE ROW IS TWO ROWS WITH DIFFERENT BLOCKERS** (3-lens adversarial verification, 2026-09-16, all
+  three refuters independently reaching the same split):
+  * *The CONSOLIDATION half is UNBLOCKED and workable at M-L effort* — retire
+    `service_kit.lancekit.{openlineage,lineage_emit}`, repoint their one live consumer
+    (`services/annotator/src/annotator/annotations/commit.py`), collapse the 805-line catalog and
+    337-line maintenance kernels and the three `RunEvent` builders. Note `lineage_kit.emitter` has NO
+    Dapr transport at HEAD, so "route every producer through it" is a rewrite, not a move.
+  * *The DURABILITY half needs a ruling*, and it is not a procedural ack: does the catalog's
+    commit->publish crash window stay permanently residual, or does it get a transactional producer?
+    The only design written down is "make the Ray job the durable producer" (`docs/RESILIENCE.md:83`),
+    which condition 3 forbids, and LANCE-ONLY leaves no relational store to replace it with.
+- *RECOMMENDED ANSWER, not yet ratified by the owner:* neither WONTFIX nor a new producer. Treat the
+  **Lance commit log as the source of truth and the lineage graph as a projection of it** — the
+  log-first / change-data-capture shape — which makes a lost publish VIEW LAG rather than data loss,
+  needs no Ray and no second format, and turns the storage->graph reconcile sweep from a backstop into
+  the documented view maintainer. The work that follows is a COMPLETENESS gate on that sweep (every
+  committed version eventually in the graph, with a measured upper bound on lateness), which is
+  assertable in a way "we accept the window" is not.
+
+**LH-169 · A `kubectl set image` on part of an image stem arms the next `helm upgrade` to revert it, and nothing fails when a stem is split**
+`chart, catalog, lineage, medallion, maintenance` · **HIGH** · found 2026-09-16 by the backlog audit's completeness critic, which looked for defects no row covered
+
+- *Why open:* TEN deployments share the `lance-rest-catalog` image stem, and the dev loop rolls them with
+  `kubectl set image` one service at a time. Measured live 2026-09-16 after exactly that: `rask-catalog`,
+  `rask-lineage`, `rask-maintenance` and `rask-medallion-producer` ran `main-9e5ff5b3` while
+  `rask-annotator`, `rask-bronze-to-silver`, `rask-media-to-silver`, `rask-search`, `rask-silver-to-gold`
+  and `rask-viewer` ran `main-3803cc1d`.
+- **THE HAZARD IS THE UPGRADE, not the split itself.** The deployed release (rev163, decoded from
+  `sh.helm.release.v1.rask.v163`) pins `image.tags['lance-rest-catalog'] = 'main-3803cc1d'` for ALL ten. So
+  the next `helm upgrade` — *even one with byte-identical values* — silently reverts the four that were
+  rolled forward. This is the same shape the chart already records for hand-deployed images, applied to a
+  stem rather than a service.
+- *The estate cannot capture its way out of it either:* `scripts/k3s-pins.sh:61-70` REFUSES to generate a
+  pin file while any stem runs more than one tag, by design ("no correct pin file exists until they
+  converge"). That refusal is correct and is a stderr exit nobody reads, so the split persists silently
+  until an upgrade reverts something.
+- *Closes when:* The stem converges (one image from a commit carrying every change, all ten rolled), and a
+  GATE makes a split loud rather than leaving it to a script's exit code — the natural home is beside the
+  pin generation the chart already depends on, so an upgrade cannot be attempted from a split estate.
 
 **LH-006 · ~~`UPSTREAM`/`DOWNSTREAM`/column-lineage Cypher is unbounded `*1..`, and Dataset nodes carry no `latest_version`~~ — CLOSED 2026-09-16**
 `lineage` · was med
@@ -1504,6 +1560,18 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Note while this is open:* a refused base currently propagates a `ValueError` out of the vend rather
   than a typed refusal, the same shape `_reject_iam_metacharacters` already had. Fail-closed and
   consistent, but an operator sees an opaque error for a poisoned manifest.
+- **THE CLOSURE CLAIM ABOVE WAS FALSE, AND THE GATE DID NARROW SOMETHING RUNNING.** It read "the bases
+  live tables actually declare are `<table-root>/tree/work` … i.e. inside the table's own scope — so the
+  new gate narrows nothing that is running". Measured on the deployed catalog the same day (image
+  `main-9e5ff5b3`): 1,836 `vend_base_path_unsanctioned` warnings in three hours, every one for
+  `s3://lance-catalog/models/`, against tables in unrelated buckets (`tracka-wh`, `cslens0d7def-wh`,
+  `acme-bucket`), all with `sanctioned_count=0`. The estate had already approved that base — the pod
+  carries `LANCE_EXTERNAL_BLOB_BASES=s3://lance-catalog/models/` — but `main.py` gave the vendor only
+  `multibase_data_base_list`, so the gate this row installed dropped a base the create door accepts.
+  FIXED `6d923a40` (`Settings.vend_sanctioned_bases` unions both allowlists), with the four tests the
+  drop's remoteness demands: `vending.py:271-281` says a dropped base "surfaces later as a read denial at
+  the object store … with nothing naming the base", so a regression is invisible at the vend.
+  **Not yet deployed** — the fix is in HEAD and the running image predates it.
 
 **LH-141 · A wrong `lineage.dataset_id` stamp is repaired only by a WRITE, so a dataset that stopped being written keeps a false name forever**
 `medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-11 · measured on the live estate
@@ -3241,6 +3309,23 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - *Why open:* The code landed (3cacdd91) but every test skips on the shipped stack and a skip reads identically to a pass — RustFS never evaluates the session policy. `scripts/e2e_stack.sh` provisions neither web-identity vending nor a second tenant admin, and the sabotage half needs a deliberately-widened-policy lever that must not be reachable in production.
 - *Closes when:* Provision `vending.mode=web_identity` (requires `rustfs.oidc.enabled` + `auth.enabled`) plus a SECOND tenant with its own admin subject in `scripts/e2e_stack.sh`, add the widened-policy sabotage lever to the harness chart values, then run the credential attack e2e unskipped in CI.
+- **THE SECOND-TENANT HALF IS WIRED 2026-09-16, AND THE ROW'S FIRST CLAUSE IS WRONG.** `web_identity`
+  is not the lever: `chart/values.yaml:955` ships `mode: sts`, and `credentials.py:125` sets
+  `mode = "server_mediated" if creds is None else "direct"`, so the suite's own gate
+  (`test_credential_isolation_e2e.py:110`, skip unless `direct`) already passes under `sts` —
+  while `vending.py:354` returns None without a caller OIDC token, so `web_identity` would make the
+  legs skip MORE, not less. Strike that clause rather than implementing it.
+- *What landed:* `scripts/e2e_stack.sh` now provisions `project:e2etenantb` through
+  `POST /v1/projects` and grants bob `admin` on it, exports `LANCE_E2E_PROJECT_B` +
+  `LANCE_E2E_TENANT_B_TOKEN`, and runs `tests/e2e-py/test_credential_isolation_e2e.py` in the guarded
+  list. Bob holds nothing on `acme`, so he stays the 403 leg the sibling suites need. The
+  no-silent-skips gate was deliberately NOT widened: a tenant-B provisioning failure skips the five
+  legs and reds the job, which is the gate working.
+- *STILL OPEN, and this is the whole remaining ask:* the harness has **not been run**. `bash -n` is
+  clean and both doors it posts to were verified present on the deployed catalog's OpenAPI
+  (`POST /v1/projects`, `POST /v1/access/tuples`, 2026-09-16), but a kind run is what proves the five
+  legs EXECUTE rather than skip — and that is the one thing this row has always been about. Also still
+  open: the widened-policy SABOTAGE lever, which exists nowhere (no fixture, no chart value).
 
 **LH-055 · The FGA model has no `branch`/`column`/`base`/`estate` type, `can_set_protection` collapses onto `can_drop`, and `project` has no security_admin/data_admin/role_creator split or machine identity**
 
