@@ -6001,7 +6001,21 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 `chart, compute, medallion` · med
 
 - *Why open:* The hand-applied Ray head has diverged from the chart's own RayService, and re-applying an older copy silently reverted the scoped S3 credential to the root key once. Until the head is reconciled and the OpenBao bootstrap is a Job, 'it is all in the chart' is false — and the gap sits exactly where the security posture lives.
-- *Closes when:* Reconcile the hand-applied Ray head with the chart's RayService and delete `deploy/ray-lance-demo.yaml`; turn the OpenBao k8s auth backend/policy/role and KV seeding into a chart-owned Job.
+- **THE OPENBAO HALF IS DONE, verified 2026-09-16 — this row is now only about the Ray head.**
+  `chart/templates/openbao.yaml:305-315` is a chart-owned Job that enables the kubernetes auth mount,
+  writes `auth/<path>/config`, writes the policy and writes the role, with every step idempotent and the
+  one non-idempotent case (`auth enable` on an existing mount) handled explicitly. The KV seeding is in
+  the same Job at :171 (`bao kv put secret/lance …`). "Seeded by runbook" is no longer true of OpenBao.
+- *The Ray half IS still open, measured the same day:* `deploy/ray-lance-demo.yaml` still exists (9,845
+  bytes), the live `ray-lance-head` Deployment carries **no `meta.helm.sh/release-name` annotation**, and
+  the chart's own `chart/templates/rayservice.yaml` renders nothing into the deployed release — the same
+  hand-applied shape [[LH-169]] and [[XC-052]] describe elsewhere.
+- *And that half is PHASE 2, not phase 1.* It is the Ray lane's ownership question, which
+  [[CP-012]]/[[CP-020]]/[[CP-021]] already hold as one owner decision (chart-owned RayCluster vs
+  ephemeral per-job clusters vs delete the adapter). This row should not be worked ahead of that ruling
+  — reconciling the head against `rayservice.yaml` presumes the first answer.
+- *Closes when:* the Ray-head ownership ruling lands and the head is reconciled with whatever it chooses,
+  and `deploy/ray-lance-demo.yaml` goes. The OpenBao clause is DONE and must not be re-attempted.
 
 **XC-015 · ~~Residual duplicated storage seams: ingest hand-maps its own 409, a dead line in `storage/client.py`, and three boto3 constructors outside `s3_client`~~ — CLOSED 2026-09-15: the three cited seams are clean**
 `storage, ingest, catalog, service-kit` · med
