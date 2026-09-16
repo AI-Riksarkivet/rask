@@ -166,7 +166,13 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             "counts": report.counts,
             "unavailable": [u.category for u in report.unavailable],
             "skipped": [s.category for s in report.skipped],
-            "incomplete": [i.source for i in report.incomplete],
+            # SOURCE AND REASON, because this list GATES RECLAMATION and the source alone cannot be
+            # acted on. `report_is_clean` blocks the #79 purge while anything is incomplete, so these
+            # entries are why the estate holds unreclaimed orphans — measured 2026-09-16: three entries
+            # all reading `storage:lance-catalog`, against 932 orphan files the purge could not touch.
+            # `IncompleteScan` has carried a `reason` all along and it was computed and discarded here,
+            # the same shape as the orphan findings that named a file and not its dataset.
+            "incomplete": [f"{i.source}: {i.reason}" for i in report.incomplete],
             # WHICH ones, not just how many — see `_drift_names`. Without this the WARNING is a number
             # an operator cannot act on, and the only place the identities existed was a cron response
             # body that nothing stores.
