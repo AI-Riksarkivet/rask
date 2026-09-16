@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**216 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**215 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 74 | 17 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4603,7 +4603,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   ROOT secret; it is now scoped and proven bounded. That made the env-borne credential correct in
   SCOPE while leaving it wrong in DELIVERY.
 
-**LH-101 · The sweep has no per-tick budget and no rotated bucket order, so at estate scale the tail is maintained only if the tick has time left**
+**LH-101 · ~~The sweep has no per-tick budget and no rotated bucket order, so at estate scale the tail is maintained only if the tick has time left~~ — CLOSED 2026-09-16 (mechanism shipped; the VALUE is an operator setting, not open work)**
 `maintenance` · med
 
 - *Why open:* Nothing records which buckets a tick actually reached, so silent starvation of the last buckets is undetectable.
@@ -4660,9 +4660,20 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Per BUCKET, and the shuffle is why:* rotation deliberately breaks bucket ordering, so a truncated
   tick starves buckets PARTIALLY. Only a per-bucket count shows that; a tick-level "stopped early"
   cannot say whose datasets went unmaintained.
-- *Closes when:* nothing further — both halves are in. Rotation was already done and must not be
-  replaced with a coarser bucket rotation. What remains is an operator choosing a budget VALUE, which
-  this row correctly refuses to infer.
+- **CLOSED, and against the row's own ask.** It asked for "an explicit per-tick time budget — checked
+  between work items, with its value a chart setting rather than a literal" and for maintenance coverage
+  per bucket. Both shipped: `execute_within_budget` + `maintenance.sweepBudgetSeconds`, and
+  `report_bucket_coverage`. Rotation was already done and must not be replaced with a coarser bucket
+  rotation.
+- *THE TITLE'S COMPLAINT IS ADDRESSED EVEN AT THE DEFAULT, which is the part worth being precise about.*
+  `sweepBudgetSeconds` defaults to 0 = unlimited, so a tick is still as long as it needs to be until an
+  operator sets a value — but the starvation is no longer SILENT either way: every tick now logs
+  `compaction_bucket_maintained` with planned-vs-maintained per bucket, so a starved tail is visible
+  before anyone chooses a number. "Undetectable" was this row's actual defect; unbounded was its
+  symptom.
+- *What is NOT done and is deliberately not a row:* choosing the value. Too small and a large estate
+  never completes a pass, too large and the bound is decorative; the right number depends on the dataset
+  count and the tick interval, and the coverage line now prices any candidate directly.
 
 **LH-102 · Storage reclamation has never been run live — trash purge must go first, and it is gated on a clean drift report**
 `maintenance` · med · **blocked:** a clean, complete drift report (the zero-tuple detector plus the `incomplete` rows)
