@@ -3896,6 +3896,29 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   `/v1.0/metadata` and the publish call sites — not merely the one topic being protected. The scoping
   the estate already has is the document-level `scopes:`, which closes each component to one app-id and
   is what makes an arbitrary pod unable to publish at all.
+- **RE-SHIPPED NARROW AND VERIFIED LIVE 2026-09-16 — ONE component, not eight.** The goal was always
+  the one consumer-only identity, so the change is applied to `lineage-pubsub-notifications` alone with
+  its FULL measured topic list in both directions:
+
+      protectedTopics    lineage.events.v1
+      publishingScopes   notifications=dlq.notifications          <- provenance withheld
+      subscriptionScopes notifications=dlq.notifications,lineage.events.v1
+
+  The dead-letter publish grant is deliberate: notifications has no publish call sites of its own, its
+  sidecar parks on `dlq.notifications` via `deadLetterTopic`, and whether THAT publish is scope-checked
+  is undocumented — withholding it would be the same guess that broke delivery the first time.
+  **Verified on a genuinely fresh pod** (created 17:41:37, probed 17:41:48, so it loaded the scoped
+  component rather than the cached one — `HotReload: false` means an older pod proves nothing): all
+  three subscriptions registered, **zero scope denials**, and the untouched app-ids unchanged.
+- *The gate now pins the invariant that BROKE, not the one the first test checked:* every topic the app
+  subscribes to must appear in its `subscriptionScopes`, the provenance topic must appear in its
+  publishing scope nowhere, and — the real blast-radius bound — **no sibling component may carry these
+  keys** until its own full topic list has been measured the same way.
+  `tests/unit/test_the_inbox_may_read_the_provenance_bus_but_never_write_it.py`.
+- *Still open on this row:* the producer signature over the CloudEvent (`_StampedAuthor`'s own docstring
+  — "nothing proves the stamp"), which is transport-independent and survives a Dapr retreat. The
+  seven producers keep unrestricted publish on their own components, which is correct for them and is
+  what the remaining signature work is for.
 - *Closes when (rewritten):* `protectedTopics: lineage.events.v1` plus a `publishingScopes` naming the
   measured producer set on the lineage pub/sub components, a producer signature verified in the bus
   door (still genuinely open — `_StampedAuthor`'s own docstring says "nothing proves the stamp"), and

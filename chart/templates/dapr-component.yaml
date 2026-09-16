@@ -228,6 +228,22 @@ spec:
     - { name: name, value: "lance-dapr-{{ .appId }}" }
     - { name: queueGroupName, value: {{ .appId | quote }} }
     - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
+    {{- if eq .appId "notifications" }}
+    {{- /* THE ONE CONSUMER-ONLY IDENTITY on the provenance bus, denied publish to it ([[LH-064]]).
+         Measured 2026-09-16: `notifications` has NO publish call sites of its own and its sidecar
+         registers exactly two topics on this component — `lineage.events.v1` and `dlq.notifications`.
+         Applied HERE ONLY, and that is the lesson from the first attempt: the same three keys rolled
+         to all eight components broke delivery, because `subscriptionScopes` is not additive — naming
+         an app in it makes that list its COMPLETE allowlist, so an unlisted-but-unprotected topic is
+         refused too (the `dlq.notifications` refusal quoted above).
+         So BOTH topics are listed on the subscribe side, and the publish side grants the dead-letter
+         (the sidecar parks on it via `deadLetterTopic`, and whether that publish is scope-checked is
+         not documented — granting it costs nothing and withholding it would be the same guess that
+         caused the outage) while withholding the provenance topic, which is the whole point. */}}
+    - { name: protectedTopics, value: "{{ $.Values.pubsub.topic }}" }
+    - { name: publishingScopes, value: "{{ .appId }}=dlq.{{ .appId }}" }
+    - { name: subscriptionScopes, value: "{{ .appId }}=dlq.{{ .appId }},{{ $.Values.pubsub.topic }}" }
+    {{- end }}
     {{- if eq .deliverPolicy "new" }}
     # Durable cursor for the trigger consumers (stage runners + cascade head): survives pod death and redeploys,
     # so a trigger published while the app is down is DELIVERED on recovery instead of skipped (see the
