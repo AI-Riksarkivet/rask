@@ -3723,6 +3723,18 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 - *No feature flag any more.* The old short-circuit was gated on `multibase_data_base_list` so a
   single-bucket estate "never pays the fragment scan". There is no scan: a single-bucket table declares
   no bases, so the check costs one tuple comparison on a manifest read the door already did.
+- **BUILT, DEPLOYED AND OBSERVED 2026-09-16** — Dagger `main-9e0608d8`, all ten stem-mates rolled, pins
+  refreshed. Live against the deployed release, 21 passed / 1 skipped:
+  `test_client_direct_e2e` (zero-byte-ingress commit, concurrent ACID commits, governed commit),
+  `test_credential_isolation_e2e` (all 11), `test_multibase_e2e::test_off_allowlist_base_rejected`,
+  `test_warehouses_e2e` (physical isolation, quarantine/restore, the two 401 legs). The one skip is
+  `multibase_redirects_data_and_reads_fan_out`, which needs `multibase_data_base_list` set and this
+  estate ships it empty — the documented gap, not a silent one.
+  * **Catalog: 0 errors and 0 `vend_server_mediated_unreachable_bases`** — no table on this estate
+    declares a base the policy cannot grant, so every multi-base table is direct-vended rather than
+    proxied, which is the whole point of the narrowing.
+  * **Maintenance: 220 SCOPED vends, 0 AMBIENT, 0 `not permitted to read the base at …`** — the union
+    vend reaching `s3://lance-catalog/models/` holds, and [[LH-141]]'s four crossings still refuse.
 
 **LH-058 · No column-level classification or policy exists: `columns.py` has no FGA check and `pii` survives only as a key in seed data**
 `catalog, lineage, openfga` · **HIGH** · **blocked:** the FGA model-shape decision (the `column` relation is part of it)
