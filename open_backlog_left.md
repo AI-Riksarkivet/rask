@@ -77,9 +77,10 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**11 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094` and
-`LH-159` workable — [[LH-172]] joined them once its remedy was measured to be inert and the only lever
-that works became a trade nobody has ruled on. That number is the one worth watching: the column above says how much
+**10 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
+`LH-159` and `LH-172` workable — the last of those came back once the owner ruled "accept it for now",
+which is a decision that CLOSES a question rather than unblocking work, and the R1-R11 ruling the same
+day made nine more rows workable without changing this count (they are gated on nothing). That number is the one worth watching: the column above says how much
 is written down, and this says how much of the priority anyone can pick up without a ruling. It moved
 here by measurement rather than by attrition — four rows that were decision-gated in their bodies
 carried no `**blocked:**` marker, so the workable count read optimistic until they were marked. Gated
@@ -99,9 +100,21 @@ OpenFGA integration is the closest thing to a standard — declares exactly
 `crates/authz-openfga/src/relations.rs` contains **zero** occurrences of `column`, `branch`,
 `base_path` or `storage_location`. A mature catalog authorizes at CONTAINER and OBJECT granularity
 only. `estate` has a precedent there (`Server`); the other three do not.
-*So the recommendation is the third option:* re-measure each row against what the estate actually
-enforces and narrow or strike, rather than growing four types the reference deliberately lacks. A model
-this estate cannot enforce at the door is a vocabulary, not a control.
+**AND THAT RECOMMENDATION IS WITHDRAWN — it was derived from the wrong reference, which the owner
+caught: "we are using lance, does it still apply according to the lance_docs".** It does not, and the
+spec rask implements is the reason. `lance_docs/ns_catalog/spec.yaml` makes branches, tags and columns
+FIRST-CLASS OPERATIONS — `CreateTableBranch`, `DeleteTableBranch`, `ListTableBranches`,
+`CreateTableTag`/`DeleteTableTag`/`UpdateTableTag`/`GetTableTagVersion`/`ListTableTags`, and
+`AlterTableAddColumns`/`AlterColumns`/`DropColumns`/`BackfillColumns`. Iceberg has no such doors, which
+is precisely why Lakekeeper's FGA needs no such types: **it is not authorizing operations it does not
+have.** rask has the doors. A door whose granularity the authorization model cannot express is
+authorized on something coarser, which is what `LH-055`/`LH-056`/`LH-058` say.
+*So `branch` and `column` are JUSTIFIED for rask on the spec's own evidence*, and the Lakekeeper
+comparison argues the opposite of what I first drew from it. `base` is the one that does not follow:
+base paths are a FILE-FORMAT concept (`file_format.md`, shallow clones / multi-base), not a namespace
+door, so it needs its own argument rather than this one. `estate` keeps the `Server` precedent.
+*The lesson is the standing rule, applied to myself:* idiomatic to lance-ns, never Iceberg — and I
+reached for an Iceberg catalog because it was the nearest analogue rather than the governing spec.
 
 **The permanently-refused ack: Lakekeeper does NOT settle it, and saying so is the finding.** Its event
 plane is fire-and-forget — `service/events/dispatch.rs:390-391`: *"If the listener fails, it will be
@@ -109,14 +122,18 @@ logged, but the request will continue to process."* There is no consumer, no ack
 `lakekeeper-events-nats` is a publish backend only. rask's bus door AUTHORIZES what it records, which is
 strictly more than the reference does, so this question is rask's own and has no borrowed answer.
 
-**The governed-tier home: the recommendation is YES — the catalog-vended path only.** Iceberg catalogs
-(Lakekeeper included) do not let a table live at a location the catalog does not govern: the location
-IS catalog state, which is why its FGA vocabulary needs no `storage_location` type at all. rask's
-composed `medallion/<tier>` datasets are the exception to that rule, and every crossing measured today
-sits in one — three of the four [[LH-141]] refusals name a composed path. Adopting the rule makes the
-composed population either registered or reaped, which is a bounded job ([[LH-164]] already measures
-it); keeping both homes means teaching the catalog to govern a second layout, which is the coupling the
-vended path exists to remove.
+**The governed-tier home: the spec answers it, and the answer is CREATED-OR-REGISTERED rather than
+"vended path only".** Read off `lance_docs/ns_catalog/spec.yaml` rather than by analogy:
+* `CreateTableRequest` (:3739-3742), verbatim — *"The table location and any credential vending
+  behavior are **determined by the implementation** and returned in the response, rather than specified
+  in this request."* So on the CREATE door the catalog owns the location and a client cannot choose it.
+* `RegisterTable` (:373) — *"Register an existing table at a given storage location as `id`."* So the
+  spec DOES support a governed table that already lives somewhere the catalog did not mint.
+*Therefore the rule is not "only the vended path".* A table elsewhere is legitimate **iff it is
+registered**; what is illegitimate is a dataset that is neither created by the catalog nor registered
+with it — which is exactly rask's composed `medallion/<tier>` population, and where three of the four
+[[LH-141]] crossings sit. The remedy is unchanged in shape (register or reap, [[LH-164]] measures the
+set) and better founded: the spec has a door for the registering half.
 
 ## The five conditions, MEASURED against the running estate (2026-09-15)
 
@@ -5156,7 +5173,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   control record louder than a WARN, or prove the set empty and keep it so with a gate.
 
 **LH-172 · Every lakehouse pod builds a 64-wide Lance thread pool against a one-CPU quota, and the documented override is ignored**
-`catalog, lineage, medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-16 · **blocked:** the only lever that works is CPU affinity, and pinning a latency-sensitive service to one core is a trade nobody has ruled on
+`catalog, lineage, medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-16 · **RULED 2026-09-16 (owner): accept it for now** — the pools stay host-sized and the memory multiplier is a recorded cost, not a defect to chase
 
 - **THE PREMISE IS MEASURED NOW, not inferred from the docs — and the first two versions of this row
   were wrong in opposite directions, so the measurement is given in full.**
