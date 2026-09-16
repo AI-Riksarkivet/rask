@@ -58,6 +58,12 @@ REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     "ray-batch": ("LANCE_E2E_RAY_HEAD_DEPLOY",),
     "ray-train": ("LANCE_E2E_LANCERAY_URL", "LANCE_E2E_CATALOG_URL", "LANCE_E2E_LINEAGE_URL", "LANCE_E2E_FGA"),
     "isolation": ("LANCE_E2E_CATALOG_URL",),
+    # The container-tier deletes ([[LH-028]]). Keyed on the catalog URL alone, which is what the
+    # suite's own `catalog` fixture skips on. `LANCE_E2E_NONADMIN_TOKEN` is deliberately NOT here: it
+    # gates ONE leg, and that leg skips by design when no genuinely unprivileged identity exists —
+    # requiring it would turn "the estate has no honest outsider" into a failed invocation rather than
+    # the recorded skip it should be.
+    "container-deletes": ("LANCE_E2E_CATALOG_URL",),
 }
 
 #: Targets that BRING UP the stack they then drive, so there is no external target to require: both

@@ -1,4 +1,4 @@
-.PHONY: sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes
 
 help:
 	@echo "Targets:"
@@ -805,7 +805,7 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 # Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
 # kind cluster, which is what the CI live-proof jobs (e2e-stack / e2e-ray) boot. Toolchain
 # is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
-.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci e2e-isolation
+.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci e2e-isolation e2e-container-deletes
 
 LOCALBIN     := $(CURDIR)/.localbin
 KIND         := $(LOCALBIN)/kind
@@ -904,6 +904,19 @@ e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray su
 e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled stack (needs 2 tenants)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! set LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_TENANT_B_TOKEN, LANCE_E2E_PROJECT_B (and LANCE_E2E_S3)"; exit 1; }
 	uv run pytest tests/e2e-py/test_credential_isolation_e2e.py -m e2e -v
+
+# The CONTAINER tier's deletes ([[LH-028]]): table-level drop/protect/force/undrop were proven live and
+# warehouse/project delete never were, which is exactly where `force` and cascade interact. Every
+# container the suite destroys is one it created, and it never sends `purge_bucket` — the rule worth
+# pinning is the refusal, and a customer's bucket is not recoverable.
+#
+# The disclosure leg needs an identity that administers NOTHING here, and `scripts/e2e_live.sh` is what
+# picks one: bob is in `team:eng`, bound to `project:acme`, so he holds `can_administer` and would make
+# that leg allege a property the estate does not have. Prefer `bash scripts/e2e_live.sh <file>`, which
+# discovers the whole environment from the running release.
+e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-disclosure rule, vs a deployed release
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! set LANCE_E2E_CATALOG_URL + LANCE_E2E_TOKEN (and LANCE_E2E_NONADMIN_TOKEN for the disclosure leg), or run: bash scripts/e2e_live.sh tests/e2e-py/test_the_container_tier_deletes_are_driven.py"; exit 1; }
+	uv run pytest tests/e2e-py/test_the_container_tier_deletes_are_driven.py -m e2e -v
 
 # ---- one target per e2e suite marker (audit H1) ------------------------------
 # pyproject.toml declares twelve per-suite markers with the comment "used by the e2e make targets

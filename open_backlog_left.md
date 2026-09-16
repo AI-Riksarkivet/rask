@@ -2743,6 +2743,30 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 
 - *Why open:* Table-level drop/protect/force/undrop are proven; the CONTAINER tier is not, and that is exactly where `force` and cascade interact.
 - *Closes when:* Drive warehouse delete, project delete, cascade DETACH + the plural undrop and `projects_claiming_bucket` bucket-purge against the deployed release (`scripts/e2e_live.sh`) and pin each.
+- **RE-MEASURED 2026-09-16: the premise HOLDS.** `test_warehouses_e2e.py` carries isolation,
+  deactivate/activate and two auth legs and **no delete at all**, and no e2e anywhere drives project
+  delete, the warehouse cascade or `projects_claiming_bucket`.
+- **DRIVEN LIVE 2026-09-16 — 7 legs, all passing against the deployed catalog**
+  (`tests/e2e-py/test_the_container_tier_deletes_are_driven.py`): a missing warehouse 404s; an EMPTY
+  warehouse this caller administers deletes (the positive control, without which every refusal below
+  could be a door that refuses everything); one still holding a namespace refuses 409 **naming it**;
+  `?cascade=true` drops exactly those; an unprivileged caller is refused **without learning what the
+  warehouse holds**, with and without `force`; `DELETE /v1/projects/{id}?cascade=true` does not delete a
+  project that holds warehouses — the transitive path from one request to a bucket purge stays
+  unreachable; and a malformed project id is refused before anything else.
+- *Every container it destroys is one it created*, in a bucket named for the suite, and `purge_bucket`
+  is never sent — a customer's bucket is not recoverable and the rule worth pinning is the refusal.
+- **THE DISCLOSURE LEG FAILED FIRST, AND THE DOOR WAS RIGHT.** Driven with the tenant-B token it got a
+  409 naming the namespace, which reads exactly like the ordering defect `delete_warehouse`'s docstring
+  forbids. The code's order is correct; the TEST's outsider was not: `scripts/e2e_live.sh:90-94` already
+  records that bob is a member of `team:eng`, bound to `project:acme`, so *"can_administer(project:acme)
+  is False for publisher and True for bob"*. Corrected to `LANCE_E2E_NONADMIN_TOKEN`, which the runner
+  fills only with a candidate that really is unprivileged and leaves EMPTY otherwise, so the leg skips
+  rather than alleging a property the estate does not have — `topology.py`'s own rule, which I should
+  have read before writing the leg.
+- *Still open on this row:* the plural undrop and the `projects_claiming_bucket` bucket-purge refusal.
+  The latter needs two warehouses in one bucket, which this suite deliberately does not build — every
+  leg here creates its own bucket so nothing it does can reach a real one.
 
 **LH-029 · ~~`batch_commit_tables` cannot converge: a retry re-runs the atomic native commit, hits `TableAlreadyExists`, and never reaches the ownership seeds~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
