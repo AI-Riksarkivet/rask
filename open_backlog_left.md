@@ -3075,7 +3075,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 ### Governance: auth, authz, tenancy
 
 **LH-150 · `LANCE_NS_DELIMITER` is documented as an operator knob and is actually a bootstrap-only identity: changing it on a running estate silently denies every authorization check**
-`catalog, service-kit, openfga, lineage` · med · found 2026-09-14 while measuring [[LH-023]]
+`catalog, service-kit, openfga, lineage` · med · found 2026-09-14 while measuring [[LH-023]] · **blocked:** owner decision — refuse a boot whose delimiter disagrees with the tuples already stored, or document the delimiter as bootstrap identity and stop presenting it as an operator knob
 
 - *Why open:* the delimiter spells the OpenFGA object id, not merely the wire identifier.
   `fga.canonical_object_id(segments, delimiter=...)` JOINS with whatever it is given and 55 of its 64
@@ -3145,7 +3145,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   door, or the tier board — does.
 
 **LH-151 · The DLQ parking plane assumes every park is retry exhaustion, and Dapr parks on at least two other paths — one invisibly, one as a false page**
-`medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2
+`medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2 · **blocked:** owner decision — the parking shape; shares its answer with [[LH-166]]'s refusal-ack ruling
 
 - *Why open:* the DLQ plane's whole promise is that parking is VISIBLE — `/dlq-event` ERROR-logs
   `dapr_dead_letter_parked` and bumps `medallion_dlq_parked_total`, which `MedallionCascadeDeadLettering`
@@ -4048,7 +4048,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *What would reopen it:* A commit path where `_set_tag` is called with a version different from the one stamped into `PublicationResult.to_version`, or an emit site for `table_published` other than publication.py:330 (grep for `action="table_published"` across services/ returns exactly one non-test producer).
 
 **LH-091 · The change feed has no control-lane EVENT, so a BYO consumer must poll `POST /v1/table/{id}/changes`**
-`catalog, lineage, notifications` · med
+`catalog, lineage, notifications` · med · **blocked:** owner decision — point BYO consumers at `lineage.events.v1` (costs no event), or accept the control lane's broadcast buffer carrying data-plane frequency
 
 - *Why open:* The door landed and was driven live 2026-09-09 (three defects found and fixed), leaving exactly one residue: a consumer can only poll, never be told.
 - **THE PRESCRIBED FIX HAS A COST THE ROW DID NOT PRICE, measured 2026-09-14.** `catalog.control.v1`
@@ -4981,7 +4981,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 
 **LH-152 · Four live e2e legs cannot pass against a governed estate: three stage provenance as an identity that holds no grant, and one asserts zero errors against 24 unreadable registry entries**
-`lineage, medallion, maintenance, catalog` · med · found 2026-09-15 completing [[LH-109]]'s verdict pass
+`lineage, medallion, maintenance, catalog` · med · found 2026-09-15 completing [[LH-109]]'s verdict pass · **blocked:** owner rulings on how an e2e probe obtains provenance-write authority, and the rest of its (a)/(b) pair
 
 - *Why open:* each carries a verdict and none is fixable as a test edit — all four need a decision
   about the estate, which is why they are here rather than left inside a struck row.
