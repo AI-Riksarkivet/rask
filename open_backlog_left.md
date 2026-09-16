@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**209 open items**, deduped from 325 raw rows mined out of the seven files above. A further 98 rows
+**210 open items**, deduped from 325 raw rows mined out of the seven files above. A further 98 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 69 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4486,6 +4486,29 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* The bare per-request opens are real and unchanged outside maintenance, but the per-pod sizing half of the coupled Closes-when is already solved generically, so the remaining work is threading one existing seam — not a handle cache with a freshness contract plus per-service cgroup arithmetic.
   **Evidence:** Still real: 66 non-test `lance.dataset(` call sites across services/ + packages/, of which exactly 7 pass a session — all in maintenance (reconcile.py:328, optimize.py:574, purge.py:280, purge.py:710, orphans.py:173, sweep.py:270) plus base_refs.py:187 which mints its own default. Per service: medallion 15, catalog 12, maintenance 9, ingest 8, service-kit 8, viewer 6, lineage 6. Named sites open bare at HEAD: services/lineage/src/lineage/core/reconcile.py:61,79,96,111 and services/medallion/src/medallion/services/compute.py:135,145,177,178,237,273; the catalog's request path is services/catalog/src/catalog/core/namespace.py:92,114 plus services/catalog/src/catalog/services/dataplane.py:307,613,648,822,882 (the row's locator `catalog/core/namespace.py:48` has drifted — line 48 is a branch-failure classifier, the opens are at 92/114). The residue the row bundles is also real: `LANCE_CPU_THREADS`/`LANCE_IO_THREADS`/`LANCE_LOG` appear NOWHERE in the tree (grep over .py/.yaml/.sh returns nothing), and `instrument_lance_if_available` is called only by catalog/main.py:39, lineage/main.py:29, medallion/stage_runner.py:38, medallion/producer.py:47, maintenance/service.py:44 — not ingest, viewer or search. What is NOT still needed: the sizing clause. packages/service-kit/src/service_kit/lakehouse/lance_session.py:81-123 `affordable_cache_bytes` reads the container's own cgroup and scales the requested caps proportionally (default 0.4 of the limit), and services/maintenance/src/maintenance/core/config.py:392-410 shows the whole call shape — `affordable_cache_bytes(md << 20, idx << 20)` then `lance_session(...)`. A converting service states a ratio; no per-pod arithmetic is required of it, so 'sized to each pod's cgroup limit' is satisfied by using the seam.
   **Reopen if:** A converted service that still OOMs after passing `lance_session(affordable_cache_bytes(...))`, which would show the clamp is insufficient and the coupled redesign is warranted; or a `lance.dataset(..., session=...)` call outside services/maintenance and base_refs.py.
+
+- **THE PHASE-1 HALF IS DONE AND GATED — re-measured by AST 2026-09-16, not by grep:**
+
+      services/catalog       threaded=10   BARE=0
+      services/lineage       threaded= 8   BARE=0
+      services/medallion     threaded=15   BARE=0
+      services/maintenance   threaded= 9   BARE=0
+      packages/service-kit   threaded= 7   BARE=0
+
+  49 threaded opens, **zero bare**, across the four lakehouse services and the platform library they
+  all call — against the 66-site / 7-threaded figure this row's own re-measure recorded six days ago.
+  Pinned by `tests/unit/test_a_lakehouse_open_shares_the_process_session.py`, which walks the ASTs (the
+  row's original counts were taken by grep and counted PROSE — five "bare" hits were docstrings
+  explaining why bare opens are bad). `instrument_lance_if_available` is likewise called by all four,
+  medallion from both its entrypoints.
+- *WHAT IS LEFT IS NOT PHASE 1:* `services/ingest` 9 bare opens (phase 2) and the parked zones
+  `services/viewer` 5 + `services/search` 1. The gate names those exemptions and asserts they are still
+  NEEDED, so a silent exemption over a converted area fails rather than rots.
+- *And the thread/log clause this row bundled is now its OWN row, because it is a different defect
+  with its own measurement:* `LANCE_CPU_THREADS`/`LANCE_IO_THREADS`/`LANCE_LOG` still appear nowhere,
+  and measured in the running pods every lakehouse container builds a 64-thread compute pool on a
+  one-CPU quota — see [[LH-172]]. Keeping it here would have left a memory multiplier filed under a
+  row whose memory clause is already solved.
 `viewer, medallion, lineage, catalog, ingest, maintenance, service-kit, chart` · **HIGH**
 
 - **THE CATALOG IS CONVERTED 2026-09-14 (`aca6a485`) — the per-REQUEST half, which is where this costs
@@ -4843,6 +4866,46 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Closes when:* that mapping is ruled on and the nine are migrated or deleted — the choice is now
   cheap, because the whole set is 10 records and 9 of them share one shape. Then make an unparseable
   control record louder than a WARN, or prove the set empty and keep it so with a gate.
+
+**LH-172 · Every lakehouse pod builds a 64-thread Lance compute pool on a one-CPU quota, and the thread count is also a memory multiplier**
+`catalog, lineage, medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-16 · measured in the running pods
+
+- *Why open:* `lance_docs/guide.md:2989-2996` — the compute pool "is determined by the number of cores
+  on the machine", overridable by `LANCE_CPU_THREADS`, and the guide says doing so "is commonly done
+  when running multiple Lance processes on the same machine". A container is that case wearing
+  different clothes, and nothing in this estate set the variable: grep over `.py`/`.yaml`/`.sh`
+  returned zero hits for `LANCE_CPU_THREADS`, `LANCE_IO_THREADS` and `LANCE_LOG`.
+- **MEASURED FROM INSIDE THE RUNNING CONTAINERS 2026-09-16**, which is the only place the two numbers
+  can be compared:
+
+      rask-catalog      /sys/fs/cgroup/cpu.max = "100000 100000"  (1 CPU)   nproc = 64
+      rask-lineage      same                                                nproc = 64
+      rask-maintenance  same                                                nproc = 64
+      rask-medallion-producer same                                          nproc = 64
+
+  And it is already costing, at idle: `nr_throttled` 21 of 3,738 periods on the catalog, **116 of
+  3,761 on maintenance**.
+- *It is a MEMORY bound too, which is what makes it this row rather than a tuning note.*
+  `guide.md:3288` sizes a write at `io_readahead_buffer + num_cpu_threads * batch_size *
+  (raw_vector_size + transformed_vector_size)` — the thread count multiplies the very ceiling
+  [[LH-096]]'s `affordable_cache_bytes` clamp exists to hold, against the same 512Mi tier.
+- *FIXED, and the shape is the one the memory half already proved.* `lance_session.cpu_budget_cores`
+  reads the container's own `cpu.max` (the CPU twin of `cache_budget_bytes`), and
+  `bound_lance_thread_pools()` `setdefault`s `LANCE_CPU_THREADS` to it at each of the five lakehouse
+  entrypoints — before the first open, because Lance builds the pool on first use and reads the
+  variable then. An unconstrained process (a laptop, a CI runner) is left at Lance's own default, and
+  an operator who set the variable keeps their number.
+- *THE IO POOL IS DELIBERATELY UNTOUCHED.* The same page calls the cloud-store default of 64 IO threads
+  "a fairly conservative default" and says you "may need 128 or 256 … to saturate network bandwidth".
+  IO threads are not CPU-bound; shrinking them to the CPU quota would trade a measured contention
+  problem for an unmeasured throughput one.
+- *A near-miss worth recording, because it would have been silent:* inserting this function above
+  `lance_session` orphaned that function's `@cache` onto the new one — so `lance_session` would have
+  minted a FRESH session per call, which is exactly the defect the module exists to prevent, while
+  every test that asserts a `session=` kwarg kept passing. Caught by a test whose second assertion used
+  a different quota.
+- *Closes when:* the fix is deployed and a running pod reports `lance_compute_pool_bound_to_container`
+  with `cpu_threads` matching its quota, and the throttle counters are re-read against today's numbers.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule

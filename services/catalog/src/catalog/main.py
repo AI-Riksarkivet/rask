@@ -37,6 +37,7 @@ from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.lance_session import bound_lance_thread_pools
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -99,6 +100,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         oidc_enabled=settings.oidc_enabled,
         insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
     )
+    # BEFORE the first Lance open, because the pool is built on first use and reads the variable then.
+    # `lance_docs/guide.md:2989-2996`: the compute pool sizes to the MACHINE's cores — measured in these
+    # pods 2026-09-16, 64 against a one-CPU quota, throttling at idle.
+    bound_lance_thread_pools()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
     # of truth, NOT a fallback. With secrets_from_dapr on, the chart does not put the secret in pod env,

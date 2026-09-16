@@ -27,6 +27,7 @@ from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.lance_session import bound_lance_thread_pools
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -48,6 +49,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # shutting_down, so k8s pulls the pod from rotation during boot and graceful drain.
     app.state.startup_complete = False
     app.state.shutting_down = False
+    # BEFORE the first Lance open, because the pool is built on first use and reads the variable then.
+    # `lance_docs/guide.md:2989-2996`: the compute pool sizes to the MACHINE's cores — measured in these
+    # pods 2026-09-16, 64 against a one-CPU quota, throttling at idle.
+    bound_lance_thread_pools()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Fail closed if ANY sidecar-delivered route mounts — the pub/sub ingest (dapr_enabled) OR the cron
     # reconcile binding — but the app-api-token is unset: either route would otherwise be an

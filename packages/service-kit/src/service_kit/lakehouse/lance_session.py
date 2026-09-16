@@ -24,6 +24,8 @@ was wrong was each reopen minting and discarding gigabyte-scale cache ceilings.
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import MutableMapping
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +40,10 @@ if TYPE_CHECKING:
 #: on the other, and "unlimited" is the answer that disables the clamp below.
 _CGROUP_V2 = Path("/sys/fs/cgroup/memory.max")
 _CGROUP_V1 = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+
+#: Where a container states its own CPU quota. Same v2-first rule as the memory pair above, and the
+#: same reason: a reader that knows one layout reports "unlimited" on the other.
+_CGROUP_CPU_V2 = Path("/sys/fs/cgroup/cpu.max")
 
 #: The share of the container a process may spend on Lance caches by DEFAULT. Deliberately below a
 #: half: the caps are LRU soft bounds (see the module docstring), so this is the size the cache grows
@@ -119,6 +125,63 @@ def _log_clamp(requested: int, granted: int, budget: int, fraction: float) -> No
         "lance_cache_clamped_to_container",
         extra={"requested_bytes": requested, "granted_bytes": granted, "container_budget_bytes": budget, "fraction": fraction},
     )
+
+
+def cpu_budget_cores(*, source: Path = _CGROUP_CPU_V2) -> float | None:
+    """The CPU cores THIS container may use, or ``None`` when nothing constrains it.
+
+    cgroup v2 states ``<quota> <period>`` in microseconds, so ``100000 100000`` is one CPU. ``max``
+    is an unconstrained cgroup — and a laptop or CI runner says it too, which is why ``None`` has to
+    mean "leave it alone" rather than "assume one".
+
+    The memory twin of this is :func:`cache_budget_bytes`, and its argument carries over verbatim: a
+    literal cannot track a chart value. ``resources.limits.cpu`` can move without anyone revisiting a
+    constant in Python, and what follows is throttling with no line to blame.
+    """
+    try:
+        quota, _, period = source.read_text(encoding="utf-8").strip().partition(" ")
+    except OSError:
+        return None
+    if quota == "max":
+        return None
+    try:
+        return int(quota) / int(period or "100000")
+    except ValueError:
+        return None
+
+
+def bound_lance_thread_pools(*, source: Path = _CGROUP_CPU_V2, env: MutableMapping[str, str] | None = None) -> None:
+    """Size Lance's COMPUTE pool to this container's CPU quota, before any pool is built.
+
+    ``lance_docs/guide.md:2989-2996``: the compute pool "is determined by the number of cores on the
+    machine" and ``LANCE_CPU_THREADS`` overrides it — "commonly done when running multiple Lance
+    processes on the same machine". A container is that case wearing different clothes: measured in the
+    running pods 2026-09-16, ``cpu.max`` reads ``100000 100000`` (one CPU) while ``nproc`` reads 64, so
+    every lakehouse process builds a 64-thread pool on a one-CPU budget and throttles at idle.
+
+    It is a MEMORY bound as well, which is why it belongs beside the cache clamp rather than in a chart
+    value: ``guide.md:3288`` sizes a write at ``io_readahead_buffer + num_cpu_threads * batch_size *
+    (raw_vector_size + transformed_vector_size)``, so the thread count multiplies the very ceiling
+    :func:`affordable_cache_bytes` exists to hold.
+
+    THE IO POOL IS DELIBERATELY UNTOUCHED. The same page calls the cloud-store default of 64 IO threads
+    "a fairly conservative default" and says you "may need 128 or 256 … to saturate network bandwidth".
+    IO threads are not CPU-bound, so shrinking them to the CPU quota would trade a measured contention
+    problem for an unmeasured throughput one.
+
+    ``setdefault``, never an assignment: ``LANCE_CPU_THREADS`` is Lance's own documented override, and a
+    container-derived default must not replace a number an operator chose.
+
+    Called from a service's startup rather than its lifespan, because Lance builds the pool on first use
+    and reads the variable then — a value set after the first open is a value that does nothing.
+    """
+    cores = cpu_budget_cores(source=source)
+    if cores is None:
+        return
+    target = max(1, round(cores))
+    environment = os.environ if env is None else env
+    if environment.setdefault("LANCE_CPU_THREADS", str(target)) == str(target):
+        log.info("lance_compute_pool_bound_to_container", extra={"cpu_threads": target, "quota_cores": cores})
 
 
 @cache
