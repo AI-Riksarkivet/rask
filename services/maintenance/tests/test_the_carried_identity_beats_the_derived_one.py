@@ -15,9 +15,17 @@ executor prefers it — leaving derivation as the fallback for a unit built befo
 
 The failure this prevents is the quiet one: derive-only leaves the cascade tier signing with the root
 key while every log line, every counter and every test stays green.
+
+WHERE THE VALUE COMES FROM IS A DIFFERENT QUESTION, and it went unanswered for longer than this file
+did: the parameter landed here and its only producer could not fill it — `plan_sweep` set
+`item.table_id` from `table_id_from_uri`, which is exactly the parser this module is about. The sweep
+reads the dataset's own stamp now ([[LH-141]]), and what it hands over is checked against the catalog's
+location for that id rather than trusted.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import pytest
 
@@ -27,11 +35,29 @@ from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 AMBIENT = {"aws_access_key_id": "minioadmin"}
+SCOPED = {"aws_access_key_id": "SCOPED"}
 CASCADE_URI = "s3://lance-catalog/medallion/bronze"
+FLAT_URI = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
 
 
 def _settings() -> MaintenanceSettings:
     return MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog", MAINTENANCE_CATALOG_URL="http://catalog:2333")
+
+
+def _vending(location: str | None, asked: list[str]) -> Callable[[str, MaintenanceSettings], credentials.Vended | None]:
+    """A vend double that answers with BOTH halves the real one does.
+
+    The location is not decoration: `write_options_for` refuses a credential that does not cover the
+    dataset being maintained ([[LH-141]]), so a double returning bare options would pass by never
+    reaching the check its caller now runs — which is the shape of double this suite has been bitten by
+    before.
+    """
+
+    def _vend(table_id: str, settings: MaintenanceSettings) -> credentials.Vended | None:
+        asked.append(table_id)
+        return None if location is None else credentials.Vended(options=dict(SCOPED), location=location)
+
+    return _vend
 
 
 def test_the_cascade_layout_really_is_underivable() -> None:
@@ -41,28 +67,20 @@ def test_the_cascade_layout_really_is_underivable() -> None:
 
 def test_the_declared_identity_is_what_gets_vended(monkeypatch: pytest.MonkeyPatch) -> None:
     asked: list[str] = []
+    monkeypatch.setattr(credentials, "_vend", _vending(CASCADE_URI, asked))
 
-    def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None:
-        asked.append(table_id)
-        return {"aws_access_key_id": "SCOPED"}
-
-    monkeypatch.setattr(credentials, "_vend", _vend)
     options = credentials.write_options_for(CASCADE_URI, _settings(), fallback=AMBIENT, declared_table_id="bronze$events")
 
     assert asked == ["bronze$events"], "the cascade's rewrite was not vended against its own table"
-    assert options == {"aws_access_key_id": "SCOPED"}, "the cascade's rewrite is still signed by the root key"
+    assert options == SCOPED, "the cascade's rewrite is still signed by the root key"
 
 
 def test_derivation_still_serves_a_unit_that_declares_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     asked: list[str] = []
+    monkeypatch.setattr(credentials, "_vend", _vending(FLAT_URI, asked))
 
-    def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None:
-        asked.append(table_id)
-        return {"aws_access_key_id": "SCOPED"}
+    credentials.write_options_for(FLAT_URI, _settings(), fallback=AMBIENT, declared_table_id=None)
 
-    monkeypatch.setattr(credentials, "_vend", _vend)
-    flat = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
-    credentials.write_options_for(flat, _settings(), fallback=AMBIENT, declared_table_id=None)
     assert asked == ["transcripts_v2$annotations"]
 
 
@@ -70,14 +88,9 @@ def test_a_declared_identity_is_not_second_guessed(monkeypatch: pytest.MonkeyPat
     """A wrong stamp must surface as a failed vend on a real table, not be silently repaired by
     derivation — otherwise a producer's bug hides behind a sweep that looks fine."""
     asked: list[str] = []
+    monkeypatch.setattr(credentials, "_vend", _vending(None, asked))
 
-    def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None:
-        asked.append(table_id)
-        return None
-
-    monkeypatch.setattr(credentials, "_vend", _vend)
-    flat = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
-    options = credentials.write_options_for(flat, _settings(), fallback=AMBIENT, declared_table_id="other$table")
+    options = credentials.write_options_for(FLAT_URI, _settings(), fallback=AMBIENT, declared_table_id="other$table")
 
     assert asked == ["other$table"], "the declared id was discarded in favour of the path"
     assert options == AMBIENT

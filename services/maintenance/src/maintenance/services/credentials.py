@@ -28,10 +28,12 @@ that can fail a maintenance run turns an optional improvement into a new way to 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
 
+from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.table_locations import table_id_from_location
 
 
@@ -48,6 +50,24 @@ logger = logging.getLogger(__name__)
 #: blocks longer than this on ONE credential should proceed on the ambient one rather than stall the
 #: dataset behind it.
 _TIMEOUT_SECONDS = 10.0
+
+
+@dataclass(frozen=True, slots=True)
+class Vended:
+    """What the catalog handed back: the scoped options AND where it says that table lives.
+
+    THE LOCATION WAS ALWAYS IN THE RESPONSE AND WAS ALWAYS DISCARDED. `CredentialResponse` carries
+    `location` — the catalog's authoritative answer for the table id it was asked about — and this
+    module read only `credentials.storage_options`. Keeping it is what makes [[LH-141]]'s crossing
+    check cost nothing: the question "does this credential cover the dataset I am holding" is answered
+    by a field already on the wire, not by a second round trip the sweep cannot afford (the tick walks
+    552 datasets).
+
+    ``None`` where the door named none. A catalog that does not say is not a catalog that disagrees.
+    """
+
+    options: dict[str, str]
+    location: str | None
 
 
 def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict[str, str], declared_table_id: str | None = None) -> dict[str, str]:
@@ -68,6 +88,11 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
        signing with the root key while reporting no fault at all. Derivation stays as the fallback for
        a unit produced before the field existed, or by a planner that genuinely does not know;
     3. the door answers ``direct``. ``server_mediated`` is a supported posture (`mode_b`), not a fault.
+
+    A FOURTH condition is checked on the way OUT rather than the way in, because it needs the catalog's
+    answer: the vended credential must COVER the dataset being maintained. See
+    :func:`_refuse_a_credential_that_does_not_cover` — a credential scoped to another table's location
+    is not a weaker credential, it is a credential for a different tenant's data.
 
     A DECLARED id is never repaired or second-guessed here. If a producer stamps a wrong one the vend
     fails on a table that does exist, which is a visible 403 in the log — whereas silently falling back
@@ -99,9 +124,48 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
         # that something else was working.
         record_credential_tier(tier="ambient")
         return fallback
+    # AFTER the vend and BEFORE handing it over: the catalog's answer is what says where this table
+    # lives, so the crossing is only detectable once there is an answer to read.
+    _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
     logger.info("write credential SCOPED for %s — this rewrite is signed by a table-scoped credential", table_id)
     record_credential_tier(tier="scoped")
-    return vended
+    return vended.options
+
+
+def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
+    """Stop the unit when the catalog's location for ``table_id`` is not the dataset being maintained.
+
+    [[LH-141]]. A stale ``lineage.dataset_id`` stamp makes the sweep hold one tenant's dataset while
+    addressing another tenant's table. Measured 2026-09-16: ``s3://bind86-wh/medallion/silver`` and
+    ``s3://lance-catalog/medallion/gold`` both stamped ``bronze$events``, a table the catalog governs at
+    ``s3://lance-catalog/medallion/bronze``. The compaction-plan door answered 200 to every one of
+    those — correctly, because it was asked about a table and not about the dataset the caller holds.
+
+    CONTAINMENT, NOT EQUALITY, and getting that backwards would refuse the healthy majority: a branch
+    dataset is swept at ``<root>/tree/<branch>`` while the catalog answers with the root, and the live
+    sweep holds several. ``base_refs.normalise`` is the estate's one comparator for two spellings of one
+    path; re-implementing it here is what its own docstring names as the failure indistinguishable from
+    having no guard at all.
+
+    AN UNVERIFIABLE VEND PROCEEDS, loudly. A missing location means the catalog did not say, not that
+    it disagrees, and refusing on absence would stop maintaining the estate the day the response shape
+    changed — the same asymmetry ``sweep._probe_before_vending`` argues for uncertainty.
+    """
+    if location is None:
+        logger.warning(
+            "vended credential for %s carries no location, so it cannot be checked against %s — this rewrite proceeds unverified",
+            table_id,
+            uri,
+        )
+        return
+    governed, holding = normalise(location), normalise(uri)
+    if holding == governed or holding.startswith(f"{governed}/"):
+        return
+    raise MaintenanceDenied(
+        f"the dataset at {uri} declares the table id {table_id!r}, which the catalog governs at {location} — "
+        "the two name different locations, so a rewrite here would be signed for one tenant's table and land in "
+        "another's. Repair the dataset's `lineage.dataset_id` stamp, or register the id the dataset really is."
+    )
 
 
 #: Whether this process has already said that vending is switched off. The CONDITION is a whole-service
@@ -139,7 +203,7 @@ def _announce_vending_is_off(subject: str, *, key_id: str) -> None:
     )
 
 
-def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None:
+def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     """One vend, or ``None``. Narrow ``except`` on purpose — see `ingest.catalog_service`, where a
     blanket catch reported a `NameError` in the vending method itself as "vending unavailable"."""
     url = f"{settings.catalog_url.rstrip('/')}/v1/table/{table_id}/credentials"
@@ -179,4 +243,10 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> dict[str, str] | None
     if payload.get("mode") != "direct":
         return None
     options = (payload.get("credentials") or {}).get("storage_options")
-    return {str(key): str(value) for key, value in options.items()} if isinstance(options, dict) else None
+    if not isinstance(options, dict):
+        return None
+    location = payload.get("location")
+    return Vended(
+        options={str(key): str(value) for key, value in options.items()},
+        location=str(location) if location else None,
+    )

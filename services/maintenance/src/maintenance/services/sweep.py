@@ -15,6 +15,7 @@ import logging
 import random
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter
@@ -26,7 +27,7 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
-from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
+from maintenance.core.lineage_emit import MaintenanceEmitter, declared_table_id, table_id_from_uri
 from maintenance.core.metrics import (
     record_dataset_swept,
     record_failed,
@@ -361,16 +362,23 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     # thing that takes the object store down. The probe is conservative: anything it cannot answer, or
     # cannot read, counts as "may write", because skipping a dataset that WOULD have been maintained is
     # the failure this service exists to prevent while a spare credential is only a cost.
-    if not _may_write_anything(item.uri, options, cleanup_enabled=item.plan.cleanup_enabled, optimize_indices_enabled=item.plan.optimize_indices_enabled):
+    probe = _probe_before_vending(item.uri, options, cleanup_enabled=item.plan.cleanup_enabled, optimize_indices_enabled=item.plan.optimize_indices_enabled)
+    if not probe.may_write:
         return _maintain_one(item.uri, item.plan, settings=settings, options=options, protected=protected)
+    # THE PATH FIRST, THE STAMP ONLY WHERE THE PATH IS SILENT. `item.table_id` is derived from where
+    # the bytes actually are; the stamp is what a producer claimed, and [[LH-141]] is a catalogue of
+    # wrong stamps — so the stamp must never displace an answer the layout could give. It fills the gap
+    # the parser cannot read (every composed `medallion/<tier>` path), and the vend then checks it
+    # against the catalog's own location for that id rather than trusting it.
+    table_id = item.table_id or probe.declared_table_id
     try:
-        write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=item.table_id)
+        write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=table_id)
     except compaction_executor.MaintenanceDenied as exc:
         # The catalog refused this identity a write credential for this table. Maintaining it anyway
         # means maintaining it under `options` — the ambient key, which reaches every bucket in the
         # estate — so the refusal has to stop the dataset, not just the vend. Refused rather than
         # errored: nothing is broken, a grant is missing, and the two must not read alike.
-        log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": item.table_id, "reason": str(exc)})
+        log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
         return DatasetResult(uri=item.uri, refused=str(exc))
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected)
 
@@ -528,8 +536,35 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
     return _rewrite
 
 
-def _may_write_anything(uri: str, options: dict[str, str], *, cleanup_enabled: bool, optimize_indices_enabled: bool) -> bool:
-    """Could this unit write anything at all? Answered with a READ, before any credential is asked for.
+@dataclass(frozen=True, slots=True)
+class WriteProbe:
+    """What one pre-vend open of a dataset tells us: whether it can write, and what it calls itself.
+
+    BOTH ANSWERS COME FROM THE SAME OPEN, which is the only reason the second one is affordable. The
+    sweep walks 552 datasets a tick and this probe already opens every one of them that is about to be
+    vended for; reading the schema metadata the handle already holds costs nothing, while a second open
+    per dataset would be the shape this probe exists to avoid.
+    """
+
+    may_write: bool
+    #: The ``lineage.dataset_id`` the producer stamped, or ``None``. NEVER a guess — see
+    #: :class:`~service_kit.lakehouse.work_items.DatasetWorkItem` on why inventing one vends a
+    #: credential for the wrong table rather than for none.
+    declared_table_id: str | None = None
+
+
+def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled: bool, optimize_indices_enabled: bool) -> WriteProbe:
+    """Could this unit write anything at all, and what does the dataset call itself?
+
+    THE SECOND QUESTION IS HERE BECAUSE THE TWO DOORS WERE ASKED ABOUT DIFFERENT TABLES. [[LH-141]]:
+    the credential door received ``item.table_id`` — filled from ``table_id_from_uri``, which answers
+    ``None`` for every composed ``medallion/<tier>`` path — while the compaction-plan door received the
+    dataset's own stamp, read inside ``compact_one``. Measured on the live estate 2026-09-16, one tick:
+    59 datasets wrote, 56 under a vended table-scoped credential and 3 under the ambient one with no
+    vend decision at all, all three composed paths. The window's totals say the same thing from the
+    other side: 1,310 SCOPED vend lines, 0 AMBIENT, 0 ``vend_skipped_unresolvable_location`` — the
+    skipped branch is a ``logger.debug`` that makes no HTTP call, so every observable read as total
+    coverage.
 
     THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and
     prunes none — 280 per minute on this estate — and the previous store became unable to restart at
@@ -549,12 +584,13 @@ def _may_write_anything(uri: str, options: dict[str, str], *, cleanup_enabled: b
     """
     try:
         ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
+        stamp = declared_table_id(ds)
         if len(ds.get_fragments()) > 1:
-            return True  # compaction can merge them
+            return WriteProbe(may_write=True, declared_table_id=stamp)  # compaction can merge them
         if cleanup_enabled and len(ds.versions()) > 1:
-            return True  # a superseded version is something to reclaim
+            return WriteProbe(may_write=True, declared_table_id=stamp)  # a superseded version is something to reclaim
         if optimize_indices_enabled and any(not str(ix.name).startswith("__") for ix in ds.describe_indices()):
-            return True  # an index optimize commits
+            return WriteProbe(may_write=True, declared_table_id=stamp)  # an index optimize commits
     except Exception as exc:
         # Unreadable, absent, or a pylance refusal: cannot tell, so do not decide. `compact_one` runs
         # its own refusal ladder over exactly these cases and reports them honestly; short-circuiting
@@ -565,8 +601,8 @@ def _may_write_anything(uri: str, options: dict[str, str], *, cleanup_enabled: b
         # hid one: `lance` was not imported in this module, so the probe raised NameError on every
         # dataset and the whole check reported "may write" while appearing to work.
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
-        return True
-    return False
+        return WriteProbe(may_write=True)
+    return WriteProbe(may_write=False, declared_table_id=stamp)
 
 
 def _maintain_one(

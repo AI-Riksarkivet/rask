@@ -15,6 +15,10 @@ THE CHECK IS CONSERVATIVE BY CONSTRUCTION, and that direction is the whole safet
 vend for a dataset that WOULD have been maintained means a dataset silently stops being maintained —
 far worse than a wasted credential. So every uncertain answer, including an unreadable dataset, must
 say "may write".
+
+The probe carries a second answer now — the dataset's declared id, read off the same open ([[LH-141]]).
+That half is asserted in `test_the_sweep_vends_for_the_dataset_it_is_holding`; this module stays about
+the saving, so a change to either question fails the file that argues for it.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 
-from maintenance.services.sweep import _may_write_anything
+from maintenance.services.sweep import _probe_before_vending
 
 
 def _dataset(tmp: Path, name: str, *, fragments: int = 1) -> str:
@@ -43,21 +47,21 @@ def test_a_single_fragment_dataset_with_nothing_to_reclaim_needs_no_credential(t
     """The common case on this estate, and the one paying for 280 vends a minute."""
     uri = _dataset(tmp_path, "quiet", fragments=1)
 
-    assert _may_write_anything(uri, {}, cleanup_enabled=False, optimize_indices_enabled=False) is False
+    assert _probe_before_vending(uri, {}, cleanup_enabled=False, optimize_indices_enabled=False).may_write is False
 
 
 def test_more_than_one_fragment_may_compact_so_it_vends(tmp_path: Path) -> None:
     """Compaction merges fragments; two of them is work that can happen."""
     uri = _dataset(tmp_path, "fragmented", fragments=3)
 
-    assert _may_write_anything(uri, {}, cleanup_enabled=False, optimize_indices_enabled=False) is True
+    assert _probe_before_vending(uri, {}, cleanup_enabled=False, optimize_indices_enabled=False).may_write is True
 
 
 def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_vends(tmp_path: Path) -> None:
     """Reclamation is a write, and a dataset with superseded versions has something to reclaim."""
     uri = _dataset(tmp_path, "versioned", fragments=2)
 
-    assert _may_write_anything(uri, {}, cleanup_enabled=True, optimize_indices_enabled=False) is True
+    assert _probe_before_vending(uri, {}, cleanup_enabled=True, optimize_indices_enabled=False).may_write is True
 
 
 def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
@@ -66,4 +70,4 @@ def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
     A wasted credential is a cost; a dataset that quietly stops being compacted and reclaimed is the
     failure this whole service exists to prevent.
     """
-    assert _may_write_anything(str(tmp_path / "does-not-exist"), {}, cleanup_enabled=True, optimize_indices_enabled=True) is True
+    assert _probe_before_vending(str(tmp_path / "does-not-exist"), {}, cleanup_enabled=True, optimize_indices_enabled=True).may_write is True

@@ -1829,6 +1829,62 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   does not exist. That points at the same unregistered-`medallion/<ns>`-dataset population as
   [[LH-164]]'s remaining owner decision, so the two may resolve together — **may**, on today's
   evidence, and this row does not assert it.
+- **THE OPEN QUESTION IS ANSWERED AND THE GUARD HAS LANDED — 2026-09-16.** This row said the guard
+  could not be placed until one thing was measured: *why this dataset produced 30 plan calls and ZERO
+  credential calls.* Because **the sweep carries two table identities per dataset and asks a different
+  door about each**:
+  * the CREDENTIAL door gets `item.table_id`, which `plan_sweep` fills from `table_id_from_uri` —
+    `None` for every composed `medallion/<tier>` path;
+  * the COMPACTION-PLAN door gets the dataset's own `lineage.dataset_id` stamp, read inside
+    `compact_one`.
+
+  So a stamp the vend never sees reaches the catalog. `write_options_for` returns the ambient fallback
+  at `table_id is None` on a `logger.debug` line and makes **no HTTP call**, which is why the condition
+  left no trace: measured over 90 minutes on the live estate, **1,310 SCOPED vend lines, 0 AMBIENT, 0
+  `maintenance_vend_skipped_unresolvable_location`**. Every observable read as total coverage.
+- **THE LIVE COUNT, one tick 2026-09-16: 59 datasets wrote, 56 under a vended table-scoped credential
+  and 3 under the AMBIENT one with no vend decision at all** — and all three are composed paths:
+
+      s3://bind86-wh/medallion/silver      stamped bronze$events     indices_optimized=1
+      s3://lance-catalog/medallion/silver  stamped silver$features   indices_optimized=1
+      s3://lance-catalog/medallion/gold    stamped bronze$events     indices_optimized=1
+
+  Two datasets in two buckets both claim to be `bronze$events`; `s3://lance-catalog/medallion/gold` is
+  a THIRD crossing this row did not have. None of them is a one-off.
+- **THIS ELIMINATES THE THIRD CANDIDATE FIX, the one this row proposed itself.** "The cheap
+  discriminator is probably the vend itself" cannot work: the crossing datasets are *precisely the ones
+  that never vend*. A guard placed there would be a control that cannot fire on the population it was
+  built for — the same failure this row already recorded for `table_id_from_location` and for lineage's
+  durable feed.
+- **WHAT THE DISCRIMINATOR ACTUALLY IS: a field already on the wire and being discarded.**
+  `CredentialResponse` carries `location` — the catalog's own answer for where that table lives —
+  and `_vend` read only `credentials.storage_options`. So the check needs no extra call, which is what
+  the tick's 552-dataset walk could not have afforded.
+- **LANDED**: the probe that already opens each about-to-vend dataset now also reads its stamp
+  (`sweep._probe_before_vending`), the path still wins wherever it can answer — this row is a catalogue
+  of wrong stamps, so a stamp must never displace a layout-derived id — and
+  `credentials.write_options_for` refuses the unit when the catalog's location for that id does not
+  **cover** the URI being maintained, naming both locations. Containment, never equality: several live
+  datasets are swept at `<root>/tree/<branch>` while the catalog answers with the root, and equality
+  would refuse the healthy majority. Gated by
+  `services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py` and
+  `tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py`.
+- **BLAST RADIUS BOUNDED WITHOUT DEPLOYING: no dataset that vends today would be refused.** A vended
+  credential that did not cover its dataset would already be failing the rewrite at the object store,
+  and the tick recorded **zero errored datasets holding one** (the 20 `AccessDenied` strings in the
+  window are all inside the `s3://lance-catalog/models/` shallow-clone refusal, on `table_id=None`
+  datasets that vend nothing). The three composed datasets above WILL be refused every tick — which is
+  this row's Closes-when working: three silent ambient writes become three visible refusals until the
+  stamps are repaired.
+- *NOT CONFIRMED IN-CLUSTER, stated rather than glossed.* A host-side dry-run against the live catalog
+  answered 401 — *"the presented credential may not claim 'service-maintenance'"* — which is the
+  zero-trust design working: maintenance holds a dedicated token from the secret store and
+  `APP_API_TOKEN` cannot claim its identity. The bound above is from log evidence, not from firing the
+  guard in-cluster, and the deploy is behind [[LH-169]]'s split stem either way.
+- **WHAT IS LEFT OF THIS ROW IS THE REPAIR, AND ONLY THE REPAIR.** The guard stops a crossing from
+  landing; it does not correct a single stamp or a single relative `source_uri`. The 58 governed
+  relative-URI datasets and the composed stale stamps still need option 1 or option 3 above, and
+  option 3 is still blocked on [[LH-146]]'s ruling about a synthetic assertion.
 - *Also connects [[LH-137]]:* that row's half (b) residue is these exact two ids, so it is this defect
   seen from the compaction door rather than a separate fault.
 
