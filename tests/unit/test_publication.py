@@ -165,6 +165,10 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
         key_column: str,
         required_columns: tuple[str, ...] | list[str] = (),
         version: int | None = None,
+        # [[LH-096]]: the gate now takes the process's bounded session. Spelled out rather than absorbed
+        # by a `**kwargs`, for the reason the comment above gives — a wrapper that swallows unknown
+        # parameters keeps passing on the day the gate grows one, which is the whole point of this shape.
+        session: object | None = None,
     ) -> list[Assertion]:
         tags = publication.dataplane.list_tags(ns, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
         entry = tags.get(PUBLISHING_TAG)
