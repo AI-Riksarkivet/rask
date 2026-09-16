@@ -1517,9 +1517,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
       catalog  silver$features  ->  s3://bind86-wh/medallion/silver      <- the governed id for that path
       catalog  bronze$events    ->  s3://lance-catalog/medallion/bronze  <- a DIFFERENT bucket
 
-  So the sweep asks for a write credential for `bronze$events`, is granted one because that table really
-  exists and `service-maintenance` really may maintain it, and applies the result to a dataset belonging
-  to `silver$features`. `indices_optimized=1` says a write landed.
+  So a maintenance pass recorded against `bronze$events` wrote to a dataset belonging to
+  `silver$features` — `indices_optimized=1` says a write landed.
+  *The id came from the STAMP, not from the path, which is what makes this LH-141 rather than an id-
+  derivation bug:* `table_id_from_location` answers **None** for every composed medallion path
+  (`s3://bind86-wh/medallion/silver`, `…/medallion/bronze`, `s3://lance-catalog/medallion/bronze` — run
+  directly), so the only source for `bronze$events` is the dataset's own declared
+  `lineage.dataset_id`.
+- *WHAT I HAVE NOT ESTABLISHED, stated so nobody builds on it:* whether a credential was VENDED for that
+  wrong id. `credentials.write_options_for` logs `write credential SCOPED for <id>` on every vend, and
+  in a 12-hour window there are **1,233 SCOPED and 0 AMBIENT decisions — and not one of them names
+  `bronze$events`**. So the vend path was seemingly not taken for this dataset at all, which sits oddly
+  beside the outcome's `mode='distributed'`. Either the pass reached a branch that maintains without
+  vending, or the credential subject differs from the outcome's `table_id`. Until that is measured, the
+  crossing of IDENTITY is established and the crossing of a CREDENTIAL is NOT, and an earlier draft of
+  this entry asserted the grant — it should not have.
 - *Why the existing guard does not catch it, read off the code rather than assumed:*
   `credentials.write_options_for` keys the vend on `declared_table_id or table_id_from_location(uri)`
   (`credentials.py:79`) and its docstring states the intended safety — *"A DECLARED id is never repaired
@@ -1528,11 +1540,6 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   this identity may NOT maintain. Here it is one it may, so there is no 403 and nothing is visible: the
   guard's failure mode assumes the stamp names a table the caller cannot reach, and a stale CASCADE
   stamp names a table the caller reaches every tick.
-- *What is measured and what is not:* the outcome, the two catalog locations and the id the sweep used
-  are all read off the live estate. Which credential actually signed the index write is NOT — the
-  distributed path splits plan/execute/commit across credentials, so proving the vended one reached
-  another bucket needs a further measurement. The crossing of IDENTITY is established; the crossing of
-  the CREDENTIAL is not, and this row should not claim it until it is.
 - *Why open:* `ensure_declared_dataset_id` self-heals a stale stamp — its docstring is explicit that a
   `merge_insert` does not carry schema metadata, so the tier above would otherwise keep its parent's
   name — but all five call sites are inside `compute.py`'s WRITE paths. Nothing outside a write ever
