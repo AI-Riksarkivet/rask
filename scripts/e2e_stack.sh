@@ -274,7 +274,40 @@ PG_DB=$(kubectl get sts "$RELEASE-age" -o jsonpath='{.spec.template.spec.contain
 PG_PASS=$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.postgres-password}' | base64 -d)
 export LINEAGE_DATABASE_URL="postgresql://${PG_USER}:${PG_PASS}@localhost:5433/${PG_DB}"
 
+# ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
+# Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is
+# REFUSED on tenant B's data — the sharpest statement of storage isolation this estate makes. This
+# harness minted both principals and seeded neither a second project nor the vars the legs gate on,
+# so all five SKIPPED here while `e2e_live.sh` ran them against the deployed estate. A skip reads
+# exactly like a pass, which is the failure the "NO SILENT SKIPS" gate below exists to catch.
+#
+# BOB ADMINISTERS B WHILE ALICE ADMINISTERS acme, which is what makes this a cross-tenant test rather
+# than one principal talking to two of its own projects. Bob holds nothing on `acme` here (see the
+# grant seeded above), so he stays the 403 leg the other suites need.
+#
+# A FIXED ID, not one per run: a project has no retention to clean it up, so a per-run tenant would
+# leave one behind on every drive. `POST /v1/projects` writes the record and the creator's admin tuple
+# together; a second create converges rather than failing, and 409 is accepted because which of the two
+# a door gives for "already there" is exactly the kind of thing that changes underneath a harness.
+TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
+B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST http://localhost:2333/v1/projects \
+  -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
+  -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
+BOB_SUB="$(TOK="$BOB" uv run python -c "
+import base64, json, os
+b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
+print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true)"
+if { [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; } && [ -n "$BOB_SUB" ]; then
+  fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$BOB_SUB" admin "project:$TENANT_B" >/dev/null 2>&1 || true
+  export LANCE_E2E_PROJECT_B="$TENANT_B"
+  export LANCE_E2E_TENANT_B_TOKEN="$BOB"
+  echo "   tenant B: $TENANT_B (admin=bob) — the credential-isolation legs will RUN"
+else
+  echo "   note: could not provision tenant B (HTTP ${B_CODE:-?}) — the 5 credential-isolation legs will SKIP"
+fi
+
 PYTHONPATH=services uv run pytest \
+  tests/e2e-py/test_credential_isolation_e2e.py \
   tests/e2e-py/test_object_store_cas_e2e.py \
   tests/e2e-py/test_client_direct_e2e.py \
   tests/e2e-py/test_warehouses_e2e.py \

@@ -879,10 +879,13 @@ e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3
 e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI e2e-ray
 	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
 
-# The tenant-isolation attack (#74's live half). NOT in `e2e-ci`: it needs TWO tenants' bearer
-# tokens and a vending-enabled stack, neither of which the kind stack provisions today (#84 tracks
-# that wiring). The suite's own docstring cited this target for months while no Makefile defined it
-# (diff2 F5) — so anyone following the docs ran nothing and saw no error.
+# The tenant-isolation attack (#74's live half), as a STANDALONE target against an already-deployed
+# estate. `e2e-ci`'s kind stack now runs the same suite itself: `scripts/e2e_stack.sh` provisions a
+# second project and grants bob admin on it, so the five legs execute there under the harness's
+# no-silent-skips gate. This target remains for driving the suite against a cluster the harness did
+# not build, where the two tokens come from the operator rather than from Dex-on-localhost.
+# The suite's own docstring cited this target for months while no Makefile defined it (diff2 F5) —
+# so anyone following the docs ran nothing and saw no error.
 #
 # Un-skipping it is the point: with the env unset every test in the file SKIPS, which is why a
 # key-name mismatch in it survived to be found by reading rather than by running.
