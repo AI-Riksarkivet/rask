@@ -254,6 +254,14 @@ def _finding_identity(finding: BaseModel) -> str:
     finding an operator needs to see, and a blank entry is the failure mode this function exists to end.
     """
     dumped = finding.model_dump()
+    # QUALIFIED FIRST. `path` is relative to something on every model that carries one, and `dataset`
+    # is that something — `OrphanFile.dataset` exists for exactly this ("so a finding is actionable
+    # without re-deriving it") and the loop below reaches `path` before it would ever look. Measured on
+    # the live estate 2026-09-16: 932 orphan files across 13 buckets, named `data/00110000….lance` and
+    # `_transactions/0-….txn`. Every Lance dataset has both of those directories, so an unqualified
+    # path is not merely unhelpful — it is not unique across the report.
+    if (root := dumped.get("dataset")) and (relative := dumped.get("path")):
+        return f"{root}/{relative}"
     for field in ("fga_object", "bucket", "namespace", "top_ns", "path", "task", "id"):
         if value := dumped.get(field):
             return str(value)

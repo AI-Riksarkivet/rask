@@ -4298,6 +4298,38 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   Not done here — the row holds a considered position and a log level is an operator-experience call —
   but the 50% is new information the position was taken without.
   **Reopen if:** A live reconcile tick whose `incomplete` is non-zero for a reason other than a genuinely unreadable prefix, or a `maintenance_refused_protected_base` log line naming a dataset whose only referrer resolves through an `is_dataset_root=False` external blob base — that would prove the reference-only field is still load-bearing. (The row's live numbers — 13/65/442 — are estate claims I could not verify from the tree.)
+
+- **RE-MEASURED 2026-09-16 on `main-fd3999f4`, the first reconcile tick after [[LH-141]]'s guard and the
+  vend fix deployed. Every number in this row has moved:**
+
+      total       13  ->  946
+      incomplete  65  ->    3   (all three `storage:lance-catalog`)
+      excluded   442  ->  518
+      orphan_files 0  ->  932   across 13 buckets
+
+  **`incomplete` falling 65 -> 3 is this row's headline resolving**, and it resolved by deployment
+  rather than by code written here: the narrowing was measured 2026-09-10 and the image carrying it is
+  only now on the estate. Three residual notes remain and the row's Reopen-if asks whether they are
+  "a genuinely unreadable prefix" — the drift line carries the SOURCE and not the reason, so that
+  question is one log field away from being answerable and is not yet answered.
+- **`orphan_files` went 0 -> 932 in the same tick, and the 0 was not a clean estate.** The scan is
+  gated (`orphan_scan_enabled`) and a skipped scan is recorded as SKIPPED, never as zero — so this is a
+  scan that ran both times and saw more. The likely reason is the vend fix in the same image: the
+  maintainer could not read the `s3://lance-catalog/models/` base before, and that refusal is now gone
+  from every tick. **Stated as correlation.** Whether these 932 are newly-VISIBLE pre-existing orphans
+  or newly-CREATED ones decides whether this is the fix working or a regression, and one tick cannot
+  tell them apart.
+- **`maintenance_refused_protected_base` is still half the estate's warnings — re-measured: 738 of
+  1,356 WARN-or-worse lines in 25 minutes, 54%.** The row's 2026-09-11 position (10,461 of 20,740)
+  holds unchanged on a different image and a different window, so it is structural rather than a spike.
+- **FIXED HERE: a named orphan finding said WHAT but never WHERE.** `_drift_names` exists because
+  "orphan_buckets: 12" gave an operator no way to learn which twelve; `_finding_identity` takes the
+  first present field from a fixed list and reaches `path` before it would ever consider `dataset` —
+  so all 932 were named `data/00110000….lance` and `_transactions/0-….txn`. `OrphanFile.dataset`
+  exists for precisely this ("so a finding is actionable without re-deriving it") and was the one field
+  the namer skipped. Every Lance dataset has a `data/` and a `_transactions/`, so across 13 buckets
+  those names were not merely unhelpful, they were not unique. A path is now qualified by its dataset,
+  gated by `services/maintenance/tests/test_a_drift_finding_is_named_where_it_actually_lives.py`.
 `maintenance, catalog, ingest` · **HIGH**
 
 - *Why open:* **RE-MEASURED 2026-09-10 on the live estate and the headline is falsified.** Two consecutive reconcile ticks five minutes apart both report `total=13 counts={'ghost_projects':1,'unbound_namespaces':4,'orphan_buckets':12,'orphaned_annotation_tasks':3,'orphan_files':0} incomplete=65 excluded=442`. Against the numbers this row carried (`total 611, incomplete 490, orphan_files 598, orphan_buckets 12`): only `orphan_buckets` still matches. `orphan_files` is **0**, not 598 — nothing is being named as an orphan at all.
