@@ -151,7 +151,13 @@ _BRANCH_CONTAINER = "tree"
 #: root's children only into `tree/` — but on the run that CREATES the destination the parent is still a
 #: plain directory, and a crash inside that window leaves the set findable. One underscore, so the
 #: `__`-prefix rule above does not cover it.
-_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging")
+#: `_backups` earns its place for a reason the others do not have. The rest are skipped because probing
+#: them is wasted round-trips; this one was BLOCKING RECLAMATION. `control_root_backup.py` writes
+#: `_backups/control/<timestamp>/…`, which nests past `discovery_max_depth`, so the walk recorded an
+#: `IncompleteScan` — and `report_is_clean` refuses to certify an estate with anything incomplete, which
+#: gates the #79 purge. Measured on the deployed release 2026-09-16: three incomplete entries, all
+#: backup snapshots, against 932 orphan files across 8 datasets the purge could not touch.
+_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging", "_backups")
 
 
 def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
