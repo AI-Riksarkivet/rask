@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**216 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**220 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 10 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 17 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -4331,6 +4331,45 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   worth considering alongside.
 - *Found while re-measuring LH-127*, which is about a different consumer on a different stream.
 
+**LH-170 · The lineage replay is idempotent for events the graph ACCEPTS and not for events the gate REFUSES, and no row attributes the DLQ loop to it**
+`lineage, chart` · med · found 2026-09-16 by the backlog audit, verified against the live components
+
+- *Why open:* `lineage-pubsub-lineage` is the ONE subscription of eight with no `durableName` and
+  `deliverPolicy: all` — every sibling carries `<app>-durable` + `new` (measured live: 8 components,
+  1 exception). That is deliberate and the chart says so at `dapr-component.yaml:160-172`: "a restart
+  replays the retained stream into the idempotent MERGE ingest — that replay IS the outage-durability
+  story", and "a durable cursor would defeat its replay-rebuilds-the-graph recovery story".
+- **THE IDEMPOTENCE CLAIM HAS AN EXCEPTION THE COMMENT DOES NOT STATE.** An accepted event MERGEs
+  harmlessly on replay — the design working. An event the AUTHORIZATION gate refuses never reaches the
+  graph, so it re-parks on every restart and appends a NEW dead letter about an event already in the
+  DLQ. That is the feedback loop condition 4's scorecard measured (49 parks within two minutes of a pod
+  start, zero before) attributed to its actual mechanism for the first time.
+- *This is not a new defect and not a reason to give the subscription a cursor.* It is the missing
+  attribution: [[LH-148]] and [[LH-166]] describe the loop's effects and neither names the
+  `deliverPolicy: all` half as its cause, so a reader can conclude the transport is unhealthy when the
+  transport is doing exactly what it was configured to do.
+- *Closes when:* the decision on [[LH-151]]/[[LH-166]]'s ack semantics lands — acking a permanently
+  refused event as SUCCESS makes the replay genuinely idempotent and the loop disappears with no change
+  to this subscription — and the chart's comment states the exception rather than an unqualified
+  "idempotent MERGE ingest".
+
+**LH-171 · Nine governed control-root records are unreadable at HEAD and the estate only WARNs**
+`medallion, service-kit` · med · found 2026-09-16 by the backlog audit, re-measured live
+
+- *Why open:* Every listing pass on the deployed medallion producer emits exactly nine
+  `transform_spec_malformed` warnings for records under `s3://lance-catalog/_transforms/` — measured
+  2026-09-16, 9 in a two-hour window, e.g.
+  `path='lance-catalog/_transforms/acme-0904d517…'`. The stored JSON carries fields the current
+  `TransformSpec` forbids and lacks fields it now requires, so the model refuses them.
+- *Why it matters beyond noise:* these are GOVERNED CONTROL RECORDS — the transform definitions the
+  cascade dispatches on. A record the producer cannot parse is a transform that cannot run, and the
+  estate's only signal is a WARN on a listing path nobody reads. It is the same shape as the outbox
+  lesson: the one path that loses work is the one nothing watches.
+- *Closes when:* the nine records are read, and each is either migrated to the current schema or
+  deleted as residue — with the answer recorded, because "malformed" covers both "written by an older
+  writer" and "never valid". Then make an unparseable control record louder than a WARN, or prove the
+  set is empty and keep it that way with a gate.
+
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
 
@@ -5979,6 +6018,35 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 
 - *Why open:* Verified: `chart/values.yaml:2779` defaults `environment: rask` with the comment 'override per deploy (dev / staging / prod)', and `grep environment chart/values-prod.yaml` returns nothing — so every trace and metric in prod, the cascade's included, carries the wrong `deployment.environment.name`.
 - *Closes when:* Add `observability.environment: prod` to `chart/values-prod.yaml`.
+
+**XC-052 · A helm-LABELLED Deployment that the release does not own will fail the next upgrade that touches it**
+`chart` · med · found 2026-09-16 by the backlog audit, verified live
+
+- *Why open:* `Deployment/rask-assist` and `Service/rask-assist` carry the release's own labels
+  (`app.kubernetes.io/instance: rask`, `managed-by: Helm`) with **zero `ownerReferences`** and **no**
+  `meta.helm.sh/release-name` annotation, and they are absent from the deployed release's manifest —
+  measured live 2026-09-16. They were `kubectl apply`d on 2026-08-03.
+- *What that costs:* they look release-owned to every reader and every label selector — `helm` will not
+  reconcile them, and a future chart that legitimately renders a `rask-assist` meets an existing object
+  it does not own, which is a failed upgrade rather than an adoption. Meanwhile any component-scoped
+  NetworkPolicy or PDB selecting on `instance: rask` silently includes them.
+- *Closes when:* either the chart renders them (and helm adopts them with the annotations that make
+  ownership real), or they are removed as hand-applied residue — with the choice recorded. Related to
+  [[LH-169]]: both are the same class, a hand-applied object the release believes it owns.
+
+**XC-053 · Helm hook Jobs accumulate one per revision forever — 17 today, each holding a completed pod**
+`chart` · low · found 2026-09-16 by the backlog audit, counted live
+
+- *Why open:* 17 `rask-minio-scoped-users-r<NNN>` Jobs are present in `default`, one per release
+  revision (r146..r163 at the time of counting), each retaining its completed pod. They carry no
+  `helm.sh/hook-delete-policy`, so nothing collects them, and the release revision count only grows.
+- *Why it is low and still real:* it costs a little etcd and a lot of `kubectl get pods` legibility —
+  the same noise that made the four orphaned durables in [[LH-127]] hard to see. Its sibling
+  `openfga-migrate` already learned this: `chart/templates/openfga-migrate.yaml:20` carries
+  `ttlSecondsAfterFinished: 3600` with a comment recording that 14 Completed husks had accumulated
+  before it did.
+- *Closes when:* the hook Job gains the same `ttlSecondsAfterFinished` its sibling already has, or an
+  explicit `helm.sh/hook-delete-policy` — and a sweep removes the 17 that exist.
 
 **XC-051 · Undecided whether the estate shares one GreptimeDB or runs one per workload**
 `chart` · low · **blocked:** owner decision
