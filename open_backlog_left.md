@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**217 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 50 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -5669,11 +5669,26 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 - *Why open:* `accessControl`/`defaultAction` appear in zero chart templates (re-measured true 2026-09-10), so any of the 16 sidecars may invoke any app-id, and `networkPolicy.enabled` is still false (`values.yaml:559`). The row's original 11-entry plan was sized from the HTTP `/v1.0/invoke` callers grep can see, but the estate invokes over three planes — HTTP (gateway, notifications), ActorProxy (annotator, notifications; 28 references), and Dapr Workflow (flows, ingest, medallion) which Dapr documents as EXCLUDED from service-invocation access control and needing a `WorkflowAccessPolicy` this estate has never heard of — so a `defaultAction: deny` written from the HTTP count alone would ship as an outage.
 - *Closes when:* Characterise actor-to-actor and workflow invocation on the live estate first (no document answers it), then write `policies:` (not `appPolicies:`) plus `defaultAction: deny` and `trustDomain` into the one shared `lance-tracing` Configuration (`chart/templates/observability.yaml:50-56`), add a `WorkflowAccessPolicy`, validate with a live drive of every gateway route rather than a render, and add the missing test. NetworkPolicy is a separate prod-hardening half — it is a no-op on k3s flannel and needs a policy-enforcing CNI.
 
-**XC-010 · OpenFGA subjects are raw-interpolated (`f"user:{user}"` in `service_kit/governed/fga.py`) — user IDs are never URL-encoded, and OIDC subjects here are emails**
+**XC-010 · ~~OpenFGA subjects are raw-interpolated (`f"user:{user}"` in `service_kit/governed/fga.py`) — user IDs are never URL-encoded, and OIDC subjects here are emails~~ — STRUCK 2026-09-16 (PREMISE FALSIFIED, AND THE FIX WOULD BREAK AUTHORIZATION)**
 `service-kit, catalog` · med
 
 - *Why open:* The Lakekeeper study ruled this mandatory before prod OIDC if subjects can contain `@`/`+`/`:`, and email subjects always do; the interpolation is still present at `fga.py:487`, `:532`, `:617` and `:1312`. No verdict on it appears in `docs/DECISIONS.md` §9, so it is neither fixed nor knowingly accepted.
-- *Closes when:* URL-encode the subject when serializing to OpenFGA in `packages/service-kit/src/service_kit/governed/fga.py` (all four interpolation sites), with a test covering `@`, `+` and `:` in the subject.
+- *What is true now, measured 2026-09-16 against the running estate:*
+  * **THE SUBJECT IS NOT IN A URL.** All four sites (now `fga.py:826`, `:871`, `:956`, `:1730`) hand the
+    string to SDK models — `ClientCheckRequest`, `ClientBatchCheckItem`, `ClientTuple` — which serialize
+    to a JSON BODY. There is no path segment to escape, so percent-encoding does not harden anything.
+  * **AND IT WOULD BREAK WHAT WORKS.** Encoding changes the identifier's bytes:
+    `user:alice@example.com` becomes `user:alice%40example.com`, a DIFFERENT subject that matches none
+    of the stored tuples. The fix as written silently denies every principal whose id contains a
+    special character — the opposite of its intent.
+  * *The premise is false for this estate.* Dex issues OPAQUE base64 subjects, not emails — measured on
+    a freshly minted token and against the live store (`01KYPGG8F8MAZTJANME4K077DE`): of 26 distinct
+    `user:` subjects, the OIDC ones are `CiQ3ZjJhOWM0MS01YjhlLTRkMTYt…` shaped, and exactly ONE carries
+    a special character at all — `user:alice@example.com`, a seeded fixture, which authorizes correctly
+    today (it is the identity that drove the live `compact_table` probe for [[LH-153]]).
+- *What would reopen it:* an identity provider whose `sub` can contain OpenFGA's type separator in a
+  position that makes `user:<sub>` parse ambiguously, or evidence that any of the four sites reaches a
+  URL path rather than a JSON body. Either would restore the row's mechanism; neither is true at HEAD.
 
 **XC-011 · Estate bootstrap is still check-then-write, and `fga.provision()` rewrites the authorization model on every unpinned boot**
 `chart, service-kit, catalog` · med · **blocked:** owner decision (C-Q2) — whether `provision()` gates on a model-content hash or `RASK_FGA_MODEL_ID` is the accepted pin
