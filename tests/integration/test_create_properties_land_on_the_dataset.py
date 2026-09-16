@@ -22,24 +22,20 @@ from catalog.services import dataplane
 
 @pytest.fixture
 def real_ns(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> LanceNamespace:
-    """The `dir` backend AND the settings the write path needs to reach it.
-
-    The backend is local, but `dataplane`'s create/read go through `shared_lance_session()`, which
-    builds the catalog's whole `Settings` — and `LANCE_S3_ACCESS_KEY_ID` / `LANCE_S3_SECRET_ACCESS_KEY`
-    are REQUIRED fields there with no default. A fixture that connects without them raises
-    `ValidationError` before any dataset is touched, so the test says "table has no readable dataset"
-    about a table that was never written.
+    """The `dir` backend, rooted where this test can write.
 
     `monkeypatch.setenv` rather than `os.environ`, so teardown restores the environment and these tests
-    stay order-independent — which is the property that was actually missing: they passed under the full
-    suite only because `tests/unit/test_openapi_contract.py` does `os.environ.setdefault` on the same key
-    at import time, and failed whenever `tests/integration` ran on its own. The conftest's
-    `real_ns_client` sets the same four for the same reason.
+    stay order-independent — the property that was actually missing when they were written: they passed
+    under the full suite and failed whenever `tests/integration` ran alone.
+
+    THE CREDENTIALS THIS FIXTURE USED TO SET ARE GONE, and the reason is the point: `dataplane`'s
+    create/read reach `shared_lance_session()`, which used to build the catalog's whole `Settings` —
+    where the S3 pair is REQUIRED — to read two defaulted cache integers. Opening a LOCAL dataset
+    therefore demanded credentials it never used. `LanceSessionCaps` now carries just those two, so this
+    fixture needs no credential and the suite is never taught that one arrives through the environment.
     """
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
     monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")
-    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "test")
 
     from catalog.core.config import get_settings
 

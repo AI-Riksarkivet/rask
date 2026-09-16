@@ -28,7 +28,42 @@ if TYPE_CHECKING:
 _STORAGE_PREFIX = "storage."
 
 
-class Settings(GovernedAuthSettings, BaseSettings):
+class LanceSessionCaps(BaseSettings):
+    """The two Lance cache ceilings, and NOTHING else — so opening a dataset costs no credential.
+
+    SPLIT OUT OF :class:`Settings` DELIBERATELY. `shared_lance_session` needs exactly these two
+    integers, both defaulted, yet it built the whole catalog `Settings` to read them — and that model
+    REQUIRES `LANCE_S3_ACCESS_KEY_ID` / `LANCE_S3_SECRET_ACCESS_KEY`. So every local `dir`-backend open
+    was coupled to credentials it never uses, and a process that legitimately holds none could not open
+    a dataset at all.
+
+    MEASURED 2026-09-16, which is what made it a defect rather than an inefficiency: five tests in
+    `services/maintenance/tests/test_compaction_runs_off_the_pod.py` and three in
+    `tests/integration/test_create_properties_land_on_the_dataset.py` failed in isolation and passed
+    only when an unrelated module had already put those variables in the environment — the suite's
+    result depended on collection order. The alternative fix was to hand the suite fake credentials,
+    which would have taught it to be comfortable with a credential arriving through the environment.
+    The estate's rule is that a secret reaches a workload from ESO, the Dapr secret store or STS and
+    never from env, so a test harness that needs one to open a local file is the wrong shape to
+    normalise.
+
+    Inherited by `Settings` rather than duplicated: two definitions of one default is the failure this
+    estate keeps finding, and the aliases stay the single spelling operators already set.
+    """
+
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
+
+    #: The bounded Lance caches this process is willing to hold (#102 / [[LH-096]]). Lance's own defaults
+    #: are 1 GiB metadata + 6 GiB index, which dwarf the 512 Mi limit every lakehouse pod runs under —
+    #: and a bare `lance.dataset()` mints those ceilings per open and discards them WITH the handle, so
+    #: the cache never engages at all. Named settings rather than literals because a literal cannot
+    #: track `resources.limits.memory`: raise the pod and these should follow, lower it and they must.
+    #: `shared_lance_session` clamps them to the container on top of whatever is set here.
+    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="LANCE_METADATA_CACHE_MB")
+    lance_index_cache_mb: int = Field(default=256, ge=8, alias="LANCE_INDEX_CACHE_MB")
+
+
+class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
     """Catalog + object-store configuration sourced from ``LANCE_*`` env vars.
 
     The OIDC/FGA knobs are NOT declared here. They are the estate's shared vocabulary and arrive from
@@ -55,8 +90,6 @@ class Settings(GovernedAuthSettings, BaseSettings):
     #: the cache never engages at all. Named settings rather than literals because a literal cannot
     #: track `resources.limits.memory`: raise the pod and these should follow, lower it and they must.
     #: `shared_lance_session` clamps them to the container on top of whatever is set here.
-    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="LANCE_METADATA_CACHE_MB")
-    lance_index_cache_mb: int = Field(default=256, ge=8, alias="LANCE_INDEX_CACHE_MB")
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
@@ -507,8 +540,8 @@ def shared_lance_session() -> lance.Session:
     """
     from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
 
-    settings = get_settings()
+    caps = LanceSessionCaps()
     # Clamped from the cgroup rather than by lowering the defaults, so the caps track the pod's real
     # limit instead of a literal somebody has to remember to change.
-    metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
+    metadata, index = affordable_cache_bytes(caps.lance_metadata_cache_mb << 20, caps.lance_index_cache_mb << 20)
     return lance_session(metadata, index)
