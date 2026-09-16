@@ -3832,6 +3832,37 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   not separate them. **The one remaining measurement is: which of the eight scoped app-ids publish to
   `lineage.events.v1` specifically** — answerable from the live bus or by reading each publish's topic
   argument, and it must be answered before the scopes are written.
+- **THAT MEASUREMENT IS DONE 2026-09-16, and the env scan alone would have got it WRONG.** Reading each
+  publish site's topic argument, not just the env:
+
+      PRODUCERS of lineage.events.v1   catalog (LANCE_DAPR_TOPIC default), maintenance,
+                                       medallion-producer, bronze-to-silver, silver-to-gold,
+                                       media-to-silver, and **lineage**
+      CONSUMER-ONLY                    notifications
+
+  **`lineage` is a producer and no environment variable says so.** `api/reconcile_cron.py:470-474`
+  publishes to `settings.dapr_pubsub` / `settings.dapr_topic` — the outbox relay's drain, which
+  `main.py:114` explains: "The drain re-publishes a recovered event so a subscriber that never saw it
+  still acts on it — without this the relay repairs the GRAPH while the cascade it was meant to restart
+  stays halted." A scopes file written from the env pairs would have denied that republish and left the
+  relay repairing the graph while the cascade stayed stopped — the exact silent-provenance failure this
+  row was told to avoid.
+- *So the change is smaller and sharper than "name the producers":* every component is ALREADY scoped to
+  exactly one app-id, so `publishingScopes` cannot restrict which APPS publish — it restricts which
+  TOPICS each app may publish. The one app it would newly deny is `notifications`, and the real value is
+  deny-by-default for the NINTH app-id somebody adds later, which today would silently inherit publish
+  rights on the provenance bus.
+- **THE HAZARD, named before anyone writes it:** `protectedTopics` gates PUBLISH *and* SUBSCRIBE ("an
+  application must be explicitly granted publish or subscribe permissions"), and these per-app
+  components are the SUBSCRIBER components — `queueGroupName` lives on them. A component that protects
+  the topic and omits its app from `subscriptionScopes` silently stops delivering to that app, on the
+  bus that carries every provenance record and the whole cascade. So the edit is per-component and needs
+  both directions, plus a gate that derives the expected scopes from the same template data the
+  subscriber list is built from, plus a live check after the roll (a sweep tick publishes, lineage
+  ingests, the notifications inbox receives).
+- *Deliberately NOT shipped in the same batch as the measurement*, because the blast radius is the
+  provenance bus and the gain is one first-party app-id plus a future-proofing posture. It is specified
+  now rather than guessed at later.
 - *Closes when (rewritten):* `protectedTopics: lineage.events.v1` plus a `publishingScopes` naming the
   measured producer set on the lineage pub/sub components, a producer signature verified in the bus
   door (still genuinely open — `_StampedAuthor`'s own docstring says "nothing proves the stamp"), and
