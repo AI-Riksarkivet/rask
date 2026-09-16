@@ -3172,6 +3172,22 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   four silver writes, two compactions — that is strong, but it is not the same as proving no process
   ran. Distinguishing "no trigger was published" from "a trigger was published and refused" needs the
   DLQ, and is the same question [[LH-151]]/[[LH-166]] answer.
+- **AND THE BUS CANNOT ANSWER IT, which is worth recording so nobody repeats the attempt.** Measured
+  2026-09-16: `MEDALLION` holds **178 messages** (seq 1580-1757), a rolling window, so advref31's silver
+  writes have long aged out; a 40 KB sample of the 7,271-message `DLQ` contains no `advref31`, which is
+  suggestive and is not proof over a partial read. The trigger's fate is simply not recoverable from the
+  streams now.
+- *What the deployed stage runner DOES say (`rask-silver-to-gold`, read 2026-09-16):*
+  `MEDALLION_SUB_TOPIC=medallion.silver`, `MEDALLION_FROM_URI=s3://lance-catalog/medallion/silver`,
+  `MEDALLION_TO_URI=s3://lance-catalog/medallion/gold`, and `MEDALLION_PUB_TOPIC=` EMPTY — gold is
+  terminal, so publishing nothing downstream is correct there.
+- *A tempting wrong conclusion, recorded because it is the obvious one:* those FROM/TO URIs are the
+  COMPOSED paths ([[LH-137]]/[[LH-164]]'s double-home) while advref31's silver is a catalog table
+  (`advref31-silver$features`), which reads like "the runner never looks at advref31". It is not that
+  simple — five tenants DO have catalog-table-shaped gold (`acme-gold$catalog` and four more) produced
+  by this same runner, so it resolves the tenant from the trigger payload rather than from the path. Why
+  advref31's silver produced no trigger, or produced one that resolved nowhere, needs that payload —
+  which the rolling window no longer holds.
 - *Closes when:* a surface names a written-but-unpublished tier — the lag detector's own report, the
   promotions door, or the tier board. The publish state no longer needs establishing; one of those
   three has to say it out loud, because from every surface the estate has today this is still
