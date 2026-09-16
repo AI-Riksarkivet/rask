@@ -4078,10 +4078,27 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* The tier URIs the row asks to configure are already rendered for the lane's deploy path — the only true residue is that the lane never asserts a committed silver/gold version with row counts.
   **Evidence:** scripts/ingest-lane.sh:79-97 (`lane_values`) sets `medallion: {enabled: true}` and does NOT override `medallion.compute`; chart/values.yaml:1187 has `compute: true` as the shipped default; chart/templates/medallion.yaml:505-512 renders `MEDALLION_COMPUTE_ENABLED`, `MEDALLION_FROM_URI` and `MEDALLION_TO_URI` under `{{- if $root.Values.medallion.compute }}` for every stage runner. So the guard at services/medallion/src/medallion/services/transform.py:971 (`if settings.compute_enabled and from_uri and to_uri:`) is satisfied in the lane slice, not bypassed. The row's cited locator (medallion.yaml:502-503) has drifted to 511-512. The values.yaml:1176-1181 caveat 'REQUIRES OpenBao off' is itself stale — the medallion now fetches its S3 secret through Dapr (services/medallion/src/medallion/core/config.py:447-449 + packages/service-kit/src/service_kit/governed/secrets.py:147-193), and chart/templates/medallion.yaml:522 withholds the plaintext key only when `secretsViaDapr` is on. What IS absent: scripts/ingest-lane.sh asserts only bronze — `committed_version` (line 506-508) and `units_done` (line 512-515), repeated at 617-619 and 717-721 — and the word silver/gold appears in the script only inside the comment at line 89. Nothing reads a silver or gold version or row count.
   **Reopen if:** A `MEDALLION_FROM_URI` that renders empty in the lane's `helm template` output (run `scripts/ingest-lane.sh` render and grep), or an assertion in ingest-lane.sh that opens the silver/gold dataset and checks its version or row count.
-`medallion` · med
+`medallion` · med · **blocked:** the double-home ruling ([[LH-137]]/[[LH-164]]) — the tiers this row asks the lane to assert are composed paths the catalog does not know
 
 - *Why open:* `medallion/services/transform.py:970` guards the whole compute path on `settings.compute_enabled and from_uri and to_uri`; in the lane slice those URIs are unset and no project routing is configured, so the stage runner wakes, emits and writes nothing. Partly overtaken — `chart/templates/medallion.yaml:502-503` now renders both for the chart deploy path — so what remains is the lane proving bronze→silver→gold moves BYTES.
-- *Closes when:* Configure the tier URIs (or the per-project warehouse registry) in `scripts/ingest-lane.sh` and assert a committed silver and gold version with row counts, not just a `POST /medallion-event 200`.
+- **AND THE ASSERTION CANNOT BE WRITTEN THROUGH THE CATALOG YET, measured 2026-09-16.** The tiers the
+  row asks the lane to check are the ones `chart/templates/medallion.yaml:525-526` renders:
+  `MEDALLION_FROM_URI` / `MEDALLION_TO_URI` = `s3://<stageBucket>/medallion/<namespace>` — the COMPOSED
+  paths. Those are precisely the datasets [[LH-137]]/[[LH-164]] name as the double-home: their derived
+  ids are namespace-shaped and name no table door, which is why condition 5's own measurement finds all
+  three `maintenance_vend_denied` refusals there (`lakehouse$gold`, `$silver`, `$silver-media`). A lane
+  assertion that asked the catalog for a committed silver version would 404 — not because the cascade
+  failed, but because the tier is not a catalog table.
+- *So this row is gated on the SAME ruling as the double-home*, and which assertion to write depends on
+  the answer: if the catalog-vended path becomes the only legitimate home, the lane asserts through the
+  catalog like it does for bronze; if composed paths stay, the lane has to open the S3 path directly and
+  the test says nothing about governance. Writing either before the ruling means writing it twice.
+- *Re-measured, the rest of the row holds:* `silver` and `gold` appear in `scripts/ingest-lane.sh` exactly
+  ONCE, in a comment at line 89. The script asserts `committed_version` (line 506) and `units_done`
+  (513, 618, 719) — bronze only. The DATA chain is genuinely unproven; only the means of proving it is
+  blocked.
+- *Closes when:* the double-home ruling lands, then the lane asserts a committed silver and gold version
+  with row counts through whichever door that ruling makes correct — not just a `POST /medallion-event 200`.
 
 **LH-093 · ~~The event actor is one `author.sub` string where it should be a closed union~~ — THE LIVE DEFECT CLOSED 2026-09-11; the union is struck**
 `medallion, catalog, service-kit` · was low
