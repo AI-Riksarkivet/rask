@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**220 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 74 | 11 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 50 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -1545,6 +1545,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *The index optimize DID write* (`indices_optimized=1`), and that half is a genuine write under a
   mis-recorded identity; it is not planned by the catalog and so is not covered by the plan door's
   answer.
+- *WHERE THE GUARD GOES IS NOT OBVIOUS, and the two obvious places are both wrong — recorded so the fix
+  is not attempted at the first site that looks right:*
+  * `catalog_compaction.plan_via_catalog(table_id, policy, settings)` receives ONLY the id. The catalog
+    cannot detect the mismatch because the sweep never tells it which dataset it is holding, so the
+    door answering 200 is not a catalog bug — it answered the question it was asked.
+  * a sweep-side `describe` before each plan would cost one extra catalog round trip per dataset, and
+    the tick already walks **552** of them. That is the shape the `_may_write_anything` probe exists to
+    avoid (it was added because vending per PLANNED dataset was minting 280 STS records a minute).
+  *The cheap discriminator is probably the vend itself* — a credential is already scoped to the table's
+  own bucket+prefix, so options that do not cover `item.uri` ARE the crossing, detectable with no extra
+  call. That needs one more measurement first: why this dataset produced 30 plan calls and ZERO
+  credential calls, when `_may_write_anything` returns True for a dataset whose index optimize commits.
+  Until that is answered the guard cannot be placed, and placing it by analogy is how this estate gets
+  controls that cannot fire.
+- *Closes when:* a declared id that does not name the dataset being maintained stops the unit, and the
+  refusal says which two locations disagreed.
 - *Why the existing guard does not catch it, read off the code rather than assumed:*
   `credentials.write_options_for` keys the vend on `declared_table_id or table_id_from_location(uri)`
   (`credentials.py:79`) and its docstring states the intended safety — *"A DECLARED id is never repaired
@@ -5783,6 +5799,29 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 
 
 ---
+
+**LH-168 · The live `lance-secrets` Dapr component has DRIFTED from the chart — two app-ids the chart grants are missing, and helm will never put them back**
+`chart, viewer, search` · low · found 2026-09-16 by a zero-trust audit, verified against the cluster
+
+- *Why open:* `helm get manifest rask` renders **13** scopes for the `lance-secrets` secret store; the
+  live Component has **11**. `search` and `viewer` are in the chart and not in the cluster.
+- *Why helm will not repair it:* helm patches only fields that CHANGED between releases, so out-of-band
+  drift on a stable field survives every upgrade — the estate already records this as a standing trap.
+  The release has gone through revisions 160-163 today with the drift intact.
+- *Why it is LOW and not med:* the two affected app-ids are `viewer` and `search`, both explicitly
+  low-priority. **All four lakehouse services are correctly scoped** (catalog, lineage, maintenance,
+  medallion-producer) along with the three stage runners, annotator, ingest, flows and notifications, so
+  nothing in phase 1 is affected. Measured: no `unavailable from Dapr store` line in either pod in the
+  last 30 minutes, so whatever they would fetch they are not currently fetching.
+- *The shape is what makes it worth a row rather than a note:* an unscoped Dapr component does not error
+  at boot — the app comes up, reports Ready, and the capability is simply absent. That is this estate's
+  signature defect (a control that cannot fire) arriving through infrastructure drift rather than code.
+- *Also found in the same audit and NOT filed here because they are already tracked:* `APP_API_TOKEN`
+  reaching 10 sidecar'd services as a k8s Secret through env is [[LH-160]]; the observability stack's
+  root-scoped S3 pair is [[LH-161]].
+- *Closes when:* the live Component matches the chart, and something detects the divergence rather than
+  a person noticing — a render-vs-live diff on Component scopes, which the estate already does for
+  images via `k3s-pins`.
 
 **LH-156 · ~~Six places still describe the deleted `RayJobExecutor` as live~~ — CLOSED 2026-09-16**
 `medallion, docs` · was low · filed 2026-09-15 with the deletion that caused it
