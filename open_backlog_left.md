@@ -4506,10 +4506,26 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   cascade dispatches on. A record the producer cannot parse is a transform that cannot run, and the
   estate's only signal is a WARN on a listing path nobody reads. It is the same shape as the outbox
   lesson: the one path that loses work is the one nothing watches.
-- *Closes when:* the nine records are read, and each is either migrated to the current schema or
-  deleted as residue — with the answer recorded, because "malformed" covers both "written by an older
-  writer" and "never valid". Then make an unparseable control record louder than a WARN, or prove the
-  set is empty and keep it that way with a gate.
+- **READ 2026-09-16, AND THEY ARE THREE SCHEMA GENERATIONS, NOT ONE BREAK.** `_transforms/` holds 11
+  objects: a directory marker and TEN records. Their key sets:
+
+      current       name, task, cardinality, code_version, from_id, to_id, params, project   x1  (acme-d5e2c64f)
+      intermediate  name, ENTRYPOINT,        code_version, from_id, to_id, params, project   x1  (lakehouse-3f59e5b5)
+      oldest        LANE, ENTRYPOINT,        code_version, from_id, to_id, params, project   x8
+
+  So nothing is corrupt and nothing was "never valid": two migrations were never run, and one record is
+  half-way through — it gained `name` and still carries `entrypoint`.
+- *The estate has been running on ONE loadable record*, and the cascade works, so the other nine are
+  effectively dead rather than merely unread. The skip is deliberate and documented
+  (`transform_specs.py:182-193`: "a record written by an older build whose shape has since tightened
+  must not take down the listing").
+- *What the migration needs that this measurement cannot supply:* a ruling on the field mapping —
+  whether `entrypoint` becomes `task` verbatim, what `lane` becomes (the concept has no successor in
+  `TransformSpec`), and what `cardinality` defaults to for a record written before it existed. Guessing
+  any of the three writes a wrong governed record, which is worse than an unread one.
+- *Closes when:* that mapping is ruled on and the nine are migrated or deleted — the choice is now
+  cheap, because the whole set is 10 records and 9 of them share one shape. Then make an unparseable
+  control record louder than a WARN, or prove the set empty and keep it so with a gate.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
