@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**211 open items**, deduped from 325 raw rows mined out of the seven files above. A further 96 rows
+**210 open items**, deduped from 325 raw rows mined out of the seven files above. A further 97 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 71 | 15 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -3558,7 +3558,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   warehouses with one bucket (the work+gold pair) — keying by warehouse id would have refused the
   second half of a legitimate pair, which is the mistake this row's title was pointing at.
 
-**LH-054 · The credential-isolation e2e SKIPS against the shipped stack, so cross-tenant credential refusal is proven only by rask's own offline policy evaluator**
+**LH-054 · ~~The credential-isolation e2e SKIPS against the shipped stack, so cross-tenant credential refusal is proven only by rask's own offline policy evaluator~~ — CLOSED 2026-09-16 (11 legs driven live against the real store, 0 skipped)**
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* The legs no longer skip against the deployed estate — the live runner provisions tenant B and the chart vends `sts` (→ mode `direct`) — so what is actually left is the CI kind stack, and the row's `web_identity` requirement is the wrong lever.
   **Evidence:** /home/gabriel/Desktop/rask/scripts/e2e_live.sh:234-271 provisions a fixed second tenant and exports `LANCE_E2E_PROJECT_B` + `LANCE_E2E_TENANT_B_TOKEN` ('the credential-isolation legs will RUN'), and e2e_live.sh:319 runs `pytest tests/e2e-py -m e2e`, which includes the suite. /home/gabriel/Desktop/rask/chart/values.yaml:955 `mode: sts` — and /home/gabriel/Desktop/rask/services/catalog/src/catalog/api/v1/endpoints/credentials.py:125 sets `mode = "server_mediated" if creds is None else "direct"`, so the suite's own gate (/home/gabriel/Desktop/rask/tests/e2e-py/test_credential_isolation_e2e.py:110, skip unless `direct`) passes under `sts`. `web_identity` would make it WORSE, not better: /home/gabriel/Desktop/rask/services/catalog/src/catalog/core/vending.py:354 returns None without a caller OIDC token. The test file carries live measurements from the unskipped drives (test_credential_isolation_e2e.py:139, :243-249). WHAT IS STILL OPEN: the CI harness /home/gabriel/Desktop/rask/scripts/e2e_stack.sh:277-284,305-306 lists the suites it runs and this file is not among them, and it exports no tenant-B vars; /home/gabriel/Desktop/rask/Makefile:882-889 still says 'NOT in e2e-ci'. The widened-policy SABOTAGE lever does not exist anywhere (no such fixture or chart value).
@@ -3584,6 +3584,62 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   (`POST /v1/projects`, `POST /v1/access/tuples`, 2026-09-16), but a kind run is what proves the five
   legs EXECUTE rather than skip — and that is the one thing this row has always been about. Also still
   open: the widened-policy SABOTAGE lever, which exists nowhere (no fixture, no chart value).
+- **DRIVEN AGAINST THE LIVE ESTATE 2026-09-16 AND EVERY LEG EXECUTED — 8 passed, 0 skipped.**
+  `RELEASE=rask bash scripts/e2e_live.sh tests/e2e-py/test_credential_isolation_e2e.py` on the deployed
+  k3s release (`main-17aae203`), which discovered `catalog=10.43.220.241:2333`, `s3=10.43.44.177:9000`,
+  alice + bob, warehouse `acme-bucket`, and provisioned `tenant B: e2etenantb (admin=bob)`:
+
+      tenant_b_credentials_cannot_list_tenant_a_bucket   [read]  PASSED
+      tenant_b_credentials_cannot_list_tenant_a_bucket   [write] PASSED
+      tenant_b_credentials_cannot_read_tenant_a_objects  [read]  PASSED
+      tenant_b_credentials_cannot_read_tenant_a_objects  [write] PASSED
+      tenant_b_write_credentials_cannot_put_into_tenant_a_bucket PASSED
+      the_credential_still_works_on_its_OWN_table        [read]  PASSED
+      the_credential_still_works_on_its_OWN_table        [write] PASSED
+      read_tier_credentials_cannot_write_to_their_OWN_table      PASSED
+
+  **The refusal comes from the STORE, not the catalog** — the attack builds a raw boto3 client from the
+  credentials the catalog really vended for B and points it at A's bucket, so the catalog is not in the
+  request path. The two OWN-table legs are what make the other six mean something: the credential is
+  live, so the refusals are the session policy evaluating, not a dead key. This is the claim
+  `open_lakehouse_diff` §3 called "the single most important untested claim in the security story", and
+  it is no longer untested.
+- *WHAT IS LEFT, and neither part is the claim above:*
+  1. **The CI harness.** `scripts/e2e_stack.sh` builds a **kind** cluster (`kind create cluster`,
+     `kind load docker-image`), which is Docker — so it cannot be driven from this workstation under the
+     estate's own toolchain rule. The live drive above is the stronger evidence in every respect except
+     "a fresh install also does this", which is the only question the kind harness answers that this
+     one does not.
+  2. **The widened-policy SABOTAGE lever**, which still exists nowhere — no fixture, no chart value. It
+     is what would prove the legs would FAIL if the policy were wrong, as opposed to passing because
+     the store refuses everything. Until it exists, eight green legs prove the refusal happens and not
+     that the session policy is the thing causing it.
+- **THE SABOTAGE LEVER IS NOT NEEDED — the question it asked is answered by a leg that needs no
+  production-reachable switch. 2026-09-16: 11 passed, 0 skipped.** Every original assertion attacks
+  ANOTHER TENANT'S bucket, so all six would pass just as well if the store refused on bucket ownership
+  and never read the session policy — which is precisely why the row wanted a widened policy to sabotage.
+  The same question asked differently: **two tables, ONE tenant, ONE bucket.**
+  `build_session_policy` scopes object actions to `arn:aws:s3:::{bucket}/{prefix}/*` and gates
+  `s3:ListBucket` on `s3:prefix` matching `{prefix}/*` (`vending.py:208-249`), so a credential vended
+  for table 1 must be refused on its SIBLING — while a bucket-level refusal would let it straight
+  through. Driven live:
+
+      a_credential_is_scoped_to_its_TABLE_not_merely_its_bucket  [read]  PASSED
+      a_credential_is_scoped_to_its_TABLE_not_merely_its_bucket  [write] PASSED
+      a_write_credential_cannot_plant_an_object_in_a_SIBLING_table       PASSED
+
+  With `the_credential_still_works_on_its_OWN_table` as the positive control — the SAME credential
+  lists its own prefix — the refusals are the prefix condition evaluating, not a dead key and not the
+  bucket. A lever "that must not be reachable in production" was the wrong shape for the question; it
+  needed a second table, not a weaker policy.
+- **CLOSED.** The row's claim — that the refusal is proven only by rask's own offline evaluator — is
+  false: it is proven by the store, against the deployed release, 11 legs, 0 skipped. The struck first
+  clause (`web_identity`) is measured to be the wrong lever and is not implemented.
+- *The one residue, named so it is not lost:* `scripts/e2e_stack.sh` is WIRED for these legs (tenant B
+  provisioned, the file in its guarded list, `bash -n` clean) but has never been EXECUTED, because it
+  builds a **kind** cluster — Docker — which this estate's toolchain rule forbids from a workstation.
+  It answers one question the live drive does not: "does a FRESH install also isolate". **Reopen if:**
+  the first CI run of `e2e_stack.sh` reports these legs SKIPPED rather than passed.
 
 **LH-055 · The FGA model has no `branch`/`column`/`base`/`estate` type, `can_set_protection` collapses onto `can_drop`, and `project` has no security_admin/data_admin/role_creator split or machine identity**
 

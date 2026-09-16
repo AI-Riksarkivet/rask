@@ -167,15 +167,21 @@ def estates(catalog: str) -> dict[str, str]:
     """Two tenants, two warehouses, two buckets — provisioned through the real doors."""
     a = _provision(catalog, TOKEN_A, PROJECT_A, "e2e-iso-a", "isoans", "isoatbl")
     b = _provision(catalog, TOKEN_B, PROJECT_B, "e2e-iso-b", "isobns", "isobtbl")
+    # A SECOND table for the SAME tenant, in the same bucket. It is what separates "the store refused
+    # because the bucket belongs to someone else" from "the session policy scoped the credential to one
+    # prefix" — see `test_a_credential_is_scoped_to_its_TABLE_not_merely_its_bucket`.
+    b2 = _provision(catalog, TOKEN_B, PROJECT_B, "e2e-iso-b", "isobns", "isobtbl2")
     return {
         "a_ident": a,
         "b_ident": b,
+        "b2_ident": b2,
         "a_bucket": "e2e-iso-a",
         "b_bucket": "e2e-iso-b",
         # The REAL storage prefix, read off the catalog's own answer rather than composed from the
         # namespace: `describe` returns `s3://<bucket>/<uuid8>_<ns>$<table>`, and only that path is
         # inside the vended credential's session policy.
         "b_prefix": _prefix_of(catalog, TOKEN_B, b, "e2e-iso-b"),
+        "b2_prefix": _prefix_of(catalog, TOKEN_B, b2, "e2e-iso-b"),
     }
 
 
@@ -261,4 +267,51 @@ def test_read_tier_credentials_cannot_write_to_their_OWN_table(catalog: str, est
         s3.put_object(Bucket=estates["b_bucket"], Key=key, Body=b"read-tier-should-not-write")
     assert exc.value.response["Error"]["Code"] in ("AccessDenied", "AccessDeniedException"), (
         "a read-tier credential could WRITE — the tier split is not enforced at the store"
+    )
+
+
+@pytest.mark.parametrize("tier", ["read", "write"])
+def test_a_credential_is_scoped_to_its_TABLE_not_merely_its_bucket(catalog: str, estates: dict[str, str], tier: str) -> None:
+    """THE DISCRIMINATOR the cross-tenant legs cannot supply on their own.
+
+    Every assertion above attacks ANOTHER TENANT'S bucket, so all six would pass just as well if the
+    store refused on bucket ownership and never read the session policy at all — and then a widened or
+    broken policy would change nothing observable. [[LH-054]] records that gap as needing a
+    "widened-policy sabotage lever" in the harness chart values; this is the same question asked without
+    one, using only credentials the catalog legitimately vends.
+
+    Two tables, ONE tenant, ONE bucket. `build_session_policy` scopes object actions to
+    `arn:aws:s3:::{bucket}/{prefix}/*` and gates `s3:ListBucket` on `s3:prefix` matching `{prefix}/*`
+    (`vending.py:208-249`), so a credential vended for table 1 must be refused on table 2 — while a
+    bucket-level refusal would let it straight through. The positive control is
+    `test_the_credential_still_works_on_its_OWN_table`: the same credential DOES list its own prefix.
+    """
+    creds = _vend(catalog, TOKEN_B, estates["b_ident"], tier)
+    s3 = _client(creds)
+
+    with pytest.raises(ClientError) as exc:
+        s3.list_objects_v2(Bucket=estates["b_bucket"], Prefix=f"{estates['b2_prefix']}/", MaxKeys=1)
+
+    code = exc.value.response["Error"]["Code"]
+    assert code in ("AccessDenied", "AccessDeniedException"), (
+        f"a {tier}-tier credential for one table listed a SIBLING table in the same bucket ({code}) — the "
+        "session policy is scoped to the bucket rather than the prefix, which also means every "
+        "cross-tenant assertion in this file is passing on bucket ownership rather than on the policy"
+    )
+
+
+def test_a_write_credential_cannot_plant_an_object_in_a_SIBLING_table(catalog: str, estates: dict[str, str]) -> None:
+    """The corruption case inside one tenant. Separate from the read leg for the reason the
+    cross-tenant pair is separate: a policy can be right for GET and wrong for PUT."""
+    creds = _vend(catalog, TOKEN_B, estates["b_ident"], "write")
+    s3 = _client(creds)
+    key = f"{estates['b2_prefix']}/data/{uuid.uuid4().hex}.lance"
+
+    with pytest.raises(ClientError) as exc:
+        s3.put_object(Bucket=estates["b_bucket"], Key=key, Body=b"sibling-table")
+
+    code = exc.value.response["Error"]["Code"]
+    assert code in ("AccessDenied", "AccessDeniedException"), (
+        f"a write credential for one table PUT into a sibling table's prefix: {code} — one tenant's tables "
+        "are not isolated from each other, and a compromised writer reaches every table it was never vended"
     )
