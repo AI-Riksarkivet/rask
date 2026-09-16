@@ -222,4 +222,21 @@ jobs_missing=$(awk '
 grep -q "app.kubernetes.io/component: minio-mkbucket" "$OUT" || fail "the mkbucket hook pod must carry its component label"
 grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must admit the mkbucket hook component"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, alerting on, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled"
+# POD IDENTITY. All three default OFF in values.yaml because the dev loop runs PSA-unlabelled, and all
+# three were live-proven 2026-07-13 — so their absence from the prod overlay read as a posture and was
+# an omission (XC-028). Asserted on the RENDER rather than on the values file: a `security:` block can
+# be present and still reach no pod if a template stops consuming it, which is the failure a values
+# grep cannot see. Counted, not merely found: one dedicated ServiceAccount proves the switch is
+# readable, not that the fleet uses it. Measured on this overlay 2026-09-16 — 37 ServiceAccounts and 20
+# `automountServiceAccountToken: false` with the switches on, against 18 and 1 with them off.
+sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
+[ "$sa" -ge 30 ] \
+  || fail "prod must give the fleet dedicated ServiceAccounts (security.serviceAccounts.enabled), rendered $sa (>=30 expected; 18 is the everything-runs-as-default baseline)"
+automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
+[ "$automount" -ge 15 ] \
+  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"
+grep -q "sidecarDropALLCapabilities" "$OUT" \
+  || grep -q "drop:" "$OUT" \
+  || fail "prod must drop the daprd sidecar's capabilities (dapr.sidecarRestricted + sidecarDropALLCapabilities) — a pod is only as restricted as its loosest container"
+
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA=3, Dapr-HA on, PDBs=$pdb (backends+OpenFGA+zones named), spread=$spread, tiers=$tiers, alerting on, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

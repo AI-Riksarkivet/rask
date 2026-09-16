@@ -173,6 +173,26 @@ dapr:
       enabled: true
   dashboard:
     enabled: false # don't expose the Dapr control-plane UI in prod
+  # The sidecar's own hardening. Both flip together on purpose: `sidecarRestricted` sets the daprd
+  # container's securityContext, and the injector must drop ALL capabilities or the sidecar keeps
+  # NET_RAW while the app container beside it has none — a pod is only as restricted as its loosest
+  # container. Live-proven 2026-07-13; absent from this overlay until 2026-09-16, which read as a
+  # decision and was an omission.
+  sidecarRestricted: true
+  dapr_sidecar_injector:
+    sidecarDropALLCapabilities: true
+
+# --- Pod identity. Both default OFF in values.yaml because the dev loop runs PSA-unlabelled, and both
+# were live-proven on 2026-07-13 — so their absence here was an oversight, not a posture. MEASURED on
+# the prod render 2026-09-16: flipping them takes ServiceAccounts 18 -> 37 and
+# `automountServiceAccountToken: false` from 1 -> 20, i.e. every app pod stops running as SA `default`
+# with its token mounted. `scripts/prod_render_check.sh` asserts both, so a values edit cannot silently
+# undo it. -----------------------------------------------------------------------------------------
+security:
+  serviceAccounts:
+    enabled: true
+  infraContexts:
+    enabled: true
 
 # --- Durable lakehouse storage: the rustfs-operator Tenant's volumeClaimTemplate (the ONE store,
 # lance-ns-merge P4). SIZE it for prod — per Tenant volume (4 volumes/pod), holding the lakehouse AND

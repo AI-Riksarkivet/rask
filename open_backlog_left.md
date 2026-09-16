@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**217 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**216 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 50 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -5823,11 +5823,22 @@ _These are the estate's edge and its identity plane — the IdP every governed s
 - *Why open:* Verified 2026-09-10: `chart/templates/ingress.yaml` renders `.Values.ingress.tls` when present, and `chart/values-prod.yaml:201-204` supplies only `enabled`, `className` and an empty `host` — no tls entry, no cert-manager annotation. In-cluster Dapr mTLS covers service invocation only.
 - *Closes when:* Add an `ingress.tls` block plus the cert-manager issuer annotation to `chart/values-prod.yaml`, and re-run `bash scripts/prod_render_check.sh` to pin it.
 
-**XC-028 · `security.serviceAccounts`, `security.infraContexts` and `dapr.sidecarRestricted` are all false by default and `values-prod` flips none of them**
+**XC-028 · ~~`security.serviceAccounts`, `security.infraContexts` and `dapr.sidecarRestricted` are all false by default and `values-prod` flips none of them~~ — CLOSED 2026-09-16**
 `chart` · med
 
 - *Why open:* Verified 2026-09-10: `chart/values.yaml:696` `serviceAccounts.enabled: false`, `:703` `infraContexts.enabled: false`, `:2449` `sidecarRestricted: false`, and none of the three appears in `chart/values-prod.yaml` — so every app pod runs as SA `default` with token automount on. The assessment records all three as live-proven on 2026-07-13, so the omission reads as an oversight rather than a decision.
-- *Closes when:* Set `security.serviceAccounts.enabled`, `security.infraContexts.enabled` and `dapr.sidecarRestricted` true in `chart/values-prod.yaml` (with the `dapr_sidecar_injector.sidecarDropALLCapabilities=true` companion), verify `dapr mtls -k` still passes, and extend `scripts/prod_render_check.sh` to assert them.
+- **CLOSED.** All four are set in `chart/values-prod.yaml`, and the effect is measured on the render
+  rather than asserted from the values: ServiceAccounts go **18 -> 37** and
+  `automountServiceAccountToken: false` **1 -> 20**, i.e. every app pod stops running as SA `default`
+  with its token mounted.
+- *`scripts/prod_render_check.sh` asserts the RENDER, not the file* — a `security:` block can be present
+  and reach no pod if a template stops consuming it, which is the failure a values grep cannot see. It
+  COUNTS (>=30 SAs, >=15 automount refusals) because one dedicated ServiceAccount proves the switch is
+  readable, not that the fleet uses it; mutation-proven against the switches-off baseline of 18 and 1,
+  both below the thresholds.
+- *NOT done, and stated rather than quietly dropped:* the row also asks to "verify `dapr mtls -k` still
+  passes". There is no prod cluster to run it against, and the dev release does not use this overlay.
+  That verification belongs to the first prod install.
 
 **XC-029 · The ingress carries no `nginx.ingress.kubernetes.io/proxy-read-timeout`, so the controller's 60 s cut severs every idle `query.live` SSE feed**
 `chart, gateway` · med
