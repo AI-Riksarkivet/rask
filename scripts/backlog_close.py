@@ -30,6 +30,18 @@ from pathlib import Path
 REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left.md"
 
 _ITEM_START = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
+
+#: An item that is still OPEN, with its body up to the next item. A closed row STAYS RENDERED, struck
+#: through, because the measurements that made it worth opening are worth keeping — so counting every
+#: rendered item reports finished work as work that is left. Measured 2026-09-16: 302 rows are
+#: rendered and 220 are open, and `--recount` reading the former would have written "302 open items".
+_OPEN_ITEM = re.compile(r"^\*\*[A-Z]+-\d+ · (?!~~)[^\n]*\n(.*?)(?=^\*\*[A-Z]+-\d+ · |\Z)", re.MULTILINE | re.DOTALL)
+
+#: A row's metadata: backticked service tags, priority, sometimes `**blocked:**`. FOUND BY SCANNING the
+#: row rather than by taking the line under its title — 13 open rows carry a multi-line RE-MEASURED
+#: block between the two, and a section-wide `· **HIGH**` search counts struck rows besides.
+#: `tests/unit/test_the_backlog_counts_itself.py` holds this file to the same reading.
+_METADATA = re.compile(r"^`[^`\n]+`[^\n]*·[^\n]*$", re.MULTILINE)
 _SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^\n]*)$", re.MULTILINE)
 _TABLE_ROW = re.compile(r"^(\| \*\*([^*]+)\*\*[^|]*\| )(\d+)( \| )(\d+)( \|)$", re.MULTILINE)
 _TOTAL = re.compile(r"^\*\*(\d+) open items\*\*", re.MULTILINE)
@@ -61,7 +73,8 @@ def _retotal(text: str) -> str:
     for i, (start, name) in enumerate(bounds[:-1]):
         body = text[start : bounds[i + 1][0]]
         if name:
-            per_section[name] = (len(_ITEM_START.findall(body)), len(re.findall(r"· \*\*HIGH\*\*", body)))
+            rows = [_METADATA.search(row) for row in _OPEN_ITEM.findall(body)]
+            per_section[name] = (len(rows), sum(1 for meta in rows if meta and "**HIGH**" in meta.group(0)))
 
     def _row(m: re.Match[str]) -> str:
         prefix = _LABEL_TO_SECTION.get(m.group(2).strip())
@@ -72,7 +85,7 @@ def _retotal(text: str) -> str:
         return f"{m.group(1)}{n}{m.group(4)}{h}{m.group(6)}"
 
     text = _TABLE_ROW.sub(_row, text)
-    return _TOTAL.sub(f"**{len(_ITEM_START.findall(text))} open items**", text, count=1)
+    return _TOTAL.sub(f"**{len(_OPEN_ITEM.findall(text))} open items**", text, count=1)
 
 
 def main() -> int:

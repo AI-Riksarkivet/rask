@@ -35,14 +35,31 @@ BACKLOG = Path(__file__).resolve().parents[2] / "open_backlog_left.md"
 #: included, because two rows answering to one id is a problem whatever their state.
 _ITEM = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
 
-#: An item that is still OPEN, and the metadata line under it. A closed row stays rendered — its
-#: measurements are why the row was worth keeping — and is struck through, so `~~` right after the
-#: separator is the file's own marker for "done".
+#: An item that is still OPEN, with everything under its title up to the next item. A closed row stays
+#: rendered — its measurements are why the row was worth keeping — and is struck through, so `~~` right
+#: after the separator is the file's own marker for "done".
 #:
 #: THE SIZE OF THE FILE IS NOT THE SIZE OF THE WORK, and conflating them is how the header came to
 #: overstate by 42 rows (273 claimed, 231 open, measured 2026-09-11). The number here is the one the
 #: owner reads to decide what is left, so it counts what is left.
-_OPEN_ITEM = re.compile(r"^\*\*[A-Z]+-\d+ · (?!~~)[^\n]*\n([^\n]*)$", re.MULTILINE)
+_OPEN_ITEM = re.compile(r"^\*\*[A-Z]+-\d+ · (?!~~)[^\n]*\n(.*?)(?=^\*\*[A-Z]+-\d+ · |\Z)", re.MULTILINE | re.DOTALL)
+
+#: A row's metadata: backticked service tags, priority, and sometimes `**blocked:**`. IT IS FOUND BY
+#: SCANNING, NOT BY TAKING THE LINE UNDER THE TITLE — measured 2026-09-16, 13 open rows carry a
+#: multi-line RE-MEASURED block between the two, and reading line+1 scored those against prose. The
+#: cost was not theoretical: the HIGH column it feeds said 11 for phase 1 when 16 rows were marked,
+#: and 34 estate-wide against a true 39, so five HIGH lakehouse rows were invisible to the header that
+#: decides what gets worked next.
+_METADATA = re.compile(r"^`[^`\n]+`[^\n]*·[^\n]*$", re.MULTILINE)
+
+
+def _metadata_of(body: str) -> str:
+    """The row's metadata line, or "" for a row that renders none (which is itself a legible state —
+    an unclassified row simply carries no priority)."""
+    found = _METADATA.search(body)
+    return found.group(0) if found else ""
+
+
 #: A phase section heading, e.g. `## PHASE 1 · LAKEHOUSE — the priority`.
 _SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^\n]*)$", re.MULTILINE)
 #: A row of the counts table: `| **1 · Lakehouse** (…) | 120 | 26 |`.
@@ -85,7 +102,7 @@ def test_every_phase_row_matches_the_items_under_its_heading() -> None:
     bounds = [(m.start(), m.group(1)) for m in _SECTION.finditer(text)] + [(len(text), None)]
     per_section = {}
     for i, (start, name) in enumerate(bounds[:-1]):
-        per_section[name] = _OPEN_ITEM.findall(text[start : bounds[i + 1][0]])
+        per_section[name] = [_metadata_of(body) for body in _OPEN_ITEM.findall(text[start : bounds[i + 1][0]])]
 
     rows = _TABLE_ROW.findall(text)
     assert len(rows) == len(_LABEL_TO_SECTION), f"the counts table has {len(rows)} rows, expected {len(_LABEL_TO_SECTION)}"
@@ -155,3 +172,26 @@ def test_a_row_that_declares_itself_closed_is_struck_through() -> None:
         if identifier and _DECLARES_CLOSED.search(row) and "~~" not in heading:
             offenders.append(identifier.group(1))
     assert not offenders, f"these rows declare themselves closed in the body but their titles are not struck, so they still count as open work: {offenders}"
+
+
+def test_the_closer_and_this_gate_read_the_register_the_same_way() -> None:
+    """`scripts/backlog_close.py` re-derives the header; this file checks it. Two readings, one file.
+
+    They drifted, and the documented command was the casualty: the closer counted every RENDERED item
+    and searched whole sections for `· **HIGH**`, so `--recount` over the register measured 2026-09-16
+    would have written "302 open items" against 220 open, and 150 items / 26 HIGH for phase 1 against
+    74 / 16 — closed rows counted as work left, and then the gate here would have failed the file the
+    tool had just written. Running its re-derivation over an already-correct register must change
+    nothing; anything else means one of the two has moved.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "backlog_close.py"
+    spec = importlib.util.spec_from_file_location("backlog_close", path)
+    assert spec and spec.loader, f"{path} is not importable, so the register's own closer cannot be checked"
+    closer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(closer)
+
+    text = _text()
+
+    assert closer._retotal(text) == text, "scripts/backlog_close.py would rewrite the header of an already-correct register — the two readings have drifted"
