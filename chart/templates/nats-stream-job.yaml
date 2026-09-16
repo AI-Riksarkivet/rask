@@ -37,6 +37,9 @@ spec:
       containers:
         - name: nats
           image: natsio/nats-box:0.14.5
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
           command:
             - sh
             - -c

@@ -65,6 +65,9 @@ _SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^
 #: A row of the counts table: `| **1 · Lakehouse** (…) | 120 | 26 |`.
 _TABLE_ROW = re.compile(r"^\| \*\*([^*]+)\*\*[^|]*\| (\d+) \| (\d+) \|$", re.MULTILINE)
 _TOTAL = re.compile(r"^\*\*(\d+) open items\*\*", re.MULTILINE)
+#: The sentence beside it: `A further 94 rows\nare CLOSED and still rendered`. Wraps mid-sentence in
+#: the file, so the newline is part of the pattern rather than something to normalise away.
+_CLOSED_TOTAL = re.compile(r"A further (\d+) rows\s+are CLOSED", re.MULTILINE)
 _FOCUS = re.compile(r"<!-- FOCUS:START -->(.*?)<!-- FOCUS:END -->", re.DOTALL)
 
 #: Table label -> the section heading that carries its items. Keyed on the table's own labels so a
@@ -92,6 +95,25 @@ def test_the_header_total_matches_the_rows() -> None:
     assert int(stated.group(1)) == counted, (
         f"header says {stated.group(1)} open items; {counted} are still open below (closed rows stay rendered, struck through)"
     )
+
+
+def test_the_header_count_of_CLOSED_rows_matches_the_struck_titles() -> None:
+    """The half of the header that measures PROGRESS rather than what is left.
+
+    It drifted where the open count could not: the open total has been gated since this file existed,
+    so every closure corrected it — while the closed sentence beside it sat at 50 against 93 struck
+    rows (measured 2026-09-16), understating the work done by 43 rows. A register whose progress number
+    is stale argues for itself badly, which matters because this sentence is what someone reads to
+    decide whether the drain is worth continuing.
+    """
+    text = _text()
+    stated = _CLOSED_TOTAL.search(text)
+    assert stated, "the header states no closed count — `A further N rows are CLOSED` is how this file reports progress"
+
+    struck = len(re.findall(r"^\*\*[A-Z]+-\d+ · ~~", text, re.MULTILINE))
+    assert int(stated.group(1)) == struck, f"header says {stated.group(1)} rows are closed; {struck} titles are struck through"
+
+    assert struck + len(_OPEN_ITEM.findall(text)) == len(_ITEM.findall(text)), "open + closed does not account for every rendered row"
 
 
 def test_every_phase_row_matches_the_items_under_its_heading() -> None:

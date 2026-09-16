@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**214 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**213 open items**, deduped from 325 raw rows mined out of the seven files above. A further 94 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 47 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -6231,11 +6231,37 @@ _This is the machinery that decides whether a change can be proved and shipped �
 - *Why open:* The parse half landed (memoised `_rendered_docs` + libyaml, 36 `yaml.safe_load_all` sites converted: 726.9 s → 308.3 s, `make test` now 8 m 36 s). Two residuals stand: `-n` is unsafe until the parallel-unsafe suites are grouped with `--dist loadfile` (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers), and of 44 files touching helm, 17 roll their own render — 105 uncached calls for 162 tests, ≈76 redundant renders ≈ 34 s.
 - *Closes when:* Add `pytest-xdist` and group the three parallel-unsafe suites with `--dist loadfile`; convert the 13 cleanly-convertible of the 17 hand-rolled renders onto one cached `render(*flags)` keyed on the verbatim flag tuple, leaving the 4 that need a real subprocess (`check=False` ×3, `CalledProcessError` in `test_invariants`) and the two deliberate variants (`test_chart_gitops_ready._render` omits `image.localImages=true`; `test_prod_ha_posture` renders with `-f chart/values-prod.yaml`) alone.
 
-**XC-038 · The infra subcharts (GreptimeDB, NATS, Perses, the Dapr control plane) still get no requests/limits from values-prod**
+**XC-038 · ~~The infra subcharts (GreptimeDB, NATS, Perses, the Dapr control plane) still get no requests/limits from values-prod~~ — CLOSED 2026-09-16 (premise falsified; the REAL unbounded set found and fixed)**
 `chart` · low
 
 - *Why open:* `chart/values-prod.yaml` carries only two `resources:` blocks (one of them OpenFGA's, which half-closed the assessment's gap #4); the remaining infra subcharts pass none through, and they are the shared bus and telemetry the cascade rides. Not re-measured against every subchart's own defaults.
-- *Closes when:* Add per-component `resources` keys under the greptimedb-standalone, nats, perses and dapr subchart stanzas in `chart/values-prod.yaml`, then re-render and confirm no container is unbounded.
+- **THE HEADLINE IS FALSE, and the row's own last sentence admits why it was never checked.** All four
+  named subcharts carry requests AND limits, supplied by `chart/values.yaml` —
+  greptimedb-standalone:3013, nats:2416 (three containers), perses:3028, dapr:2478 (five components).
+  Helm merges the overlay ON TOP of the base, so reading `values-prod.yaml` alone answers a different
+  question than "is this container bounded". Measured on the rendered prod overlay 2026-09-16:
+  **41 of 42 workload containers bounded**, and the one exception is not a subchart.
+- **What the same render DID show: 9 of 54 containers unbounded, every one of them ours.** Union across
+  both overlays — `services.yaml`'s and `openfga-migrate.yaml`'s two `wait-age` busybox inits, the
+  `minio-buckets` / `minio-scoped-users` / `nats-stream-job` / `openbao-seed` bootstrap Jobs,
+  `openfga-migrate`'s own `migrate` container, and the `backup-pg` (pg-dump init + upload) and
+  `backup-snapshot` CronJobs.
+- **That is worse than the tier-sizing the row asked for, and in the opposite direction.** A namespace
+  `ResourceQuota` — the ordinary prod control, and the reason anyone audits this at all — REJECTS a pod
+  whose containers declare no requests. The fleet would come up and the release would *never converge*,
+  because the Jobs that create the buckets, the JetStream streams and the OpenFGA schema would never be
+  admitted. The chart renders no `ResourceQuota`/`LimitRange` of its own, so nothing local would have
+  revealed this.
+- **FIXED**: all ten containers now carry an inline block sized to their own work, matching the idiom
+  the four Job templates that already complied use (`bootstrap-admin`, `dapr-inject-sweep`,
+  `greptimedb-ttl-job`, `kueue-queues`). Gated by
+  `tests/unit/test_every_pod_the_chart_renders_asks_the_scheduler_for_something.py`, which renders BOTH
+  overlays — neither alone sees every Job (the backup CronJobs render only under prod, the OpenBao seed
+  only under the defaults) and that asymmetry is asserted rather than left to a comment.
+- *Not yet in the k3s release, and that is not this row's blocker.* These are Job/CronJob pod specs —
+  they take effect at the next install or `helm upgrade`, and the running release is pinned to the
+  older image stem until [[LH-169]] is resolved. The row's own Closes-when was "re-render and confirm
+  no container is unbounded", which the gate does on every run.
 
 **XC-039 · Three live e2e legs skip on a 5 s `/livez` timeout while the medallion producer is up and serving the cascade**
 `medallion, e2e` · low

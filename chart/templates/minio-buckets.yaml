@@ -45,6 +45,9 @@ spec:
       containers:
         - name: mc
           image: {{ .Values.minio.mcImage }}
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
           # The S3 root secret from a k8s Secret (not interpolated plaintext into the shell command) —
           # `mc alias set` reads it from "$MINIO_SECRET_KEY", so it never appears in the rendered Job
           # command/args. Same credential pair the Tenant boots with (credsSecret, templates/secrets.yaml).

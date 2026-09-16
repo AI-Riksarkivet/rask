@@ -160,6 +160,9 @@ spec:
       containers:
         - name: seed
           image: {{ .Values.openbao.image }}
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
           env:
             - { name: BAO_ADDR, value: "http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}" }
             - { name: BAO_TOKEN, value: {{ .Values.openbao.devToken | quote }} }

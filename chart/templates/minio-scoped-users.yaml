@@ -105,6 +105,9 @@ spec:
       containers:
         - name: mc
           image: {{ .Values.minio.mcImage }}
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
           # Every secret arrives as an env var read by `mc`, never interpolated into the rendered
           # command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
           # discloses a key.
