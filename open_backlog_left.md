@@ -5855,7 +5855,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   the shared derivation. The in-process lane can no longer re-attach to a previous build's outcome.
 
 **LH-158 · The `Executor` port is declared, documented and used by neither lane**
-`medallion` · med · found 2026-09-15 by an adversarial workflow
+`medallion, service-kit` · med · found 2026-09-15 by an adversarial workflow · **blocked:** which of the three named options — the row's own text calls it "a decision rather than an edit", and it carried no marker
 
 - **THE HEADLINE THIS ROW WAS FILED WITH WAS WRONG, AND IS CORRECTED RATHER THAN QUIETLY DROPPED.** It
   claimed a task registered for a THIRD engine would silently run in-process because `transform.py:828`
@@ -5925,6 +5925,24 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   uncalled port is the worst of the three**, because the decision record then documents an
   architecture nothing implements. Do NOT add an engine-refusal guard: one already exists at
   `engine_choice.engine_for` and a second would be unreachable.
+- **OPTION 3 IS SMALLER THAN THIS ROW MAKES IT SOUND, and the port already answers the objection
+  against it — measured 2026-09-16.** The row calls widening the port "a `service-kit` change that every
+  future adapter inherits" needing "an answer for what 'the result' means to an engine that writes
+  asynchronously". The port ALREADY has that pattern, twice: `Capability` is a `StrEnum` whose own
+  docstring says *"Absence is the default, so a new adapter is assumed to promise nothing"*, and
+  `CANCEL` / `FAILURE_DETAIL` are exactly optional methods gated by a declared capability.
+  * So the change is: one `RESULT` member, one optional `result()` on the protocol, `InProcessExecutor`
+    claims it, `RayJobsApiExecutor` does not — the same way it already declines `DURABLE_RECORD`.
+  * And the objection answers itself: what "the result" means to an asynchronous engine is **that it
+    does not claim the capability**, and the caller re-derives. That is not a new question; it is the
+    question `DURABLE_RECORD` already settled on this very port.
+  * The asymmetry is already REAL in the code, which is the argument for naming it rather than hiding
+    it: the Ray lane has no in-process result and re-derives today, so "re-derive when the engine does
+    not promise a result" describes what the estate does, while `transform.py`'s hand-built adapter is
+    the one lane taking a shortcut the port cannot express.
+  *Still filed as a decision*, because it is a shared-package port and the ruling is the owner's — but
+  the decision is now "adopt the pattern the port already uses" rather than "design a capability
+  model", which is a materially smaller question than the row posed.
 
 **LH-159 · THE BYO CONTRACT — what "bring your own workflow engine and compute engine" actually requires, and where rask is short of it**
 `medallion, service-kit` · **HIGH** · owner ruling 2026-09-15, evidence from an adversarial workflow the same day
