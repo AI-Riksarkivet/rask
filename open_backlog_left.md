@@ -1524,14 +1524,27 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   (`s3://bind86-wh/medallion/silver`, `…/medallion/bronze`, `s3://lance-catalog/medallion/bronze` — run
   directly), so the only source for `bronze$events` is the dataset's own declared
   `lineage.dataset_id`.
-- *WHAT I HAVE NOT ESTABLISHED, stated so nobody builds on it:* whether a credential was VENDED for that
-  wrong id. `credentials.write_options_for` logs `write credential SCOPED for <id>` on every vend, and
-  in a 12-hour window there are **1,233 SCOPED and 0 AMBIENT decisions — and not one of them names
-  `bronze$events`**. So the vend path was seemingly not taken for this dataset at all, which sits oddly
-  beside the outcome's `mode='distributed'`. Either the pass reached a branch that maintains without
-  vending, or the credential subject differs from the outcome's `table_id`. Until that is measured, the
-  crossing of IDENTITY is established and the crossing of a CREDENTIAL is NOT, and an earlier draft of
-  this entry asserted the grant — it should not have.
+- **THE CROSSING IS AT THE PLAN DOOR, NOT THE CREDENTIAL DOOR — resolved 2026-09-16 and it changes both
+  the mechanism and the severity.** Reading the sweep's own lines around that dataset:
+
+      POST /v1/table/bronze$events/compaction_plan          -> 200
+      compaction_distributed_nothing_to_do uri='s3://bind86-wh/medallion/silver'
+      maintenance_index_findings          uri='s3://bind86-wh/medallion/silver'
+      maintenance_dataset_outcome         dataset='s3://bind86-wh/medallion/silver'
+
+  Over 12 hours: **30 calls to `table/bronze$events/compaction_plan` and ZERO to
+  `table/bronze$events/credentials`.** So no credential was ever vended for the wrong id — the estate's
+  1,233 SCOPED / 0 AMBIENT decisions in that window are all for correctly-named datasets.
+- *What this makes it: a NEAR-MISS, latent, and one empty plan away from data corruption.* The catalog
+  answers **200** to a compaction plan for `bronze$events` while the sweep holds a dataset governed as
+  `silver$features` in a different warehouse. The plan comes back EMPTY every time
+  (`compaction_distributed_nothing_to_do`), so nothing is executed and no fragment is rewritten. Had
+  `bronze$events` carried pending compaction work, those tasks — computed against ITS manifest, in
+  `s3://lance-catalog` — would have been executed against another tenant's dataset. The only thing
+  standing between this and a cross-tenant rewrite is that one table happening to be at target.
+- *The index optimize DID write* (`indices_optimized=1`), and that half is a genuine write under a
+  mis-recorded identity; it is not planned by the catalog and so is not covered by the plan door's
+  answer.
 - *Why the existing guard does not catch it, read off the code rather than assumed:*
   `credentials.write_options_for` keys the vend on `declared_table_id or table_id_from_location(uri)`
   (`credentials.py:79`) and its docstring states the intended safety — *"A DECLARED id is never repaired
