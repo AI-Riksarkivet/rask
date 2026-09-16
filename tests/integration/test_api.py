@@ -726,7 +726,12 @@ def test_describe_version_missing_maps_to_404(client: TestClient, fake_ns: Magic
 
 def test_create_version_marshals_request_to_a_dict(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.create_table_version.return_value = CreateTableVersionResponse()
-    resp = client.post("/v1/table/db$t/version/create", json={"version": 2, "manifest_path": "_versions/2.manifest"})
+    # The door reads the table's own location to confine `manifest_path`, so the double has to answer
+    # with one. The path below is the shape that actually commits — a STORE key carrying the table's
+    # prefix — measured 2026-09-16 against both the `dir` and S3 backends; the spec's table-relative
+    # example commits on neither and is refused here.
+    fake_ns.describe_table.return_value.location = "s3://bucket/db/t.lance"
+    resp = client.post("/v1/table/db$t/version/create", json={"version": 2, "manifest_path": "db/t.lance/_versions/2.manifest"})
     assert resp.status_code == 200
     arg = fake_ns.create_table_version.call_args.args[0]
     assert isinstance(arg, dict) and arg["id"] == ["db", "t"] and arg["version"] == 2

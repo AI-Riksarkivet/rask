@@ -7,12 +7,20 @@ was the one being refused 400. Every test used a stub namespace that recorded th
 `object()`, so "the guard let it through" was the whole of what could be asserted, and "the backend
 then accepted it" was assumed. A stub cannot tell a working door from a shut one.
 
-WHAT THE BACKEND ACTUALLY WANTS, measured 2026-09-16 by driving every spelling against ONE staged
-manifest that was present on disk each time::
+WHAT THE BACKEND ACTUALLY WANTS, measured 2026-09-16 by staging ONE real manifest and driving every
+spelling at it — here on `dir`, and again against the estate's own S3 store::
 
-    '_versions/<n>.manifest-<uuid>'                  -> InvalidInput "Staging manifest not found"
-    't.lance/_versions/<n>.manifest-<uuid>'          -> InvalidInput "Staging manifest not found"
-    '/<root>/t.lance/_versions/<n>.manifest-<uuid>'  -> OK, version 2 committed
+    dir  '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
+    dir  't.lance/_versions/<n>.manifest-<uuid>'           -> InvalidInput "Staging manifest not found"
+    dir  '/<root>/t.lance/_versions/<n>.manifest-<uuid>'   -> OK, version 2 committed
+    s3   '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
+    s3   '<prefix>/t.lance/_versions/<n>.manifest-<uuid>'  -> OK, version 2 committed
+
+So the field is resolved inside the table's object STORE, not inside the table: the whole filesystem
+path for `dir`, the bucket key for S3. The spec's table-relative example commits on neither. THAT is why
+there is no "relative therefore confined" shortcut — on S3 the committing spelling carries no scheme and
+no leading slash, so a guard that only judges absolute paths waves a sibling project's key straight
+through to a move.
 
 The staged shape is the spec's own (`lance_docs/file_format.md:5391`: stage at
 `{dataset}/_versions/{version}.manifest-{uuid}`, finalise by copy), and the version file name is the
@@ -136,3 +144,23 @@ def test_a_sibling_s_manifest_is_refused_and_the_sibling_is_untouched(staged) ->
 
     assert staging.exists(), "the manifest was moved out of `t` — the refusal came too late"
     assert lance.dataset(str(root / "victim.lance")).to_table().column("i").to_pylist() == [1, 2, 3]
+
+
+def test_the_table_relative_form_the_spec_documents_commits_on_neither_backend(staged) -> None:  # noqa: ANN001
+    """Pins the measurement the guard rests on, against the real backend rather than a claim.
+
+    The guard refuses `_versions/<name>` as a store key outside the table, and this is the evidence that
+    refusing it costs a caller nothing: with the file present at exactly that table-relative path, the
+    backend does not find it. If a future backend starts resolving table-relative paths, THIS test fails
+    first and the guard's rule is revisited with a reason.
+    """
+    from lance_namespace import connect as _connect  # noqa: F401 — the fixture already holds the namespace
+
+    namespace, root, staging = staged
+    table_relative = f"_versions/{staging.name}"
+
+    with pytest.raises(InvalidInputError) as refused:
+        namespace.create_table_version({"id": ["t"], "version": 2, "manifest_path": table_relative})
+
+    assert "Staging manifest not found" in str(refused.value), "the backend resolved a table-relative path after all"
+    assert [v["version"] for v in lance.dataset(str(root / "t.lance")).versions()] == [1], "it committed"

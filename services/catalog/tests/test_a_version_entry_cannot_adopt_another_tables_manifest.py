@@ -126,9 +126,8 @@ def _create(manifest_path: str, spy: list[str]) -> object:
     ],
 )
 def test_a_TRAVERSAL_is_refused_without_asking_the_backend_anything(manifest_path: str, spy: list[str]) -> None:
-    """THE GATE, cheap half. A traversal reaches a sibling while never being absolute, so it would slip
-    past a containment test that only judges absolute paths — and it needs no knowledge of where the
-    table lives, so it costs no round trip."""
+    """THE GATE, cheap half. A traversal is refused on SHAPE, before the location is read: `..` makes
+    containment undecidable by string comparison, so it must never reach the comparison at all."""
     with pytest.raises(InvalidInputError):
         _create(manifest_path, spy)
 
@@ -143,9 +142,9 @@ def test_a_TRAVERSAL_is_refused_without_asking_the_backend_anything(manifest_pat
     ],
 )
 def test_an_ABSOLUTE_path_into_another_table_is_refused_after_one_location_read(manifest_path: str, spy: list[str]) -> None:
-    """THE GATE, comparing half. An absolute path cannot be judged by its shape — only against the
-    location of the table it is claimed for — so exactly one `describe_table` READ happens first. That
-    read is not the move: the move is `create_table_version`, and it must not appear."""
+    """THE GATE, comparing half. A path cannot be judged by its shape — only against the location of the
+    table it is claimed for — so exactly one `describe_table` READ happens first. That read is not the
+    move: the move is `create_table_version`, and it must not appear."""
     with pytest.raises(InvalidInputError):
         _create(manifest_path, spy)
 
@@ -153,20 +152,35 @@ def test_an_ABSOLUTE_path_into_another_table_is_refused_after_one_location_read(
 
 
 @pytest.mark.parametrize("manifest_path", ["_versions/18446744073709551613.manifest", "18446744073709551613.manifest"])
-def test_the_spec_s_own_relative_form_is_passed_through_to_the_backend(manifest_path: str, spy: list[str]) -> None:
-    """The other half: a guard that refused the legitimate shape would just break the door.
+def test_the_spec_s_TABLE_relative_form_is_refused_because_it_is_a_STORE_key(manifest_path: str, spy: list[str]) -> None:
+    """The spec's own example is refused, and that is a measurement rather than a restriction.
 
-    THESE DO NOT COMMIT ON THIS BACKEND, and the test deliberately does not pretend otherwise. Driven
-    2026-09-16 against a real `dir` namespace, both spellings answer `InvalidInput: Staging manifest not
-    found` with the file present at exactly that relative path — the backend resolves this field
-    absolutely. But the form is the SPEC's (`namespace.md`, "Table Version Metadata Schema"), the
-    divergence is not this door's to settle, and a relative path with no traversal cannot leave the
-    table. So it is passed through to the backend's own answer rather than refused here, which also
-    keeps the door correct if a backend ever resolves it.
+    `namespace.md`'s "Table Version Metadata Schema" shows `"_versions/9223372036854775806.manifest"`,
+    and it commits on NEITHER backend: driven 2026-09-16 with the file present at exactly that
+    table-relative path, both a local `dir` namespace and the estate's S3 store answer
+    `InvalidInput: Staging manifest not found`. The field is resolved inside the table's object STORE,
+    so `_versions/x` names `<store>/_versions/x` — outside the table. Admitting it would cost nothing a
+    caller can use and would let a manifest sitting at the store root be moved in.
     """
-    _create(manifest_path, spy)
+    with pytest.raises(InvalidInputError):
+        _create(manifest_path, spy)
 
-    assert spy == ["create_table_version"], "a relative manifest cannot escape, so the door must not stand in its way"
+    assert spy == ["describe_table"], "the version door was reached with a path that resolves outside the table"
+
+
+def test_a_BARE_BUCKET_RELATIVE_path_into_another_project_is_refused(spy: list[str]) -> None:
+    """THE LIVE HOLE, and the reason "relative means confined" is not available here.
+
+    On S3 the spelling that commits is the BUCKET KEY — measured 2026-09-16 against the estate's own
+    store: a staged manifest at `<prefix>/t.lance/_versions/<name>` committed version 2 through this
+    door. That path carries no scheme and no leading slash, so a guard that only judges absolute paths
+    waves it through — and the backend resolves it against the bucket, moving another project's manifest
+    into this table. The deployed catalog is S3-backed, so this is the production case, not an edge.
+    """
+    with pytest.raises(InvalidInputError):
+        _create("other-project/other.lance/_versions/18446744073709551613.manifest", spy)
+
+    assert spy == ["describe_table"], "the move was attempted"
 
 
 # ---------------------------------------------------------------- the form that actually commits
@@ -177,9 +191,12 @@ def test_the_spec_s_own_relative_form_is_passed_through_to_the_backend(manifest_
     [
         "/srv/lakehouse/attacker.lance/_versions/18446744073709551613.manifest",
         "/srv/lakehouse/attacker.lance/_versions/18446744073709551613.manifest-0e1f2a3b",
+        # The S3 shape: a bare STORE key carrying the table's own prefix. This is the spelling that
+        # actually commits on the deployed backend, so it is the one that must not be refused.
+        "srv/lakehouse/attacker.lance/_versions/18446744073709551613.manifest-0e1f2a3b",
     ],
 )
-def test_an_absolute_manifest_INSIDE_this_table_reaches_the_backend(manifest_path: str, spy: list[str]) -> None:
+def test_a_manifest_INSIDE_this_table_s_own_prefix_reaches_the_backend(manifest_path: str, spy: list[str]) -> None:
     """THE HALF THAT WAS BROKEN. `manifest_path` is resolved by the backend as an ABSOLUTE path — measured
     2026-09-16 against a real `dir` namespace, driving every spelling against one staged manifest:
 

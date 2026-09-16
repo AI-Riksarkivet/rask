@@ -809,6 +809,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   (35) and `e2e_outbox_ds` (7). **The drain is behaving exactly as designed**: a refusal is not poison
   and not transient, so it strands rather than drops, because destroying the only durable copy of a
   committed write's provenance is the wrong answer to "you may not record this".
+  **THE OBVIOUS REMEDY IS NOT AVAILABLE, measured 2026-09-16 before building it.** "Move a
+  permanently-refused event aside to a `_refused/` prefix so it leaves the drain and the gauge" is the
+  natural design — `_staged_infos` lists with `recursive=False`, so a sub-prefix is invisible to
+  `backlog`, `list_events` and the drain, and the same outbox prefix keeps it inside the STS scope. It
+  cannot be done BY THE RELAY: a copy is a PutObject, and the relay's identity is granted only
+  `s3:DeleteObject` on its own outbox (`rustfs-scoped-users.yaml`), pinned by
+  `test_the_lineage_plane_writes_nothing_it_does_not_own.py`, which asserts it gets no `PutObject`
+  anywhere. Widening that grant to tidy a gauge would trade a real least-privilege boundary for a
+  cosmetic one, and it is the same shape as the 2026-09-10 defect where `delete_file` re-created a
+  directory marker and the drain had never once succeeded.
+  *So the fix is to change what COUNTS, not to move the object:* report `refused` as its own number and
+  its own metric rather than folding it into `stranded`, which needs no write permission, destroys
+  nothing, and leaves the event recoverable if the grant ever lands. The drain already NAMES the
+  refusal separately (`lineage_outbox_event_unauthorized`) and then folds it into `stranded += 1`
+  (`reconcile_cron.py:493`) — that fold is the whole defect, because `stranded` is documented as "a tick
+  failed while it recovered everything else" and a governance refusal is not a failed tick.
   *What the estate has no answer for is the AFTER.* These six will strand forever, be re-refused every
   tick, and hold `outbox.events.stranded` permanently non-zero — which a dashboard reads as an ongoing
   fault rather than a settled one. That is [[LH-148]]/[[LH-151]]/[[LH-166]]'s question — what a
@@ -2697,6 +2713,47 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   exactly this symptom (*"answering 400 InvalidInputError: Staging manifest not found … a real domain
   answer rather than a routing failure"*) and it was read as the drive's own missing manifest rather
   than as the door being shut.
+  **CONFIRMED ON THE LIVE S3 ESTATE**, not only on a local `dir` namespace. Against the deployed
+  catalog (`main-b2d08df6`), `acme-bronze$events` (real location `s3://acme-bucket/medallion/bronze`):
+  an absolute `manifest_path` answers **400** with the guard's own sentence, and the relative form
+  driven at the version the CAS demands (186) answers **400 `Staging manifest not found at
+  '_versions/…'`** — the same refusal the local measurement produced with the file present. Both
+  spellings are therefore dead on the deployed door: one refused before the backend, one refused by it.
+  A version below the CAS answers `409 ConcurrentModification … requested 2, expected 186 (latest 185)`,
+  which is the CAS firing first and is why an earlier probe looked like it "reached the backend".
+- **AND THE FIRST REMEDY STILL DID NOT CONFINE — the field resolves against the STORE, not the table,
+  measured 2026-09-16 by staging one real manifest in the estate's own S3 and driving every spelling at
+  it.** The first fix admitted absolute paths and compared them, and passed anything without a scheme or
+  a leading slash through as "relative, therefore confined by construction". On S3 that is exactly the
+  spelling that commits:
+
+      s3   '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
+      s3   '<prefix>/t.lance/_versions/<n>.manifest-<uuid>'  -> OK, version 2 committed
+
+  A bare `other-project/other.lance/_versions/x` carries no scheme and no leading slash, so it went
+  through unchecked, and the backend resolves it against the BUCKET — another project's manifest moved
+  into the caller's table. **This hole is OLDER than either fix, not introduced by one**: the 2026-09-11
+  guard refused `startswith("/")`, `"://"`, `"\\"`, a `..` segment and control characters, and that
+  path carries none of them. It was never considered because the attack that motivated the guard was
+  driven with an ABSOLUTE path on a `dir` namespace, where the bucket-relative spelling does not exist.
+  So the deployed estate has been reachable this way the whole time; this is the first fix that closes
+  it.
+  **DEMONSTRATED AGAINST THE RUNNING CATALOG**, not argued: `POST /v1/table/acme-bronze$events/version/create`
+  with `manifest_path` `'some-other-project/other.lance/_versions/probe.manifest-0'` passes the guard
+  and reaches the BACKEND, which answers `Staging manifest not found at
+  'some-other-project/other.lance/…' for version 186 of table at 's3://acme-bucket/medallion/bronze'`.
+  It says "not found" only because that object does not exist — the path was looked for **in the bucket**,
+  not in the table, and an object that did exist there would have been moved. **The deployed catalog is S3-backed, so this was the production case, not an
+  edge**, and the local `dir` measurement hid it: there the store root is the filesystem, so only a
+  fully-qualified path commits and "absolute" happened to coincide with "store-relative".
+  Every spelling is now compared against the table's own location as the OBJECT STORE sees it — scheme
+  and authority must match when present, and an unqualified path is compared key-only because "no
+  scheme" means "this store", never "this table". The spec's own table-relative example is refused
+  with the rest, which costs a caller nothing: it commits on NEITHER backend, and pinned by a
+  real-backend test so that a backend which starts honouring it fails that test first.
+  *Provenance for the shape of the guard:* traversal and control characters are refused on SHAPE with
+  the backend untouched; everything else costs exactly one `describe_table` READ, and
+  `create_table_version` must not appear in the call log of any refusal.
   **The remedy's own premise was the error**: "confinement by construction, no `describe_table`
   round-trip to get wrong" only holds if relative paths resolve inside the table, and they resolve
   nowhere. Confinement is now BY COMPARISON — shape refusals first (traversal, control characters) at no
@@ -6325,6 +6382,33 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     at `transform.py:828`, a task registered for a THIRD engine does not fail — it silently runs
     in-process. An estate that cannot REFUSE an engine it does not host cannot honestly claim to
     support bringing your own.
+- **RE-MEASURED 2026-09-16 AT HEAD — REQUIREMENT 3 NOW HOLDS, AND ITS SHARPEST CLAIM IS FALSIFIED.**
+  The bullet above says *"because in-process is the implicit `else` at `transform.py:828`, a task
+  registered for a THIRD engine does not fail — it silently runs in-process"*. That is no longer the
+  code. `engine_choice.engine_for` resolves the task's registration and raises `UnrunnableTaskError`
+  when `registration.engine not in hosted_engines(settings)` — and the refusal distinguishes the two
+  operator errors it covers, because their fixes differ: an engine this BUILD has no adapter for ("the
+  declaration is valid and belongs to another executor") versus one the build knows and this DEPLOYMENT
+  has turned off ("the Ray lane's workflow runtime starts only when MEDALLION_RAY_ENABLED is true, so
+  the stage would be enqueued and never executed"). The implicit `else` at :828 is now safe *because*
+  the refusal fires upstream of it: by the time `use_ray` is computed, the engine is known to be hosted.
+  `hosted_engines` is a DEPLOYMENT fact derived from `ray_enabled`, narrower than the build's
+  `KNOWN_ENGINES` ceiling — so a task registered for `ray` on a Ray-OFF deployment is refused rather
+  than scheduled-and-never-executed, which is the silent failure the row was really about.
+  Pinned by seven files under `services/medallion/tests/`, `test_the_record_decides_which_engine_runs_it.py`
+  and `test_a_declared_ray_task_is_refused_where_no_ray_runtime_runs.py` among them.
+- **REQUIREMENT 2 HAS MOVED TOO, and what is left of it is narrower than the bullet above says.** The
+  claim was "the port exists and is honoured by NEITHER lane". Both adapters now exist and both lanes
+  reach the port's interface: `transform.py:788` drives the in-process lane through
+  `executor.submit/status/failure/result`, and `rayjobs_api_executor.RayJobsApiExecutor` wraps
+  `submit_or_reattach`/`job_status`/`job_failure` (deliberately NOT claiming `DURABLE_RECORD` — a Jobs-API
+  submission lives in the head's GCS and a head restart takes the history with it, observed on this
+  estate, and that absence is what licenses the resubmit machinery).
+  *What genuinely remains is the SELECTION function, not the adapters:* `engine_registry.executor_for`
+  still has **zero production callers**, and `transform.py:828` picks the lane with
+  `use_ray = ... == RAY_ENGINE` rather than by asking the registry for the adapter. So engine choice is
+  still a branch that happens to pick one, which is exactly requirement 2's wording — and it is
+  [[LH-158]]'s remaining scope, not a second row.
 - **TWO COUPLINGS THAT ARE REAL AND ARE NOT CONDITION-3 VIOLATIONS**, recorded so they are not
   mistaken for either:
   * `services/medallion/pyproject.toml:30` hard-depends on `dapr-ext-workflow`. INSTALL-time coupling,

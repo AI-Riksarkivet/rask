@@ -252,11 +252,7 @@ def list_table_versions(
 
 
 def _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path: str) -> None:
-    """Shape refusals that need no knowledge of where the table lives, so they cost no round trip.
-
-    Traversal is the one that matters: ``_versions/../../victim.lance/...`` is relative, so it escapes
-    the containment test below by never being absolute, and it reaches a sibling all the same.
-    """
+    """Shape refusals that need no knowledge of where the table lives, so they cost no round trip."""
     unsafe = (
         not manifest_path
         or "\\" in manifest_path
@@ -270,35 +266,57 @@ def _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path: str) -> No
         )
 
 
-def _is_absolute(manifest_path: str) -> bool:
-    """A path the backend resolves on its own, rather than against some base it is given."""
-    return manifest_path.startswith("/") or "://" in manifest_path
+def _in_the_store(path: str) -> tuple[str, str]:
+    """Split a location or a ``manifest_path`` into ``(authority, key)`` as the OBJECT STORE sees it.
+
+    The authority is ``<scheme>://<netloc>`` when the value is fully qualified and empty when it is
+    store-relative; the key is the rest, with the leading and trailing separators stripped so a bucket
+    key and a filesystem path compare on the same terms.
+    """
+    parts = urlsplit(path)
+    if parts.scheme:
+        return f"{parts.scheme}://{parts.netloc}", parts.path.strip("/")
+    return "", path.strip("/")
 
 
 def _refuse_a_manifest_outside(manifest_path: str, *, table_location: str | None) -> None:
-    """Refuse an absolute ``manifest_path`` that is not inside ``table_location``.
+    """Refuse a ``manifest_path`` that does not name a place inside ``table_location``.
 
     FAIL-CLOSED ON AN UNKNOWN LOCATION: with nothing to compare against there is no way to tell this
     table's manifest from a sibling's, and the failure mode is a destructive move rather than a refused
     read.
 
-    CONTAINMENT IS TESTED AGAINST ``<location>/``, never as a bare string prefix, and the scheme and
-    authority must match exactly — otherwise ``/srv/lakehouse/attacker.lance-evil`` passes for
-    ``/srv/lakehouse/attacker.lance``. That near-miss is reachable by anyone who can choose a table
-    name, which is every writer. The same reasoning and the same shape as
-    :func:`catalog.core.vending._location_within`; it is not reused directly because that one splits an
+    CONTAINMENT IS TESTED AGAINST ``<key>/``, never as a bare string prefix, and a qualified candidate's
+    authority must match exactly — otherwise ``medallion/bronze-evil`` passes for ``medallion/bronze``
+    and the bucket ``acme-bucket-evil`` passes for ``acme-bucket``. Both near-misses are reachable by
+    anyone who can choose a table name, which is every writer. Same reasoning and same shape as
+    :func:`catalog.core.vending._location_within`; not reused directly because that one splits an
     ``s3://`` location and this field is also a bare filesystem path on a ``dir`` namespace.
+
+    AN UNQUALIFIED CANDIDATE IS COMPARED KEY-ONLY, because the backend resolves it inside the SAME store
+    the table is in — so "no scheme" means "this store", not "this table".
+
+    AN EMPTY OUTER KEY FAILS CLOSED, and this is the one place the shape deliberately differs from
+    ``vending._location_within``: there an empty prefix IS the whole bucket, because the policy it
+    renders says so. Here it would mean every object in the store is inside the table and the guard
+    stops guarding, so a table location that reduces to a bare store root is refused instead. No table
+    in this estate has one — locations carry a project prefix — so the branch costs nothing and removes
+    a way for the check to silently become a no-op.
     """
     if not table_location:
-        raise InvalidInputError(f"manifest_path {manifest_path!r} is absolute and this table's location is unknown, so there is nothing to confine it to")
-    outer, inner = urlsplit(table_location.rstrip("/")), urlsplit(manifest_path)
-    stem = outer.path.rstrip("/")
-    within = (outer.scheme, outer.netloc) == (inner.scheme, inner.netloc) and (inner.path == stem or inner.path.startswith(f"{stem}/"))
+        raise InvalidInputError(
+            f"manifest_path {manifest_path!r} cannot be checked because this table's location is unknown, so there is nothing to confine it to"
+        )
+    outer_authority, outer_key = _in_the_store(table_location)
+    inner_authority, inner_key = _in_the_store(manifest_path)
+    authority_agrees = not inner_authority or inner_authority == outer_authority
+    within = authority_agrees and bool(outer_key) and (inner_key == outer_key or inner_key.startswith(f"{outer_key}/"))
     if not within:
         raise InvalidInputError(
-            f"manifest_path {manifest_path!r} is outside this table's own location ({table_location!r}); "
-            f"creating a version MOVES that file, so naming one this table does not own both destroys it "
-            f"and grafts its rows here"
+            f"manifest_path {manifest_path!r} does not name a place inside this table's own location "
+            f"({table_location!r}); creating a version MOVES that file, so naming one this table does not own "
+            f"both destroys it and grafts its rows here. The path is resolved inside the table's object store, "
+            f"so it must carry the table's own prefix"
         )
 
 
@@ -312,24 +330,27 @@ async def _refuse_a_manifest_this_table_does_not_own(ns: LanceNamespace, segment
     attacker [1] -> [1, 2]). The FGA gate above is sound and does not reach this: it authorises the table
     in ``id``, while the reach came from a field nothing inspected.
 
-    THE BACKEND RESOLVES THIS FIELD AS AN ABSOLUTE PATH, which is what decides the shape of the guard.
-    Measured 2026-09-16 against a real ``dir`` namespace, driving every spelling against ONE staged
-    manifest that was present on disk each time::
+    THE BACKEND RESOLVES THIS FIELD INSIDE THE TABLE'S OBJECT STORE, NOT INSIDE THE TABLE, and that is
+    what decides the guard. Measured 2026-09-16 by staging one real manifest and driving every spelling
+    at it — on a local ``dir`` namespace, and again against the estate's own S3 store::
 
-        '_versions/<n>.manifest-<uuid>'          -> InvalidInput "Staging manifest not found"
-        't.lance/_versions/<n>.manifest-<uuid>'  -> InvalidInput "Staging manifest not found"
-        '/<root>/t.lance/_versions/<n>.manifest-<uuid>' -> OK, version 2 committed
+        dir  '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
+        dir  't.lance/_versions/<n>.manifest-<uuid>'           -> InvalidInput "Staging manifest not found"
+        dir  '/<root>/t.lance/_versions/<n>.manifest-<uuid>'   -> OK, version 2 committed
+        s3   '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
+        s3   '<prefix>/t.lance/_versions/<n>.manifest-<uuid>'  -> OK, version 2 committed
 
-    So there is no base to resolve a relative path against and confinement BY CONSTRUCTION is not
-    available here: the only spelling that can commit is the one that names a place directly. The guard
-    therefore compares — one ``describe_table`` for the table's own location, and only when the path is
-    absolute, so the ordinary refusals still cost nothing.
+    So the accepted spelling is the STORE-relative one — the whole filesystem path for ``dir``, the
+    bucket key for S3 — and the spec's own table-relative example
+    (``namespace.md``, "Table Version Metadata Schema": ``"_versions/9223372036854775806.manifest"``)
+    commits on neither backend.
 
-    THE SPEC DOCUMENTS THE RELATIVE FORM and the backend does not accept it (``namespace.md``'s "Table
-    Version Metadata Schema" example is ``"_versions/9223372036854775806.manifest"``). That divergence is
-    not this door's to settle, so a relative path is passed through to the backend's own answer rather
-    than refused here — it cannot escape the table by construction once traversal is rejected, so
-    admitting it costs nothing and keeps the door conformant if a backend ever resolves it.
+    THERE IS THEREFORE NO SAFE "RELATIVE MEANS CONFINED" SHORTCUT, and reading the S3 row as one is the
+    live hole this closes: a bare ``other-project/other.lance/_versions/x`` carries no scheme and no
+    leading slash, so a guard that only judges absolute paths waves it through — and the backend
+    resolves it against the BUCKET and moves another project's manifest into this table. Every spelling
+    is compared, and a bare ``_versions/x`` is refused with the rest: as a store key it is outside the
+    table, it commits on neither backend, and if such an object existed it would be moved in.
 
     THE VERSION CAS IS NOT THIS GUARD, which is why the door looked safe. The backend refuses any version
     but ``latest + 1``, so an arbitrary slot cannot be written — but aimed at the version the CAS demands,
@@ -338,10 +359,12 @@ async def _refuse_a_manifest_this_table_does_not_own(ns: LanceNamespace, segment
     if manifest_path is None:
         return
     _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path)
-    if not _is_absolute(manifest_path):
-        return
     described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    _refuse_a_manifest_outside(manifest_path, table_location=getattr(described, "location", None))
+    # NARROWED, not trusted: `location` is optional in the spec's response model, and a backend that
+    # answers without one leaves nothing to compare against. Anything that is not a string is the same
+    # situation as absent, and both fail closed below rather than reaching `urlsplit`.
+    location = getattr(described, "location", None)
+    _refuse_a_manifest_outside(manifest_path, table_location=location if isinstance(location, str) else None)
 
 
 @router.post("/{id}/version/create", response_model_exclude_none=True)
