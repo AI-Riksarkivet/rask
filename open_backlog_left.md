@@ -5998,6 +5998,42 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   than a hard dependency; and either the Ray/workflow product is decoupled or the limit is WRITTEN DOWN
   as a supported-combination matrix instead of being inferred from two independent-looking flags.
   A second engine that has actually run in-cluster is the evidence this row is really closed.
+- **RE-MEASURED 2026-09-16 AND THREE OF THIS ROW'S FOUR CLOSES-WHEN CLAUSES ARE ALREADY SATISFIED.
+  Corrected here because a HIGH row that overstates what is missing is how phase-2 planning starts from
+  the wrong place.**
+  * *"`dapr-ext-workflow` is an extra rather than a hard dependency" — DONE.*
+    `services/medallion/pyproject.toml:56` declares `workflow = ["dapr-ext-workflow>=1.18"]`, and
+    `.docker/rest-catalog.dockerfile:32-41` passes `--extra workflow` with the reason on the line:
+    the engine moved out of the unconditional dependencies "so the lakehouse may be DRIVEN BY a workflow
+    engine without DEPENDING on one (goal condition 3, now expressed in package metadata rather than
+    only in the import graph)". Measured there too: `uv export --package medallion` names the engine 0
+    times without the flag and 2 times with it. **Condition 3 is now true of the PACKAGE, not just of
+    the import graph.**
+  * *"a dispatch that REFUSES an unhosted engine" — DONE, and it refutes this row's sharpest claim.*
+    The row says "a task registered for a THIRD engine does not fail — it silently runs in-process".
+    `engine_choice.engine_for` raises `UnrunnableTaskError` for an engine the deployment does not host,
+    and the message distinguishes the two cases an operator must tell apart — a build with no adapter
+    ("the declaration is valid and belongs to another executor") from one this deployment turned OFF
+    ("the Ray lane's workflow runtime starts only when MEDALLION_RAY_ENABLED is true"). Gated by
+    `services/medallion/tests/test_the_record_decides_which_engine_runs_it.py::test_an_engine_NOBODY_here_runs_is_refused_rather_than_silently_defaulted`.
+    **This estate CAN refuse an engine it does not host.**
+  * *"the Ray lane reaches it as an adapter" — DONE at the adapter, NOT at the caller.*
+    `medallion/services/rayjobs_api_executor.py` is a real `Executor` for `RAY_ENGINE` — it wraps
+    `submit_or_reattach` / `job_status` / `job_failure` rather than reimplementing them, and
+    deliberately does NOT claim `DURABLE_RECORD` because a Jobs-API submission dies with the head's GCS
+    and claiming it would make `may_resubmit` refuse a run that really was lost. `engine_registry`
+    resolves both engines.
+- **WHAT IS ACTUALLY LEFT IS ONE BYPASS AND ONE DOCUMENT.**
+  * `engine_registry.executor_for` still has **ZERO production callers** — measured by grep across
+    `services/` and `packages/`, only three test call sites. `transform.py:830` still decides with
+    `use_ray = await engine_choice.engine_for_async(...) == RAY_ENGINE` and branches at :832 and :877.
+    So the port has two adapters and nothing dispatches through it: the port is not yet the only door.
+    That is [[LH-158]]'s remaining scope, and this row should not be worked separately for it.
+  * The Ray-lane-runs-only-through-Dapr-Workflow product limit is still **not written down**. Each axis
+    reads independent and the product of them is not, which is exactly the shape that needs a matrix
+    rather than a reader's inference.
+  * The in-process lane has still **never run in-cluster**, so the second engine that would prove the
+    abstraction still has no live evidence behind it.
 
 **LH-163 · ~~The sweep's base probe is permanently denied on `lance-catalog/models/`, and answers with a full traceback every pass~~ — CLOSED 2026-09-15, observed live**
 `maintenance, chart` · med · measured 2026-09-15 on the running `rask-maintenance`
