@@ -4858,8 +4858,18 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `keep: 7` and this prunes nothing, so `_backups/control/` grows without bound. And the default
   destination is the control root's own bucket, which survives a bad write and not a lost bucket;
   `--dest` takes another bucket and the manifest says which of the two you got.
-- *Closes when:* retention lands, and a scheduled run exists (this is operator-invoked today, not a
-  CronJob beside `backup-pg.yaml`).
+- **RETENTION LANDED 2026-09-16.** `do_prune` keeps the newest N and deletes the rest; `backup --keep N`
+  runs it AFTER the copy, never before — pruning first would drop the oldest backup on the very run that
+  then failed to write its replacement. `keep=0` is the default and means unbounded, matching
+  `backups.pgDump`'s own `gt 0` gate, because a tool that quietly began deleting backups on upgrade is a
+  worse failure than the growth it fixes. Newest-first is the reverse lexical sort of the
+  `%Y%m%dT%H%M%SZ` stamps — deliberately the same ordering `backup-pg.yaml` gets from
+  `mc ls … | sort -r`, so an operator reading one lane and reasoning about the other meets one answer.
+- *STILL OPEN — and the scheduled half is NOT the small job this row implies.* `scripts/` ships in no
+  image: `.docker/rest-catalog.dockerfile` copies none of it, and `/app/scripts/control_root_backup.py`
+  is absent from the running catalog pod. So a CronJob cannot simply invoke the tool, and the choice —
+  bake `scripts/` into an image, mount the script from a ConfigMap, or re-implement the prune in shell
+  with `mc` the way `backup-pg.yaml` does — is a real decision rather than a template to copy.
 
 **LH-111 · ~~No in-flight blob-byte admission budget — the catalog counts requests, not bytes~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 

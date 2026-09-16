@@ -170,6 +170,37 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
     }
 
 
+def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: ANN401
+    """Keep the newest ``keep`` backups under ``dest`` and delete the rest.
+
+    WITHOUT THIS THE TOOL GREW WITHOUT BOUND while its sibling did not: ``backups.pgDump`` prunes to
+    ``keep: 7`` in `chart/templates/backup-pg.yaml`, and the control root — 1,454 small objects per run —
+    accumulated every run ever taken.
+
+    ``keep=0`` MEANS UNBOUNDED and is the default, matching the chart's ``gt 0`` gate. A tool that
+    quietly started deleting backups the first time it was upgraded would be a worse failure than the
+    growth it fixes.
+
+    Newest-first is a REVERSE LEXICAL SORT of the ``%Y%m%dT%H%M%SZ`` stamps — the same property
+    `backup-pg.yaml` relies on when it pipes ``mc ls … | sort -r | tail -n +N``. Both lanes order their
+    backups identically on purpose: an operator reading one and reasoning about the other must not meet
+    two different answers to "which is the newest".
+    """
+    bucket, prefix = split_uri(dest)
+    # `_join` DROPS EMPTY PARTS, so `_join(prefix, "")` returns the base with no trailing slash and every
+    # key would slice to "" — one phantom stamp instead of N. The separator is added here deliberately.
+    base = _join(prefix)
+    listed = list_objects(client, bucket, base)
+    stamps = sorted({stamp for key in listed if not is_directory_marker(key) and (stamp := key[len(base) :].lstrip("/").split("/", 1)[0])}, reverse=True)
+    kept, pruned = stamps[:keep] if keep > 0 else stamps, stamps[keep:] if keep > 0 else []
+
+    for stamp in pruned:
+        for key in list_objects(client, bucket, _join(prefix, stamp)):
+            client.delete_object(Bucket=bucket, Key=key)
+
+    return {"dest": dest, "keep": keep, "kept": [{"stamp": s} for s in kept], "pruned": pruned}
+
+
 def read_manifest(client: Any, backup: str) -> dict[str, Any]:  # noqa: ANN401
     bucket, prefix = split_uri(backup)
     body = client.get_object(Bucket=bucket, Key=_join(prefix, MANIFEST_KEY))["Body"].read()
@@ -239,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("backup", help="copy the control records to a timestamped backup")
     b.add_argument("--root", default="s3://lance-catalog", help="the control root (LANCE_REST_ROOT)")
     b.add_argument("--dest", default=None, help="where the backup lands; ANOTHER BUCKET for real DR")
+    b.add_argument("--keep", type=int, default=0, help="prune to the newest N backups after copying; 0 (default) keeps every run")
 
     v = sub.add_parser("verify", help="check a backup against its own manifest")
     v.add_argument("--from", dest="backup", required=True)
@@ -254,6 +286,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "backup":
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         result = do_backup(client, root=args.root, dest=args.dest, stamp=stamp)
+        # AFTER the copy, never before: pruning first would drop the oldest backup on the run that then
+        # failed to write its replacement, which is the one moment the old one is worth most.
+        if args.keep > 0:
+            result["retention"] = do_prune(client, dest=result["backup"].rsplit("/", 1)[0], keep=args.keep)
     elif args.command == "verify":
         result = do_verify(client, backup=args.backup)
     else:

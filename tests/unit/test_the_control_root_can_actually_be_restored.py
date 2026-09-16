@@ -183,3 +183,39 @@ def test_the_backup_states_which_failure_it_protects_against(s3: Any) -> None:
     other = crb.do_backup(s3, root=ROOT, dest="s3://offsite/control", stamp="20260914T000001Z")
     assert "loss of the source bucket" in other["protects_against"]
     assert json.loads(s3.get_object(Bucket="offsite", Key="control/20260914T000001Z/MANIFEST.json")["Body"].read())["objects"]
+
+
+def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any) -> None:
+    """[[LH-110]]'s stated residual: the tool backs up and prunes nothing, so `_backups/control/` grows
+    without bound while its sibling `backups.pgDump` already honours `keep: 7`.
+
+    The stamps are `%Y%m%dT%H%M%SZ`, so newest-first is a reverse lexical sort — the same property
+    `backup-pg.yaml` relies on when it pipes `mc ls … | sort -r | tail -n +N`. Keeping that identical
+    across the two lanes matters more than it looks: an operator reading one and reasoning about the
+    other must not find two different orderings.
+    """
+    for stamp in ("20260914T000000Z", "20260915T000000Z", "20260916T000000Z"):
+        crb.do_backup(s3, root=ROOT, dest=None, stamp=stamp)
+
+    result = crb.do_prune(s3, dest=f"{ROOT}/{crb.DEFAULT_DEST_PREFIX}", keep=2)
+
+    surviving = {entry["stamp"] for entry in result["kept"]}
+    assert surviving == {"20260915T000000Z", "20260916T000000Z"}
+    assert result["pruned"] == ["20260914T000000Z"]
+
+    # The survivors must still VERIFY — a prune that clipped a live backup's objects would look like a
+    # success here and fail only during an incident.
+    newest = f"{ROOT}/{crb.DEFAULT_DEST_PREFIX}/20260916T000000Z"
+    assert crb.do_verify(s3, backup=newest)["intact"] is True
+
+
+def test_retention_keeps_everything_when_it_is_not_asked_for(s3: Any) -> None:
+    """`keep=0` is the default and means unbounded, matching `backups.pgDump`'s `gt 0` gate. A tool that
+    silently began deleting backups on upgrade is a worse failure than the unbounded growth."""
+    for stamp in ("20260914T000000Z", "20260915T000000Z"):
+        crb.do_backup(s3, root=ROOT, dest=None, stamp=stamp)
+
+    result = crb.do_prune(s3, dest=f"{ROOT}/{crb.DEFAULT_DEST_PREFIX}", keep=0)
+
+    assert result["pruned"] == []
+    assert len(result["kept"]) == 2
