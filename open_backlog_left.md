@@ -4241,6 +4241,23 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   tenant can query its own table's rewrites; then observe it on a dataset that actually has fragments to
   reclaim, measured through the running app or a door. Do NOT remove the deterministic run id without
   replacing the flood guard it is.
+- **RE-MEASURED AT HEAD 2026-09-16 — TWO OF THE THREE ASKS ARE ALREADY IN, and the third is not where
+  the row implies.** `duration_seconds` IS carried: `sweep.py:897` passes it into `audit_material_work`,
+  which writes to the `lance.audit` compliance stream keyed on `resource=table:<id>` — so "which
+  compaction rewrote my table, and was it slow" has a per-object, FGA-gated answer already. What is
+  genuinely absent is the ATTEMPT COUNT: `maintenance/core/lineage_emit.py` carries no `attempts` facet
+  (the `attempts` field in `purge.py:140,531` is the TRASH purge's, and `:522-534` records that it is
+  deliberately not written because it would undercount).
+- **AND THE COUNTER CANNOT BE COMPUTED WHERE THE ROW PUTS IT.** A count of consecutive failures is
+  CROSS-TICK state, and the sweep is a cron that holds none — each tick sees one dataset once. The
+  emitter therefore has nothing to count. The only place that already has the history is the MERGE
+  TARGET itself: every tick merges onto ONE `(:Run)` node by construction of the flood guard, so the
+  increment belongs in the graph write — `ON MATCH SET attempts = coalesce(attempts, 1) + 1` in the
+  lineage repository — not in a facet the producer computes.
+- *Which makes the remaining work a LINEAGE-service change on the provenance write path*, not a
+  maintenance one, and larger than "add a counter": it changes MERGE semantics for every deterministic
+  run id, not just this lane. Sized and located here rather than attempted, because a wrong increment
+  on that path corrupts the estate's account of what ran.
 
 **LH-099 · A sweep that deleted a terabyte and one that deleted nothing produce the same-shaped report — no bytes-reclaimed anywhere, and no control event for what was rewritten**
 
