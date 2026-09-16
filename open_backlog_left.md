@@ -2764,9 +2764,18 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   fills only with a candidate that really is unprivileged and leaves EMPTY otherwise, so the leg skips
   rather than alleging a property the estate does not have — `topology.py`'s own rule, which I should
   have read before writing the leg.
-- *Still open on this row:* the plural undrop and the `projects_claiming_bucket` bucket-purge refusal.
-  The latter needs two warehouses in one bucket, which this suite deliberately does not build — every
-  leg here creates its own bucket so nothing it does can reach a real one.
+- **THE BUCKET-PURGE REFUSAL AND THE FORCE/PROTECTION RULE ARE DRIVEN TOO — 9 legs now, all green.**
+  `POST /v1/warehouses` takes an explicit `bucket`, so the suite builds the exact shape the guard exists
+  for: TWO warehouses of ONE project on ONE bucket — a work warehouse plus a `serving="gold"` one is
+  that shape, and `create_warehouse`'s cross-claim guard subtracts the caller's own project on purpose,
+  so nothing at create time refuses it. `?purge_bucket=true` on the first then refuses **409**, and the
+  warehouse is still there afterwards — the refusal costs nothing, which is the half a status code alone
+  would not prove. Both warehouses are the suite's own, in a bucket it named, so no real bytes are
+  reachable by it.
+  *And `force` is pinned to what it actually overrides:* a warehouse created `protected: true` refuses
+  409, the same delete with `?force=true` succeeds, and the gate above ran identically both times.
+- *Still open on this row:* the plural undrop (`POST /v1/namespace/{id}/undrop`, `namespaces.py:678`),
+  which is the one clause left — the cascade DETACH half is covered by the cascade leg above.
 
 **LH-029 · ~~`batch_commit_tables` cannot converge: a retry re-runs the atomic native commit, hits `TableAlreadyExists`, and never reaches the ownership seeds~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 

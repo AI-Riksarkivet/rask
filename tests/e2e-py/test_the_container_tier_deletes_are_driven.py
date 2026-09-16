@@ -133,3 +133,50 @@ def test_a_malformed_project_id_is_refused_before_anything_else(catalog: str) ->
     response = requests.delete(f"{catalog}/v1/projects/not a valid id", headers=_auth(), timeout=30)
 
     assert response.status_code in (400, 404), f"a malformed project id answered {response.status_code}: {response.text[:200]}"
+
+
+def test_a_purge_refuses_bytes_a_SIBLING_warehouse_still_claims(catalog: str) -> None:
+    """The guard `create_warehouse`'s cross-claim check deliberately does NOT provide.
+
+    A bucket may back two warehouses of the SAME project — a work warehouse plus a `serving="gold"` one
+    is exactly that shape, and the create-time guard subtracts the caller's own project on purpose. A
+    purge deletes every object AND the bucket, so destroying one of the pair would silently take the
+    other's data and leave its record pointing at a bucket that no longer exists.
+
+    Both warehouses here are this test's own, in a bucket it named, so the refusal is asserted without
+    any real bytes being reachable.
+    """
+    bucket = f"e2edel-shared-{uuid.uuid4().hex[:8]}"
+    first, second = f"{bucket}-a", f"{bucket}-b"
+    for name in (first, second):
+        made = requests.post(f"{catalog}/v1/warehouses", json={"id": name, "project": PROJECT, "bucket": bucket}, headers=_auth(), timeout=30)
+        if made.status_code not in (200, 201, 409):
+            pytest.skip(f"cannot provision the sibling pair ({made.status_code}): {made.text[:200]}")
+    try:
+        response = requests.delete(f"{catalog}/v1/warehouses/{first}?purge_bucket=true", headers=_auth(), timeout=60)
+
+        assert response.status_code == 409, (
+            f"a purge of {bucket!r} was allowed while {second!r} still claims it ({response.status_code}) — "
+            "deleting one of a same-project pair would destroy the other's data"
+        )
+        still_there = requests.get(f"{catalog}/v1/warehouses/{first}", headers=_auth(), timeout=30)
+        assert still_there.status_code == 200, "the refusal was not free — the warehouse went anyway"
+    finally:
+        for name in (second, first):
+            requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true", headers=_auth(), timeout=60)
+
+
+def test_deletion_protection_refuses_and_force_overrides_exactly_it(catalog: str) -> None:
+    """`force` overrides the PROTECTION only — never the gate, which has already run identically."""
+    name = f"e2edel-{uuid.uuid4().hex[:8]}"
+    made = requests.post(f"{catalog}/v1/warehouses", json={"id": name, "project": PROJECT, "protected": True}, headers=_auth(), timeout=30)
+    if made.status_code not in (200, 201, 409):
+        pytest.skip(f"cannot provision a protected warehouse ({made.status_code}): {made.text[:200]}")
+    try:
+        refused = requests.delete(f"{catalog}/v1/warehouses/{name}", headers=_auth(), timeout=60)
+        assert refused.status_code == 409, f"a protected warehouse deleted without force: {refused.status_code} {refused.text[:200]}"
+
+        forced = requests.delete(f"{catalog}/v1/warehouses/{name}?force=true", headers=_auth(), timeout=60)
+        assert forced.status_code == 200, f"force did not override deletion protection: {forced.status_code} {forced.text[:300]}"
+    finally:
+        requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&force=true", headers=_auth(), timeout=60)
