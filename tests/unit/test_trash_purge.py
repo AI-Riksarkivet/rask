@@ -964,3 +964,44 @@ def test_the_purge_blocker_names_only_the_categories_that_actually_BLOCK() -> No
     assert "ghost_projects" in reason and "orphan_buckets" in reason, reason
     assert "unbound_namespaces" not in reason, f"the blocker names a non-gating category: {reason}"
     assert "orphaned_annotation_tasks" not in reason, f"the blocker names a non-gating category: {reason}"
+
+
+def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE RACE the neighbouring test does not drive, and the one the docstring promises to close.
+
+    `test_a_recovered_id_is_REFUSED` registers the table BEFORE the tick, so the once-per-tick
+    `live_ids` snapshot already contains it and the refusal ladder catches it on the first read. That
+    proves the ladder works; it says nothing about WHEN the answer was computed.
+
+    The real window is narrower and is the one `undrop` opens: the snapshot is taken once, before the
+    loop, and every record is then checked against it. An undrop landing after that snapshot — a
+    `register_table` at the same location, or the catalog's own re-register in the instant before it
+    clears the record — is invisible to every later record in the same tick. Purge then revokes a LIVE
+    table's grants and deletes its bytes, and answers 200.
+
+    Driven deterministically rather than by timing: the estate pre-pass runs after the snapshot and
+    before the loop, so re-registering from inside it lands the undrop exactly in the window. Nothing
+    here is a sleep or a thread.
+    """
+    estate = _Estate(tmp_path)
+    canonical, _location = estate.drop_recoverably("team", "orders")
+
+    real_prepass = mod._estate_base_refs
+
+    def _prepass_then_undrop(*args: Any, **kwargs: Any) -> Any:
+        result = real_prepass(*args, **kwargs)
+        estate.create_table("team", "orders")  # the undrop lands mid-tick, after the snapshot
+        return result
+
+    monkeypatch.setattr(mod, "_estate_base_refs", _prepass_then_undrop)
+
+    out = _run(estate)
+
+    # THE TEST'S OWN PRECONDITION. If the mid-tick re-register had failed, the id would not be live and
+    # purging it would be CORRECT — the assertions below would then be demanding the wrong behaviour.
+    live_now = mod.live_object_ids(estate.data_root, {})
+    assert live_now is not None and canonical in live_now, f"the mid-tick undrop did not land; this test proves nothing: {live_now}"
+
+    assert out.purged == [], f"purge reclaimed a table that was re-registered during the tick: {out.purged}"
+    assert [(r.kind, r.id) for r in out.refused] == [("table", canonical)], out.refused
+    assert "still registered" in out.refused[0].reason, out.refused[0].reason

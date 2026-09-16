@@ -4867,7 +4867,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Closes when:* a stage failure still attempts the publish, and a test drives a raising `stage_event` and
   asserts the publish was attempted.
 
-**LH-155 · Undrop and trash purge race with no arbitration on either side — LATENT**
+**LH-155 · ~~Undrop and trash purge race with no arbitration on either side — LATENT~~ — PURGE HALF CLOSED 2026-09-16**
 `catalog, maintenance` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 9)
 
 - *Why open:* Re-measured 2026-09-15 and unchanged. `maintenance/services/purge.py:745` snapshots `live_ids`
@@ -4880,8 +4880,32 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   (`MAINTENANCE_TRASH_PURGE_ENABLED=false`), so nothing can race today. Turning purge on is what arms it.
 - *A docstring is currently false about this:* `purge.py:31-34` says the record is "re-checked immediately
   before deleting". It is not.
-- *Closes when:* the delete re-checks registration immediately before acting (or takes a lease undrop respects),
-  and the false docstring is rewritten — BEFORE `trashPurgeEnabled` is ever set true anywhere.
+- **THE PURGE SIDE IS CLOSED 2026-09-16, and the race was DEMONSTRATED before it was fixed.** A test
+  drives the window deterministically rather than by timing: the estate pre-pass runs after the
+  liveness snapshot and before the loop, so re-registering from inside it lands an undrop exactly in
+  the gap. Measured against the unfixed code, the purge reclaimed a table that was live at the moment
+  of deletion — **867 bytes across 4 files, reported as a success**.
+- *The fix is a second read at the last instant before the FIRST mutation*, which is the revoke rather
+  than the delete (the revoke runs first, so a lost race costs the grants too).
+  `_recovered_since_the_snapshot` re-runs the SAME refusal ladder, so an unreadable manifest refuses
+  here exactly as it does above rather than degrading to "purge anyway". The shared per-tick snapshot
+  STAYS as the cheap filter over every due record; only records that reach a mutation pay for the
+  second read, which is at most `trash_purge_max_per_tick`.
+- *The false docstring is rewritten*, and says what the code does: the id is checked TWICE, and the
+  second read is the one that closes the undrop window.
+- *Mutation-proven both ways:* removing the re-check reds exactly that test and nothing else, and the
+  test asserts its OWN precondition — that the mid-tick re-register actually landed — because if it had
+  not, the id would not be live and purging it would have been correct.
+- *A pre-existing gate caught the change and was satisfied by extraction, not exemption:*
+  `test_no_god_functions` refused `_purge_one` at 42 statements, which is why the re-check is its own
+  function.
+- *WHAT REMAINS OPEN IS THE UNDROP SIDE:* `tables.py:790-832` still does an unguarded
+  `trash.get` -> `register_table` -> clear with no clock gate. The purge can no longer delete a table
+  undrop has registered, but undrop can still re-register one the purge is mid-way through deleting —
+  a narrower window, and it needs the catalog half (a lease, or a re-read of the record after
+  registering). Still LATENT: `MAINTENANCE_TRASH_PURGE_ENABLED=false` in the cluster, verified 2026-09-16.
+- *Closes when:* the undrop side takes the arbitration too — BEFORE `trashPurgeEnabled` is ever set
+  true anywhere.
 
 **LH-157 · ~~One `WorkOrder` carries TWO idempotency-key formulas, so an in-process build bump re-attaches to a stale outcome~~ — CLOSED 2026-09-15, observed live**
 `medallion` · **HIGH** · found 2026-09-15 by an adversarial workflow, verified first-hand before filing

@@ -30,9 +30,13 @@ could destroy live data:
 * **STILL REGISTERED.** The catalog's undrop registers and THEN clears the record
   (``tables.py`` / ``namespaces.py``); a crash in between — or a manual ``register_table`` at the same
   location — leaves a LIVE table with a stale trash record. Purging that record deletes a live table's
-  bytes. So the id is re-checked against ``__manifest`` (the spec's own object index, which is the only
-  place a namespace exists at all) immediately before deleting, and a manifest that cannot be READ
-  refuses EVERY record rather than degrading to "purge anyway".
+  bytes. So the id is checked against ``__manifest`` (the spec's own object index, which is the only
+  place a namespace exists at all) TWICE: once against the tick's shared snapshot, as a cheap filter
+  over every due record, and again in :func:`_purge_one` at the last instant before the first mutation.
+  The second read is the one that closes the undrop window — a snapshot taken before the loop cannot
+  see a registration that lands during it, and undrop re-registers BEFORE clearing the record, which is
+  exactly that window. Either read failing refuses EVERY record rather than degrading to "purge
+  anyway".
 * **namespace / empty location.** A ``kind="namespace"`` record (#96) and a declared-only table both
   carry ``location=""`` — there are no bytes, so the path checks do not apply and the record is revoked
   and cleared without a delete.
@@ -57,6 +61,7 @@ witnessed". The flag ships OFF.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
@@ -576,6 +581,43 @@ async def _delete_bytes_or_refuse(
     return None
 
 
+async def _recovered_since_the_snapshot(
+    record: dict[str, Any],
+    out: TrashPurgeReport,
+    *,
+    roots: set[str],
+    recheck_live: Callable[[], set[str] | None],
+    control_root: str,
+    storage_options: StorageOptions,
+) -> bool:
+    """Re-read liveness at the last instant before the first mutation. ``True`` when the record was refused.
+
+    THE REASON THE LADDER IN :func:`check` IS NOT SUFFICIENT ON ITS OWN. ``live_ids`` is ONE snapshot,
+    taken before the loop and shared by every record, so an undrop landing after it is invisible to
+    every record processed later in the same tick — and undrop re-registers BEFORE it clears the
+    record, which is precisely that window. Re-reading here shrinks what an undrop must win from "this
+    tick" to "this call".
+
+    ONLY RECORDS THAT REACHED A MUTATION PAY FOR IT, which is why the shared snapshot stays: it is the
+    cheap filter over every due record and this is the correctness gate over the few that survive it.
+    The SAME ladder, so an unreadable manifest refuses here exactly as it does above rather than
+    degrading to "purge anyway".
+
+    Pinned by `test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused`, which drives the
+    window deterministically (re-registering from inside the estate pre-pass, which runs between the
+    snapshot and the loop) rather than by timing — and which measured, before this existed, a live
+    table losing 867 bytes across 4 files to a purge that answered success.
+    """
+    kind = str(record.get("kind") or "table")
+    obj_id = str(record.get("id") or "")
+    reason = check(record, roots=roots, live_ids=await run_in_threadpool(recheck_live))
+    if reason is None:
+        return False
+    await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=False)
+    log.warning("trash_purge_refused_on_recheck", extra={"kind": kind, "id": obj_id, "reason": reason})
+    return True
+
+
 async def _purge_one(
     record: dict[str, Any],
     out: TrashPurgeReport,
@@ -585,6 +627,7 @@ async def _purge_one(
     control_root: str,
     roots: set[str],
     live_ids: set[str] | None,
+    recheck_live: Callable[[], set[str] | None],
     fga_client: Any,  # noqa: ANN401 — OpenFgaClient | None
     control: ControlEmitter,
     protected: BaseRefs | None = None,
@@ -622,6 +665,9 @@ async def _purge_one(
         # and none of the three can be evaluated without performing the act it guards.
         out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=str(record.get("expires_at") or "")))
         log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
+        return
+
+    if await _recovered_since_the_snapshot(record, out, roots=roots, recheck_live=recheck_live, control_root=control_root, storage_options=storage_options):
         return
 
     try:
@@ -758,6 +804,7 @@ async def purge_expired_trash(
             control_root=resolved_control_root,
             roots=roots,
             live_ids=live_ids,
+            recheck_live=lambda: live_ids_across(roots, storage_options),
             fga_client=fga_client,
             control=control,
             protected=protected,
