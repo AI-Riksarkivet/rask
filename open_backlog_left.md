@@ -3860,9 +3860,25 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
   both directions, plus a gate that derives the expected scopes from the same template data the
   subscriber list is built from, plus a live check after the roll (a sweep tick publishes, lineage
   ingests, the notifications inbox receives).
-- *Deliberately NOT shipped in the same batch as the measurement*, because the blast radius is the
-  provenance bus and the gain is one first-party app-id plus a future-proofing posture. It is specified
-  now rather than guessed at later.
+- **SHIPPED 2026-09-16, once the directions were measured off the running sidecars rather than the
+  templates.** `/v1.0/metadata` on each app container, which corrected the truth table twice: the three
+  stage runners subscribe to `medallion.bronze|silver|media` and NOT to the provenance topic, and
+  **`maintenance` registers no subscriptions at all** (its write-event lane is gated on `workTopic`,
+  unset here) while the template comment describes one. Rendered result:
+
+      lineage-pubsub                     protect=lineage.events.v1  pub=catalog;maintenance   sub=-
+      lineage-pubsub-lineage             protect=lineage.events.v1  pub=lineage               sub=lineage
+      lineage-pubsub-medallion-producer  protect=lineage.events.v1  pub=medallion-producer    sub=medallion-producer
+      lineage-pubsub-bronze-to-silver    protect=lineage.events.v1  pub=bronze-to-silver      sub=-
+      lineage-pubsub-silver-to-gold      protect=lineage.events.v1  pub=silver-to-gold        sub=-
+      lineage-pubsub-media-to-silver     protect=lineage.events.v1  pub=media-to-silver       sub=-
+      lineage-pubsub-notifications       protect=lineage.events.v1  pub=-                     sub=notifications
+
+  Gated by `tests/unit/test_only_a_producer_may_publish_on_the_provenance_bus.py`, which asserts the
+  protection is present on every component (without it the scopes grant nothing), that each app holds
+  exactly the directions it uses, that `notifications` is the one denial, and — the blast-radius
+  assertion — that **no other topic was swept into the protection**, so `medallion.*`, `training.jobs`
+  and every `dlq.*` keep today's behaviour and this cannot stop a cascade trigger or a dead-letter.
 - *Closes when (rewritten):* `protectedTopics: lineage.events.v1` plus a `publishingScopes` naming the
   measured producer set on the lineage pub/sub components, a producer signature verified in the bus
   door (still genuinely open — `_StampedAuthor`'s own docstring says "nothing proves the stamp"), and
