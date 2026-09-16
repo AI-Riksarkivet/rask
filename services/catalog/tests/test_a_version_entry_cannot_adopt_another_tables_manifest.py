@@ -37,6 +37,7 @@ to `describe_table` to get wrong. Both relative spellings the backend accepts �
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 import pytest
@@ -65,6 +66,15 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return object()
 
     monkeypatch.setattr(versions_endpoint.native, "call", _call)
+
+    # THE EMIT TRAILER IS PATCHED AT ITS SEAM, not mirrored by a fake emitter. This file is about the
+    # manifest guard; growing a stub that implements enough of the emitter protocol to satisfy the
+    # trailer is the hand-rolled-mirror shape that drifted three times in one day — and it would fail
+    # this test for a reason that has nothing to do with what it guards.
+    async def _no_emit(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(versions_endpoint.lineage_deps, "emit_measured_write", _no_emit)
     return reached
 
 
@@ -76,7 +86,22 @@ def _create(manifest_path: str, spy: list[str]) -> object:
     this field. A gate satisfied by a neighbouring control proves nothing about its own.
     """
     body = CreateTableVersionRequest(id=["attacker"], version=2, manifest_path=manifest_path)
-    return versions_endpoint.create_table_version("attacker", body, cast(Any, _Namespace()), cast(Any, _Settings()))
+    # The door became ASYNC and grew the emit trailer's dependencies ([[LH-018]] — it mints a version and
+    # recorded nobody). The guard under test still runs BEFORE the native call, so the refusal path never
+    # reaches the emitter and a `None` is the honest stub for it; the accept path does reach it, which is
+    # why the emitter stub below records rather than raising.
+    return asyncio.run(
+        versions_endpoint.create_table_version(
+            "attacker",
+            body,
+            cast(Any, _Namespace()),
+            cast(Any, {}),
+            cast(Any, _Settings()),
+            cast(Any, None),
+            cast(Any, None),
+            None,
+        )
+    )
 
 
 @pytest.mark.parametrize(

@@ -104,6 +104,11 @@ COMPACT_TABLE = "compact_table"
 #: Restore moves the table's current version to a prior one — a real version-state change, recorded as a
 #: versioned WROTE at the new (restored) version.
 RESTORE_TABLE = "restore_table"
+#: The spec's own commit door (`CreateTableVersion`): it MOVES a manifest into the table's version slot,
+#: so a new version exists and its rows are whatever that manifest describes. A versioned WROTE at the
+#: version just minted — the same shape as ``restore_table``, and for the same reason: the version state
+#: changed and the graph has to be able to say who changed it. [[LH-018]].
+CREATE_TABLE_VERSION = "create_table_version"
 #: Declare reserves a table id with no data yet (versionless); register attaches an existing storage
 #: location. Both are "the table came into existence in this catalog" events, so — like ``create_table`` —
 #: they key a ``(:User)-[:CREATED]->(:Dataset)`` edge (see ``lineage/repository.py`` ``_CREATE_OPS``).

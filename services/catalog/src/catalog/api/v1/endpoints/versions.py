@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     BatchCommitTablesRequest,
@@ -24,9 +24,10 @@ from lance_namespace import (
     ServiceUnavailableError,
 )
 
-from catalog.api import fga_deps
+from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
     FgaClientDep,
+    LineageEmitterDep,
     NamespaceDep,
     SettingsDep,
     StorageOptionsDep,
@@ -35,6 +36,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import paginate_versions
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.core.lineage_emit import CREATE_TABLE_VERSION
 from catalog.services import dataplane, native
 from service_kit.governed import fga
 
@@ -288,11 +290,44 @@ def _refuse_a_manifest_this_table_does_not_own(manifest_path: str | None) -> Non
 
 
 @router.post("/{id}/version/create", response_model_exclude_none=True)
-def create_table_version(id: str, body: CreateTableVersionRequest, ns: NamespaceDep, settings: SettingsDep) -> CreateTableVersionResponse:
-    """Create one version entry for this table, from a manifest the table itself owns."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+async def create_table_version(
+    id: str,
+    body: CreateTableVersionRequest,
+    ns: NamespaceDep,
+    so: StorageOptionsDep,
+    settings: SettingsDep,
+    token: CurrentToken,
+    emitter: LineageEmitterDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> CreateTableVersionResponse:
+    """Create one version entry for this table, from a manifest the table itself owns.
+
+    THE ONLY DOOR IN THIS MODULE THAT WRITES, and until [[LH-018]] it recorded nothing. It MOVES a
+    manifest into the table's version slot, so a version exists afterwards that did not before — and a
+    version minted through the SPEC's own commit door left no provenance, while the same table's
+    `/commit` door emitted. Two doors onto one table, one of them silent.
+
+    Emitted AFTER the native call, pinned to the version just minted, exactly as the column doors and
+    `restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion
+    control, and two ops the dir backend answers 406) and stay quiet on purpose — an emit from those
+    would be provenance for work that never happened.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
     _refuse_a_manifest_this_table_does_not_own(body.manifest_path)
-    return native.call(ns, "create_table_version", body)
+    response = await run_in_threadpool(native.call, ns, "create_table_version", body)
+    await lineage_deps.emit_measured_write(
+        emitter,
+        segments,
+        ns=ns,
+        so=so,
+        settings=settings,
+        token=token,
+        operation=CREATE_TABLE_VERSION,
+        authorization=authorization,
+        pin_version=body.version,
+    )
+    return response
 
 
 @router.post("/{id}/version/describe", response_model_exclude_none=True)
