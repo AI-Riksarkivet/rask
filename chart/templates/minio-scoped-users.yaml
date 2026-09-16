@@ -84,6 +84,13 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
+  # Reap the finished pod, exactly as `openfga-migrate.yaml` does and for the identical reason: this
+  # Job's name carries the bootstrap revision, so the `before-hook-creation` policy above matches the
+  # PREVIOUS revision's name never — each upgrade mints a new name and leaves the old husk holding its
+  # completed pod. Counted live 2026-09-16: 17 of them (r146..r163). The cost is legibility, which is
+  # the thing this estate keeps losing — a `kubectl get pods` full of husks is how four orphaned
+  # durables and a split image stem both stayed invisible.
+  ttlSecondsAfterFinished: 3600
   backoffLimit: 3
   template:
     metadata:

@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**220 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 50 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -6034,7 +6034,7 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   ownership real), or they are removed as hand-applied residue — with the choice recorded. Related to
   [[LH-169]]: both are the same class, a hand-applied object the release believes it owns.
 
-**XC-053 · Helm hook Jobs accumulate one per revision forever — 17 today, each holding a completed pod**
+**XC-053 · ~~Helm hook Jobs accumulate one per revision forever — 17 today, each holding a completed pod~~ — CLOSED 2026-09-16 (the CLASS is gated; the 17 existing husks await a sweep)**
 `chart` · low · found 2026-09-16 by the backlog audit, counted live
 
 - *Why open:* 17 `rask-minio-scoped-users-r<NNN>` Jobs are present in `default`, one per release
@@ -6045,8 +6045,18 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   `openfga-migrate` already learned this: `chart/templates/openfga-migrate.yaml:20` carries
   `ttlSecondsAfterFinished: 3600` with a comment recording that 14 Completed husks had accumulated
   before it did.
-- *Closes when:* the hook Job gains the same `ttlSecondsAfterFinished` its sibling already has, or an
-  explicit `helm.sh/hook-delete-policy` — and a sweep removes the 17 that exist.
+- **CLOSED AS A CLASS, not as an instance.** `minio-scoped-users.yaml` gains the
+  `ttlSecondsAfterFinished: 3600` its five siblings already carry — measured: SIX chart Jobs are named
+  with `bootstrapRev` and it was the only one without. `hook-delete-policy` is not a substitute and
+  that is the whole trap: it matches by NAME, and the name is what changes every revision.
+- *Gated by `tests/unit/test_a_revision_named_hook_job_is_reaped.py`*, which derives the family from the
+  templates rather than listing it, so a seventh revision-named Job inherits the rule. Read off the
+  SOURCE, not a render: a render under one set of values cannot distinguish a conditional Job that was
+  skipped from one that is compliant. Proven discriminating — it was RED for exactly the one offender
+  and GREEN for the five compliant before the fix.
+- *Left undone, deliberately:* the 17 husks already on the cluster (r146..r163). A TTL applies to Jobs
+  created after it, so removing the existing ones is a `kubectl delete` against a shared cluster — the
+  owner's call, not a template's.
 
 **XC-051 · Undecided whether the estate shares one GreptimeDB or runs one per workload**
 `chart` · low · **blocked:** owner decision
