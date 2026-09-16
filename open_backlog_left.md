@@ -67,7 +67,7 @@ opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -76,6 +76,13 @@ opening — and are not counted here.
 
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
+
+**10 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
+`LH-172` and `LH-159` workable. That number is the one worth watching: the column above says how much
+is written down, and this says how much of the priority anyone can pick up without a ruling. It moved
+here by measurement rather than by attrition — four rows that were decision-gated in their bodies
+carried no `**blocked:**` marker, so the workable count read optimistic until they were marked. Gated
+too, for the same reason the CLOSED count is: a progress number nobody re-derives is a claim.
 
 ## The five conditions, MEASURED against the running estate (2026-09-15)
 
@@ -1658,7 +1665,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   **Not yet deployed** — the fix is in HEAD and the running image predates it.
 
 **LH-141 · A wrong `lineage.dataset_id` stamp is repaired only by a WRITE, so a dataset that stopped being written keeps a false name forever**
-`medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-11 · measured on the live estate
+`medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-11 · measured on the live estate · **blocked:** [[LH-146]]'s ruling on whether a synthetic assertion is acceptable — the GUARD half landed 2026-09-16, the REPAIR half cannot start without it
 
 - **THE CONSEQUENCE IS LIVE AND IT WRITES — measured 2026-09-16, and this is no longer a latent row.**
   A dataset the catalog governs as one table is being MAINTAINED under the identity of another, in a
@@ -4509,7 +4516,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   and measured in the running pods every lakehouse container builds a 64-thread compute pool on a
   one-CPU quota — see [[LH-172]]. Keeping it here would have left a memory multiplier filed under a
   row whose memory clause is already solved.
-`viewer, medallion, lineage, catalog, ingest, maintenance, service-kit, chart` · **HIGH**
+`viewer, medallion, lineage, catalog, ingest, maintenance, service-kit, chart` · med · *was HIGH; the lakehouse half closed 2026-09-16 (49 threaded opens, zero bare, gated) and what remains is `ingest` (phase 2) and the parked zones*
 
 - **THE CATALOG IS CONVERTED 2026-09-14 (`aca6a485`) — the per-REQUEST half, which is where this costs
   most.** All 11 of its opens now thread `shared_lance_session()`: `namespace.py` (2), `dataplane.py` (5),
@@ -4933,7 +4940,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   describes and a filtered scan may simply not exercise.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
-`medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
+`medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule · **blocked:** its own ruling — "Phase 2 — do not work ahead of the lakehouse"; counted here, worked after phase 1
 
 - *Measured 2026-09-11 on the running estate.* `scripts/ray_stage_job.py:86-88` reads
   `os.environ["S3_KEY"]` / `os.environ["S3_SECRET"]`, and the Ray head takes them via `secretKeyRef`

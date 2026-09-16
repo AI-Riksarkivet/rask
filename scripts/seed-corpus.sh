@@ -4,7 +4,7 @@
 # WHY THIS EXISTS, and why it does not simply declare a volume of its own.
 #
 # The corpus was seeded on 2026-08-03 and the estate looked empty until 2026-08-06. Nothing was
-# broken. A hand-applied Job mounted `corpus` as a hostPath (/home/blackwell/media-corpus) and wrote
+# broken. A hand-applied Job mounted `corpus` as a hostPath (/home/gabriel/media-corpus) and wrote
 # a real corpus into it — 10 chunk rows, 3 documents, an FTS index. The viewer mounted `corpus` as an
 # emptyDir, read it honestly, and answered `{"datasets": []}`. Same volume NAME, different SOURCE.
 # The seed exited 0. The viewer stayed 1/1 Ready and answered 200. Every probe was green.

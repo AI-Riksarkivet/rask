@@ -9,7 +9,7 @@ torch/transformers pins clash with TrOCR/htrflow).
     ~/qwen-serve/.venv-ray/bin/python scripts/deploy_qwen_llm.py down
 
 The Serve replica + vLLM engine run with `py_executable` pinned to this same
-venv so vLLM (torch 2.11/cu130, Blackwell sm_120) is available on the worker
+venv so vLLM (torch 2.11/cu130, gabriel sm_120) is available on the worker
 without polluting the rask venv. The engine reserves 1 GPU (tp=1); the HTR apps
 share the other two.
 

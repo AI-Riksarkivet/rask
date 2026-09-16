@@ -21,7 +21,7 @@
 import { chromium } from '@playwright/test';
 
 const ORIGIN = 'http://localhost:8090';
-const SHOT = '/home/blackwell/Desktop/lance-ns/docs/audits/shots';
+const SHOT = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
 const ZONES = [
 	{ name: 'home', path: '/' },
 	{ name: 'lakehouse', path: '/lakehouse/' },

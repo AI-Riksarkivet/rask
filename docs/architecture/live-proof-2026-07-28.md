@@ -242,7 +242,7 @@ Both run against the box's own k3s (`dmlpai01`, v1.36.2+k3s1). Note for anyone r
 `/etc/rancher/k3s/k3s.yaml` is world-readable, so DRIVING k3s needs no sudo — only
 `make k3s-import` does (it writes k3s's root-owned containerd image store).
 
-### GPU — the device plugin actually schedules onto a Blackwell
+### GPU — the device plugin actually schedules onto a gabriel
 
 kind has no nvidia OCI runtime, which is why `rask-nvdp` sat in `ContainerCreating` for the whole
 kind session. On k3s:
@@ -253,7 +253,7 @@ nvidia-device-plugin-q4qsm   1/1   Running
 
 # a pod with runtimeClassName: nvidia and limits {nvidia.com/gpu: 1}
 phase=Succeeded
-0, NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition
+0, NVIDIA RTX PRO 6000 gabriel Max-Q Workstation Edition
 ```
 
 ### NetworkPolicy — default-deny actually BLOCKS

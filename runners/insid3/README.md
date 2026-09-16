@@ -17,4 +17,4 @@ Setup (weights are Meta-gated; nothing here downloads them for you):
    then complete/verify with the strict load (`fix` step inside the converter's docstring).
 4. `INSID3_CODE=<code-dir> ASSIST_FRAME_BASE=<viewer-url> uv run python server.py`
 
-Blackwell GPUs need the cu128 torch wheels (pinned here) — cu126 has no sm_120 kernels.
+gabriel GPUs need the cu128 torch wheels (pinned here) — cu126 has no sm_120 kernels.

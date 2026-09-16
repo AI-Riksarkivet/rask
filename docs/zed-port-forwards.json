@@ -2,11 +2,11 @@
   "ssh_connections": [
     {
       "host": "10.16.51.53",
-      "username": "blackwell",
+      "username": "gabriel",
       "projects": [
         {
           "paths": [
-            "/home/blackwell/Desktop/rask"
+            "/home/gabriel/Desktop/rask"
           ]
         }
       ],

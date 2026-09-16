@@ -4,7 +4,7 @@
 //
 import { chromium } from '@playwright/test';
 
-const SHOTS = '/home/blackwell/Desktop/lance-ns/docs/audits/shots';
+const SHOTS = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1100, height: 620 } });
 const fails = [];

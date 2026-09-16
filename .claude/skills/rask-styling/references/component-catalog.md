@@ -78,7 +78,7 @@ Coverage is thin: **4 story files for ~35 exported components** — `button.stor
 
 Do not treat these as patterns to copy.
 
-1. `harness/drive.mjs:7` hardcodes an absolute path into a **different repo** (`/home/blackwell/Desktop/lance-ns/...`) and imports `@playwright/test`, which is not a dependency of `@rask/ui`. The harness cannot run as committed on another machine.
+1. `harness/drive.mjs:7` hardcodes an absolute path into a **different repo** (`/home/gabriel/Desktop/lance-ns/...`) and imports `@playwright/test`, which is not a dependency of `@rask/ui`. The harness cannot run as committed on another machine.
 2. Three extensionless relative imports violate the package's own `.js` convention and survive into `dist`: `motion.ts:10` → `'./gsap'`, `status-board.svelte:9` → `'../../motion'`, and `search-bar.svelte:8` → `'../chip'` (a bare **directory** import, resolvable only by a bundler's implicit `/index` lookup).
 3. Component subpaths declare no `default` condition — a tool resolving without the `svelte` condition gets an unresolvable specifier. Conversely `./color-mode` promises a `default` while shipping raw `$state`/`$derived`.
 4. `seenOnClose` is exported from `runs/run-status.ts:152` and consumed by `notification-center.svelte:73` but omitted from `runs/index.ts` — invisible on the public surface.

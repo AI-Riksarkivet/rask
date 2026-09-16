@@ -11,7 +11,7 @@
 import { chromium } from '@playwright/test';
 
 const ORIGIN = 'http://localhost:8090';
-const SHOT = '/home/blackwell/Desktop/lance-ns/docs/audits/shots';
+const SHOT = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
 
 const browser = await chromium.launch({
 	args: ['--host-resolver-rules=MAP lance-ns-dex:5556 127.0.0.1:5556'],

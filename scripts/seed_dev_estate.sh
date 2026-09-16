@@ -19,7 +19,7 @@
 set -euo pipefail
 
 NS="${RASK_NAMESPACE:-default}"
-CORPUS_HOST_PATH="${RASK_MEDIA_CORPUS:-/home/blackwell/media-corpus}"
+CORPUS_HOST_PATH="${RASK_MEDIA_CORPUS:-/home/gabriel/media-corpus}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }

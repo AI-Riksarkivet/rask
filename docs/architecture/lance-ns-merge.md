@@ -1,7 +1,7 @@
 <!-- Status: PLAN — decisions marked ACCEPTED below are owner-ratified; the rest stay PROPOSED.
      Authored 2026-07-24. RE-PINNED 2026-07-27: main@df70b63 -> main@502150b (190 commits), with owner
      ruling R8 and the structural drift folded in — see "Re-pin 2026-07-27" below.
-     Source repo: /home/blackwell/Desktop/lance-ns
+     Source repo: /home/gabriel/Desktop/lance-ns
      (re-pin to current lance-ns main at each phase copy — copies are taken fresh, never stale). -->
 
 # Merge plan: lance-ns → rask (`feat/lance-ns-merge`)
@@ -17,7 +17,7 @@
 > not-do list). Upstream's `controlplane` landed at `services/controlplane` and is picked up by the
 > `services/*` glob with no manifest edit.
 
-Source of truth for the copy is `/home/blackwell/Desktop/lance-ns` at **`502150b`** (re-pinned 2026-07-27 from `df70b63`); target is `/home/blackwell/Desktop/rask` on `feat/lance-ns-merge` (carries the `projects/`-layer removal, `06a60a4`, **and the D7 restructure, which LANDED 2026-07-27** — `frontend/` is now its own bun+turbo root, `components/` no longer exists, and both workspaces glob; see D7 below for what actually shipped vs what was proposed). The vendored reference copy at `/home/blackwell/Desktop/lance-ns/rask/` is NOT a merge source or target.
+Source of truth for the copy is `/home/gabriel/Desktop/lance-ns` at **`502150b`** (re-pinned 2026-07-27 from `df70b63`); target is `/home/gabriel/Desktop/rask` on `feat/lance-ns-merge` (carries the `projects/`-layer removal, `06a60a4`, **and the D7 restructure, which LANDED 2026-07-27** — `frontend/` is now its own bun+turbo root, `components/` no longer exists, and both workspaces glob; see D7 below for what actually shipped vs what was proposed). The vendored reference copy at `/home/gabriel/Desktop/lance-ns/rask/` is NOT a merge source or target.
 
 **Amendment (2026-07-24, re-pin `c2ae04f` → `df70b63`).** The 14 commits between the pins are (a) the **media plane** — the lance-audio fold: `services/{viewer,search,annotator}` + `media`/`annotator` frontend zones + `media.yaml`/corpus mount + catalog-mode bearer identity — and (b) **OIDC hardening** — Dex served on the app origin (`/dex`), split-horizon issuer discovery, a login-first gate. Owner rulings folded into this revision:
 
@@ -52,7 +52,7 @@ case); catalog 501s **confirmed at 7** (`docs/COVERAGE.md`, 47/54 backed).
 ## P0 — Branch hygiene + repo-layout decision (first commit is a doc, not code)
 
 **Hygiene rules (whole branch):**
-- All work commits land on `feat/lance-ns-merge` in `/home/blackwell/Desktop/rask`. Never push to any rask remote. Never commit to or merge with rask `main`. Never edit `/home/blackwell/Desktop/lance-ns` (copy out only).
+- All work commits land on `feat/lance-ns-merge` in `/home/gabriel/Desktop/rask`. Never push to any rask remote. Never commit to or merge with rask `main`. Never edit `/home/gabriel/Desktop/lance-ns` (copy out only).
 - Conventional commits (rask `cliff.toml`); each phase = one reviewable commit series; each commit message cites the lance-ns source commit (`c2ae04f`) — full git-history grafting (subtree/filter-repo) is explicitly out of scope, provenance is by citation.
 - First commit: `docs/architecture/lance-ns-merge.md` — the layout table below, the naming rules, and the five decisions restated with status PROPOSED. rask's `docs/architecture/` is its living design record; this is where the plan lives, not in scratch files.
 
@@ -567,7 +567,7 @@ job `runtime_env`), repoint `medallion.rayAddress` at the KubeRay head Service, 
 
 ## Explicitly NOT done on this branch
 
-- No push to any rask remote; no commits to or merge with rask `main`; no edits to `/home/blackwell/Desktop/lance-ns`.
+- No push to any rask remote; no commits to or merge with rask `main`; no edits to `/home/gabriel/Desktop/lance-ns`.
 - No NATS HA / nack operator work (#20 parked).
 - No Keycloak integration or Dex removal (seam documented only).
 - ~~No Ray version reconciliation, no touching rask's orchestrator loop or head-local htr jobs~~ — **REVOKED by owner rulings R2/R3**: unification is the P1 pre-step; the orchestrator loop is decommissioned in P7 (and only there, only after the P7 gate).

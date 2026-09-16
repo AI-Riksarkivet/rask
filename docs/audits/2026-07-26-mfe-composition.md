@@ -1,6 +1,6 @@
 # Audit: four-zone micro-frontend composition vs the `micro-frontends` skill
 
-Repo: `/home/blackwell/Desktop/lance-ns` — branch `main` (clean at `e489f2b`).
+Repo: `/home/gabriel/Desktop/lance-ns` — branch `main` (clean at `e489f2b`).
 Skill read in full: `SKILL.md` + all five references
 (`composition.md`, `routing-and-orchestration.md`, `principles.md`, `communication.md`,
 `module-federation.md` — the last is N/A, no bundler federation here).

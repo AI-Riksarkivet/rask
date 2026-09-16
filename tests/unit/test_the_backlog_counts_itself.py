@@ -69,6 +69,11 @@ _TOTAL = re.compile(r"^\*\*(\d+) open items\*\*", re.MULTILINE)
 #: the file, so the newline is part of the pattern rather than something to normalise away.
 _CLOSED_TOTAL = re.compile(r"A further (\d+) rows\s+are CLOSED", re.MULTILINE)
 _FOCUS = re.compile(r"<!-- FOCUS:START -->(.*?)<!-- FOCUS:END -->", re.DOTALL)
+#: The sentence that says how much of the priority is pickable: `10 of the 13 phase-1 lakehouse HIGH
+#: rows are decision-gated`.
+_GATED = re.compile(r"\*\*(\d+) of the (\d+) phase-1 lakehouse HIGH rows are decision-gated\*\*")
+#: A row that names a decision it waits on. The marker lives on the metadata line beside the priority.
+_BLOCKED = "**blocked:**"
 
 #: Table label -> the section heading that carries its items. Keyed on the table's own labels so a
 #: renamed phase fails here rather than silently counting zero.
@@ -140,6 +145,33 @@ def test_every_phase_row_matches_the_items_under_its_heading() -> None:
         # stayed honest — and it is the column that decides what gets worked next.
         high = sum(1 for metadata in rendered if "**HIGH**" in metadata)
         assert int(stated_high) == high, f"the counts table says {label.strip()} has {stated_high} HIGH; {high} open rows are marked **HIGH**"
+
+
+def test_the_header_says_how_much_of_the_priority_is_actually_pickable() -> None:
+    """The HIGH column counts work; this counts work anyone can START.
+
+    The two diverged silently and by a lot. Measured 2026-09-16, FOUR phase-1 rows named the ruling
+    they waited on in their bodies and carried no `**blocked:**` marker, so the header implied twice as
+    many pickable HIGH rows as there were — and the number a reader uses to decide "what do I do next"
+    was the wrong one. Re-derived here for the same reason the CLOSED count is: a progress number
+    nobody checks is a claim.
+    """
+    text = _text()
+    stated = _GATED.search(text)
+    assert stated, "the header does not say how many phase-1 lakehouse HIGH rows are decision-gated"
+
+    bounds = [(m.start(), m.group(1)) for m in _SECTION.finditer(text)] + [(len(text), None)]
+    metadata: list[str] = []
+    for i, (start, name) in enumerate(bounds[:-1]):
+        if name and name.startswith("PHASE 1 · LAKEHOUSE"):
+            metadata = [_metadata_of(body) for body in _OPEN_ITEM.findall(text[start : bounds[i + 1][0]])]
+    assert metadata, "the phase-1 lakehouse section rendered no open rows — this would pass vacuously"
+
+    high = [m for m in metadata if "**HIGH**" in m]
+    gated = [m for m in high if _BLOCKED in m]
+    assert (int(stated.group(1)), int(stated.group(2))) == (len(gated), len(high)), (
+        f"the header says {stated.group(1)} of {stated.group(2)} phase-1 HIGH rows are decision-gated; {len(gated)} of {len(high)} carry a `{_BLOCKED}` marker"
+    )
 
 
 def test_item_ids_are_unique() -> None:

@@ -1,7 +1,7 @@
 # Route audit — lance-ns frontend (branch `main`, HEAD `f9fe691`)
 
 Read-only audit. Every claim below is anchored to `path:line` and to a command that was actually run.
-Paths are relative to `/home/blackwell/Desktop/lance-ns` unless absolute.
+Paths are relative to `/home/gabriel/Desktop/lance-ns` unless absolute.
 
 **Method / scope notes**
 - Route enumeration: `find <zone>/src/routes -type f` per zone (four zones, complete file listing, no
@@ -581,7 +581,7 @@ them.
 **(b) `isCrossZonePath` returns false for the dead paths, by construction.** `ZONES = ['lakehouse', 'media',
 'annotator']` (`:20`) and `ZONE_PATH = ^\/(lakehouse|media|annotator)(?:\/|$)` (`:23`). `/data…` and
 `/lineage` match nothing. Run against the real markup (script:
-`/tmp/claude-1000/-home-blackwell-Desktop-lance-ns/88508a85-af5d-44c1-9ef1-92d04ece7015/scratchpad/probe.ts`,
+`/tmp/claude-1000/-home-gabriel-Desktop-lance-ns/88508a85-af5d-44c1-9ef1-92d04ece7015/scratchpad/probe.ts`,
 `bun run` output):
 
 ```

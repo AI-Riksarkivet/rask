@@ -21,27 +21,27 @@
   "ssh_connections": [
     {
       "host": "10.16.51.53",
-      "username": "blackwell",
+      "username": "gabriel",
       "args": [],
       "projects": [
         {
           "paths": [
-            "/home/blackwell"
+            "/home/gabriel"
           ]
         },
         {
           "paths": [
-            "/home/blackwell/Desktop/./"
+            "/home/gabriel/Desktop/./"
           ]
         },
         {
           "paths": [
-            "/home/blackwell/Desktop/diffu/./"
+            "/home/gabriel/Desktop/diffu/./"
           ]
         },
         {
           "paths": [
-            "/home/blackwell/Desktop/rask"
+            "/home/gabriel/Desktop/rask"
           ]
         }
       ],

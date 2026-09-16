@@ -17,7 +17,7 @@
 import { chromium } from '@playwright/test';
 
 const ORIGIN = 'http://localhost:8090';
-const SHOT = '/home/blackwell/Desktop/lance-ns/docs/audits/shots';
+const SHOT = '/home/gabriel/Desktop/lance-ns/docs/audits/shots';
 // Distinctive, so a stale fixture or a coincidental match cannot pass this.
 const VIEW = `cond5-${Date.now().toString(36)}`;
 

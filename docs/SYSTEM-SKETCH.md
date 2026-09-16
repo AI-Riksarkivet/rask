@@ -148,11 +148,11 @@ DB-per-service · spec-faithful (Lance Namespace REST).
 
 ---
 
-_The three sections below are the **cited Lakekeeper study output** (study `wfb25lg74`, run against the real clone at `/home/blackwell/Desktop/lakekeeper-ref`) — they expand §5 with `file:line` evidence on both sides, a sequenced top-5, and the keepers + deliberate non-adoptions._
+_The three sections below are the **cited Lakekeeper study output** (study `wfb25lg74`, run against the real clone at `/home/gabriel/Desktop/lakekeeper-ref`) — they expand §5 with `file:line` evidence on both sides, a sequenced top-5, and the keepers + deliberate non-adoptions._
 
 ## Lakekeeper → Lance-NS adoption backlog (prioritized, de-duped)
 
-> Citations verified against the cloned repos. "Our state" cites `/home/blackwell/Desktop/lance-ns/...`; Lakekeeper cites `/home/blackwell/Desktop/lakekeeper-ref/...`. Data-plane reality: **target = S3-compatible (MinIO default; AWS/Ceph/RustFS). STS vending (`AssumeRole`) is the recommended scoped-cred path and works on MinIO/Ceph/AWS; Mode B is the server-mediated default; static keys for STS-less S3 backends.**
+> Citations verified against the cloned repos. "Our state" cites `/home/gabriel/Desktop/lance-ns/...`; Lakekeeper cites `/home/gabriel/Desktop/lakekeeper-ref/...`. Data-plane reality: **target = S3-compatible (MinIO default; AWS/Ceph/RustFS). STS vending (`AssumeRole`) is the recommended scoped-cred path and works on MinIO/Ceph/AWS; Mode B is the server-mediated default; static keys for STS-less S3 backends.**
 
 | # | Pattern | Maps to | Our state | Recommendation | Priority | Effort |
 |---|---------|---------|-----------|----------------|----------|--------|
@@ -225,7 +225,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 
 ## Lessons adopted from Lakekeeper
 
-We studied the cloned Lakekeeper source (`/home/blackwell/Desktop/lakekeeper-ref`, a production Rust Iceberg REST catalog) subsystem-by-subsystem and selectively adopted its patterns. Lakekeeper is a multi-warehouse, multi-table-format, high-scale service; we are a single-warehouse FastAPI catalog over native pylance `DirectoryNamespace`. The guiding principle below is **adopt the shape, not the scale** — and several mature Lakekeeper patterns are deliberately *not* adopted because they solve problems we do not have.
+We studied the cloned Lakekeeper source (`/home/gabriel/Desktop/lakekeeper-ref`, a production Rust Iceberg REST catalog) subsystem-by-subsystem and selectively adopted its patterns. Lakekeeper is a multi-warehouse, multi-table-format, high-scale service; we are a single-warehouse FastAPI catalog over native pylance `DirectoryNamespace`. The guiding principle below is **adopt the shape, not the scale** — and several mature Lakekeeper patterns are deliberately *not* adopted because they solve problems we do not have.
 
 ### Data-plane reality (read this first)
 

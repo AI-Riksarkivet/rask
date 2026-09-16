@@ -1232,7 +1232,7 @@ can never drift into a profile that sets neither.
      did answer `{"datasets": []}`. Neither was broken. They mounted a volume with the same NAME and
      a different SOURCE:
 
-         seed job                  corpus -> hostPath /home/blackwell/media-corpus
+         seed job                  corpus -> hostPath /home/gabriel/media-corpus
          viewer/search/annotator   corpus -> emptyDir {}          (explorer.corpus.mode default)
 
      A THIRD path was in play: explorer.corpus.hostPath defaults to /var/media-corpus, so even

@@ -20,7 +20,7 @@ version must match the cluster's ray (currently 3.0.0.dev0) — rask's pinned
 
 Key deployment decisions (learned the hard way — keep them):
   - Pinned to the **Ada** tier via the `gpu_ada` custom resource (1 whole GPU x
-    4 replicas = the entire Ada tier). Gemma owns Blackwell; HTR owns Ada.
+    4 replicas = the entire Ada tier). Gemma owns gabriel; HTR owns Ada.
   - `runtime_env` installs deps with **uv** and lists `opencv-python-headless`
     BEFORE htrflow: uv resolves deterministically, so the GL-free cv2 wins over
     the full `opencv-python` htrflow pulls in (otherwise the replica dies on a
