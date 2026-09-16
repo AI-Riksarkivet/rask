@@ -26,10 +26,15 @@ THE SAME FUNCTION, NOT A SECOND COPY. `enforce_bus_authz` already authorizes AS 
 stamped, which is the only principal a cron tick has; reimplementing "may you record this" here is how
 the two doors would drift, and that drift is the defect this closes rather than repeats.
 
-A REFUSAL STRANDS, IT DOES NOT DROP. The drain already separates a malformed object (poison — dropped,
+A REFUSAL IS LEFT STAGED, NOT DROPPED. The drain separates a malformed object (poison — dropped,
 because it can wedge the drain forever) from a failure (stranded — counted, left staged for the next
 tick). A governance refusal is neither malformed nor transient, and destroying the only durable copy of
-a committed write's provenance is the wrong answer to "you may not record this": it strands.
+a committed write's provenance is the wrong answer to "you may not record this": the object stays.
+
+IT IS COUNTED AS `refused`, NOT `stranded` ([[LH-004]]). `stranded` is documented as "a tick FAILED
+while it recovered everything else", and a refusal is the opposite: well-formed, deterministic, and no
+evidence of any fault. Counting the two together made `drained=0 stranded=6` — measured unchanged for
+2.1 days on a healthy relay — read as a wedged one. THE HANDLING IS UNCHANGED; only the number moved.
 """
 
 from __future__ import annotations
@@ -56,19 +61,19 @@ def test_the_relay_authorizes_before_it_ingests() -> None:
     assert body.index("await enforce_bus_authz(") < ingest_at, "the check must run BEFORE the event reaches the graph"
 
 
-def test_a_refused_event_is_stranded_rather_than_dropped() -> None:
-    """The drain's two existing outcomes mean different things, and a refusal is the second.
+def test_a_refused_event_is_counted_apart_and_not_dropped() -> None:
+    """The drain's outcomes mean different things, and a refusal is its own.
 
     Poison is DROPPED because a malformed object wedges the drain forever. A refusal is well-formed and
     deterministic: dropping it would destroy the only durable copy of a committed write's provenance to
-    answer a governance question. It is counted and left staged.
+    answer a governance question. It is counted — as `refused`, not `stranded` — and left staged.
     """
     body = inspect.getsource(reconcile_cron._drain_outbox)
 
     assert "PermissionDeniedError" in body, "a refusal must be caught distinctly — it is neither poison nor a transient failure"
     refusal_at = body.index("PermissionDeniedError")
-    tail = body[refusal_at : refusal_at + 900]
-    assert "stranded" in tail, "a refused event must land on the stranded counter, which already exists for exactly this"
+    tail = body[refusal_at : refusal_at + 1400]
+    assert "refused += 1" in tail, "a refused event must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening"
     assert "drop_event" not in tail, "a refusal must NOT delete the staged object — that is the poison path, and this is not poison"
 
 
@@ -152,6 +157,7 @@ def test_a_refusal_is_HANDLED_and_not_a_crash(tmp_path: Any, monkeypatch: pytest
 
     outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), cast("Any", _Settings()), {}))
 
-    assert outcome.stranded == 1, "a refused event must be counted as stranded"
+    assert outcome.refused == 1, "a refused event must be counted as refused"
+    assert outcome.stranded == 0, "`stranded` means a tick that FAILED; a governance refusal is not one"
     assert outcome.drained == 0 and repo.ingested == [], "a refused event must never reach the graph"
     assert list(outbox.list_events(uri, {})), "a refusal must LEAVE the event staged — dropping it destroys the only durable copy"

@@ -819,6 +819,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   anywhere. Widening that grant to tidy a gauge would trade a real least-privilege boundary for a
   cosmetic one, and it is the same shape as the 2026-09-10 defect where `delete_file` re-created a
   directory marker and the drain had never once succeeded.
+  **SHIPPED 2026-09-16 — `refused` IS ITS OWN NUMBER, AND THE ALERTS NO LONGER LIE.** `DrainOutcome`
+  and `SweepReport` carry `refused` beside `drained`/`stranded`; the `PermissionDeniedError` branch
+  counts it instead of folding into `stranded`; `outbox.events.refused` is emitted every tick (zero
+  included, so the series exists before it is needed). The event is still LEFT STAGED — this split the
+  reporting, not the handling.
+  **THE ALERT HALF IS THE PART THAT MATTERED.** `chart/alerting/rules.yml` carried
+  `LineageOutboxNotDraining: max(outbox_depth) > 0` at severity CRITICAL, and depth has a permanent
+  floor equal to the refused count — so the moment `observability.alerting.enabled` was turned on it
+  would have fired forever with a false description, making a genuinely stuck relay indistinguishable
+  from a settled answer. (It is NOT firing today: there is no vmalert and no alertmanager pod on this
+  estate, and the toggle is off — `values.yaml:3006` records enabling it as a separate open decision.)
+  Both rules are now guarded on "nothing is moving" rather than "something is staged", and a
+  `LineageOutboxEventsRefused` WARNING keeps the condition visible without paging.
+  *`or vector(0)` is load-bearing and `make alert-rules-check` proved it:* an `and` against an EMPTY
+  vector yields empty, so the first guarded version silently never fired at all — a fix for a false page
+  turning into a permanent no-page, which is strictly worse. Pinned by three new promtool cases: stuck
+  with counters ABSENT still pages, the measured live scenario (depth 6, refused each tick, aging 2.1
+  days) does not, and a deep-but-draining backlog does not.
   *So the fix is to change what COUNTS, not to move the object:* report `refused` as its own number and
   its own metric rather than folding it into `stranded`, which needs no write permission, destroys
   nothing, and leaves the event recoverable if the grant ever lands. The drain already NAMES the
@@ -2754,6 +2772,19 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   *Provenance for the shape of the guard:* traversal and control characters are refused on SHAPE with
   the backend untouched; everything else costs exactly one `describe_table` READ, and
   `create_table_version` must not appear in the call log of any refusal.
+  **DEPLOYED `main-b42bed5d` AND OBSERVED ON THE RUNNING CATALOG** — the acceptance test is the door,
+  not the suite. Driven against `acme-bronze$events` (location `s3://acme-bucket/medallion/bronze`):
+
+      medallion/bronze/_versions/probe.manifest-0                 -> reaches the backend
+      s3://acme-bucket/medallion/bronze/_versions/probe.manifest-0 -> reaches the backend
+      some-other-project/other.lance/_versions/probe.manifest-0    -> REFUSED by name
+      medallion/bronze-evil/_versions/x.manifest                   -> REFUSED (near-miss prefix)
+      s3://acme-bucket-evil/medallion/bronze/_versions/x           -> REFUSED (near-miss bucket)
+      _versions/probe.manifest-0                                   -> REFUSED (store key outside)
+
+  The third row is the whole point: that exact request passed the guard on `main-5775970a` an hour
+  earlier and was resolved against the bucket. The first two rows are the other half — a guard that
+  refused everything would look identical on the attack row and is how this defect started.
   **The remedy's own premise was the error**: "confinement by construction, no `describe_table`
   round-trip to get wrong" only holds if relative paths resolve inside the table, and they resolve
   nowhere. Confinement is now BY COMPARISON — shape refusals first (traversal, control characters) at no

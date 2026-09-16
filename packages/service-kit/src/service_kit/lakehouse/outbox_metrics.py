@@ -63,9 +63,20 @@ _stranded = _meter.create_counter(
     "outbox.events.stranded",
     unit="{event}",
     description=(
-        "Staged events the relay could not ingest this tick and deliberately LEFT staged. Distinct from "
-        "poison_dropped: the object is intact and is retried next tick, so a steady non-zero value means a "
-        "specific event the graph keeps refusing — which, before per-event isolation, wedged the whole drain."
+        "Staged events a tick FAILED on and deliberately LEFT staged — a store outage, an expired "
+        "credential, a graph that did not answer. Distinct from poison_dropped: the object is intact and "
+        "is retried next tick. Distinct from refused: that one is a settled governance answer rather than "
+        "a failure, and counting the two together made this number report an outage that was not happening."
+    ),
+)
+_refused = _meter.create_counter(
+    "outbox.events.refused",
+    unit="{event}",
+    description=(
+        "Staged events the GRAPH refuses to record — a producer staged provenance it is not authorized to "
+        "write. Deterministic, so every tick re-refuses the same events and the count is a floor rather "
+        "than a rate: it means N events need a human, NOT that the relay is failing. Split out because "
+        "`drained=0 stranded=6` held for 2.1 days on a healthy relay and read as a wedged one."
     ),
 )
 _poison_dropped = _meter.create_counter(
@@ -148,6 +159,14 @@ def record_stranded(count: int) -> None:
     """Always emit, for the same reason as ``record_drained``: a series that only appears once something is
     already wedged cannot be alerted on before it wedges."""
     _stranded.add(count)
+
+
+def record_refused(count: int) -> None:
+    """Always emit, same reason again — and here it matters more, because the alert that guards on this
+    series must be able to read a zero. A rule written as "depth > 0 and no refusals" evaluates to
+    nothing at all if the refused series does not exist yet, which is the silent no-fire this module has
+    already paid for once (see the `_seconds` suffix note in `chart/alerting/rules.yml`)."""
+    _refused.add(count)
 
 
 def record_poison_dropped() -> None:

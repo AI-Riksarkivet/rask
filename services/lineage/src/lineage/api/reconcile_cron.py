@@ -68,21 +68,36 @@ class SweepReport(BaseModel):
     provenance_holes: dict[str, list[int]] = Field(default_factory=dict)
     outbox_drained: int = 0
     outbox_stranded: int = 0
+    outbox_refused: int = 0
     pruned_runs: int = 0
     pruned_events: int = 0
 
 
 class DrainOutcome(BaseModel):
-    """What one outbox drain did — BOTH numbers, because either alone reads as the opposite of the truth.
+    """What one outbox drain did — THREE numbers, because any one alone reads as the opposite of the truth.
 
     ``drained`` alone says a tick succeeded while a specific event has been refused on every tick since
-    the estate came up; ``stranded`` alone says a tick failed while it recovered everything else. The
-    pair is what distinguishes "the relay is working and one event needs a human" from "the relay is
-    wedged", and those need different responses.
+    the estate came up; ``stranded`` alone says a tick failed while it recovered everything else. The set
+    is what distinguishes "the relay is working and one event needs a human" from "the relay is wedged",
+    and those need different responses.
+
+    ``refused`` IS THAT DISTINCTION MADE LOAD-BEARING rather than left to a reader. A governance refusal
+    is not a failed tick: the event is well-formed, the graph's answer is deterministic, and no retry
+    changes it. Counted as ``stranded`` it made the pair say both things at once — measured on the live
+    estate, `drained=0 stranded=6` unchanged for 2.1 days while the relay was healthy (it drained
+    `drained=1 stranded=0` the moment ingest's credential landed), so the numbers reported a wedged relay
+    that did not exist.
+
+    THE HANDLING IS UNCHANGED AND THE EVENT STAYS STAGED. This splits the REPORTING only. Retiring a
+    permanently-refused event is not available to this service: moving it aside is a PutObject and the
+    relay is denied that by policy (`test_the_lineage_plane_writes_nothing_it_does_not_own.py` pins
+    `not (allowed & {"s3:PutObject", ...})`), and destroying the only durable copy of a committed write's
+    provenance is the wrong answer to "you may not record this" in any case.
     """
 
     drained: int = 0
     stranded: int = 0
+    refused: int = 0
 
 
 def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
@@ -183,6 +198,7 @@ def log_sweep(report: SweepReport) -> None:
             "provenance_holes": sum(len(v) for v in report.provenance_holes.values()),
             "outbox_drained": report.outbox_drained,
             "outbox_stranded": report.outbox_stranded,
+            "outbox_refused": report.outbox_refused,
             "pruned_runs": report.pruned_runs,
             "pruned_events": report.pruned_events,
         },
@@ -349,7 +365,7 @@ async def _on_cron(
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
         report = summarize_sweep(await _sweep(repository, settings, opts, await governed_tables(request, settings)))
-        report.outbox_drained, report.outbox_stranded = outcome.drained, outcome.stranded
+        report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
         report.pruned_runs = await _prune_old_runs(repository, settings)
         report.pruned_events = await _prune_old_events(repository, settings)
     log_sweep(report)
@@ -403,7 +419,7 @@ async def _drain_outbox(
 
     cap = settings.outbox_drain_limit or None  # 0 => unbounded (the pre-P1.2 behavior)
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=cap)))
-    drained = stranded = 0
+    drained = stranded = refused = 0
     for key, event_json in staged:
         try:
             event = RunEvent.model_validate_json(event_json)
@@ -490,7 +506,14 @@ async def _drain_outbox(
             # Its own log line because the fact is worth reading: a staged event the graph refuses means a
             # producer is staging provenance it is not authorized to record, which the generic stranded
             # line — shared with credential expiry and store outages — would bury.
-            stranded += 1
+            #
+            # AND ITS OWN NUMBER, for the same reason one step up. `stranded` is documented as "a tick
+            # FAILED while it recovered everything else", and a refusal is the opposite of that: the
+            # event is well-formed, the answer is deterministic, and the relay is working exactly as
+            # designed. Folding the two together made `drained=0 stranded=6` — measured unchanged for
+            # 2.1 days on this estate — read as a wedged relay, so the pair could no longer tell a
+            # settled governance answer from the outage it exists to surface.
+            refused += 1
             # THE VERIFIED `sub`, parsed HERE from the raw json rather than reused from the poison branch
             # above — `payload` is bound only inside that branch, so reading it here raised
             # `UnboundLocalError`, and because this handler sits inside the per-event `try` it escaped to
@@ -516,9 +539,14 @@ async def _drain_outbox(
     # of reading "no data" until the first non-zero drain (the lesson the compaction metrics learned).
     outbox_metrics.record_drained(drained)
     outbox_metrics.record_stranded(stranded)
-    if drained or stranded:
-        log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded})
-    return DrainOutcome(drained=drained, stranded=stranded)
+    outbox_metrics.record_refused(refused)
+    # ALL THREE IN THE CONDITION, not just the two that used to exist. Gated on `drained or stranded`,
+    # a tick whose only outcome was a REFUSAL logged nothing at all — so splitting the counter would have
+    # made the six live refusals invisible and read as the problem disappearing. The line is the thing an
+    # operator greps before any dashboard exists, so it carries what the outcome carries.
+    if drained or stranded or refused:
+        log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded, "refused": refused})
+    return DrainOutcome(drained=drained, stranded=stranded, refused=refused)
 
 
 async def _ack_binding() -> dict[str, str]:

@@ -7,17 +7,61 @@
 groups:
   - name: lance-lineage
     rules:
+      # DEPTH ALONE IS NOT A RELAY FAULT, and this rule asserted that it was. A governance refusal leaves
+      # the event staged FOREVER by design — the graph's answer is deterministic and destroying the only
+      # durable copy of a committed write's provenance is the wrong response to "you may not record this"
+      # — so depth has a permanent floor equal to the number of refused events. Measured 2026-09-16 on the
+      # `rask-lineage` lane: depth 6, oldest 179206s (2.1 days), while the relay was healthy (it drained
+      # `drained=1 stranded=0` the moment ingest's credential landed). This rule would therefore have fired
+      # CRITICAL continuously from the moment alerting was enabled, with a description that is false — and
+      # a permanently-firing critical makes a genuinely stuck relay indistinguishable from a settled one,
+      # neutralising the very alert this file exists to provide.
+      #
+      # THE GUARD IS "NOTHING IS MOVING", not "something is staged": page when the relay is neither
+      # draining nor refusing, which is the condition that actually means stuck. `_total` is not optional
+      # — the OTLP->Prometheus exporter suffixes counters, and the live information_schema carries
+      # `outbox_events_drained_total` / `outbox_events_refused_total`. A rule naming the bare form matches
+      # nothing and can never fire, which is the identical defect recorded below for `outbox_oldest_age`.
+      #
+      # `or vector(0)` IS LOAD-BEARING, not defensive noise. An `and` against an EMPTY vector yields
+      # empty, so a guard naming a series that does not exist yet silently disables the whole alert —
+      # turning a fix for a false page into a permanent no-page, which is strictly worse. Caught by
+      # `make alert-rules-check`: without it, promtool replayed the existing depth-only fixture and the
+      # critical did not fire at all. The counters are emitted on EVERY tick including zero
+      # (`outbox_metrics.record_refused`), so in a running estate the series exists — this covers the
+      # first tick after a fresh deploy, and a backend that drops an all-zero counter series.
       - alert: LineageOutboxNotDraining
-        expr: max(outbox_depth) > 0
+        expr: >-
+          max(outbox_depth) > 0
+          and (sum(rate(outbox_events_drained_total[15m])) or vector(0)) == 0
+          and (sum(rate(outbox_events_refused_total[15m])) or vector(0)) == 0
         for: 10m
         labels:
           severity: critical
           service: lineage
         annotations:
-          summary: "Lineage outbox not draining (depth > 0 for 10m)"
+          summary: "Lineage outbox not draining (depth > 0, nothing drained or refused for 15m)"
           description: >-
-            Durable lineage events are staged but not published — provenance is not reaching the AGE graph.
-            The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+            Durable lineage events are staged and the relay is moving none of them — neither ingesting nor
+            being refused. Provenance is not reaching the AGE graph and the relay, lineage, or the NATS bus
+            is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # VISIBLE WITHOUT PAGING. The estate should know that N events need a human; it should not be woken
+      # for a condition that no retry changes and that has been true for days. Severity is the whole point
+      # of splitting this out of the critical above.
+      - alert: LineageOutboxEventsRefused
+        expr: sum(rate(outbox_events_refused_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "Lineage outbox holds events the graph refuses to record"
+          description: >-
+            A producer staged provenance it is not authorized to write, so the relay re-refuses it every
+            tick and the event stays staged. Not a relay fault and not retryable: either the producer's
+            grant is wrong or the event should never have been staged.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # `_seconds`, and the suffix is the whole rule. The instrument declares `unit="s"`, and the
       # OTLP->Prometheus exporter APPENDS the unit — so the series is `outbox_oldest_age_seconds` and a
@@ -25,8 +69,12 @@ groups:
       # information_schema: `outbox_oldest_age_seconds` exists, `outbox_oldest_age` does not. The gate
       # could not have caught it either, because it read only the service's own metrics.py while this
       # instrument lives in service_kit's shared outbox module — both halves fixed together.
+      # SAME GUARD, same reason: a refused event ages forever, so without this the warning would also
+      # never clear. Aging only means "the relay is lagging" when the relay is supposed to be moving it.
       - alert: LineageOutboxBacklogAging
-        expr: max(outbox_oldest_age_seconds) > 300
+        expr: >-
+          max(outbox_oldest_age_seconds) > 300
+          and (sum(rate(outbox_events_refused_total[15m])) or vector(0)) == 0
         for: 5m
         labels:
           severity: warning

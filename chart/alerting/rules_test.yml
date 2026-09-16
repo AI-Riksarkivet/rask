@@ -9,7 +9,10 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # 1. Outbox stuck at depth 5 for 12 min → LineageOutboxNotDraining fires (past its 10m `for`).
+  # 1. Outbox stuck at depth 5 for 12 min, with NOTHING moving → LineageOutboxNotDraining fires.
+  #    The counters are absent here on purpose: that is a fresh deploy whose relay has not ticked, and
+  #    `or vector(0)` is what keeps the critical alive through it. Without that, an `and` against an
+  #    empty vector yields empty and the alert silently never fires.
   - interval: 1m
     input_series:
       - series: "outbox_depth"
@@ -22,8 +25,50 @@ tests:
               severity: critical
               service: lineage
             exp_annotations:
-              summary: "Lineage outbox not draining (depth > 0 for 10m)"
-              description: "Durable lineage events are staged but not published — provenance is not reaching the AGE graph. The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+              summary: "Lineage outbox not draining (depth > 0, nothing drained or refused for 15m)"
+              description: "Durable lineage events are staged and the relay is moving none of them — neither ingesting nor being refused. Provenance is not reaching the AGE graph and the relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # 1b. THE REGRESSION THIS GUARD EXISTS FOR. Depth is stuck at 6 AND the graph is refusing events —
+  #     measured on the live estate 2026-09-16 as depth 6 / oldest 2.1 days, on a relay that was healthy.
+  #     The old rule (`max(outbox_depth) > 0` alone) fired CRITICAL here forever, which makes a genuinely
+  #     stuck relay indistinguishable from a settled governance answer.
+  - interval: 1m
+    input_series:
+      - series: "outbox_depth"
+        values: "6+0x29"
+      - series: "outbox_events_refused_total"
+        values: "0+6x29" # re-refused every tick, exactly as a deterministic denial behaves
+      - series: "outbox_oldest_age_seconds"
+        values: "179206+60x29" # aging forever, because nothing will ever move it
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LineageOutboxNotDraining
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LineageOutboxBacklogAging
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: LineageOutboxEventsRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: lineage
+            exp_annotations:
+              summary: "Lineage outbox holds events the graph refuses to record"
+              description: "A producer staged provenance it is not authorized to write, so the relay re-refuses it every tick and the event stays staged. Not a relay fault and not retryable: either the producer's grant is wrong or the event should never have been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # 1c. A relay that is DRAINING must not page either, however deep the backlog is. Depth alone never
+  #     meant "stuck"; it means "there is work", and work being done is not a fault.
+  - interval: 1m
+    input_series:
+      - series: "outbox_depth"
+        values: "40+0x14"
+      - series: "outbox_events_drained_total"
+        values: "0+10x14"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LineageOutboxNotDraining
+        exp_alerts: []
 
   # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
   - interval: 1m

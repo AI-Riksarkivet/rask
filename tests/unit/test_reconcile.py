@@ -517,6 +517,8 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "checked": 0,
         "outbox_drained": 0,
         "outbox_stranded": 0,
+        # [[LH-004]] A governance refusal is not a failed tick, so it is reported apart from `stranded`.
+        "outbox_refused": 0,
         "backfilled": [],
         "storage_loss": [],
         # `ungoverned` is on the same contract as its two neighbours, and for the reason they establish:
