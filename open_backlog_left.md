@@ -1508,6 +1508,31 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 **LH-141 · A wrong `lineage.dataset_id` stamp is repaired only by a WRITE, so a dataset that stopped being written keeps a false name forever**
 `medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-11 · measured on the live estate
 
+- **THE CONSEQUENCE IS LIVE AND IT WRITES — measured 2026-09-16, and this is no longer a latent row.**
+  A dataset the catalog governs as one table is being MAINTAINED under the identity of another, in a
+  different warehouse, and the rewrite lands:
+
+      sweep    dataset='s3://bind86-wh/medallion/silver'  table_id='bronze$events'
+                                                          mode='distributed'  indices_optimized=1
+      catalog  silver$features  ->  s3://bind86-wh/medallion/silver      <- the governed id for that path
+      catalog  bronze$events    ->  s3://lance-catalog/medallion/bronze  <- a DIFFERENT bucket
+
+  So the sweep asks for a write credential for `bronze$events`, is granted one because that table really
+  exists and `service-maintenance` really may maintain it, and applies the result to a dataset belonging
+  to `silver$features`. `indices_optimized=1` says a write landed.
+- *Why the existing guard does not catch it, read off the code rather than assumed:*
+  `credentials.write_options_for` keys the vend on `declared_table_id or table_id_from_location(uri)`
+  (`credentials.py:79`) and its docstring states the intended safety — *"A DECLARED id is never repaired
+  or second-guessed here. If a producer stamps a wrong one the vend fails on a table that does exist,
+  which is a visible 403 in the log."* That reasoning holds only when the wrongly-named table is one
+  this identity may NOT maintain. Here it is one it may, so there is no 403 and nothing is visible: the
+  guard's failure mode assumes the stamp names a table the caller cannot reach, and a stale CASCADE
+  stamp names a table the caller reaches every tick.
+- *What is measured and what is not:* the outcome, the two catalog locations and the id the sweep used
+  are all read off the live estate. Which credential actually signed the index write is NOT — the
+  distributed path splits plan/execute/commit across credentials, so proving the vended one reached
+  another bucket needs a further measurement. The crossing of IDENTITY is established; the crossing of
+  the CREDENTIAL is not, and this row should not claim it until it is.
 - *Why open:* `ensure_declared_dataset_id` self-heals a stale stamp — its docstring is explicit that a
   `merge_insert` does not carry schema metadata, so the tier above would otherwise keep its parent's
   name — but all five call sites are inside `compute.py`'s WRITE paths. Nothing outside a write ever
